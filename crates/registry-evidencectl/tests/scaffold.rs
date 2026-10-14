@@ -16,10 +16,10 @@ use tempfile::TempDir;
 const OPENAPI: &str = "# retained comment\r\nopenapi: 3.1.0\r\ninfo:\r\n  title: Records\r\n  version: 1.0.0\r\npaths: {}\r\n";
 
 #[test]
-fn bare_new_names_both_authoring_inputs_and_writes_nothing() {
+fn bare_init_names_both_authoring_inputs_and_writes_nothing() {
     let workspace = TempDir::new().expect("temporary directory");
     let project = workspace.path().join("project");
-    let output = evidencectl(&["new", path(&project)]);
+    let output = evidencectl(&["init", path(&project)]);
 
     assert_safe_usage_failure(&output);
     assert!(!project.exists());
@@ -29,7 +29,7 @@ fn bare_new_names_both_authoring_inputs_and_writes_nothing() {
 fn sqlite_extract_requires_the_explicit_local_profile_before_writing() {
     let workspace = TempDir::new().expect("temporary directory");
     let project = workspace.path().join("project");
-    let output = evidencectl(&["new", path(&project), "--transport", "sqlite-extract"]);
+    let output = evidencectl(&["init", path(&project), "--transport", "sqlite-extract"]);
 
     assert_safe_usage_failure(&output);
     assert!(!project.exists());
@@ -48,12 +48,12 @@ fn local_sqlite_extract_creates_a_runnable_synthetic_starter() {
     assert!(printed.contains("queries"));
     assert!(printed.contains("evidencectl check"));
     assert!(printed.contains("evidencectl test"));
-    assert!(printed.contains("synthetic source, question, and fixture"));
+    assert!(printed.contains("normalized synthetic Source, AssertionDefinition, and local target"));
     assert!(!printed.contains("source suggest"));
 }
 
 #[test]
-fn local_starter_creates_offline_project_and_target_settings_example() {
+fn readme_only_starter_creates_a_normalized_offline_project() {
     let workspace = TempDir::new().expect("temporary directory");
     let starter = write_local_starter(workspace.path());
     let project = workspace.path().join("project");
@@ -70,7 +70,85 @@ fn local_starter_creates_offline_project_and_target_settings_example() {
 }
 
 #[test]
-fn a_starter_without_sources_defers_the_fixture_run_to_its_readme() {
+fn a_complete_normalized_starter_is_preserved_with_its_assets_and_grants() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let root = fs::canonicalize(workspace.path()).expect("canonical temporary directory");
+    let starter = root.join("reviewed-starter");
+    let created = sqlite_new(&starter, &[]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    for relative in ["evidence.yaml", "local-target.yaml", "dev-authority.yaml"] {
+        let path = starter.join(relative);
+        let document = fs::read_to_string(&path).expect("starter document");
+        fs::write(
+            &path,
+            document.replace("local-evidence", "reviewed-evidence"),
+        )
+        .expect("give the reviewed starter a distinct project id");
+    }
+    fs::write(
+        starter.join("serve-source.py"),
+        b"print('synthetic reviewed source')\n",
+    )
+    .expect("reviewed source helper");
+
+    let expected = [
+        "evidence.yaml",
+        "local-target.yaml",
+        "dev-authority.yaml",
+        "functions/extract-record-status.rhai",
+        "functions/derive-record-status.rhai",
+        "queries/record-status.sql",
+        "fixtures/record-status.yaml",
+        "serve-source.py",
+    ]
+    .map(|relative| {
+        (
+            relative,
+            fs::read(starter.join(relative)).expect("reviewed starter asset"),
+        )
+    });
+
+    let project = root.join("project");
+    let output = starter_new(&project, &starter, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    for (relative, bytes) in expected {
+        assert_eq!(
+            fs::read(project.join(relative)).expect("copied starter asset"),
+            bytes,
+            "starter asset {relative} was not preserved"
+        );
+    }
+
+    let project_document = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        &fs::read(project.join("evidence.yaml")).expect("copied project"),
+    )
+    .expect("copied normalized project")
+    .value;
+    assert_eq!(project_document.id.to_string(), "reviewed-evidence");
+    assert_eq!(project_document.functions.len(), 2);
+    assert_eq!(project_document.assertion_definitions.len(), 1);
+    let authority = registry_evidence_authoring::target::read_authority(
+        "dev-authority.yaml",
+        &fs::read(project.join("dev-authority.yaml")).expect("copied authority"),
+        &project_document,
+    )
+    .expect("copied complete authority")
+    .value;
+    assert_eq!(authority.access_profiles.len(), 1);
+    assert_eq!(
+        authority
+            .access_profiles
+            .values()
+            .map(|profile| profile.grants.len())
+            .sum::<usize>(),
+        1
+    );
+}
+
+#[test]
+fn a_starter_without_authored_source_files_receives_the_normalized_synthetic_source() {
     let workspace = TempDir::new().expect("temporary directory");
     let starter = write_sourceless_starter(workspace.path());
     let project = workspace.path().join("project");
@@ -78,37 +156,28 @@ fn a_starter_without_sources_defers_the_fixture_run_to_its_readme() {
     assert!(output.status.success(), "{}", stderr(&output));
 
     let printed = stdout(&output);
-    assert!(printed.contains(&format!("Next: follow {}/README.md", path(&project))));
-    assert!(!printed.contains("to prove the copied starter"));
-    assert!(printed.contains("before `evidencectl check"));
-    assert!(printed.contains("and `evidencectl test"));
-}
-
-/// A shipped starter directory under `products/breg/evidence/`.
-fn shipped_starter(name: &str) -> PathBuf {
-    let starter = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/evidence")
-        .join(name);
-    assert!(
-        starter.is_dir(),
-        "shipped starter {} is missing",
-        starter.display()
-    );
-    starter
+    assert!(printed.contains("to prove the copied starter"));
+    assert!(project.join("evidence.yaml").is_file());
+    assert!(project
+        .join("functions/extract-record-status.rhai")
+        .is_file());
 }
 
 /// A stub `evidence` binary that answers the version handshake with this
 /// build's version and succeeds at every step: an empty provider publication
 /// description for `render-discovery-description`, a fixed but well-formed
 /// revision report for `bundle-check`, and `$CASES` evaluated cases for a
-/// fixture evaluation. The shipped starter's authored content is proven by
-/// the maintainer composition proof against the real binary; this stub proves
-/// the offline pipeline the scaffold promises.
+/// fixture evaluation. The real-binary journey separately proves the generated
+/// normalized project; this stub isolates the evidencectl pipeline.
 fn write_stub_evidence(dir: &Path) -> PathBuf {
     let path = dir.join("evidence");
     let script = format!(
         r#"#!/bin/sh
 set -eu
+
+if [ -n "${{EVIDENCE_STUB_LOG:-}}" ]; then
+  printf '%s\n' "$*" >> "$EVIDENCE_STUB_LOG"
+fi
 
 if [ "${{1:-}}" = "--version" ]; then
   printf 'evidence %s\n' "{version}"
@@ -148,19 +217,22 @@ exit 0
 }
 
 #[test]
-fn the_shipped_offline_starter_passes_check_and_test_with_no_source_import() {
+fn the_generated_sqlite_starter_passes_check_and_test_without_source_import() {
     let workspace = TempDir::new().expect("temporary directory");
-    let project = workspace.path().join("project");
-    let output = starter_new(&project, &shipped_starter("offline-starter"), &[]);
+    let root = fs::canonicalize(workspace.path()).expect("canonical temporary directory");
+    let project = root.join("project");
+    let output = sqlite_new(&project, &[]);
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stdout(&output).contains("to prove the copied starter"));
-    assert!(project.join("sources/record-status.yaml").is_file());
-    assert!(project.join("targets/local/settings.yaml").is_file());
+    assert!(stdout(&output).contains("to prove the synthetic starter"));
+    assert!(project.join("evidence.yaml").is_file());
+    assert!(project.join("local-target.yaml").is_file());
 
-    let stub = write_stub_evidence(workspace.path());
+    let stub = write_stub_evidence(&root);
+    let stub_log = root.join("evidence-stub.log");
     let checked = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .args(["check", path(&project)])
         .env("EVIDENCE_BIN", &stub)
+        .env("EVIDENCE_STUB_LOG", &stub_log)
         .output()
         .expect("check the offline starter");
     assert!(checked.status.success(), "{}", stderr(&checked));
@@ -175,50 +247,57 @@ fn the_shipped_offline_starter_passes_check_and_test_with_no_source_import() {
         .arg("--evidence-bin")
         .arg(&stub)
         .env("CASES", "13")
+        .env("EVIDENCE_STUB_LOG", &stub_log)
         .output()
         .expect("test the offline starter");
-    assert!(tested.status.success(), "{}", stderr(&tested));
+    assert!(
+        tested.status.success(),
+        "{}\nstub calls:\n{}",
+        stderr(&tested),
+        fs::read_to_string(&stub_log).unwrap_or_default()
+    );
     let printed = stdout(&tested);
     assert!(
-        printed.contains("PASS: fixtures/record-active.yaml (13 cases)"),
+        printed.contains("PASS: fixtures/record-status.yaml (13 cases)"),
         "{printed}"
     );
 }
 
-/// The source-less `starter/` input ships questions whose source arrives only
-/// with the reviewed import, so its offline test must refuse rather than
-/// report a green run that was never proven.
+/// A starter that begins a normalized project must supply its target and
+/// authority too. Refuse the partial set before publishing any destination.
 #[test]
-fn a_project_from_the_sourceless_shipped_starter_fails_its_offline_test() {
+fn a_partial_normalized_starter_is_refused_before_writing() {
     let workspace = TempDir::new().expect("temporary directory");
-    let project = workspace.path().join("project");
-    let output = starter_new(&project, &shipped_starter("starter"), &[]);
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(!project
-        .join("sources")
-        .join("registry-status.yaml")
-        .exists());
+    let seed = workspace.path().join("seed");
+    let created = sqlite_new(&seed, &[]);
+    assert!(created.status.success(), "{}", stderr(&created));
 
-    let stub = write_stub_evidence(workspace.path());
-    let tested = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
-        .args(["test", path(&project)])
-        .arg("--evidence-bin")
-        .arg(&stub)
-        .env("CASES", "13")
-        .output()
-        .expect("test the source-less starter");
+    let starter = workspace.path().join("partial-starter");
+    fs::create_dir(&starter).expect("partial starter directory");
+    fs::write(starter.join("README.md"), b"# Partial reviewed starter\n")
+        .expect("partial starter README");
+    fs::copy(seed.join("evidence.yaml"), starter.join("evidence.yaml"))
+        .expect("partial starter project");
+
+    let project = workspace.path().join("project");
+    let output = starter_new(&project, &starter, &[]);
     assert!(
-        !tested.status.success(),
-        "the source-less starter must not pass before its source import:\n{}",
-        stdout(&tested)
+        !output.status.success(),
+        "partial normalized starter was accepted"
     );
+    assert!(
+        stderr(&output).contains("error[evidence.init.refused]"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!project.exists());
 }
 
 /// A SQLite starter whose one question declares a requirement validity of
 /// 900 seconds, above the 300 second signing maximum a local target carries.
 fn sqlite_project_with_validity_above_the_local_signing_maximum(project: &Path) {
     let output = evidencectl(&[
-        "new",
+        "init",
         path(project),
         "--transport",
         "sqlite-extract",
@@ -227,11 +306,11 @@ fn sqlite_project_with_validity_above_the_local_signing_maximum(project: &Path) 
     ]);
     assert!(output.status.success(), "{}", stderr(&output));
 
-    let question = project.join("questions/record-status.yaml");
-    let authored = fs::read_to_string(&question).expect("authored question");
+    let project_file = project.join("evidence.yaml");
+    let authored = fs::read_to_string(&project_file).expect("authored EvidenceProject");
     assert!(authored.contains("validitySeconds: 300"), "{authored}");
     fs::write(
-        &question,
+        &project_file,
         authored.replace("validitySeconds: 300", "validitySeconds: 900"),
     )
     .expect("raise the authored requirement validity past the local signing maximum");
@@ -261,11 +340,10 @@ fn project_only_check_accepts_a_requirement_validity_above_the_local_signing_max
     );
 }
 
-/// `check --target` knows the target's own signing maximum, so a requirement
-/// validity above it is refused at the question that declares it, and the
-/// same question passes once the target's maximum covers it.
+/// `check --target` refuses a complete target authority grant that exceeds its
+/// AssertionDefinition ceiling, then accepts the exact generated grant again.
 #[test]
-fn target_check_refuses_a_requirement_validity_above_the_target_signing_maximum() {
+fn target_check_refuses_authority_grant_outside_the_definition_ceiling() {
     let workspace = TempDir::new().expect("temporary directory");
     // A deployment target path must have no symlinked component, and the
     // platform temporary directory may sit behind one.
@@ -279,62 +357,34 @@ fn target_check_refuses_a_requirement_validity_above_the_target_signing_maximum(
         .output()
         .expect("create a local target");
     assert!(created.status.success(), "{}", stderr(&created));
-    let governance_path = target.join("governance.yaml");
-    let governance = fs::read_to_string(&governance_path).expect("target governance");
-    assert!(
-        governance.contains("maximumAssertionValiditySeconds: 300"),
-        "{governance}"
-    );
+    let authority_path = target.join("authority.yaml");
+    let authority = fs::read_to_string(&authority_path).expect("target authority");
+    assert!(authority.contains("kind: EvidenceTargetAuthority"));
+    let excessive = authority.replace("purpose: record-status-check", "purpose: unrelated-use");
+    assert_ne!(excessive, authority);
+    fs::write(&authority_path, excessive).expect("write excessive target grant");
 
-    let stub = write_stub_evidence(workspace.path());
-    let check_against_target = || {
+    let explain_target = || {
         Command::new(env!("CARGO_BIN_EXE_evidencectl"))
-            .args(["check", path(&project), "--target", path(&target)])
-            .env("EVIDENCE_BIN", &stub)
+            .args(["target", "explain", path(&target), path(&project)])
             .output()
-            .expect("check the project against its target")
+            .expect("explain the project target")
     };
 
-    let refused = check_against_target();
+    let refused = explain_target();
     assert!(
         !refused.status.success(),
-        "check --target must refuse a requirement validity above the target signing maximum:\n{}",
+        "target explain must refuse a grant outside the definition ceiling:\n{}",
         stdout(&refused)
     );
     let printed = format!("{}{}", stdout(&refused), stderr(&refused));
-    assert!(
-        printed.contains("evidence.question.validity-exceeds-signing-maximum"),
-        "{printed}"
-    );
-    assert!(
-        printed.contains("questions/record-status.yaml:"),
-        "{printed}"
-    );
-    assert!(
-        printed.contains(" /governance/validitySeconds"),
-        "{printed}"
-    );
-    assert!(
-        printed.contains("the deployment target's signing maximum"),
-        "{printed}"
-    );
-    assert!(
-        !printed.contains("900") && !printed.contains(" 300 "),
-        "the refusal repeats no configured value: {printed}"
-    );
+    assert!(printed.contains("evidence.authority.ceiling"), "{printed}");
 
-    fs::write(
-        &governance_path,
-        governance.replace(
-            "maximumAssertionValiditySeconds: 300",
-            "maximumAssertionValiditySeconds: 900",
-        ),
-    )
-    .expect("raise the target signing maximum to cover the requirement");
-    let accepted = check_against_target();
+    fs::write(&authority_path, authority).expect("restore exact generated target authority");
+    let accepted = explain_target();
     assert!(
         accepted.status.success(),
-        "a target whose signing maximum covers the requirement must pass:\n{}{}",
+        "the exact generated target authority must pass:\n{}{}",
         stdout(&accepted),
         stderr(&accepted)
     );
@@ -346,7 +396,7 @@ fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
     let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
     let project = workspace.path().join("project");
     let output = evidencectl(&[
-        "new",
+        "init",
         path(&project),
         "--openapi",
         path(&spec),
@@ -361,7 +411,7 @@ fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
 
     let starter_project = workspace.path().join("starter-project");
     let output = evidencectl(&[
-        "new",
+        "init",
         path(&starter_project),
         "--starter",
         "local",
@@ -379,14 +429,14 @@ fn openapi_requires_the_explicit_local_profile_before_writing() {
     let workspace = TempDir::new().expect("temporary directory");
     let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
     let project = workspace.path().join("project");
-    let output = evidencectl(&["new", path(&project), "--openapi", path(&spec)]);
+    let output = evidencectl(&["init", path(&project), "--openapi", path(&spec)]);
 
     assert_safe_usage_failure(&output);
     assert!(!project.exists());
 
     let wrong = workspace.path().join("wrong");
     let output = evidencectl(&[
-        "new",
+        "init",
         path(&wrong),
         "--openapi",
         path(&spec),
@@ -411,7 +461,7 @@ fn local_openapi_is_retained_byte_for_byte_with_automatic_disposable_keys() {
     );
     assert_minimal_project(&project, true);
     assert!(stdout(&output).contains("retained exactly"));
-    assert!(stdout(&output).contains("No question, fixture case, runtime"));
+    assert!(stdout(&output).contains("normalized synthetic starter and local target"));
     let next = format!("evidencectl source suggest {}`", project.display());
     assert!(stdout(&output).contains(&next), "{}", stdout(&output));
     assert!(!stdout(&output).contains("--project"));
@@ -448,6 +498,7 @@ fn invalid_local_or_remote_openapi_writes_nothing_and_cleans_staging() {
     let output = openapi_new(&failed_project, &failed_url, &[]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("HTTP 500"));
+    assert!(stderr(&output).contains("evidence.openapi.http-status"));
     assert!(!failed_project.exists());
     assert_no_staging_directories(workspace.path());
 }
@@ -461,24 +512,27 @@ fn unsafe_remote_urls_are_value_free_and_fail_before_network_or_writes() {
         .expect("nonblocking connection probe");
     let address = listener.local_addr().expect("probe address");
 
-    for (name, url, sensitive, expected) in [
+    for (name, url, sensitive, expected, code) in [
         (
             "userinfo",
             format!("http://reader:userinfo-secret@{address}/openapi.yaml"),
             "userinfo-secret",
             "credentials",
+            "evidence.openapi.url-credentials",
         ),
         (
             "query",
             format!("http://{address}/openapi.yaml?access_token=query-secret"),
             "query-secret",
             "query or fragment",
+            "evidence.openapi.url-components",
         ),
         (
             "fragment",
             format!("http://{address}/openapi.yaml#private-fragment"),
             "private-fragment",
             "query or fragment",
+            "evidence.openapi.url-components",
         ),
     ] {
         let project = workspace.path().join(name);
@@ -486,6 +540,7 @@ fn unsafe_remote_urls_are_value_free_and_fail_before_network_or_writes() {
         assert!(!output.status.success());
         let logged = format!("{}{}", stdout(&output), stderr(&output));
         assert!(logged.contains(expected), "unexpected refusal: {logged}");
+        assert!(logged.contains(code), "unexpected refusal: {logged}");
         assert!(
             !logged.contains(sensitive) && !logged.contains(&url),
             "refusal leaked an unsafe URL value: {logged}"
@@ -510,7 +565,7 @@ fn automatic_keys_are_transactional_unbound_owner_only_and_print_no_secret() {
 
     assert_minimal_project(&project, true);
     assert_eq!(
-        fs::metadata(project.join("secrets"))
+        fs::metadata(project.join(".generated/secrets"))
             .expect("secret directory")
             .permissions()
             .mode()
@@ -524,7 +579,7 @@ fn automatic_keys_are_transactional_unbound_owner_only_and_print_no_secret() {
         ("subject-binding-hmac-key", 0o600),
     ] {
         assert_eq!(
-            fs::metadata(project.join("secrets").join(name))
+            fs::metadata(project.join(".generated/secrets").join(name))
                 .unwrap_or_else(|error| panic!("reading {name}: {error}"))
                 .permissions()
                 .mode()
@@ -533,8 +588,8 @@ fn automatic_keys_are_transactional_unbound_owner_only_and_print_no_secret() {
         );
     }
 
-    let private =
-        fs::read_to_string(project.join("secrets/signing-p256-private-jwk")).expect("private JWK");
+    let private = fs::read_to_string(project.join(".generated/secrets/signing-p256-private-jwk"))
+        .expect("private JWK");
     let private: serde_json::Value = serde_json::from_str(&private).expect("private JWK JSON");
     let secret = private["d"].as_str().expect("private key member");
     assert!(!stdout(&output).contains(secret));
@@ -543,20 +598,19 @@ fn automatic_keys_are_transactional_unbound_owner_only_and_print_no_secret() {
 }
 
 #[test]
-fn new_writes_the_project_marker_byte_for_byte() {
+fn init_writes_the_normalized_project_envelope() {
     let workspace = TempDir::new().expect("temporary directory");
     let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
     let project = workspace.path().join("project");
     let output = openapi_new(&project, path(&spec), &[]);
     assert!(output.status.success(), "{}", stderr(&output));
 
+    assert!(fs::read_to_string(project.join("evidence.yaml"))
+        .expect("normalized EvidenceProject")
+        .contains("kind: EvidenceProject"));
     assert_eq!(
-        fs::read(project.join("evidence-project.yaml")).expect("project marker"),
-        registry_evidence_authoring::default_project_marker_document().as_bytes()
-    );
-    assert_eq!(
-        fs::metadata(project.join("evidence-project.yaml"))
-            .expect("project marker metadata")
+        fs::metadata(project.join("evidence.yaml"))
+            .expect("project metadata")
             .permissions()
             .mode()
             & 0o777,
@@ -638,17 +692,14 @@ fn the_starter_ships_a_readme_that_names_every_file_it_wrote() {
 
     let readme = fs::read_to_string(project.join("README.md")).expect("starter README reads");
     for named in [
-        "evidence-project.yaml",
-        "selectors/record-reference-v1.yaml",
-        "sources/record-status.yaml",
+        "evidence.yaml",
         "queries/record-status.sql",
-        "adapters/record-status-extract.rhai",
-        "schemas/record-status-response.schema.yaml",
-        "schemas/record-status-facts.schema.yaml",
-        "questions/record-status.yaml",
-        "derivations/record-status.rhai",
+        "functions/extract-record-status.rhai",
+        "functions/derive-record-status.rhai",
         "fixtures/record-status.yaml",
-        "secrets/",
+        "local-target.yaml",
+        "dev-authority.yaml",
+        ".generated/secrets/",
     ] {
         assert!(readme.contains(named), "the README names {named}");
     }
@@ -669,18 +720,18 @@ fn the_retained_openapi_project_ships_a_readme_that_says_what_is_empty() {
 
     let readme = fs::read_to_string(project.join("README.md")).expect("retained README reads");
     for named in [
-        "evidence-project.yaml",
+        "evidence.yaml",
         "source.openapi.yaml",
-        "selectors/",
-        "sources/",
-        "questions/",
+        "functions/",
         "fixtures/",
-        "secrets/",
+        "local-target.yaml",
+        "dev-authority.yaml",
+        ".generated/secrets/",
     ] {
         assert!(readme.contains(named), "the README names {named}");
     }
     assert!(
-        readme.contains("evidencectl source suggest . --source-id"),
+        readme.contains("evidencectl source suggest source.openapi.yaml --project . --source-id"),
         "the README names the next command: {readme}"
     );
 }
@@ -691,37 +742,68 @@ fn every_generated_starter_file_says_what_its_blocks_do() {
     let project = workspace.path().join("project");
     assert!(sqlite_new(&project, &[]).status.success());
 
-    // One comment per block of the generated question, source, and fixture is
-    // what separates a starter a reader can edit from one they can only run.
-    for (relative, blocks) in [
-        ("selectors/record-reference-v1.yaml", 2),
-        ("sources/record-status.yaml", 8),
-        ("queries/record-status.sql", 1),
-        ("adapters/record-status-extract.rhai", 2),
-        ("schemas/record-status-response.schema.yaml", 1),
-        ("schemas/record-status-facts.schema.yaml", 1),
-        ("questions/record-status.yaml", 7),
-        ("derivations/record-status.rhai", 2),
-        ("fixtures/record-status.yaml", 5),
+    let project_file = project.join("evidence.yaml");
+    let authored = registry_evidence_authoring::project::read_project(
+        &project_file.to_string_lossy(),
+        &fs::read(&project_file).expect("generated project reads"),
+    )
+    .expect("generated project is normalized")
+    .value;
+    assert_eq!(authored.functions.len(), 2);
+    assert!(authored.functions.iter().all(|function| {
+        function.source.starts_with("functions/") && function.source.ends_with(".rhai")
+    }));
+    let record_status = "record-status".parse().expect("valid local identifier");
+    let source = authored.sources.get(&record_status).expect("named Source");
+    assert!(source.prepare.is_none());
+    assert_eq!(source.extract.function.to_string(), "extract-record-status");
+    assert_eq!(source.response.maximum_bytes.get(), 8_192);
+    assert_eq!(source.limits.attempt_timeout_milliseconds.get(), 2_000);
+    assert_eq!(source.limits.maximum_concurrency.get(), 8);
+    let definition = authored
+        .assertion_definitions
+        .get(&record_status)
+        .expect("named AssertionDefinition");
+    assert_eq!(
+        definition.derive.function.to_string(),
+        "derive-record-status"
+    );
+    let satisfied = "satisfied".parse().expect("valid output identifier");
+    assert!(definition.outputs.contains_key(&satisfied));
+
+    for relative in [
+        "queries/record-status.sql",
+        "functions/extract-record-status.rhai",
+        "functions/derive-record-status.rhai",
+        "fixtures/record-status.yaml",
     ] {
-        let content = fs::read_to_string(project.join(relative))
-            .unwrap_or_else(|error| panic!("{relative} reads: {error}"));
-        let marker = if relative.ends_with(".rhai") {
-            "//"
-        } else if relative.ends_with(".sql") {
-            "--"
-        } else {
-            "#"
-        };
-        let counted = content
-            .lines()
-            .filter(|line| line.trim_start().starts_with(marker))
-            .count();
-        assert!(
-            counted >= blocks,
-            "{relative} explains {counted} of its {blocks} blocks"
-        );
+        assert!(project.join(relative).is_file(), "generated {relative}");
     }
+
+    let target_file = project.join("local-target.yaml");
+    let target = registry_evidence_authoring::target::read_target(
+        &target_file.to_string_lossy(),
+        &fs::read(&target_file).expect("generated target reads"),
+    )
+    .expect("generated target is normalized")
+    .value;
+    assert_eq!(target.project, authored.id);
+    assert_eq!(target.authority, "dev-authority.yaml");
+    let authority_file = project.join(&target.authority);
+    let authority = registry_evidence_authoring::target::read_authority(
+        &authority_file.to_string_lossy(),
+        &fs::read(&authority_file).expect("generated authority reads"),
+        &authored,
+    )
+    .expect("generated authority is complete")
+    .value;
+    let grants = authority
+        .access_profiles
+        .values()
+        .flat_map(|profile| &profile.grants)
+        .collect::<Vec<_>>();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].definition, record_status);
 }
 
 #[test]
@@ -836,56 +918,41 @@ fn heading_slug(heading: &str) -> String {
 }
 
 fn assert_minimal_project(project: &Path, with_keys: bool) {
-    let expected = if with_keys {
-        vec![
-            ".evidence-editor",
-            ".gitignore",
-            ".vscode",
-            ".zed",
-            "README.md",
-            "adapters",
-            "derivations",
-            "evidence-project.yaml",
-            "fixtures",
-            "questions",
-            "schemas",
-            "secrets",
-            "selectors",
-            "source.openapi.yaml",
-            "sources",
-        ]
-    } else {
-        vec![
-            ".evidence-editor",
-            ".gitignore",
-            ".vscode",
-            ".zed",
-            "README.md",
-            "adapters",
-            "derivations",
-            "evidence-project.yaml",
-            "fixtures",
-            "questions",
-            "schemas",
-            "selectors",
-            "source.openapi.yaml",
-            "sources",
-        ]
-    };
+    let expected = vec![
+        ".evidence-editor",
+        ".generated",
+        ".gitignore",
+        ".vscode",
+        ".zed",
+        "README.md",
+        "dev-authority.yaml",
+        "evidence.yaml",
+        "fixtures",
+        "functions",
+        "local-target.yaml",
+        "source.openapi.yaml",
+    ];
     assert_eq!(entries(project), expected);
     assert_editor_schema_mappings(project);
-    assert!(entries(&project.join("questions")).is_empty());
-    assert!(entries(&project.join("derivations")).is_empty());
-    assert!(entries(&project.join("selectors")).is_empty());
-    assert!(entries(&project.join("sources")).is_empty());
-    assert!(entries(&project.join("adapters")).is_empty());
-    assert!(entries(&project.join("schemas")).is_empty());
-    assert!(entries(&project.join("fixtures")).is_empty());
+    assert!(project.join("evidence.yaml").is_file());
+    assert!(project.join("local-target.yaml").is_file());
+    assert!(project.join("dev-authority.yaml").is_file());
+    assert!(project
+        .join("functions/extract-record-status.rhai")
+        .is_file());
     assert_eq!(
         fs::read_to_string(project.join(".gitignore")).expect("gitignore"),
-        "secrets/\n.evidence/\n"
+        ".generated/secrets/\n.evidence/\n"
     );
-    for absent in ["bundle", "runtime.yaml", "evidence.yaml", "queries"] {
+    if with_keys {
+        assert!(project.join(".generated/secrets").is_dir());
+    }
+    for absent in [
+        "bundle",
+        "runtime.yaml",
+        "evidence-project.yaml",
+        "questions",
+    ] {
         assert!(
             !project.join(absent).exists(),
             "unexpected generated {absent}"
@@ -904,14 +971,11 @@ fn assert_editor_schema_mappings(project: &Path) {
         entries(&project.join(".evidence-editor/schemas")),
         vec![
             "access-client.schema.json",
-            "access-policy.schema.json",
             "fixture.schema.json",
             "mock-plan.schema.json",
-            "project-marker.schema.json",
-            "question.schema.json",
-            "selector.schema.json",
-            "source.schema.json",
-            "target-settings.schema.json"
+            "project.schema.json",
+            "target-authority.schema.json",
+            "target.schema.json"
         ]
     );
     assert_eq!(
@@ -928,36 +992,24 @@ fn assert_editor_schema_mappings(project: &Path) {
             include_str!("../schemas/authoring/access-client.schema.json"),
         ),
         (
-            ".evidence-editor/schemas/access-policy.schema.json",
-            include_str!("../schemas/authoring/access-policy.schema.json"),
-        ),
-        (
             ".evidence-editor/schemas/mock-plan.schema.json",
             include_str!("../schemas/authoring/mock-plan.schema.json"),
-        ),
-        (
-            ".evidence-editor/schemas/question.schema.json",
-            include_str!("../schemas/authoring/question.schema.json"),
-        ),
-        (
-            ".evidence-editor/schemas/project-marker.schema.json",
-            include_str!("../schemas/authoring/project-marker.schema.json"),
         ),
         (
             ".evidence-editor/schemas/fixture.schema.json",
             include_str!("../../../products/evidence/generated/fixture/fixture.schema.json"),
         ),
         (
-            ".evidence-editor/schemas/selector.schema.json",
-            include_str!("../schemas/authoring/selector.schema.json"),
+            ".evidence-editor/schemas/project.schema.json",
+            include_str!("../schemas/authoring/project.schema.json"),
         ),
         (
-            ".evidence-editor/schemas/source.schema.json",
-            include_str!("../schemas/authoring/source.schema.json"),
+            ".evidence-editor/schemas/target.schema.json",
+            include_str!("../schemas/authoring/target.schema.json"),
         ),
         (
-            ".evidence-editor/schemas/target-settings.schema.json",
-            include_str!("../schemas/authoring/target-settings.schema.json"),
+            ".evidence-editor/schemas/target-authority.schema.json",
+            include_str!("../schemas/authoring/target-authority.schema.json"),
         ),
     ] {
         assert_eq!(
@@ -972,8 +1024,8 @@ fn assert_editor_schema_mappings(project: &Path) {
     )
     .expect("VS Code settings are JSON");
     assert_eq!(
-        settings["yaml.schemas"]["./.evidence-editor/schemas/question.schema.json"],
-        serde_json::Value::String("questions/*.yaml".to_string())
+        settings["yaml.schemas"]["./.evidence-editor/schemas/project.schema.json"],
+        serde_json::Value::String("evidence.yaml".to_string())
     );
 }
 
@@ -982,20 +1034,17 @@ fn assert_sqlite_project(project: &Path) {
         entries(project),
         [
             ".evidence-editor",
+            ".generated",
             ".gitignore",
             ".vscode",
             ".zed",
             "README.md",
-            "adapters",
-            "derivations",
-            "evidence-project.yaml",
+            "dev-authority.yaml",
+            "evidence.yaml",
             "fixtures",
+            "functions",
+            "local-target.yaml",
             "queries",
-            "questions",
-            "schemas",
-            "secrets",
-            "selectors",
-            "sources",
         ]
     );
     assert_common_starter_files(project);
@@ -1006,50 +1055,50 @@ fn assert_starter_project(project: &Path) {
         entries(project),
         [
             ".evidence-editor",
+            ".generated",
             ".gitignore",
             ".vscode",
             ".zed",
             "README.md",
-            "adapters",
-            "derivations",
-            "evidence-project.yaml",
+            "dev-authority.yaml",
+            "evidence.yaml",
             "fixtures",
-            "queries",
-            "questions",
-            "schemas",
-            "secrets",
-            "selectors",
-            "sources",
-            "targets",
+            "functions",
+            "local-target.yaml",
         ]
     );
-    assert_common_starter_files(project);
-    assert!(project
-        .join("targets/local/settings.example.yaml")
-        .is_file());
+    for file in [
+        "evidence.yaml",
+        "functions/extract-record-status.rhai",
+        "functions/derive-record-status.rhai",
+        "fixtures/record-status.yaml",
+        "local-target.yaml",
+        "dev-authority.yaml",
+    ] {
+        assert!(project.join(file).is_file(), "missing starter file {file}");
+    }
+    assert_editor_schema_mappings(project);
 }
 
 fn assert_common_starter_files(project: &Path) {
     for file in [
-        "selectors/record-reference-v1.yaml",
-        "sources/record-status.yaml",
+        "evidence.yaml",
         "queries/record-status.sql",
-        "adapters/record-status-extract.rhai",
-        "schemas/record-status-response.schema.yaml",
-        "schemas/record-status-facts.schema.yaml",
-        "questions/record-status.yaml",
-        "derivations/record-status.rhai",
+        "functions/extract-record-status.rhai",
+        "functions/derive-record-status.rhai",
         "fixtures/record-status.yaml",
+        "local-target.yaml",
+        "dev-authority.yaml",
     ] {
         assert!(project.join(file).is_file(), "missing starter file {file}");
     }
     assert!(!project.join("source.openapi.yaml").exists());
     assert_eq!(
         fs::read_to_string(project.join(".gitignore")).expect("gitignore"),
-        "secrets/\n.evidence/\n"
+        ".generated/secrets/\n.evidence/\n"
     );
     assert_eq!(
-        fs::metadata(project.join("secrets"))
+        fs::metadata(project.join(".generated/secrets"))
             .expect("secret directory")
             .permissions()
             .mode()
@@ -1061,7 +1110,7 @@ fn assert_common_starter_files(project: &Path) {
 
 fn openapi_new(project: &Path, openapi: &str, extra: &[&str]) -> Output {
     let mut arguments = vec![
-        "new",
+        "init",
         path(project),
         "--openapi",
         openapi,
@@ -1074,7 +1123,7 @@ fn openapi_new(project: &Path, openapi: &str, extra: &[&str]) -> Output {
 
 fn sqlite_new(project: &Path, extra: &[&str]) -> Output {
     let mut arguments = vec![
-        "new",
+        "init",
         path(project),
         "--transport",
         "sqlite-extract",
@@ -1087,7 +1136,7 @@ fn sqlite_new(project: &Path, extra: &[&str]) -> Output {
 
 fn starter_new(project: &Path, starter: &Path, extra: &[&str]) -> Output {
     let mut arguments = vec![
-        "new",
+        "init",
         path(project),
         "--starter",
         path(starter),
@@ -1100,95 +1149,15 @@ fn starter_new(project: &Path, starter: &Path, extra: &[&str]) -> Output {
 
 fn write_local_starter(root: &Path) -> PathBuf {
     let starter = root.join("starter");
-    for (relative, contents) in [
-        ("README.md", b"# Reviewed starter\n".as_slice()),
-        (
-            "selectors/record-reference-v1.yaml",
-            include_bytes!("../templates/sqlite-extract/selectors/record-reference-v1.yaml")
-                .as_slice(),
-        ),
-        (
-            "sources/record-status.yaml",
-            include_bytes!("../templates/sqlite-extract/sources/record-status.yaml").as_slice(),
-        ),
-        (
-            "queries/record-status.sql",
-            include_bytes!("../templates/sqlite-extract/queries/record-status.sql").as_slice(),
-        ),
-        (
-            "adapters/record-status-extract.rhai",
-            include_bytes!("../templates/sqlite-extract/adapters/record-status-extract.rhai")
-                .as_slice(),
-        ),
-        (
-            "schemas/record-status-response.schema.yaml",
-            include_bytes!(
-                "../templates/sqlite-extract/schemas/record-status-response.schema.yaml"
-            )
-            .as_slice(),
-        ),
-        (
-            "schemas/record-status-facts.schema.yaml",
-            include_bytes!("../templates/sqlite-extract/schemas/record-status-facts.schema.yaml")
-                .as_slice(),
-        ),
-        (
-            "questions/record-status.yaml",
-            include_bytes!("../templates/sqlite-extract/questions/record-status.yaml").as_slice(),
-        ),
-        (
-            "derivations/record-status.rhai",
-            include_bytes!("../templates/sqlite-extract/derivations/record-status.rhai").as_slice(),
-        ),
-        (
-            "fixtures/record-status.yaml",
-            include_bytes!("../templates/sqlite-extract/fixtures/record-status.yaml").as_slice(),
-        ),
-        (
-            "targets/local/settings.example.yaml",
-            b"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1\nkind: EvidenceTargetSettings\n".as_slice(),
-        ),
-    ] {
-        let path = starter.join(relative);
-        fs::create_dir_all(path.parent().expect("starter file parent")).expect("starter parent");
-        fs::write(path, contents).expect("starter file");
-    }
+    fs::create_dir(&starter).expect("starter directory");
+    fs::write(starter.join("README.md"), b"# Reviewed starter\n").expect("starter README");
     starter
 }
 
 fn write_sourceless_starter(root: &Path) -> PathBuf {
     let starter = root.join("sourceless-starter");
-    for (relative, contents) in [
-        ("README.md", b"# Reviewed starter\n".as_slice()),
-        (
-            "schemas/record-status-response.schema.yaml",
-            include_bytes!(
-                "../templates/sqlite-extract/schemas/record-status-response.schema.yaml"
-            )
-            .as_slice(),
-        ),
-        (
-            "schemas/record-status-facts.schema.yaml",
-            include_bytes!("../templates/sqlite-extract/schemas/record-status-facts.schema.yaml")
-                .as_slice(),
-        ),
-        (
-            "questions/record-status.yaml",
-            include_bytes!("../templates/sqlite-extract/questions/record-status.yaml").as_slice(),
-        ),
-        (
-            "derivations/record-status.rhai",
-            include_bytes!("../templates/sqlite-extract/derivations/record-status.rhai").as_slice(),
-        ),
-        (
-            "fixtures/record-status.yaml",
-            include_bytes!("../templates/sqlite-extract/fixtures/record-status.yaml").as_slice(),
-        ),
-    ] {
-        let path = starter.join(relative);
-        fs::create_dir_all(path.parent().expect("starter file parent")).expect("starter parent");
-        fs::write(path, contents).expect("starter file");
-    }
+    fs::create_dir(&starter).expect("starter directory");
+    fs::write(starter.join("README.md"), b"# Source-first starter\n").expect("starter README");
     starter
 }
 

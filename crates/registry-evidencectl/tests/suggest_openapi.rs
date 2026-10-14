@@ -13,6 +13,25 @@
 // way it does under `src/suggest/`; this binding is what `super::` finds here.
 use registry_evidence_authoring::openapi::types;
 
+#[derive(Debug)]
+struct SafeCliFailure {
+    operational: bool,
+    code: String,
+    artifact: String,
+    path: String,
+    message: String,
+    suggested_action: String,
+    cause: Option<String>,
+}
+
+impl std::fmt::Display for SafeCliFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SafeCliFailure {}
+
 // `load.rs` dispatches a file path or a URL through `fetch`; this binary only
 // ever opens files, so the fetching half of that module is unused here.
 #[allow(dead_code)]

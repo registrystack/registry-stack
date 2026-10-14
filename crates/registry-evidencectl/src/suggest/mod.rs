@@ -92,8 +92,8 @@ pub struct SuggestArgs {
 
     /// Evidence project directory; the draft is printed when this is absent.
     ///
-    /// This command needs an editable project: one holding questions/ and
-    /// sources/ beside evidence-project.yaml.
+    /// This command needs an editable project containing evidence.yaml and its
+    /// named Function assets.
     #[arg(value_name = "PROJECT")]
     pub project: Option<std::path::PathBuf>,
 }

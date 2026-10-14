@@ -16,7 +16,7 @@ use clap::Args;
 use registry_evidence_authoring::validate::valid_local_identifier;
 use registry_platform_yaml::Reader;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 pub(crate) use export::DocumentRefused;
 #[cfg(test)]
@@ -194,7 +194,7 @@ pub(crate) struct ImportReport {
     pub sources: Vec<String>,
     pub changes: Vec<ArtifactChange>,
     pub conflicts: Vec<String>,
-    pub affected_questions: Vec<String>,
+    pub affected_definitions: Vec<String>,
     pub provenance_changed: Vec<String>,
     pub no_op: bool,
 }
@@ -273,7 +273,7 @@ impl Candidate {
             .collect::<BTreeSet<_>>()
         {
             if self.before.get(path) != self.after.get(path) {
-                artifact_path(path)?;
+                transaction_artifact_path(path)?;
                 operations.push(Operation {
                     path: path.clone(),
                     before: self.before.get(path).cloned(),
@@ -356,7 +356,7 @@ pub(crate) fn prepare(
                 )
             })
             .collect();
-        let current = before.get(&path).map(|content| content.text.clone());
+        let current = current_artifact(&before, &previous, &path)?;
         if upstreams.len() > 1 {
             conflicts.push(path.clone());
             changes.push(ArtifactChange {
@@ -401,7 +401,9 @@ pub(crate) fn prepare(
             None if old == upstream => (current.clone(), None),
             None => (upstream.clone(), None),
         };
-        if let Some(text) = &accepted {
+        if is_virtual_fragment(&path) {
+            after.remove(&path);
+        } else if let Some(text) = &accepted {
             after.insert(
                 path.clone(),
                 Contents {
@@ -468,6 +470,7 @@ pub(crate) fn prepare(
             }
         }
     }
+    merge_normalized_fragments(&before, &mut after, &previous, &next)?;
     // Keep a formerly generated artifact if another ordinary authored document
     // still names it. This conservative check never rewrites that document.
     loop {
@@ -508,8 +511,16 @@ pub(crate) fn prepare(
         }
     }
     let state_after = encode_state(&next)?;
-    let no_op = before == after && previous == next;
-    let affected_questions = affected_questions(&before, &after, &changes)?;
+    let no_op = before == after
+        && conflicts.is_empty()
+        && provenance_changed.is_empty()
+        && previous.imports.keys().eq(next.imports.keys())
+        && changes.iter().all(|change| {
+            change.previous_sha256 == change.next_sha256
+                && change.current_sha256 == change.accepted_sha256
+                && change.resolution.is_none()
+        });
+    let affected_definitions = affected_definitions(&before, &after)?;
     let temporary_root = fs::canonicalize(std::env::temp_dir())
         .context("resolving private source candidate temporary parent")?;
     let temporary = tempfile::Builder::new()
@@ -533,12 +544,257 @@ pub(crate) fn prepare(
             sources: requested.into_iter().collect(),
             changes,
             conflicts,
-            affected_questions,
+            affected_definitions,
             provenance_changed,
             no_op,
         },
         validated: false,
     })
+}
+
+fn current_artifact(
+    snapshot: &BTreeMap<String, Contents>,
+    previous: &State,
+    path: &str,
+) -> Result<Option<String>> {
+    if !is_virtual_fragment(path) {
+        return Ok(snapshot.get(path).map(|content| content.text.clone()));
+    }
+    let template = previous
+        .imports
+        .values()
+        .find_map(|installed| installed.upstream.get(path));
+    let Some(template) = template else {
+        return Ok(None);
+    };
+    let Some(project) = snapshot.get(registry_evidence_authoring::project::PROJECT_FILE) else {
+        return Ok(None);
+    };
+    let decoded = registry_evidence_authoring::project::read_project(
+        registry_evidence_authoring::project::PROJECT_FILE,
+        project.text.as_bytes(),
+    )?;
+    let template: Value = serde_json::from_str(template)?;
+    if let Some(selector_id) = path
+        .strip_prefix("selector-fragments/")
+        .and_then(|name| name.strip_suffix(".json"))
+    {
+        return Ok(decoded
+            .value
+            .selector_profiles
+            .iter()
+            .find_map(|(id, profile)| (id.as_str() == selector_id).then_some(profile))
+            .map(serde_json::to_value)
+            .transpose()?
+            .as_ref()
+            .map(serde_json::to_string_pretty)
+            .transpose()?);
+    }
+    let source_id = template["sourceId"]
+        .as_str()
+        .context("normalized source fragment sourceId")?;
+    let Some(source) = decoded
+        .value
+        .sources
+        .iter()
+        .find_map(|(id, source)| (id.as_str() == source_id).then_some(source))
+    else {
+        return Ok(None);
+    };
+    let function_ids = template["functions"]
+        .as_array()
+        .context("normalized Functions")?
+        .iter()
+        .filter_map(|function| function["id"].as_str())
+        .collect::<BTreeSet<_>>();
+    let fragment = json!({
+        "functions":decoded.value.functions.iter().filter(|function| function_ids.contains(function.id.as_str())).collect::<Vec<_>>(),
+        "sourceId":source_id,
+        "source":source
+    });
+    Ok(Some(serde_json::to_string_pretty(&fragment)?))
+}
+
+fn is_virtual_fragment(path: &str) -> bool {
+    path.starts_with("source-fragments/") || path.starts_with("selector-fragments/")
+}
+
+fn merge_normalized_fragments(
+    before: &BTreeMap<String, Contents>,
+    after: &mut BTreeMap<String, Contents>,
+    previous: &State,
+    next: &State,
+) -> Result<()> {
+    let file = registry_evidence_authoring::project::PROJECT_FILE;
+    let current = after
+        .get(file)
+        .or_else(|| before.get(file))
+        .context("source import requires evidence.yaml")?;
+    let decoded =
+        registry_evidence_authoring::project::read_project(file, current.text.as_bytes())?;
+    let document = decoded.document;
+    let mut value = serde_json::to_value(decoded.value)?;
+    let object = value.as_object_mut().expect("EvidenceProject is an object");
+    let mut selectors = object
+        .remove("selectorProfiles")
+        .and_then(|value| value.as_object().cloned())
+        .context("EvidenceProject selectorProfiles")?;
+    let mut functions = object
+        .remove("functions")
+        .and_then(|value| value.as_array().cloned())
+        .context("EvidenceProject Functions")?;
+    let mut sources = object
+        .remove("sources")
+        .and_then(|value| value.as_object().cloned())
+        .context("EvidenceProject Sources")?;
+    for installed in previous
+        .imports
+        .values()
+        .filter(|installed| !installed.detached)
+    {
+        for (path, text) in &installed.upstream {
+            if let Some(id) = path
+                .strip_prefix("selector-fragments/")
+                .and_then(|name| name.strip_suffix(".json"))
+            {
+                selectors.remove(id);
+                continue;
+            }
+            if path.starts_with("source-fragments/") {
+                let fragment: Value = serde_json::from_str(text)?;
+                let ids = fragment["functions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|function| function["id"].as_str())
+                    .collect::<BTreeSet<_>>();
+                functions
+                    .retain(|function| function["id"].as_str().is_none_or(|id| !ids.contains(id)));
+                if let Some(id) = fragment["sourceId"].as_str() {
+                    sources.remove(id);
+                }
+            }
+        }
+    }
+    for installed in next
+        .imports
+        .values()
+        .filter(|installed| !installed.detached)
+    {
+        for path in installed
+            .upstream
+            .keys()
+            .filter(|path| is_virtual_fragment(path))
+        {
+            let Some(text) = next.accepted.get(path).and_then(Option::as_ref) else {
+                continue;
+            };
+            if let Some(id) = path
+                .strip_prefix("selector-fragments/")
+                .and_then(|name| name.strip_suffix(".json"))
+            {
+                selectors.insert(id.to_owned(), serde_json::from_str(text)?);
+                continue;
+            }
+            let fragment: Value = serde_json::from_str(text)?;
+            for function in fragment["functions"]
+                .as_array()
+                .context("normalized Functions")?
+            {
+                functions.push(function.clone());
+            }
+            let id = fragment["sourceId"]
+                .as_str()
+                .context("normalized sourceId")?;
+            sources.insert(id.to_owned(), fragment["source"].clone());
+        }
+    }
+    object.insert("selectorProfiles".to_owned(), Value::Object(selectors));
+    object.insert("functions".to_owned(), Value::Array(functions));
+    object.insert("sources".to_owned(), Value::Object(sources));
+    object.insert(
+        "apiVersion".to_owned(),
+        json!(registry_evidence_authoring::project::PROJECT_API_VERSION),
+    );
+    object.insert(
+        "kind".to_owned(),
+        json!(registry_evidence_authoring::project::PROJECT_KIND),
+    );
+    let text = replace_project_sections(
+        &current.text,
+        &document,
+        [
+            ("/selectorProfiles", &value["selectorProfiles"]),
+            ("/functions", &value["functions"]),
+            ("/sources", &value["sources"]),
+        ],
+    )?;
+    registry_evidence_authoring::project::read_project(file, text.as_bytes())?;
+    after.insert(
+        file.to_owned(),
+        Contents {
+            text,
+            mode: current.mode,
+        },
+    );
+    Ok(())
+}
+
+/// Replace only the three collections owned by source import. The project
+/// reader provides exact source spans, so AssertionDefinitions and their
+/// surrounding comments remain byte-for-byte authored text. Comments inside
+/// a changed import-owned collection are canonicalized with that collection.
+fn replace_project_sections<const N: usize>(
+    original: &str,
+    document: &registry_platform_yaml::Document,
+    replacements: [(&str, &Value); N],
+) -> Result<String> {
+    let mut edits = replacements
+        .into_iter()
+        .map(|(pointer, value)| {
+            let span = document
+                .span_of(pointer)
+                .with_context(|| format!("EvidenceProject is missing {pointer}"))?;
+            let start = byte_offset(original, span.start)?;
+            let mut end = byte_offset(original, span.end)?;
+            while original.as_bytes().get(end) == Some(&b'\n') {
+                end += 1;
+            }
+            let continuation_indent = " ".repeat(span.start.column.saturating_sub(1));
+            let mut replacement = serde_json::to_string_pretty(value)?
+                .replace('\n', &format!("\n{continuation_indent}"));
+            replacement.push('\n');
+            Ok((start, end, replacement))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    edits.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+    let mut text = original.to_owned();
+    for (start, end, replacement) in edits {
+        text.replace_range(start..end, &replacement);
+    }
+    Ok(text)
+}
+
+fn byte_offset(text: &str, position: registry_platform_yaml::Position) -> Result<usize> {
+    let line_start = if position.line == 1 {
+        0
+    } else {
+        text.match_indices('\n')
+            .nth(position.line - 2)
+            .map(|(offset, _)| offset + 1)
+            .context("EvidenceProject source span line is outside the document")?
+    };
+    let line = &text[line_start..];
+    let column = position.column.saturating_sub(1);
+    let byte_in_line = if column == 0 {
+        0
+    } else {
+        line.char_indices().nth(column).map_or_else(
+            || line.find('\n').unwrap_or(line.len()),
+            |(offset, _)| offset,
+        )
+    };
+    Ok(line_start + byte_in_line)
 }
 
 /// Forking changes only ownership state. Files and their import provenance are
@@ -652,6 +908,14 @@ fn load_export(directory: &Path) -> Result<InstalledExport> {
             "one export must inventory exactly sources/<sourceId>.yaml and its auxiliary artifacts"
         );
     }
+    upstream = export::normalize_artifacts(&manifest.source_id, &upstream)?;
+    manifest.artifacts = upstream
+        .iter()
+        .map(|(path, text)| ExportArtifact {
+            path: path.clone(),
+            sha256: digest(text.as_bytes()),
+        })
+        .collect();
     Ok(InstalledExport {
         manifest,
         upstream,
@@ -802,53 +1066,46 @@ fn has_reference(artifacts: &BTreeMap<String, Contents>, path: &str) -> Result<b
     Ok(false)
 }
 
-fn affected_questions(
+fn affected_definitions(
     before: &BTreeMap<String, Contents>,
     after: &BTreeMap<String, Contents>,
-    changes: &[ArtifactChange],
 ) -> Result<Vec<String>> {
-    let mut changed = BTreeSet::new();
-    for change in changes {
-        if change.current_sha256 != change.accepted_sha256 || change.action == "conflict" {
-            changed.insert(change.path.clone());
-            for owner in change.previous_owners.iter().chain(&change.next_owners) {
-                changed.insert(format!("sources/{owner}.yaml"));
-            }
-        }
-    }
-    // Follow exact authored references to a fixed point. This labels structural
-    // dependants only, never fabricates a runtime requirement revision.
-    loop {
-        let count = changed.len();
-        for (path, content) in before.iter().chain(after) {
-            if path.ends_with(".yaml") && !changed.contains(path) {
-                let value = yaml_artifact(path, &content.text)
-                    .with_context(|| format!("reading structural source impact in {path}"))?;
-                if changed.iter().any(|dependency| {
-                    references(
-                        &value,
-                        dependency,
-                        Path::new(dependency)
-                            .file_stem()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or(dependency),
-                    )
-                }) {
-                    changed.insert(path.clone());
-                }
-            }
-        }
-        if changed.len() == count {
-            break;
-        }
-    }
-    Ok(changed
+    let read = |snapshot: &BTreeMap<String, Contents>| -> Result<_> {
+        let text = snapshot
+            .get(registry_evidence_authoring::project::PROJECT_FILE)
+            .context("source import requires evidence.yaml")?;
+        Ok(registry_evidence_authoring::project::read_project(
+            registry_evidence_authoring::project::PROJECT_FILE,
+            text.text.as_bytes(),
+        )?
+        .value)
+    };
+    let before_project = read(before)?;
+    let after_project = read(after)?;
+    let ids = before_project
+        .assertion_definitions
+        .keys()
+        .chain(after_project.assertion_definitions.keys())
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    let signature = |project: &registry_evidence_authoring::project::EvidenceProject,
+                     snapshot: &BTreeMap<String, Contents>,
+                     id: &str|
+     -> Option<Value> {
+        let dependency =
+            registry_evidence_authoring::compile::definition_dependencies(project, id)?;
+        let assets = dependency["functions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|function| function["source"].as_str())
+            .filter_map(|path| snapshot.get(path).map(|contents| (path, &contents.text)))
+            .collect::<BTreeMap<_, _>>();
+        Some(json!({"dependency":dependency,"functionAssets":assets}))
+    };
+    Ok(ids
         .into_iter()
-        .filter_map(|path| {
-            path.strip_prefix("questions/")
-                .and_then(|name| name.strip_suffix(".yaml"))
-                .map(str::to_owned)
-        })
+        .filter(|id| signature(&before_project, before, id) != signature(&after_project, after, id))
         .collect())
 }
 
@@ -932,13 +1189,20 @@ fn parse_journal(text: &str) -> Result<Journal> {
     let mut paths = BTreeSet::new();
     for operation in &journal.operations {
         if operation.path != STATE_PATH {
-            artifact_path(&operation.path)?;
+            transaction_artifact_path(&operation.path)?;
         }
         if !paths.insert(&operation.path) {
             bail!("source-import recovery journal repeats an artifact");
         }
     }
     Ok(journal)
+}
+
+fn transaction_artifact_path(path: &str) -> Result<()> {
+    if path == registry_evidence_authoring::project::PROJECT_FILE {
+        return Ok(());
+    }
+    artifact_path(path)
 }
 
 /// Check a baseline file on its own. The error is static text.

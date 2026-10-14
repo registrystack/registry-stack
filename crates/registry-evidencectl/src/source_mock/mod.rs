@@ -76,8 +76,8 @@ pub struct ServeArgs {
 
     /// Evidence project directory; defaults to the current directory.
     ///
-    /// This command needs an editable project: one holding questions/ and
-    /// sources/ beside evidence-project.yaml.
+    /// This command needs an editable project containing evidence.yaml and its
+    /// named Function assets.
     #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
 
@@ -127,8 +127,8 @@ pub struct GenerateArgs {
 
     /// Evidence project directory; defaults to the current directory.
     ///
-    /// This command needs an editable project: one holding questions/ and
-    /// sources/ beside evidence-project.yaml.
+    /// This command needs an editable project containing evidence.yaml and its
+    /// named Function assets.
     #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
 
@@ -165,8 +165,8 @@ pub struct CheckArgs {
 
     /// Evidence project directory; defaults to the current directory.
     ///
-    /// This command needs an editable project: one holding questions/ and
-    /// sources/ beside evidence-project.yaml.
+    /// This command needs an editable project containing evidence.yaml and its
+    /// named Function assets.
     #[arg(value_name = "PROJECT", conflicts_with = "config")]
     project: Option<PathBuf>,
     /// Exit 1 when a warning is reported.

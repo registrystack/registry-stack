@@ -1,51 +1,31 @@
 # Evidence authoring project
 
-`evidencectl init` wrote this project around the API description it retained. It
-is a starting point rather than an example: the directories below are empty on
-purpose, because only the operation you select can decide what they hold.
+`evidencectl init` retained the API description byte for byte and created a normalized synthetic project beside it. The synthetic Source and AssertionDefinition are reviewable placeholders, not inferred policy.
 
 ## Files
 
 | File | What it holds |
 | --- | --- |
-| `evidence-project.yaml` | The project marker. Every command that takes `--project` looks for it, and every path below is read relative to it. |
-| `source.openapi.yaml` | The API description, retained exactly as it was read. Question authoring reads it; nothing rewrites it. |
-| `selectors/` | Selector profiles: the exact caller input a question accepts, field by field, with a byte bound on each. |
-| `sources/` | Sources: which operation is called, which caller field binds to it, and the bounds the call runs under. |
-| `adapters/` | Bounded extraction: it turns a source response into the facts a question reasons over. |
-| `schemas/` | The shapes a source response and an extraction must have before the next stage reads them. |
-| `questions/` | Questions: one fixed request each, with the answers it may disclose and the governance the assertion carries. |
-| `derivations/` | Bounded derivation: it turns facts into the answers a question declares, and nothing else. |
-| `fixtures/` | The synthetic cases `evidencectl test` replays offline, with no network. |
-| `secrets/` | Disposable local key material. It is owner-only, unbound, and never a deployment key; `.gitignore` keeps it out of version control. |
+| `evidence.yaml` | The single `EvidenceProject` with stable IDs for selector profiles, Functions, Sources, AssertionDefinitions, and outputs. |
+| `source.openapi.yaml` | The retained API description used by `evidencectl source suggest`. |
+| `functions/` | Named Function assets referenced by `evidence.yaml`. |
+| `fixtures/` | Synthetic offline cases for `evidencectl test`. |
+| `local-target.yaml` | The disposable normalized local target. |
+| `dev-authority.yaml` | Complete local AccessProfiles and grants. |
+| `.generated/secrets/` | Owner-only disposable development keys ignored by Git. |
 
 ## Next commands
 
 ```sh
-evidencectl source suggest . --source-id <id> --operation '<METHOD /path>'
+evidencectl source suggest source.openapi.yaml --project . --source-id <id> --operation '<METHOD /path>'
+evidencectl check . --target local-target.yaml
 ```
 
-`source suggest` drafts one editable source from the retained description for
-the operation you name. It selects that operation and nothing else, and it
-writes a draft you review rather than a source you deploy.
-
-A question, its schemas, its extraction, its derivation, and its fixtures are
-written after the source. Each one bounds the next, so a change to any of them
-is a change to what the assertion may say. `evidencectl test` replays
-them offline once they exist.
-
-`evidencectl package` compiles this project and one deployment target into a
-candidate. `evidencectl artifact inspect` checks candidate custody, while
-`evidencectl doctor --runtime-config <absolute-file>` checks live startup
-dependencies. None of these commands reads an
-editable project, so both come after the fixtures pass.
+`source suggest` adds one named Source and its preparation and extraction Functions to `evidence.yaml`. Review selector bindings, transport bounds, private facts, and any AssertionDefinition that acquires the Source.
 
 ## Documentation
 
 - Author a project: <https://docs.registrystack.org/configure/evidence/>
-- Build and deploy a project:
-  <https://docs.registrystack.org/tutorials/build-and-deploy-evidence-project/>
-- Every configuration key:
-  <https://docs.registrystack.org/reference/evidence-configuration/>
-- `evidencectl` commands: run `evidencectl --help`, or read
-  <https://docs.registrystack.org/reference/evidencectl/>
+- Build and deploy a project: <https://docs.registrystack.org/tutorials/build-and-deploy-evidence-project/>
+- Every configuration key: <https://docs.registrystack.org/reference/evidence-configuration/>
+- `evidencectl` commands: <https://docs.registrystack.org/reference/evidencectl/>
