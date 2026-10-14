@@ -26,8 +26,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::config::{
-    ArtifactPath, ConceptConfig, ConceptForm, ConfigError, EvidenceConfig, OrderedMap,
-    RequirementConfig, RuntimeConfig, SchemaFault, SelectorField, TextLocation,
+    ArtifactPath, AssuranceProfile, ConceptConfig, ConceptForm, ConfigError, EvidenceConfig,
+    OrderedMap, RequirementConfig, RuntimeConfig, SchemaFault, SelectorField, TextLocation,
     SOURCE_BATCH_CAPABILITY,
 };
 
@@ -2269,7 +2269,13 @@ fn load_fixtures(
             .sources
             .get(requirement.initial_source())
             .is_some_and(|source| source.unresolved_problem().is_some());
-        let fixture = load_fixture(root, path, files, declared_unresolved)?;
+        let fixture = load_fixture(
+            root,
+            path,
+            files,
+            declared_unresolved,
+            config.assurance_profile,
+        )?;
         fixtures.insert(path.to_owned(), fixture);
     }
     Ok(fixtures)
@@ -2280,6 +2286,7 @@ fn load_fixture(
     path: &str,
     files: &BTreeMap<String, Vec<u8>>,
     declared_unresolved: bool,
+    assurance_profile: AssuranceProfile,
 ) -> Result<JsonValue, BundleError> {
     let bytes = files
         .get(path)
@@ -2288,6 +2295,7 @@ fn load_fixture(
         &root.join(path).display().to_string(),
         bytes,
         declared_unresolved,
+        assurance_profile,
     )
     .map_err(|report| BundleError::Refused(Box::new(report)))
 }
@@ -3991,8 +3999,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn strict_assurance_rejects_partial_fixture_suites() {
-        for profile in ["production", "evidence-grade"] {
+    fn fixture_coverage_follows_bundle_assurance_profile() {
+        for profile in ["local", "production", "evidence-grade"] {
             let directory = tempfile::tempdir().expect("temporary bundle");
             copy_acceptance_bundle("adult-status", directory.path());
 
@@ -4016,6 +4024,11 @@ mod tests {
             refresh_package_envelope(directory.path());
             set_tree_mode(directory.path(), 0o555, 0o444);
 
+            if profile == "local" {
+                let bundle = Bundle::load(directory.path()).expect("local focused fixture loads");
+                assert_eq!(bundle.fixtures.len(), 1);
+                continue;
+            }
             let error = Bundle::load(directory.path()).expect_err(&format!(
                 "{profile} bundle loaded with incomplete fixture coverage"
             ));

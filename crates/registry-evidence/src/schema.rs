@@ -101,7 +101,7 @@ pub fn fixture_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                 "type": "array",
                 "minItems": 1,
                 "maxItems": MAXIMUM_CASES,
-                "description": "The cases, which together cover every required category.",
+                "description": "Declared synthetic cases; production and evidence-grade bundles require complete category coverage.",
                 "items": {
                     "type": "object",
                     "required": ["id"],
@@ -312,6 +312,7 @@ mod tests {
             .collect();
         let cases: Vec<(String, bool)> = vec![
             (format!("{header}synthetic_only: true\ncases:\n{complete}"), true),
+            (format!("{header}synthetic_only: true\ncases:\n  - {{id: positive}}\n"), true),
             (format!("{header}synthetic_only: true\ncommon: {{observed_at: x}}\ncases:\n{complete}"), true),
             (format!("{header}cases:\n{complete}"), false),
             (format!("{header}synthetic_only: true\n"), false),
@@ -326,7 +327,12 @@ mod tests {
             (format!("synthetic_only: true\ncases:\n{complete}"), false),
         ];
         for (text, expected) in cases {
-            let reader = crate::fixture::read_fixture("fixtures/case.yaml", text.as_bytes(), true);
+            let reader = crate::fixture::read_fixture(
+                "fixtures/case.yaml",
+                text.as_bytes(),
+                true,
+                crate::config::AssuranceProfile::Local,
+            );
             let instance: Value =
                 serde_json::to_value(serde_norway::from_str::<serde_norway::Value>(&text).unwrap())
                     .unwrap();
