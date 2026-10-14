@@ -9,6 +9,8 @@
   and standalone example for the current model.
 - BREAKING: use `evidencectl dev start PROJECT` to launch local development.
   The bare `dev --detach` and hidden `dev --project` spellings are removed.
+- Each local issuer generation owns distinct private bind-mount paths derived
+  from its retained session identity. Stop and clean remove its generated state.
 - Targets now have closed nested schemas and field-addressed diagnostics.
   Production check refuses a missing governed public signing key before runtime
   delegation. Check and explain accept a target file or its containing directory.
