@@ -151,11 +151,9 @@ async fn busy_or_failing_gateways_are_retried_until_the_final_attempt() {
         // retried reports the status without reading it.
         for (retry_after, expected) in [
             (None, None),
+            (Some("0"), Some(Duration::ZERO)),
             (Some("120"), Some(Duration::from_secs(120))),
             (Some("86400"), Some(Duration::from_secs(86_400))),
-            (Some("86401"), None),
-            (Some("0"), None),
-            (Some("Wed, 21 Oct 2026 07:28:00 GMT"), None),
         ] {
             let mut response =
                 ResponseTemplate::new(status).set_body_string("<html>gateway busy</html>");
@@ -178,6 +176,25 @@ async fn busy_or_failing_gateways_are_retried_until_the_final_attempt() {
                 }
                 _ => panic!("status {status} is retried before the final attempt"),
             }
+            server.verify().await;
+            server.reset().await;
+        }
+        // An unsupported wait cannot be silently discarded to retry sooner.
+        for retry_after in ["86401", "Wed, 21 Oct 2026 07:28:00 GMT", "invalid"] {
+            Mock::given(method("GET"))
+                .and(path("/offices"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .insert_header("retry-after", retry_after)
+                        .set_body_string("<html>gateway busy</html>"),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert!(matches!(
+                connection.get(&json!({"path":"offices"}), false).await,
+                CallOutcome::Refused { code } if code == "external-unusable-retry-after"
+            ));
             server.verify().await;
             server.reset().await;
         }

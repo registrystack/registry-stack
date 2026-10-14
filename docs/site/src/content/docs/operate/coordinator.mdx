@@ -147,7 +147,7 @@ GRANT CREATE ON DATABASE coordinator TO coordinator_migration;
 These are the only grants you make. `apply` creates the schema the runtime file's `namespace`
 names, owned by the migration role, and grants the runtime role what it needs there: `USAGE` on the
 schema, `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on `runs`, `jobs`, `admission_lock`, and
-`review_waits`, `SELECT` on `control`, `coordinator_activations`, and `coordinator_migrations`, and
+`completion_waits`, `SELECT` on `control`, `coordinator_activations`, and `coordinator_migrations`, and
 `UPDATE` on the four recovery-hold columns of `control`. A namespace starts with `coordinator_` and
 is at most 60 characters.
 
