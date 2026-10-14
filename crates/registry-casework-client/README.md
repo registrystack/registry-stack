@@ -43,8 +43,10 @@ Changes to holdings, membership or current visibility can invalidate it.
 On `410 review.result-expired`, restart without the cursor. Task rows remain
 subject to current source visibility, Casework membership and retention.
 
-The client takes a bearer token and explicit Casework profile for each call.
-Current-source task reads take the human caller's explicit source profile. Submitted-context tasks need no provider. It never retains a
+Producer, human-review, and Directory calls take a bearer token and explicit
+Casework profile. Agent assertion and grant-status calls take only a bearer
+token and grant ID. Current-source task reads take the human caller's source
+profile. Submitted-context tasks need no provider. It never retains a
 human token or follows redirects, and it resends a mutation only under the
 bounded same-key retry below. Direct mutations carry the task or directory
 revision the caller displayed and a caller-supplied idempotency key.
@@ -65,8 +67,8 @@ after the request was sent. `CaseworkClientError::is_outcome_unknown()`
 reports those cases, and an oversized or unparseable answer, as true; it is
 false for a request defect, a connection that was never established, and
 every typed 4xx refusal such as `idempotency.key-reused` (409) or
-`idempotency.expired` (410). A 410 does not run the mutation again, but there
-an earlier attempt under the key committed and only its stored response was
+`idempotency.expired` (410). A 410 does not run the mutation again, but an
+earlier attempt under the key committed and only its stored response was
 erased by retention: reconcile the original operation, by reading the task,
 review request, or directory, before choosing a new key.
 `CaseworkClientError::mutation_class()` agrees with it: `Ambiguous` exactly
@@ -104,5 +106,9 @@ Caseload movement and clock recomputation use preview and apply calls. Apply
 sends the returned preview ID and the caller's idempotency key. The service
 revision-fences the preview's complete task set and refuses changed work
 atomically. Clock recomputation uses each request's pinned policy closure.
-Admission sends the exact discovered `PolicyBinding` in `ReviewCreateRequest`.
-A changed expected binding is refused without accepting work.
+Admission sends the exact reviewed or explicitly accepted discovered
+`PolicyBinding` in `ReviewCreateRequest`. Compute its producer-bound digest
+locally with `submission_digest(producer_id, source_namespace, &request)`;
+Node and Python expose that same implementation as `submissionDigest` and
+`submission_digest`. A changed expected binding is refused without accepting
+work. Keep the binding, request, key, and digest unchanged during recovery.

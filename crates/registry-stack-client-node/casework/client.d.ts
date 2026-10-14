@@ -373,6 +373,9 @@ export interface ReviewPolicyClosure {
   outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; resultRequired?: boolean }>
 }
 
+/** Compute the canonical producer submission digest locally, without I/O. */
+export function submissionDigest(producer: string, sourceNamespace: string, request: ReviewCreateRequest): ContentDigest
+
 export class CaseworkClient {
   constructor(config: CaseworkClientConfig)
   description(token: string, profile: string): Promise<CaseworkOutcome<Description>>
