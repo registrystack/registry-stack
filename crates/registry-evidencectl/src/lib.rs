@@ -165,6 +165,9 @@ struct CheckArgs {
     /// Require a production or evidence-grade target and complete deployment closure. Requires --target.
     #[arg(long, requires = "target")]
     production: bool,
+    /// Exit 1 when a warning is reported.
+    #[arg(long)]
+    deny_warnings: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1192,7 +1195,12 @@ fn project_of(args: &CheckArgs) -> &std::path::Path {
 
 fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
     let project = project_of(&args);
-    let checked = check::check(project, args.target.as_deref(), args.production);
+    let checked = check::check(
+        project,
+        args.target.as_deref(),
+        args.production,
+        args.deny_warnings,
+    );
     write_checked(checked, format, |found| {
         check::refused_check_report(project, args.target.as_deref(), found)
     })

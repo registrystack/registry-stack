@@ -115,6 +115,7 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
     assert!(stdout.contains(&project.join("evidence.yaml").display().to_string()));
     assert!(!stdout.contains("sources/source-b.yaml"), "{stdout}");
     assert!(stdout.contains("evidencectl check"), "{stdout}");
+    assert!(stdout.contains("authored fixtures"), "{stdout}");
     assert!(stdout.contains("evidencectl test"), "{stdout}");
 
     let prepare_path = project.join("functions/source-b-prepare.rhai");

@@ -76,9 +76,9 @@ fn an_undeclared_command_is_still_refused() {
 }
 
 #[test]
-fn retired_check_and_bare_dev_options_are_absent_from_help() {
+fn standard_check_option_and_retired_bare_dev_options_are_clear_in_help() {
     let check = evidencectl(&["check", "--help"]);
-    assert!(!check.contains("--deny-warnings"), "{check}");
+    assert!(check.contains("--deny-warnings"), "{check}");
 
     let dev = evidencectl(&["dev", "--help"]);
     assert!(!dev.contains("--detach"), "{dev}");

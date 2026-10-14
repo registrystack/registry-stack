@@ -383,16 +383,25 @@ fn the_retired_project_flag_is_refused() {
 }
 
 #[test]
-fn retired_check_deny_warnings_is_an_unknown_argument() {
+fn check_deny_warnings_is_standard_for_project_and_file_checks() {
     let workspace = tempfile::tempdir().expect("workspace");
-    let file = workspace.path().join("any.yaml");
-    std::fs::write(&file, "kind: none\n").expect("write file");
+    let project = scaffold(workspace.path());
     let output = evidencectl()
-        .args(["check", "--deny-warnings", "--file"])
+        .args(["--format", "json", "check"])
+        .arg(&project)
+        .arg("--deny-warnings")
+        .output()
+        .expect("run project check");
+    conforming(&output, "check", SUCCESS, "complete");
+
+    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/evidence/examples/client-profile/client-profile.json");
+    let output = evidencectl()
+        .args(["--format", "json", "check", "--deny-warnings", "--file"])
         .arg(&file)
         .output()
-        .expect("run check");
-    assert_eq!(output.status.code(), Some(2));
+        .expect("run file check");
+    conforming(&output, "check", SUCCESS, "complete");
 }
 
 #[test]

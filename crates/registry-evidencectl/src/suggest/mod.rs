@@ -538,7 +538,8 @@ fn deliver_into_project(
         }
         println!(
             "not verified: complete or update the AssertionDefinitions that acquire this Source, \
-             then run `evidencectl check {}` and `evidencectl test {}`.",
+             then run `evidencectl check {}`. Add or update authored fixtures for the affected \
+             definitions, then run `evidencectl test {}`.",
             project.display(),
             project.display()
         );

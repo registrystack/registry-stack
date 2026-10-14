@@ -8,7 +8,12 @@ pub(crate) struct Checked {
     pub(crate) report: Value,
     pub(crate) diagnostics: Report,
 }
-pub(crate) fn check(project: &Path, target: Option<&Path>, production: bool) -> Result<Checked> {
+pub(crate) fn check(
+    project: &Path,
+    target: Option<&Path>,
+    production: bool,
+    deny_warnings: bool,
+) -> Result<Checked> {
     let target_path = target.map(crate::target::target_path);
     let target = target_path.as_deref();
     if production {
@@ -73,7 +78,14 @@ pub(crate) fn check(project: &Path, target: Option<&Path>, production: bool) -> 
                 json!({"complete":false,"missing":["signer.publicJwkFile"]});
         }
     }
+    if refuses_warnings(&checked.diagnostics, deny_warnings) {
+        return Err(checked.diagnostics.into());
+    }
     Ok(checked)
+}
+
+fn refuses_warnings(diagnostics: &Report, deny_warnings: bool) -> bool {
+    deny_warnings && diagnostics.warning_count() > 0
 }
 pub(crate) fn explain(project: &Path, target: Option<&Path>) -> Result<Checked> {
     crate::normalized::inspect(project, target, "explain")
@@ -162,7 +174,20 @@ mod tests {
     use super::*;
     #[test]
     fn production_requires_an_explicit_target() {
-        assert!(check(Path::new("unused"), None, true).is_err());
+        assert!(check(Path::new("unused"), None, true, false).is_err());
+    }
+    #[test]
+    fn deny_warnings_refuses_a_reported_warning_but_not_a_clean_report() {
+        let clean = Report::new(Vec::new());
+        let warning = Report::new(vec![registry_platform_yaml::Diagnostic::warning(
+            "evidence.test.warning",
+            "/test",
+            "the test warning was reported",
+            "Correct the test input.",
+        )]);
+        assert!(!refuses_warnings(&clean, true));
+        assert!(!refuses_warnings(&warning, false));
+        assert!(refuses_warnings(&warning, true));
     }
     #[test]
     fn explain_renders_named_definitions_functions_and_authority() {
