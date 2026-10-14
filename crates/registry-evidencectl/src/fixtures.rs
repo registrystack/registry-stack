@@ -16,9 +16,6 @@ use registry_platform_yaml::{
     ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
 };
 
-use crate::authoring::{
-    compile_fixture_project, compile_fixture_project_with_connections, CompiledFixtureProject,
-};
 use crate::{build, evidence_binary, source_import::ProjectLock};
 
 #[derive(Debug, Subcommand)]
@@ -32,7 +29,7 @@ pub struct RunArgs {
     /// Evidence project directory; defaults to the current directory.
     ///
     /// This command accepts either shape: an editable project holding
-    /// questions/ and sources/, or a deployment project holding runtime.yaml
+    /// evidence.yaml, or a deployment project holding runtime.yaml
     /// beside bundle/.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
@@ -44,10 +41,6 @@ pub struct RunArgs {
     /// Complete deployment target to use when compiling an editable project.
     #[arg(long)]
     pub target: Option<PathBuf>,
-
-    /// Generate local caller governance from current questions, using target connections.
-    #[arg(long, requires = "target")]
-    pub local: bool,
 
     /// Run only the exact bundle-relative fixture path named here.
     #[arg(long)]
@@ -196,7 +189,7 @@ fn no_fixture_report() -> Report {
         "fixtures",
         "",
         "No fixture file was found in the project's fixtures directory.",
-        "Add fixtures/<question-id>.yaml with `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1`, `kind: EvidenceFixture`, `synthetic_only: true`, and at least one case, name it in the question's `governance.fixtures`, then rerun evidencectl test <project>.",
+        "Add fixtures/<definition-id>.yaml with `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1`, `kind: EvidenceFixture`, `synthetic_only: true`, and at least one case, name it in the definition's `fixtures`, then rerun evidencectl test <project>.",
     )]);
     report.set_files_checked(0);
     report
@@ -224,9 +217,6 @@ pub fn run(command: FixturesCommand) -> Result<ExitCode> {
 }
 
 fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
-    if args.local && args.target.is_none() {
-        bail!("--local requires --target");
-    }
     let runtime_path = args.project.join("runtime.yaml");
     let evidence_bin = evidence_binary::resolve_matching(args.evidence_bin.as_deref())?;
     let mut editable_lock = None;
@@ -250,9 +240,13 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
             fixture_paths,
         }
     } else {
-        if !args.project.join("questions").is_dir() || !args.project.join("sources").is_dir() {
+        if !args
+            .project
+            .join(registry_evidence_authoring::project::PROJECT_FILE)
+            .is_file()
+        {
             bail!(
-                "project at {} is neither a deployment project with runtime.yaml nor an editable project with questions/ and sources/",
+                "project at {} requires one normalized evidence.yaml or a deployment runtime.yaml",
                 args.project.display()
             );
         }
@@ -273,39 +267,12 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
             ProjectLock::acquire(&args.project)
                 .with_context(|| format!("locking editable project {}", args.project.display()))?,
         );
-        if let Some(target) = args.target.as_deref().filter(|_| !args.local) {
-            let compilation =
-                build::compile_target_fixture_project(&args.project, target, &evidence_bin)
-                    .context("compiling editable project with deployment target")?;
-            FixtureTarget::TargetedEditable { compilation }
-        } else {
-            let staging = tempfile::Builder::new()
-                .prefix("evidencectl-fixtures-")
-                .tempdir()
-                .context("creating private fixture compilation staging")?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
-                    .context("sealing private fixture compilation staging")?;
-            }
-            let compilation = if let Some(target) = args.target.as_deref() {
-                let (connections, _) = build::local_dev_target_inputs(target)?;
-                compile_fixture_project_with_connections(
-                    &args.project,
-                    staging.path(),
-                    &evidence_bin,
-                    connections,
-                )
-            } else {
-                compile_fixture_project(&args.project, staging.path(), &evidence_bin)
-            }
-            .context("compiling editable project for fixture evaluation")?;
-            FixtureTarget::Editable {
-                compilation,
-                _staging: staging,
-            }
-        }
+        let default_target = args.project.join("local-target.yaml");
+        let selected_target = args.target.as_deref().unwrap_or(&default_target);
+        let compilation =
+            build::compile_target_fixture_project(&args.project, selected_target, &evidence_bin)
+                .context("compiling normalized project with complete target authority")?;
+        FixtureTarget::TargetedEditable { compilation }
     };
     let _editable_lock = editable_lock;
     let fixture_paths = select_fixture_paths(target.fixture_paths(), args.fixture.as_deref())?;
@@ -391,26 +358,19 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
 /// The fixture files an editable project holds, as project-relative paths in
 /// name order.
 fn project_fixture_paths(project: &Path) -> Result<Vec<String>> {
-    let directory = project.join("fixtures");
-    let entries = match fs::read_dir(&directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("listing fixtures in {}", directory.display()))
-        }
-    };
-    let mut paths = Vec::new();
-    for entry in entries {
-        let name = entry
-            .with_context(|| format!("listing fixtures in {}", directory.display()))?
-            .file_name();
-        if let Some(name) = name.to_str().filter(|name| name.ends_with(".yaml")) {
-            paths.push(format!("fixtures/{name}"));
-        }
-    }
-    paths.sort();
-    Ok(paths)
+    let bytes = crate::authored::read_authored_file(
+        &project.join(registry_evidence_authoring::project::PROJECT_FILE),
+        "EvidenceProject",
+    )?;
+    let project =
+        registry_evidence_authoring::project::read_project("evidence.yaml", &bytes)?.value;
+    Ok(project
+        .assertion_definitions
+        .values()
+        .filter_map(|definition| definition.fixtures.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect())
 }
 
 /// Read every fixture file the project references through the shared
@@ -488,12 +448,6 @@ enum FixtureTarget {
         runtime_path: PathBuf,
         fixture_paths: Vec<String>,
     },
-    Editable {
-        // Declared before the temporary directory so its Drop restores bundle
-        // permissions before the directory removes the staging tree.
-        compilation: CompiledFixtureProject,
-        _staging: tempfile::TempDir,
-    },
     TargetedEditable {
         compilation: build::TargetFixtureProject,
     },
@@ -503,7 +457,6 @@ impl FixtureTarget {
     fn fixture_paths(&self) -> &[String] {
         match self {
             Self::Deployment { fixture_paths, .. } => fixture_paths,
-            Self::Editable { compilation, .. } => &compilation.fixture_paths,
             Self::TargetedEditable { compilation } => &compilation.fixture_paths,
         }
     }
@@ -514,12 +467,6 @@ impl FixtureTarget {
                 evidence_bin,
                 &["check", "--runtime-config"],
                 Some(runtime_path),
-                &[],
-            ),
-            Self::Editable { compilation, .. } => run_evidence_step(
-                evidence_bin,
-                &["bundle-check", "--bundle"],
-                Some(&compilation.bundle_path),
                 &[],
             ),
             Self::TargetedEditable { compilation } => run_evidence_step(
@@ -555,19 +502,6 @@ impl FixtureTarget {
                     evidence_bin,
                     &["evaluate", "--runtime-config"],
                     Some(runtime_path),
-                    &args,
-                )
-            }
-            Self::Editable { compilation, .. } => {
-                let mut args = vec!["--fixture", fixture];
-                if let Some(case) = case {
-                    args.extend(["--case", case]);
-                }
-                args.extend(["--explain", "--explain-format", "json"]);
-                run_evidence_step(
-                    evidence_bin,
-                    &["bundle-evaluate", "--bundle"],
-                    Some(&compilation.bundle_path),
                     &args,
                 )
             }
@@ -688,6 +622,14 @@ fn run_evidence_step(
         command.arg(path);
     }
     command.args(args);
+    if prefix.first() == Some(&"bundle-evaluate") {
+        if let Some(parent) = path.and_then(Path::parent) {
+            let authority = parent.join("compiled-authority.yaml");
+            if authority.is_file() {
+                command.arg("--authority-document").arg(authority);
+            }
+        }
+    }
     match command.output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();

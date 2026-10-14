@@ -4,8 +4,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::Read as _,
-    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+    os::unix::fs::PermissionsExt as _,
     path::{Component, Path, PathBuf},
     process::{Command, ExitCode, ExitStatus, Stdio},
     sync::{
@@ -18,11 +17,8 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use registry_evidence_authoring::formats::{decode_authored, TARGET_GOVERNANCE};
-
 use crate::{authoring, evidence_binary, source_import::ProjectLock, OutputFormat};
 
-const MAX_TARGET_BYTES: u64 = 1024 * 1024;
 const MAX_EVIDENCE_CAPTURE_BYTES: u64 = 1024 * 1024;
 /// How much of a failed `evidence bundle-check` diagnostic is kept for the
 /// build failure message: the two bounds are applied together, whichever is
@@ -37,11 +33,10 @@ const EVIDENCE_VALIDATION: &str = "Evidence deployment validation";
 pub struct BuildArgs {
     /// Evidence project directory.
     ///
-    /// This command needs an editable project: one holding questions/ and
-    /// sources/ beside evidence-project.yaml.
+    /// This command reads the EvidenceProject in evidence.yaml.
     pub project: PathBuf,
 
-    /// Explicit deployment target containing governance.yaml and runtime.yaml.
+    /// Explicit EvidenceTarget file.
     pub target: PathBuf,
 
     /// New candidate directory to create. It must not already exist.
@@ -49,80 +44,6 @@ pub struct BuildArgs {
 
     /// Optional source or review revision recorded in `REVISION`.
     pub revision: Option<String>,
-}
-
-/// A deployment target's governance, decoded by the shared reader. Its
-/// members are carried into the bundle as written, where the runtime's own
-/// bundle check holds each one to its closed shape; the format version is the
-/// document's `apiVersion`.
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct TargetGovernance {
-    #[cfg_attr(
-        feature = "schema",
-        schemars(extend("enum" = ["local", "production", "evidence-grade"]))
-    )]
-    assurance_profile: String,
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
-    service: Value,
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_object"))]
-    issuer: Value,
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
-    publication: Option<Value>,
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
-    authentication: Value,
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
-    audit: Value,
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
-    subject_binding: Value,
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
-    rate_limits: Value,
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
-    signing: Value,
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
-    response_formats: Option<Value>,
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
-    source_connections: Option<Value>,
-    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
-    authority_profiles: Value,
-}
-
-/// The derived JSON Schema of one target governance document.
-#[cfg(feature = "schema")]
-pub(crate) fn governance_document_schema() -> serde_json::Value {
-    let mut schema = serde_json::to_value(schemars::schema_for!(TargetGovernance))
-        .expect("a derived schema is JSON");
-    // An omitted optional member is simply absent from the bundle; the derived
-    // `null` default would say otherwise.
-    if let Some(Value::Object(properties)) = schema.get_mut("properties") {
-        for member in properties.values_mut().filter_map(Value::as_object_mut) {
-            member.remove("default");
-        }
-    }
-    schema
-}
-
-/// A governance member the bundle grammar holds to an object, copied as
-/// written by the compile.
-#[cfg(feature = "schema")]
-fn bundle_object(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({
-        "type": "object",
-        "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
-    })
-}
-
-/// A governance member the compile copies unchanged into the bundle, so the
-/// Evidence bundle grammar owns its shape.
-#[cfg(feature = "schema")]
-fn bundle_member(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({
-        "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
-    })
 }
 
 #[derive(Debug)]
@@ -140,69 +61,6 @@ impl std::fmt::Display for TargetDocumentDiagnostic {
 
 impl std::error::Error for TargetDocumentDiagnostic {}
 
-impl TargetGovernance {
-    pub(crate) fn into_bundle(self) -> Result<Value> {
-        if !matches!(
-            self.assurance_profile.as_str(),
-            "local" | "production" | "evidence-grade"
-        ) {
-            return Err(TargetDocumentDiagnostic {
-                code: "evidence.target.assurance-profile",
-                path: "governance.yaml:/assuranceProfile".to_owned(),
-                message: "deployment governance assuranceProfile must be local, production, or evidence-grade"
-                    .to_owned(),
-            }
-            .into());
-        }
-        if self
-            .authority_profiles
-            .as_object()
-            .is_none_or(Map::is_empty)
-        {
-            return Err(TargetDocumentDiagnostic {
-                code: "evidence.target.authority-profiles",
-                path: "governance.yaml:/authorityProfiles".to_owned(),
-                message: "deployment governance requires at least one authority profile".to_owned(),
-            }
-            .into());
-        }
-        let mut object = Map::from_iter([
-            // The envelope of the bundle governance compiles into; it is not
-            // the governance envelope.
-            (
-                "apiVersion".to_owned(),
-                json!(evidence_binary::EVIDENCE_BUNDLE_API_VERSION),
-            ),
-            (
-                "kind".to_owned(),
-                json!(evidence_binary::EVIDENCE_BUNDLE_KIND),
-            ),
-            (
-                "assuranceProfile".to_owned(),
-                Value::String(self.assurance_profile),
-            ),
-            ("service".to_owned(), self.service),
-            ("issuer".to_owned(), self.issuer),
-            ("authentication".to_owned(), self.authentication),
-            ("audit".to_owned(), self.audit),
-            ("subjectBinding".to_owned(), self.subject_binding),
-            ("rateLimits".to_owned(), self.rate_limits),
-            ("signing".to_owned(), self.signing),
-            ("authorityProfiles".to_owned(), self.authority_profiles),
-        ]);
-        if let Some(response_formats) = self.response_formats {
-            object.insert("responseFormats".to_owned(), response_formats);
-        }
-        if let Some(source_connections) = self.source_connections {
-            object.insert("sourceConnections".to_owned(), source_connections);
-        }
-        if let Some(publication) = self.publication {
-            object.insert("publication".to_owned(), publication);
-        }
-        Ok(Value::Object(object))
-    }
-}
-
 pub(crate) fn run_package_with_format(args: BuildArgs, format: OutputFormat) -> Result<ExitCode> {
     let interruption = BuildInterruption::install()?;
     run_inner(args, &interruption, format)
@@ -216,25 +74,7 @@ fn run_inner(
     interruption.check()?;
     let _project_lock = ProjectLock::acquire(&args.project)
         .with_context(|| format!("locking editable project {}", args.project.display()))?;
-    // The assurance profile belongs to the target alone, so it is judged
-    // before the output location: a local target is named as such rather
-    // than hidden behind an output refusal.
     let target = read_target_documents(&args.target)?;
-    if target
-        .governed_bundle
-        .get("assuranceProfile")
-        .and_then(Value::as_str)
-        == Some("local")
-    {
-        return Err(TargetDocumentDiagnostic {
-            code: "evidence.package.production-profile-required",
-            path: "governance.yaml:/assuranceProfile".to_owned(),
-            message:
-                "evidencectl package requires a production or evidence-grade deployment target"
-                    .to_owned(),
-        }
-        .into());
-    }
     reject_existing_output(&args.output)?;
     let project = plain_directory(&args.project, "authoring project")?;
     let output_parent = plain_parent(&args.output)?;
@@ -275,7 +115,7 @@ fn run_inner(
         close_candidate_staging(staging)?;
         return Err(error);
     }
-    publish(staging, &args.output)?;
+    publish(staging, &candidate)?;
 
     if format == OutputFormat::Json {
         crate::report::print(&crate::report::success(
@@ -285,6 +125,9 @@ fn run_inner(
                 "project": args.project,
                 "target": args.target,
                 "output": args.output,
+                "package": args.output.join("bundle"),
+                "runtime": args.output.join("runtime.yaml"),
+                "authority": args.output.join("compiled-authority.yaml"),
                 "packageDigest": package_digest,
                 "revision": args.revision,
                 "requiredSecrets": secret_references,
@@ -297,13 +140,18 @@ fn run_inner(
     if let Some(revision) = &args.revision {
         println!("Revision: {revision}");
     }
-    println!("Package: {}", args.output.display());
+    println!("Package: {}", args.output.join("bundle").display());
+    println!("Runtime: {}", args.output.join("runtime.yaml").display());
+    println!(
+        "Authority: {}",
+        args.output.join("compiled-authority.yaml").display()
+    );
     for reference in secret_references {
         println!("Provision {SECRET_PREFIX}{reference}");
     }
     println!(
         "Target runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config {}`.",
-        args.target.join("runtime.yaml").display(),
+        args.output.join("runtime.yaml").display(),
     );
     Ok(ExitCode::SUCCESS)
 }
@@ -341,7 +189,12 @@ pub(crate) struct TargetFixtureProject {
 
 impl Drop for TargetFixtureProject {
     fn drop(&mut self) {
-        let _ = make_tree_removable(self.staging.path());
+        if let Err(error) = make_tree_removable(self.staging.path()) {
+            eprintln!(
+                "{}",
+                authoring::cleanup_failure_line(self.staging.path(), &error)
+            );
+        }
     }
 }
 
@@ -368,68 +221,46 @@ pub(crate) fn compile_target_fixture_project(
 }
 
 pub(crate) fn local_dev_target_inputs(target: &Path) -> Result<(Value, Value)> {
-    let target = read_target_documents(target)?;
-    local_dev_inputs_from_documents(&target)
-}
-
-pub(crate) struct CompiledLocalDevTarget {
-    pub(crate) source_connections: Value,
-    pub(crate) outbound_tls: Value,
-    pub(crate) bundle: Value,
-}
-
-/// Compile and validate the selected local target before its reviewed human
-/// authenticated-context authority is considered for a local rehearsal.
-pub(crate) fn compile_local_dev_target(
-    project: &Path,
-    target: &Path,
-    evidence_bin: &Path,
-) -> Result<CompiledLocalDevTarget> {
-    let target = read_target_documents(target)?;
-    let (source_connections, outbound_tls) = local_dev_inputs_from_documents(&target)?;
-    let staging = tempfile::Builder::new()
-        .prefix("evidencectl-dev-target-")
-        .tempdir()
-        .context("creating private local target validation staging")?;
-    fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
-        .context("sealing private local target validation staging")?;
-    let staging_path = fs::canonicalize(staging.path())
-        .context("resolving private local target validation staging")?;
-    let compiled = compile_with_target(project, &target, &staging_path, evidence_bin, None)?;
-    let bundle = compiled.bundle;
-    make_tree_removable(staging.path())?;
-    Ok(CompiledLocalDevTarget {
-        source_connections,
-        outbound_tls,
-        bundle,
-    })
-}
-
-fn local_dev_inputs_from_documents(target: &TargetDocuments) -> Result<(Value, Value)> {
+    let path = if target.is_dir() {
+        target.join("target.yaml")
+    } else {
+        target.to_path_buf()
+    };
+    let bytes = crate::authored::read_authored_file(&path, "local EvidenceTarget")?;
+    let target =
+        registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?.value;
     if target
-        .governed_bundle
-        .get("assuranceProfile")
-        .and_then(Value::as_str)
-        != Some("local")
+        .assurance_profile
+        .as_deref()
+        .is_some_and(|profile| profile != "local")
     {
-        bail!("dev --target requires deployment governance assuranceProfile local");
+        bail!("dev requires a local target");
     }
-    let source_connections = target
-        .governed_bundle
-        .get("sourceConnections")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    if !source_connections.is_object() {
-        bail!("deployment governance sourceConnections must be a mapping");
-    }
-    let runtime = runtime_value(&target.runtime)
-        .context("deployment runtime is not a readable native runtime document")?;
-    let mut outbound_tls = runtime
-        .get("outboundTls")
-        .cloned()
-        .ok_or_else(|| anyhow!("deployment runtime outboundTls is required for dev --target"))?;
-    rebase_outbound_tls(&target.root, &mut outbound_tls)?;
-    Ok((source_connections, outbound_tls))
+    let connections = target
+        .connections
+        .iter()
+        .map(|(id, value)| {
+            let mut value = value.clone();
+            let map = value
+                .as_object_mut()
+                .context("source connection must be an object")?;
+            let origin = map
+                .remove("origin")
+                .context("source connection requires origin")?;
+            map.insert("baseUrl".to_owned(), origin);
+            crate::normalized::lower_connection_authentication(map);
+            map.entry("maximumConcurrency").or_insert(json!(256));
+            Ok((id.to_string(), value))
+        })
+        .collect::<Result<Map<_, _>>>()?;
+    let mut outbound_tls = target
+        .outbound_tls
+        .unwrap_or_else(|| json!({"systemRoots":true,"trustProfiles":{}}));
+    rebase_outbound_tls(
+        crate::normalized::target_directory(&path),
+        &mut outbound_tls,
+    )?;
+    Ok((json!(connections), outbound_tls))
 }
 
 struct BuildInterruption {
@@ -481,30 +312,14 @@ pub(crate) struct TargetDocuments {
     pub(crate) root: PathBuf,
     pub(crate) runtime: Vec<u8>,
     pub(crate) governed_bundle: Value,
+    pub(crate) normalized_target: Option<registry_evidence_authoring::target::EvidenceTarget>,
+    pub(crate) source_root: Option<PathBuf>,
+    pub(crate) source_path: Option<PathBuf>,
+    pub(crate) _stage: Option<tempfile::TempDir>,
 }
 
 pub(crate) fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
-    let root = plain_directory(target, "deployment target")?;
-    let governance_bytes = crate::authored::read_authored_file(
-        &root.join("governance.yaml"),
-        "deployment governance",
-    )?;
-    let runtime = read_plain_file(
-        &root.join("runtime.yaml"),
-        MAX_TARGET_BYTES,
-        "deployment runtime",
-    )?;
-    let governance = decode_authored::<TargetGovernance>(
-        "governance.yaml",
-        &governance_bytes,
-        &TARGET_GOVERNANCE,
-    )?
-    .value;
-    Ok(TargetDocuments {
-        root,
-        runtime,
-        governed_bundle: governance.into_bundle()?,
-    })
+    crate::normalized::read_target_documents(target)
 }
 
 pub(crate) struct TargetCompilation {
@@ -527,7 +342,31 @@ pub(crate) fn compile_with_target(
         target.governed_bundle.clone(),
         evidence_bin,
         revision,
-    )?;
+    )
+    .map_err(|error| {
+        if let (Some(source), Some(diagnostic)) = (
+            &target.source_path,
+            error.downcast_ref::<authoring::AuthoredDiagnostic>(),
+        ) {
+            if let Some(pointer) = diagnostic.path.strip_prefix("target.yaml:") {
+                return authoring::AuthoredDiagnostic {
+                    code: diagnostic.code.clone(),
+                    path: format!("{}:{pointer}", source.display()),
+                    message: diagnostic.message.clone(),
+                }
+                .into();
+            }
+        }
+        error
+    })?;
+    if let (Some(target_model), Some(root)) = (&target.normalized_target, &target.source_root) {
+        let (project_model, _) = crate::normalized::read(project)?;
+        let authority = crate::normalized::compiled_authority(&project_model, target_model, root)?;
+        fs::write(
+            staging_root.join("compiled-authority.yaml"),
+            crate::authored::to_indented_yaml(&authority)?,
+        )?;
+    }
     Ok(TargetCompilation {
         bundle_path: compiled.bundle_path,
         fixture_paths: compiled.fixture_paths,
@@ -552,6 +391,7 @@ fn prepare_candidate(
     revision: Option<&str>,
 ) -> Result<(String, Vec<String>)> {
     let compiled = compile_with_target(project, target, staging_root, evidence_bin, revision)?;
+    fs::write(staging_root.join("runtime.yaml"), &target.runtime)?;
     interruption.check()?;
     reject_review_markers(&compiled.bundle_path)?;
     reject_review_markers_in_bytes(&target.runtime, "runtime.yaml")?;
@@ -708,6 +548,12 @@ fn run_bundle_fixture(
         .arg("--fixture")
         .arg(fixture)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+    if let Some(parent) = bundle.parent() {
+        let authority = parent.join("compiled-authority.yaml");
+        if authority.is_file() {
+            command.arg("--authority-document").arg(authority);
+        }
+    }
     let output = run_evidence(command, interruption, false, false)?;
     if output.status.success() {
         return Ok(());
@@ -941,7 +787,7 @@ fn reject_existing_output(path: &Path) -> Result<()> {
     }
 }
 
-fn rebase_outbound_tls(target_root: &Path, outbound_tls: &mut Value) -> Result<()> {
+pub(crate) fn rebase_outbound_tls(target_root: &Path, outbound_tls: &mut Value) -> Result<()> {
     let outbound_tls = outbound_tls
         .as_object_mut()
         .ok_or_else(|| anyhow!("deployment runtime outboundTls must be a mapping"))?;
@@ -981,6 +827,11 @@ fn rebase_target_file(target_root: &Path, value: &str, description: &str) -> Res
         }
         plain_file_path(&target_root.join(path), description)?
     };
+    let metadata =
+        fs::symlink_metadata(&resolved).with_context(|| format!("inspecting {description}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        bail!("{description} must be a plain file");
+    }
     Ok(resolved.display().to_string())
 }
 
@@ -1030,9 +881,11 @@ fn validate_plain_components(
             Component::RootDir => current.push(Path::new("/")),
             Component::Normal(value) => current.push(value),
             Component::CurDir => continue,
-            Component::ParentDir | Component::Prefix(_) => {
-                bail!("{description} must not contain path traversal")
+            Component::ParentDir => {
+                current.pop();
+                continue;
             }
+            Component::Prefix(_) => bail!("{description} must use a local filesystem path"),
         }
         let metadata =
             fs::symlink_metadata(&current).with_context(|| format!("inspecting {description}"))?;
@@ -1047,31 +900,7 @@ fn validate_plain_components(
     Ok(())
 }
 
-fn read_plain_file(path: &Path, maximum: u64, description: &str) -> Result<Vec<u8>> {
-    use rustix::fs::{Mode, OFlags};
-    let descriptor = rustix::fs::open(
-        path,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-        Mode::empty(),
-    )
-    .map_err(std::io::Error::from)
-    .with_context(|| format!("opening {description}"))?;
-    let mut file = File::from(descriptor);
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.nlink() != 1 || metadata.len() > maximum {
-        bail!("{description} must be a bounded regular file");
-    }
-    let mut bytes = Vec::new();
-    std::io::Read::by_ref(&mut file)
-        .take(maximum + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > maximum {
-        bail!("{description} exceeds its byte limit");
-    }
-    Ok(bytes)
-}
-
-fn make_tree_removable(root: &Path) -> Result<()> {
+pub(crate) fn make_tree_removable(root: &Path) -> Result<()> {
     for entry in fs::read_dir(root)? {
         let path = entry?.path();
         let metadata = fs::symlink_metadata(&path)?;
@@ -1099,15 +928,18 @@ fn close_candidate_staging(staging: tempfile::TempDir) -> Result<()> {
 }
 
 fn publish(staging: tempfile::TempDir, output: &Path) -> Result<()> {
+    // The candidate owns one immutable package and separate target handoff
+    // documents. Moving their common private parent publishes all three at once.
+    for file in ["runtime.yaml", "compiled-authority.yaml"] {
+        if let Err(error) =
+            fs::set_permissions(staging.path().join(file), fs::Permissions::from_mode(0o400))
+        {
+            close_candidate_staging(staging)?;
+            return Err(error).context("sealing the candidate target handoff");
+        }
+    }
     let staged_root = staging.keep();
-    let staged_package = staged_root.join("bundle");
-    // macOS refuses RENAME_EXCL for a directory whose own write bit has been
-    // removed, even though both parent directories remain writable. Restore
-    // owner access only on the package root for the atomic move; every package
-    // file and child directory remains sealed throughout publication.
-    fs::set_permissions(&staged_package, fs::Permissions::from_mode(0o700))
-        .context("preparing the sealed package root for atomic publication")?;
-    if let Err(error) = rename_noreplace(&staged_package, output) {
+    if let Err(error) = rename_noreplace(&staged_root, output) {
         let _ = make_tree_removable(&staged_root);
         let _ = fs::remove_dir_all(&staged_root);
         return Err(error).context("publishing the deployment candidate without replacement");
@@ -1115,10 +947,8 @@ fn publish(staging: tempfile::TempDir, output: &Path) -> Result<()> {
     if let Err(error) = fs::set_permissions(output, fs::Permissions::from_mode(0o500)) {
         let _ = make_tree_removable(output);
         let _ = fs::remove_dir_all(output);
-        let _ = fs::remove_dir(&staged_root);
-        return Err(error).context("sealing the published package root");
+        return Err(error).context("sealing the published candidate root");
     }
-    fs::remove_dir(&staged_root).context("removing empty package staging directory")?;
     Ok(())
 }
 
@@ -1145,221 +975,72 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_evidence_authoring::formats::{
-        envelope_lines, TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND,
-    };
     use std::os::unix::fs::symlink;
 
-    /// A governance document with its envelope.
-    fn governance(body: &str) -> String {
-        format!(
-            "{}{body}",
-            envelope_lines(TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND)
-        )
-    }
-
-    fn decoded(
-        body: &str,
-    ) -> std::result::Result<TargetGovernance, registry_platform_yaml::Report> {
-        decode_authored::<TargetGovernance>(
-            "governance.yaml",
-            governance(body).as_bytes(),
-            &TARGET_GOVERNANCE,
-        )
-        .map(|decoded| decoded.value)
+    #[test]
+    fn sibling_candidate_parent_is_allowed_after_each_component_is_checked() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::create_dir(root.join("project")).unwrap();
+        let candidate = root.join("project/../candidate");
+        assert_eq!(plain_parent(&candidate).unwrap(), root);
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.join("linked")).unwrap();
+        assert!(plain_parent(&root.join("linked/../candidate")).is_err());
     }
 
     #[test]
-    fn production_governance_is_closed_at_the_target_boundary() {
-        let unknown = decoded(
-            r#"assuranceProfile: production
-service: {}
-issuer: {}
-authentication: {}
-audit: {}
-subjectBinding: {}
-rateLimits: {}
-signing: {}
-authorityProfiles: {}
-requirements: []
-"#,
+    fn normalized_target_reader_rejects_runtime_owned_keys() {
+        let text = include_str!("../../../products/evidence/examples/standalone/local-target.yaml");
+        let report = registry_evidence_authoring::target::read_target(
+            "target.yaml",
+            format!("{text}\nrequirements: []\n").as_bytes(),
         )
         .unwrap_err();
-        let codes: Vec<_> = unknown
+        assert!(report
             .diagnostics()
             .iter()
-            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
-            .collect();
-        assert_eq!(codes, [("config.unknown-key", "/requirements")]);
+            .any(|diagnostic| diagnostic.path == "/requirements"
+                && diagnostic.code == "config.unknown-key"));
     }
 
     #[test]
-    fn a_governance_version_names_the_envelope_that_replaced_it() {
-        let report = decoded(
-            r#"version: 1
-assuranceProfile: production
-service: {}
-issuer: {}
-authentication: {}
-audit: {}
-subjectBinding: {}
-rateLimits: {}
-signing: {}
-authorityProfiles: {}
-"#,
+    fn normalized_target_reader_accepts_bom_and_refuses_oversized_documents() {
+        let text = include_str!("../../../products/evidence/examples/standalone/local-target.yaml");
+        registry_evidence_authoring::target::read_target(
+            "target.yaml",
+            format!("\u{feff}{text}").as_bytes(),
         )
-        .unwrap_err();
-        let codes: Vec<_> = report
+        .unwrap();
+        let oversized = format!(
+            "{text}{}",
+            "#".repeat(registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES + 64)
+        );
+        let report =
+            registry_evidence_authoring::target::read_target("target.yaml", oversized.as_bytes())
+                .unwrap_err();
+        assert!(report
             .diagnostics()
             .iter()
-            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
-            .collect();
-        assert_eq!(codes, [("config.removed-key", "/version")]);
+            .any(|diagnostic| diagnostic.code == "yaml.too-large"));
     }
 
     #[test]
-    fn a_governance_file_with_a_byte_order_mark_is_read() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let target = fs::canonicalize(temporary.path()).expect("canonical target");
-        let target = target.as_path();
-        fs::write(
-            target.join("governance.yaml"),
-            format!(
-                "\u{feff}{}",
-                governance(
-                    "assuranceProfile: local\nservice: {}\nissuer: {}\nauthentication: {}\n\
-                     audit: {}\nsubjectBinding: {}\nrateLimits: {}\nsigning: {}\n\
-                     authorityProfiles:\n  local: {}\n"
-                )
-            ),
-        )
-        .expect("governance");
-        fs::write(target.join("runtime.yaml"), "outboundTls: {}\n").expect("runtime");
-        let documents = read_target_documents(target).expect("governance with a BOM");
-        assert_eq!(documents.governed_bundle["assuranceProfile"], "local");
+    fn target_relative_tls_ca_files_are_rebased_without_following_links() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::create_dir(root.join("trust")).unwrap();
+        fs::write(root.join("trust/ca.pem"), "synthetic CA").unwrap();
+        let mut tls =
+            json!({"systemRoots":true,"trustProfiles":{"local":{"caBundleFile":"trust/ca.pem"}}});
+        rebase_outbound_tls(&root, &mut tls).unwrap();
         assert_eq!(
-            documents.governed_bundle["apiVersion"],
-            evidence_binary::EVIDENCE_BUNDLE_API_VERSION
+            tls["trustProfiles"]["local"]["caBundleFile"],
+            root.join("trust/ca.pem").to_str().unwrap()
         );
-        assert_eq!(
-            documents.governed_bundle["kind"],
-            evidence_binary::EVIDENCE_BUNDLE_KIND
-        );
-    }
-
-    #[test]
-    fn an_oversized_governance_file_is_refused_by_the_reader() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let target = fs::canonicalize(temporary.path()).expect("canonical target");
-        let target = target.as_path();
-        let mut text = governance(
-            "assuranceProfile: local\nservice: {}\nissuer: {}\nauthentication: {}\n\
-             audit: {}\nsubjectBinding: {}\nrateLimits: {}\nsigning: {}\n\
-             authorityProfiles:\n  local: {}\n",
-        );
-        text.push_str(&"#".repeat(registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES + 64));
-        fs::write(target.join("governance.yaml"), text).expect("governance");
-        fs::write(target.join("runtime.yaml"), "outboundTls: {}\n").expect("runtime");
-        let error = read_target_documents(target)
-            .err()
-            .expect("an oversized governance file is refused");
-        let report = crate::authored::report_in(&error).expect("the reader's report");
-        let codes: Vec<_> = report
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| diagnostic.code.as_str())
-            .collect();
-        assert_eq!(codes, ["yaml.too-large"]);
-    }
-
-    #[test]
-    fn local_dev_target_inputs_accept_only_local_targets_and_rebase_ca_files() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let target = temporary.path().join("target");
-        fs::create_dir(&target).expect("target directory");
-        fs::create_dir(target.join("trust")).expect("trust directory");
-        fs::write(target.join("trust/local-ca.pem"), "ca").expect("ca bundle");
-        fs::write(
-            target.join("governance.yaml"),
-            governance(
-                r#"assuranceProfile: local
-service: {}
-issuer: {}
-authentication: {}
-audit: {}
-subjectBinding: {}
-rateLimits: {}
-signing: {}
-sourceConnections:
-  registry:
-    baseUrl: http://127.0.0.1:8088
-authorityProfiles:
-  local: {}
-"#,
-            ),
-        )
-        .expect("governance");
-        fs::write(
-            target.join("runtime.yaml"),
-            r#"apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
-kind: EvidenceRuntimeConfig
-outboundTls:
-  systemRoots: true
-  trustProfiles:
-    local-ca:
-      caBundleFile: trust/local-ca.pem
-"#,
-        )
-        .expect("runtime");
-
-        let target = fs::canonicalize(target).expect("canonical target");
-        let (connections, outbound_tls) =
-            local_dev_target_inputs(&target).expect("local dev target inputs");
-
-        assert_eq!(connections["registry"]["baseUrl"], "http://127.0.0.1:8088");
-        assert_eq!(
-            outbound_tls["trustProfiles"]["local-ca"]["caBundleFile"],
-            fs::canonicalize(target.join("trust/local-ca.pem"))
-                .expect("canonical CA")
-                .display()
-                .to_string()
-        );
-
-        fs::write(
-            target.join("governance.yaml"),
-            fs::read_to_string(target.join("governance.yaml"))
-                .expect("governance")
-                .replace("assuranceProfile: local", "assuranceProfile: production"),
-        )
-        .expect("production governance");
-        assert!(local_dev_target_inputs(&target).is_err());
-    }
-
-    #[test]
-    fn production_governance_passes_source_connections_to_the_compiler() {
-        let governance = decoded(
-            r#"assuranceProfile: production
-service: {}
-issuer: {}
-authentication: {}
-audit: {}
-subjectBinding: {}
-rateLimits: {}
-signing: {}
-sourceConnections:
-  registry:
-    baseUrl: https://registry.example.test
-    authentication: {type: static-authorization, tokenRef: 'secret:file/registry-token'}
-authorityProfiles:
-  reviewed: {}
-"#,
-        )
-        .expect("sourceConnections are native target governance");
-        let bundle = governance.into_bundle().expect("governed bundle");
-        assert_eq!(
-            bundle["sourceConnections"]["registry"]["baseUrl"],
-            "https://registry.example.test"
-        );
+        symlink(root.join("trust/ca.pem"), root.join("linked.pem")).unwrap();
+        let mut linked = json!({"trustProfiles":{"local":{"caBundleFile":"linked.pem"}}});
+        assert!(rebase_outbound_tls(&root, &mut linked).is_err());
     }
 
     #[test]
@@ -1484,5 +1165,41 @@ authorityProfiles:
             .next()
             .expect("content survives the trim note");
         assert!(kept.len() <= MAX_DIAGNOSTIC_EXCERPT_BYTES);
+    }
+    #[test]
+    fn candidate_publication_keeps_target_handoff_outside_immutable_package() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = tempfile::Builder::new()
+            .prefix("candidate-")
+            .tempdir_in(root.path())
+            .unwrap();
+        fs::create_dir(stage.path().join("bundle")).unwrap();
+        fs::write(
+            stage.path().join("bundle/evidence.yaml"),
+            b"compiled package",
+        )
+        .unwrap();
+        fs::write(stage.path().join("runtime.yaml"), b"operator runtime").unwrap();
+        fs::write(
+            stage.path().join("compiled-authority.yaml"),
+            b"complete target authority",
+        )
+        .unwrap();
+        let output = root.path().join("candidate");
+        publish(stage, &output).unwrap();
+        assert!(output.join("bundle/evidence.yaml").is_file());
+        assert!(output.join("runtime.yaml").is_file());
+        assert!(output.join("compiled-authority.yaml").is_file());
+        assert!(!output.join("bundle/compiled-authority.yaml").exists());
+        let other = tempfile::Builder::new()
+            .prefix("candidate-")
+            .tempdir_in(root.path())
+            .unwrap();
+        fs::create_dir(other.path().join("bundle")).unwrap();
+        fs::write(other.path().join("runtime.yaml"), b"replacement").unwrap();
+        fs::write(other.path().join("compiled-authority.yaml"), b"replacement").unwrap();
+        assert!(publish(other, &output).is_err());
+        assert!(fs::read(output.join("runtime.yaml")).unwrap() == b"operator runtime");
+        make_tree_removable(&output).unwrap();
     }
 }

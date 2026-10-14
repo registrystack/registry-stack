@@ -107,6 +107,23 @@ fn conforming(output: &Output, command: &str, exit: i32, status: &str) -> Value 
 }
 
 fn assert_camel_case(value: &Value, path: &str) {
+    // Authored map keys and JSON Schema properties retain their own vocabulary.
+    // The surrounding report fields remain camelCase.
+    if matches!(
+        path.rsplit('.').next(),
+        Some(
+            "properties"
+                | "facts"
+                | "outputs"
+                | "selectorProfiles"
+                | "accessProfiles"
+                | "parameters"
+                | "profiles"
+                | "fields"
+        )
+    ) {
+        return;
+    }
     match value {
         Value::Object(members) => {
             for (key, member) in members {
@@ -221,14 +238,7 @@ fn init_check_and_explain_share_the_envelope() {
         .expect("run explain");
     let explained = conforming(&output, "explain", SUCCESS, "complete");
 
-    let question = fs::read_dir(project.join("questions"))
-        .expect("questions")
-        .map(|entry| entry.expect("entry").path())
-        .find(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "yaml")
-        })
-        .expect("the scaffold ships a question");
+    let question = project.join("evidence.yaml");
     let text = fs::read_to_string(&question).expect("question text");
     fs::write(
         &question,
@@ -286,10 +296,10 @@ fn key_and_access_commands_share_the_envelope() {
     let project = scaffold(workspace.path());
     let output = evidencectl()
         .current_dir(&project)
-        .args(["--format", "json", "access", "policy", "list"])
+        .args(["--format", "json", "access", "profile", "list"])
         .output()
         .expect("run access policy list");
-    conforming(&output, "access policy list", SUCCESS, "complete");
+    conforming(&output, "access profile list", SUCCESS, "complete");
 }
 
 #[test]

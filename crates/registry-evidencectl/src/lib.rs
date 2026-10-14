@@ -26,6 +26,8 @@ mod junit;
 mod jwk;
 mod jwks;
 mod keygen;
+mod normalized;
+mod project_snapshot;
 mod report;
 mod request;
 mod runtime;
@@ -70,7 +72,9 @@ struct Cli {
 enum Command {
     /// Create a new editable Evidence project.
     Init(scaffold::NewArgs),
-    /// Check authored policy and, when selected, deployment closure, or one tooling file, offline.
+    /// Generate typed project outputs and Requirement URI names.
+    Types(normalized::TypesArgs),
+    /// Check a normalized project and, when selected, deployment closure, or one tooling file, offline.
     Check(CheckArgs),
     /// Explain the authored inventory and optional target-owned governance.
     Explain(ExplainArgs),
@@ -81,7 +85,7 @@ enum Command {
     /// Configure progressive relying-party clients and fetch contract candidates.
     #[command(subcommand)]
     Client(client::ClientCommand),
-    /// Manage local caller access policies and clients.
+    /// Manage target access profiles and local caller clients.
     #[command(subcommand)]
     Access(access::AccessCommand),
     /// Generate Evidence Gateway deployment key material as owner-only files.
@@ -92,8 +96,6 @@ enum Command {
     /// Convert public key material into a public JWK.
     #[command(subcommand)]
     Jwk(jwk::JwkCommand),
-    /// Start an editable Evidence Gateway project from OpenAPI, a starter, or a SQLite extract.
-    New(scaffold::NewArgs),
     /// Drive the evidence binary across a project's bundle fixtures.
     #[command(subcommand)]
     Fixtures(fixtures::FixturesCommand),
@@ -184,9 +186,6 @@ struct TestArgs {
     /// Complete deployment target to use when compiling an editable project.
     #[arg(long)]
     target: Option<PathBuf>,
-    /// Generate local caller governance while retaining the target's source connections.
-    #[arg(long, requires = "target")]
-    local: bool,
     /// Run only the exact bundle-relative fixture path named here.
     #[arg(long)]
     fixture: Option<String>,
@@ -281,7 +280,6 @@ const HUMAN_ONLY_COMMANDS: &[&[&str]] = &[
     &["source", "detach"],
     &["target", "new"],
     &["request", "prepare"],
-    &["request", "verify"],
     &["verify"],
     &["tooling", "language-server"],
     &["__dev-supervisor"],
@@ -457,6 +455,7 @@ fn run_entry() -> ExitCode {
                 "Use a new destination and correct the starter or import input named by the command.",
             )
         }
+        Command::Types(args) => normalized::generate_types(args, format),
         Command::Check(CheckArgs {
             file: Some(file), ..
         }) => Ok(file_check::run(&file, format)),
@@ -488,7 +487,6 @@ fn run_entry() -> ExitCode {
                     project: args.project,
                     evidence_bin: args.evidence_bin,
                     target: args.target,
-                    local: args.local,
                     fixture: args.fixture,
                     case: args.case,
                     json: format == OutputFormat::Json,
@@ -529,18 +527,13 @@ fn run_entry() -> ExitCode {
         Command::Keygen(command) => keygen::run(command, format),
         Command::Jwks(args) => jwks::run(args, format),
         Command::Jwk(command) => jwk::run(command, format),
-        Command::New(args) => scaffold::run_with_format(args, "new", format),
         Command::Fixtures(fixtures::FixturesCommand::Run(mut args)) => {
             args.json |= format == OutputFormat::Json;
             args.junit = junit;
             fixtures::run(fixtures::FixturesCommand::Run(args))
         }
         Command::Source(command) => source_cli::run(command, format),
-        Command::Target(target::TargetCommand::Explain(mut args)) => {
-            args.json |= format == OutputFormat::Json;
-            target::run(target::TargetCommand::Explain(args))
-        }
-        Command::Target(command) => target::run(command),
+        Command::Target(command) => target::run(command, format),
         Command::Doctor(args) => safe_command(
             runtime::run(args, format),
             "evidence.doctor.failed",
@@ -1315,10 +1308,10 @@ mod tests {
         "init",
         "check",
         "explain",
+        "types",
+        "access profile list",
         "test",
         "package",
-        "access policy add",
-        "access policy list",
         "access client add",
         "access client list",
         "access client revoke",
@@ -1474,6 +1467,9 @@ mod tests {
             Cli::try_parse_from(["evidencectl", "explain", "project", "--target", "target"])
                 .is_ok()
         );
+        assert!(
+            Cli::try_parse_from(["evidencectl", "test", "project", "--target", "target"]).is_ok()
+        );
         assert!(Cli::try_parse_from([
             "evidencectl",
             "test",
@@ -1482,7 +1478,7 @@ mod tests {
             "target",
             "--local"
         ])
-        .is_ok());
+        .is_err());
         assert!(Cli::try_parse_from([
             "evidencectl",
             "package",
@@ -1962,6 +1958,7 @@ mod tests {
                 "evidencectl target explain",
                 "evidencectl doctor",
                 "evidencectl tooling editor",
+                "evidencectl types",
             ]),
             "every documented project argument must be covered by this rule"
         );
@@ -1984,7 +1981,7 @@ mod tests {
             );
             let long_help = argument
                 .get_long_help()
-                .expect("every documented --project states the project shape it needs")
+                .unwrap_or_else(|| panic!("{path} must state the project shape it needs"))
                 .to_string();
             assert!(
                 long_help.contains("editable project") || long_help.contains("deployment project"),
@@ -2216,7 +2213,7 @@ mod tests {
         for arguments in [
             vec![
                 "evidencectl",
-                "new",
+                "init",
                 "starter-project",
                 "--starter",
                 "starters/local",
@@ -2225,7 +2222,7 @@ mod tests {
             ],
             vec![
                 "evidencectl",
-                "new",
+                "init",
                 "openapi-project",
                 "--openapi",
                 "source.openapi.yaml",
@@ -2234,7 +2231,7 @@ mod tests {
             ],
             vec![
                 "evidencectl",
-                "new",
+                "init",
                 "sqlite-project",
                 "--transport",
                 "sqlite-extract",
@@ -2292,57 +2289,27 @@ mod tests {
     }
 
     #[test]
-    fn request_verify_is_a_deprecated_alias_of_verify() {
-        let command = command();
-        let request = command
-            .find_subcommand("request")
-            .expect("request is published");
-        let aliased = request
-            .find_subcommand("verify")
-            .expect("request verify stays available");
-        let about = aliased
-            .get_about()
-            .expect("request verify carries help")
-            .to_string();
-        assert!(
-            about.to_lowercase().contains("deprecated"),
-            "request verify must announce itself as deprecated, saw {about:?}"
-        );
-        let long_about = aliased
-            .get_long_about()
-            .expect("request verify explains what replaces it")
-            .to_string();
-        assert!(
-            long_about.contains("evidencectl verify"),
-            "request verify must name the command that replaces it, saw {long_about:?}"
-        );
-
-        for arguments in [
-            vec![
-                "evidencectl",
-                "verify",
-                "response.jws",
-                "--context",
-                "context.json",
-                "--output",
-                "verified.json",
-            ],
-            vec![
-                "evidencectl",
-                "request",
-                "verify",
-                "response.jws",
-                "--context",
-                "context.json",
-                "--output",
-                "verified.json",
-            ],
-        ] {
+    fn every_advertised_help_path_builds_without_panicking() {
+        fn visit(command: &clap::Command, prefix: Vec<String>) {
+            let mut args = prefix.clone();
+            args.push("--help".to_owned());
+            let result = cli_command().try_get_matches_from(args.clone());
             assert!(
-                Cli::try_parse_from(&arguments).is_ok(),
-                "{arguments:?} must keep working"
+                matches!(result, Err(ref error) if error.kind() == clap::error::ErrorKind::DisplayHelp),
+                "{args:?}: {result:?}"
             );
+            for child in command
+                .get_subcommands()
+                .filter(|child| !child.is_hide_set() && child.get_name() != "help")
+            {
+                let mut path = prefix.clone();
+                path.push(child.get_name().to_owned());
+                visit(child, path);
+            }
         }
+        visit(&command(), vec!["evidencectl".to_owned()]);
+        assert!(Cli::try_parse_from(["evidencectl", "request", "verify"]).is_err());
+        assert!(Cli::try_parse_from(["evidencectl", "new"]).is_err());
     }
 
     #[test]

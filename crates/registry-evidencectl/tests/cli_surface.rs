@@ -10,9 +10,10 @@ use std::process::Command;
 
 /// The complete top-level subcommand set. Adding a command means adding it
 /// here; the point of the list is that an omission fails rather than passes.
-const TOP_LEVEL_COMMANDS: [&str; 14] = [
-    "client", "access", "keygen", "jwks", "jwk", "new", "package", "fixtures", "source", "dev",
-    "request", "verify", "audit", "tooling",
+const TOP_LEVEL_COMMANDS: [&str; 20] = [
+    "client", "access", "keygen", "jwks", "jwk", "init", "check", "explain", "types", "test",
+    "doctor", "target", "package", "fixtures", "source", "dev", "request", "verify", "audit",
+    "tooling",
 ];
 
 #[test]
@@ -92,7 +93,7 @@ fn progressive_request_preparation_accepts_no_caller_supplied_selector() {
 }
 
 #[test]
-fn preserved_target_context_requires_the_target_and_borrowed_issuer() {
+fn retired_preserved_context_flag_is_refused_and_explicit_target_is_accepted() {
     for incomplete in [
         vec!["--preserve-target-authenticated-context"],
         vec![
@@ -121,7 +122,6 @@ fn preserved_target_context_requires_the_target_and_borrowed_issuer() {
             "dev",
             "start",
             "project",
-            "--preserve-target-authenticated-context",
             "--target",
             "target",
             "--issuer-project",

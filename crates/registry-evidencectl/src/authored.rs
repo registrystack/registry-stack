@@ -59,18 +59,6 @@ pub(crate) fn read_authored_file(path: &Path, description: &str) -> Result<Vec<u
     Ok(bytes)
 }
 
-/// A document this binary embeds, such as a published JSON Schema, as a JSON
-/// value. It is read through the shared YAML subset without the authored
-/// file rules: the document is reviewed with the binary, not written by an
-/// author.
-pub(crate) fn embedded_document(name: &str, text: &str) -> Result<Value> {
-    Reader::new(name)
-        .scan(text.as_bytes())
-        .map_err(|report| anyhow::anyhow!("the embedded {name} is not readable YAML: {report}"))?
-        .map(|node| node.to_json_value())
-        .with_context(|| format!("the embedded {name} is empty"))
-}
-
 /// A whole file's root node as a JSON value, or `null` for an empty file.
 pub(crate) fn node_value(node: Option<Node>) -> Value {
     node.map_or(Value::Null, |node| node.to_json_value())
@@ -340,22 +328,6 @@ impl Gathered {
         self.report.extend(report);
     }
 
-    pub(crate) fn push(&mut self, diagnostic: Diagnostic) {
-        self.report.push(diagnostic);
-    }
-
-    pub(crate) fn has_errors(&self) -> bool {
-        self.report.has_errors()
-    }
-
-    /// Stop with every problem gathered so far when any of them is an error.
-    pub(crate) fn checkpoint(&self) -> Result<()> {
-        if self.report.has_errors() {
-            return Err(self.report().into());
-        }
-        Ok(())
-    }
-
     /// The gathered problems, with the count of files read.
     pub(crate) fn report(&self) -> Report {
         let mut report = self.report.clone();
@@ -538,11 +510,5 @@ mod tests {
         let kept = placed(diagnostic, &root);
         let source = kept.source.as_ref().unwrap();
         assert_eq!((source.line, source.column), (None, None));
-    }
-
-    #[test]
-    fn an_embedded_document_reads_as_json() {
-        let value = embedded_document("schema", "type: object\nrequired: [id]\n").unwrap();
-        assert_eq!(value["required"][0], "id");
     }
 }

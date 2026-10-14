@@ -39,18 +39,6 @@ const HUMAN_ONLY_COMMANDS: &[(&str, &[&str])] = &[
         &["request", "prepare", "question", "--name", "request"],
     ),
     (
-        "request verify",
-        &[
-            "request",
-            "verify",
-            "response.jwt",
-            "--context",
-            "verification.json",
-            "--output",
-            "verified.json",
-        ],
-    ),
-    (
         "verify",
         &[
             "verify",
@@ -159,22 +147,14 @@ fn help_text(arguments: &[&str]) -> String {
 #[test]
 fn migrated_json_commands_answer_one_json_document() {
     let cases: &[&[&str]] = &[
-        &[
-            "access",
-            "policy",
-            "add",
-            "policy",
-            "--question",
-            "question",
-        ],
-        &["access", "policy", "list"],
+        &["access", "profile", "list"],
         &[
             "access",
             "client",
             "add",
             "client",
-            "--policy",
-            "policy",
+            "--access-profile",
+            "consumer",
             "--generate-local-key",
         ],
         &["access", "client", "list"],
@@ -254,8 +234,8 @@ fn source_comparison_failures_emit_exactly_one_json_document() {
         let project = directory.path().join("project");
         fs::create_dir(&project).expect("project directory");
         fs::write(
-            project.join("evidence-project.yaml"),
-            registry_evidence_authoring::default_project_marker_document(),
+            project.join("evidence.yaml"),
+            include_str!("../../../products/evidence/examples/standalone/evidence.yaml"),
         )
         .expect("project marker");
         let export = malformed_source_export(directory.path());
@@ -403,4 +383,37 @@ fn legacy_json_flags_render_usage_errors_as_json() {
         .expect("run evidencectl");
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty(), "check has no legacy --json flag");
+}
+
+#[test]
+fn retired_policy_and_nested_verify_commands_are_usage_refusals() {
+    for arguments in [
+        vec![
+            "access",
+            "policy",
+            "add",
+            "policy",
+            "--question",
+            "question",
+        ],
+        vec![
+            "request",
+            "verify",
+            "response.jwt",
+            "--context",
+            "verification.json",
+            "--output",
+            "verified.json",
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(["--format", "json"])
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stderr.is_empty());
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["diagnostics"][0]["code"], "evidencectl.usage");
+    }
 }

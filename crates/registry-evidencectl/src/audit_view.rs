@@ -89,7 +89,7 @@ fn show(args: ShowArgs, format: OutputFormat) -> Result<ExitCode> {
     .map_err(|_| unavailable())?;
     let output = inspect_core(&evidence, &stopped.runtime_path)?;
     let view: CoreAuditOperation = serde_json::from_slice(&output).map_err(|_| failed())?;
-    let rendered = render(&view, &stopped.questions)?;
+    let rendered = render(&view, &stopped.definitions)?;
 
     match format {
         OutputFormat::Human => std::io::stdout()
@@ -182,7 +182,7 @@ fn named_core_failure(stderr: &[u8]) -> Option<anyhow::Error> {
         .map(|(_, refusal)| refusal())
 }
 
-fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> Result<String> {
+fn render(view: &CoreAuditOperation, questions: &[dev::ReadyDefinitionState]) -> Result<String> {
     if view.schema != CORE_VIEW_SCHEMA || !valid_operation(&view.operation) {
         return Err(failed());
     }
@@ -199,7 +199,7 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
 
 fn render_events(
     view: &CoreAuditOperation,
-    questions: &[dev::ReadyQuestionState],
+    questions: &[dev::ReadyDefinitionState],
 ) -> Result<String> {
     if let [CoreAuditEvent::Refusal(refusal)] = view.events.as_slice() {
         return render_refusal(refusal);
@@ -246,7 +246,7 @@ fn render_refusal(refusal: &CoreRefusalAuditEvent) -> Result<String> {
 fn render_authorized(
     accesses: &[&CoreAuthorizedAuditEvent],
     terminal: Option<&CoreAuthorizedAuditEvent>,
-    questions: &[dev::ReadyQuestionState],
+    questions: &[dev::ReadyDefinitionState],
 ) -> Result<String> {
     if accesses
         .iter()
@@ -358,7 +358,7 @@ fn render_authorized(
 fn render_unreleased(
     access: &CoreAuthorizedAuditEvent,
     terminal: &CoreAuthorizedAuditEvent,
-    question: &dev::ReadyQuestionState,
+    question: &dev::ReadyDefinitionState,
 ) -> Result<String> {
     validate_common(terminal, question)?;
     let outcome = match (terminal.phase, terminal.decision) {
@@ -388,7 +388,7 @@ fn render_unreleased(
 
 fn validate_common(
     event: &CoreAuthorizedAuditEvent,
-    question: &dev::ReadyQuestionState,
+    question: &dev::ReadyDefinitionState,
 ) -> Result<()> {
     if event.requirement != question.requirement_uri
         || event.purpose != question.purpose
