@@ -38,7 +38,7 @@ cannot replace unsaved content.
 | Registry Manifest | `metadata.yaml`, or an explicitly selected document | Datasets, entities, fields, codelists, services, forms, and their references |
 | Registry Render | `manifest.yaml` declaring `RenderBundle` | Documents and their template, schema, and locale files |
 | Evidence wallet delivery | Explicitly selected configuration | Configuration sections and contained, configuration-relative key-file navigation |
-| Evidence | `evidence-project.yaml`, or the legacy OpenAPI/questions pair | Questions, sources, selectors, policies, facts, and authored file references |
+| Evidence | `evidence.yaml` declaring `EvidenceProject` | Assertion definitions, sources, selector profiles, named Functions, target grants, and authored assets |
 
 Each family uses its own names and scopes. A BReg `registry.yaml` never receives
 diagnostics from another product. Discovery's remote vocabulary identifiers are not unresolved
@@ -96,13 +96,16 @@ regenerate it when moving a workspace.
 Evidence retains its canonical `tooling editor` schema generator.
 The shared helper invokes the matching Evidence CLI. Schema setup and
 CLI tasks can be used without installing the semantic extension.
+It maps the normalized `evidence.yaml`, `*-target.yaml`, `*-authority.yaml`,
+`access/clients/*.yaml`, `fixtures/*.yaml`, and `mocks/source.yaml` authoring
+files, plus the maintained JSON source-resolution and client-profile formats.
 
 `evidence-deployment` configures an Evidence deployment project: the
 `runtime.yaml` the `evidence` runtime reads, beside its bundle in `bundle/`.
 Setup maps the runtime and bundle contracts to `runtime.yaml` and
 `bundle/evidence.yaml`, the code list schema to `bundle/codelists/*.yaml`, the
-fixture schema to `bundle/fixtures/*.yaml`, and the target governance schema to
-`governance.yaml`. It maps the two verification policy contracts by file name:
+fixture schema to `bundle/fixtures/*.yaml`. It maps the two verification policy
+contracts by file name:
 `verification*.policy.yaml` to the verification policy and
 `holder-bound*.policy.yaml` to the holder-bound verification policy. It adds an
 `evidence check --runtime-config runtime.yaml` task. The runtime, bundle, and
@@ -146,17 +149,14 @@ The same language server and editor launchers also serve an Evidence authoring p
 no separate Evidence editor integration: one client per workspace folder covers
 the product families it contains.
 
-A folder is an Evidence project root when it contains the `evidence-project.yaml` marker, or, for
-a project created before the marker existed, the legacy pair of a `source.openapi.yaml` file and a
-`questions` directory. Either form gets the same cross-file definitions, references,
-workspace/document symbols, and reference diagnostics over its authoring documents (selectors,
-questions, sources, access policies, and the schemas they cite) that a `registry.yaml` root
-gets for supported products.
+A folder is an Evidence project root when `evidence.yaml` declares the normalized
+`EvidenceProject` v1alpha1 format. It gets cross-file definitions, references,
+workspace/document symbols, and reference diagnostics over assertion definitions,
+sources, selector profiles, named Functions, target grants, and their authored assets.
 
 Project setup and schema refresh use `evidencectl`:
 
 ```console
-evidencectl new /path/to/evidence-project
 evidencectl tooling editor /path/to/evidence-project
 ```
 
@@ -170,9 +170,9 @@ starter outside the checkout, so the diagnostic checks below cannot modify a tra
 
 ```console
 export REGISTRY_STACK_SMOKE_ROOT="$(mktemp -d)"
-export REGISTRY_STACK_SMOKE_PROJECT="$REGISTRY_STACK_SMOKE_ROOT/project"
+export REGISTRY_STACK_SMOKE_PROJECT="$REGISTRY_STACK_SMOKE_ROOT/standalone"
 evidencectl --version
-evidencectl init "$REGISTRY_STACK_SMOKE_PROJECT" --transport sqlite-extract --profile local
+cp -R products/evidence/examples/standalone "$REGISTRY_STACK_SMOKE_PROJECT"
 evidencectl tooling editor "$REGISTRY_STACK_SMOKE_PROJECT"
 ```
 
@@ -187,18 +187,20 @@ installation and launch instructions:
 Use the following checks in either editor:
 
 1. Confirm the Registry Stack language-server output or log says that the project was indexed.
-2. In `questions/record-status.yaml`, invoke **Go to Definition** on `record-status` in the
-   question's `source: {ref: record-status}` binding. It must open `sources/record-status.yaml`.
-3. Invoke **Find References** on that same name. Results must include the question's binding.
-4. Invoke **Go to Definition** on `record-reference-v1` in `profile: record-reference-v1`. It
-   must open `selectors/record-reference-v1.yaml`.
-5. Search workspace symbols for `record`. Results must include the `record-status` question, the
-   `record-status` source, and the `record-reference-v1` selector profile. The document outline
-   for `questions/record-status.yaml` must list the question and its `condition_satisfied`
-   answer.
-6. Temporarily change the question's source reference to `ref: missing-source`. The editor must
-   report `Unknown source reference 'missing-source'`. Restore `record-status` and confirm that
-   the diagnostic clears.
+2. In `evidence.yaml`, invoke **Go to Definition** on `person-record` in the
+   `adult-status` definition's `acquisition.source`. It must select the named source
+   in the same file.
+3. Invoke **Find References** on that source name. Results must include the
+   `adult-status` acquisition.
+4. Invoke **Go to Definition** on `derive-adult-status` in `derive.function`.
+   It must select the named Function. Invoking definition on that Function's
+   `source` must open `functions/derive-adult-status.rhai`.
+5. Search workspace symbols for `adult-status`. Results must include its
+   assertion definition. The document outline must also list `person-record`,
+   `record-by-id`, and the named Functions.
+6. Temporarily change the acquisition source to `missing-source`. The editor
+   must report an unknown source reference. Restore `person-record` and confirm
+   that the diagnostic clears.
 
 The YAML language server may report additional schema or syntax diagnostics. Semantic
 diagnostics identify their product in the source, such as `evidence` or `breg`. The editor

@@ -392,7 +392,7 @@ class ConfigureTests(unittest.TestCase):
                     configure.matching_cli("evidencectl")
 
     def test_evidence_forwards_workspace(self):
-        evidence = self.project("evidence", "evidence-project.yaml")
+        evidence = self.project("evidence", "evidence.yaml")
         with patch.object(configure, "matching_cli", return_value="/bin/evidencectl"):
             with patch.object(configure.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
                 configure.configure("evidence", evidence, self.workspace, None)
@@ -408,8 +408,15 @@ class ConfigureTests(unittest.TestCase):
             check=False,
         )
 
-    def test_evidence_maps_its_json_files_through_the_json_language_server(self):
+    def test_evidence_requires_the_normalized_project_marker(self):
         evidence = self.project("evidence", "evidence-project.yaml")
+        (evidence / "source.openapi.yaml").write_text("openapi: 3.1.0\n")
+        (evidence / "questions").mkdir()
+        with self.assertRaisesRegex(configure.SetupError, "evidence project needs evidence.yaml"):
+            configure.configure("evidence", evidence, self.workspace, None)
+
+    def test_evidence_maps_its_json_files_through_the_json_language_server(self):
+        evidence = self.project("evidence", "evidence.yaml")
         with patch.object(configure, "matching_cli", return_value="/bin/evidencectl"):
             with patch.object(configure.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
                 configure.configure("evidence", evidence, self.workspace, None)
@@ -437,9 +444,12 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             yaml_schemas,
             {
-                (schemas / "selector.schema.json").as_uri(): [str(evidence / "selectors/*.yaml")],
-                (schemas / "source.schema.json").as_uri(): [str(evidence / "sources/*.yaml")],
-                (schemas / "target-settings.schema.json").as_uri(): [str(evidence / "targets/*/settings.yaml")],
+                (schemas / "project.schema.json").as_uri(): [str(evidence / "evidence.yaml")],
+                (schemas / "target.schema.json").as_uri(): [str(evidence / "*-target.yaml")],
+                (schemas / "target-authority.schema.json").as_uri(): [str(evidence / "*-authority.yaml")],
+                (schemas / "access-client.schema.json").as_uri(): [str(evidence / "access/clients/*.yaml")],
+                (schemas / "fixture.schema.json").as_uri(): [str(evidence / "fixtures/*.yaml")],
+                (schemas / "mock-plan.schema.json").as_uri(): [str(evidence / "mocks/source.yaml")],
             },
         )
         for matches in yaml_schemas.values():
@@ -464,7 +474,6 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             settings["yaml.schemas"],
             {
-                (schemas / "target-governance.schema.json").as_uri(): [str(project / "governance.yaml")],
                 (schemas / "runtime.schema.yaml").as_uri(): [str(project / "runtime.yaml")],
                 (schemas / "bundle.schema.yaml").as_uri(): [str(project / "bundle/evidence.yaml")],
                 (schemas / "codelist.schema.json").as_uri(): [str(project / "bundle/codelists/*.yaml")],

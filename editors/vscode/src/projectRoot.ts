@@ -3,14 +3,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-// Product-owned markers mirror root discovery in registry-language-server.
-// A registry.yaml root must declare a Base Registry Engine project.
-export const EVIDENCE_MARKER_FILE = 'evidence-project.yaml';
-export const EVIDENCE_OPENAPI_FILE = 'source.openapi.yaml';
-export const EVIDENCE_QUESTIONS_DIRECTORY = 'questions';
-
 const PRODUCT_MARKERS = [
   ['registry.yaml', 'kind', 'BRegProject', 'apiVersion', 'id.registrystack.org/formats/breg/project/v1alpha1', true],
+  ['evidence.yaml', 'kind', 'EvidenceProject', 'apiVersion', 'id.registrystack.org/formats/evidence/project/v1alpha1', true],
   ['casework.yaml', 'kind', 'CaseworkProject', 'apiVersion', 'id.registrystack.org/formats/casework/project/'],
   ['scheduling.yaml', 'kind', 'SchedulingProject', 'apiVersion', 'id.registrystack.org/formats/scheduling/project/'],
   ['messaging.yaml', 'kind', 'MessagingProject', 'apiVersion', 'id.registrystack.org/formats/messaging/project/'],
@@ -24,19 +19,7 @@ const PRODUCT_MARKERS = [
 const MAX_MARKER_BYTES = 1024 * 1024;
 
 export function isProjectRoot(directory: string): boolean {
-  if (
-    declaresProduct(directory) ||
-    declaresExplicitProduct(directory)
-  ) {
-    return true;
-  }
-  if (isFile(path.join(directory, EVIDENCE_MARKER_FILE))) {
-    return true;
-  }
-  return (
-    isFile(path.join(directory, EVIDENCE_OPENAPI_FILE)) &&
-    isDirectory(path.join(directory, EVIDENCE_QUESTIONS_DIRECTORY))
-  );
+  return declaresProduct(directory) || declaresExplicitProduct(directory);
 }
 
 function declaresProduct(directory: string): boolean {

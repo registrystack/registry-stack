@@ -24,8 +24,7 @@ suite('Registry Stack extension', () => {
     assert.strictEqual(extension.packageJSON.capabilities?.virtualWorkspaces?.supported, false);
     for (const activationEvent of [
       'workspaceContains:**/registry.yaml',
-      'workspaceContains:**/evidence-project.yaml',
-      'workspaceContains:**/source.openapi.yaml',
+      'workspaceContains:**/evidence.yaml',
       'workspaceContains:**/casework.yaml',
       'workspaceContains:**/scheduling.yaml',
       'workspaceContains:**/messaging.yaml',
@@ -213,18 +212,11 @@ suite('Registry Stack extension', () => {
     // project by walking upward from that document.
     const parentPath = path.join(testRunDirectory, 'evidence-parent');
     const nestedEvidencePath = path.join(parentPath, 'projects', 'evidence');
-    const nestedSelectorsPath = path.join(nestedEvidencePath, 'selectors');
-    fs.mkdirSync(nestedSelectorsPath, { recursive: true });
+    fs.mkdirSync(nestedEvidencePath, { recursive: true });
     fs.writeFileSync(
-      path.join(nestedEvidencePath, 'evidence-project.yaml'),
-      'apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\nkind: EvidenceAuthoringProject\n',
+      path.join(nestedEvidencePath, 'evidence.yaml'),
+      normalizedEvidenceProject('nested-project', 'nested-adopter'),
     );
-    fs.writeFileSync(
-      path.join(nestedEvidencePath, 'source.openapi.yaml'),
-      'openapi: 3.1.0\ninfo: { title: test, version: 1.0.0 }\npaths: {}\n',
-    );
-    const nestedSelectorPath = path.join(nestedSelectorsPath, 'nested-adopter.yaml');
-    fs.writeFileSync(nestedSelectorPath, 'fields: {}\n');
     assert.strictEqual(
       vscode.workspace.updateWorkspaceFolders(5, 0, {
         uri: vscode.Uri.file(parentPath),
@@ -234,23 +226,20 @@ suite('Registry Stack extension', () => {
     );
     await assertWorkspaceFolderCount(6);
     await assertLanguageServerStartCountStable(startLog, 3);
-    await vscode.workspace.openTextDocument(nestedSelectorPath);
+    await vscode.workspace.openTextDocument(path.join(nestedEvidencePath, 'evidence.yaml'));
     await assertLanguageServerStartCount(startLog, 4);
     await assertWorkspaceSymbol('nested-adopter');
 
-    const legacyEvidencePath = path.join(parentPath, 'legacy', 'evidence');
-    const legacyQuestionsPath = path.join(legacyEvidencePath, 'questions');
-    const legacySelectorsPath = path.join(legacyEvidencePath, 'selectors');
-    fs.mkdirSync(legacyQuestionsPath, { recursive: true });
-    fs.mkdirSync(legacySelectorsPath);
+    const retiredEvidencePath = path.join(parentPath, 'retired', 'evidence');
+    const retiredQuestionsPath = path.join(retiredEvidencePath, 'questions');
+    fs.mkdirSync(retiredQuestionsPath, { recursive: true });
     fs.writeFileSync(
-      path.join(legacyEvidencePath, 'source.openapi.yaml'),
+      path.join(retiredEvidencePath, 'source.openapi.yaml'),
       'openapi: 3.1.0\ninfo: { title: test, version: 1.0.0 }\npaths: {}\n',
     );
-    const legacySelectorPath = path.join(legacySelectorsPath, 'legacy-selector.yaml');
-    fs.writeFileSync(legacySelectorPath, 'fields: {}\n');
-    await vscode.workspace.openTextDocument(legacySelectorPath);
-    await assertWorkspaceSymbol('legacy-selector');
+    const retiredQuestionPath = path.join(retiredQuestionsPath, 'retired-question.yaml');
+    fs.writeFileSync(retiredQuestionPath, 'kind: EvidenceQuestion\n');
+    await vscode.workspace.openTextDocument(retiredQuestionPath);
     await assertLanguageServerStartCountStable(startLog, 4);
 
     assert.strictEqual(vscode.workspace.updateWorkspaceFolders(3, 3), true);
@@ -273,6 +262,26 @@ suite('Registry Stack extension', () => {
     await assertWorkspaceSymbol('smoke');
   });
 });
+
+function normalizedEvidenceProject(id: string, selector: string): string {
+  return [
+    'apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1',
+    'kind: EvidenceProject',
+    `id: ${id}`,
+    'selectorProfiles:',
+    `  ${selector}:`,
+    '    maximumAggregateBytes: 64',
+    '    fields:',
+    '      record-id:',
+    '        type: string',
+    '        minimumBytes: 1',
+    '        maximumBytes: 64',
+    'functions: []',
+    'sources: {}',
+    'assertionDefinitions: {}',
+    '',
+  ].join('\n');
+}
 
 async function assertExtensionActivated(extension: vscode.Extension<unknown>): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
