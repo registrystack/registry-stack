@@ -4044,10 +4044,10 @@ formats:
     conformance:
       requiredText: /project/id
       optionalText: none
-      integer: /deadlineSeconds
+      integer: /workflow/deadlineSeconds
       boolean: none
-      reference: /start
-      relativePath: /functionsFile
+      reference: /workflow/start
+      relativePath: /functions/notice-route/source
     securityMembers: []
     restrictingMembers: []
   - id: coordinator/runtime
@@ -4083,22 +4083,22 @@ formats:
       requiredText: /namespace
       optionalText: /connections/applications/profile
       integer: /deployment/activeStateKey
-      boolean: /deployment/authentication/policies/1/operator
+      boolean: /deployment/authentication/policies/institution-operator/operator
       set: /connections/applications/authorization/scopes
     securityMembers:
       - pointer: /connections/*/completion
         whenOmitted: closed
-      - pointer: /decisionConnections
+      - pointer: /connections
         whenOmitted: refused
       - pointer: /deployment/listener/bind
         whenOmitted: refused
       - pointer: /deployment/metricsListener/bind
         whenOmitted: closed
-      - pointer: /deployment/authentication/allowedClients
+      - pointer: /deployment/authentication/policies
         whenOmitted: refused
       - pointer: /deployment/authentication/assertionIssuers
         whenOmitted: closed
-      - pointer: /deployment/authentication/policies
+      - pointer: /deployment/authentication/policies/*/actions
         whenOmitted: refused
       - pointer: /deployment/packages/*/expectedDigest
         whenOmitted: refused
