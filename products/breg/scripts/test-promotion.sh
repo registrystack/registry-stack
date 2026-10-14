@@ -658,8 +658,8 @@ covers = [{"code": item["change"]["code"], "target": item["change"]["target"]}
 if [cover["code"] for cover in covers] != ["field-removed"]:
     raise SystemExit(f"the successor did not remove exactly one field: {covers}")
 model = json.loads((package / "effective-model.json").read_text())
-entity = model["recordTypes"]["record"]
-table, column = entity["physicalTable"], entity["fields"]["legacy-note"]["physicalName"]
+record_type = model["recordTypes"]["record"]
+table, column = record_type["physicalTable"], record_type["fields"]["legacy-note"]["physicalName"]
 
 def canonical(document):
     return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("ascii")
@@ -678,7 +678,7 @@ descriptor = {
     "recovery": "exact-target-resume", "lockTimeoutMilliseconds": 1000,
     "statementTimeoutMilliseconds": 60000,
     "steps": [{"type": "transactional-sql", "id": "drop", "sqlPath": f"{base}/steps/drop.sql",
-               "objects": [{"schema": "registry_data", "table": table, "entity": "record",
+               "objects": [{"schema": "registry_data", "table": table, "recordType": "record",
                             "kind": "field", "member": "legacy-note", "physicalName": column}]}],
     "preAssertions": [{"id": "pre", "sqlPath": f"{base}/assertions/pre.sql"}],
     "postAssertions": [{"id": "post", "sqlPath": f"{base}/assertions/post.sql"}],
