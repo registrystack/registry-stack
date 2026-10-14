@@ -9,30 +9,29 @@ use std::time::Duration;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use tokio_postgres::types::ToSql;
 use uuid::Uuid;
 
 use crate::api::{
-    AuthorizedRequestContext, HeldReadResponse, ReadFilterExpr, ReadFilterOperator,
-    ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField, ReadServiceError,
-    RecordReadRefusal, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
-    SnapshotReadRequest, SnapshotReadService, valid_text_search_term,
+    valid_text_search_term, AuthorizedRequestContext, HeldReadResponse, ReadFilterExpr,
+    ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
+    ReadServiceError, RecordReadRefusal, RowBoundaryOperator as ApiRowBoundaryOperator,
+    ServiceFuture, SnapshotReadRequest, SnapshotReadService,
 };
 use crate::audit::{
-    PreIoAudit, PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit,
-    TerminalAuditOutcome, begin_pre_io_audit, profile_is_keyed, read_terminal_entry,
-    record_pre_io_audit,
+    begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
+    PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::cursor::{
-    CursorAdapter, CursorBinding, CursorCodec, CursorContinuation, CursorFilterExpr,
-    CursorFilterOperator, CursorLogicalOp, CursorOrderClause, CursorProjectionField,
-    CursorQueryScope, CursorRepresentation, now_unix_seconds,
+    now_unix_seconds, CursorAdapter, CursorBinding, CursorCodec, CursorContinuation,
+    CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
+    CursorProjectionField, CursorQueryScope, CursorRepresentation,
 };
 use crate::field_encryption::{FieldEncryptionService, SharedFieldEncryptionService};
 use crate::history_commit::{
-    ResolvedSnapshot, capture_latest_snapshot_reference, resolve_snapshot_reference,
+    capture_latest_snapshot_reference, resolve_snapshot_reference, ResolvedSnapshot,
 };
 use crate::history_reference::SnapshotReference;
 use crate::history_schema::{
@@ -51,8 +50,8 @@ use crate::stored_bytes;
 use super::cancellation::QueryCancellationGuard;
 use super::read::{load_retained_plaintext_fields, open_history_row_members};
 use super::{
-    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
-    begin_record_transaction, snapshot_read_error, validate_field_value,
+    begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
+    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
 };
 
 const MAX_SQL_LIMIT: usize = 1000;
@@ -2086,11 +2085,11 @@ mod tests {
     use crate::history_schema::{
         HistoryFieldCompatibility, HistoryFieldSource, HistoryValueSource,
     };
-    use crate::postgres::stored_bytes_probe::{UNREADABLE, expression_error};
+    use crate::postgres::stored_bytes_probe::{expression_error, UNREADABLE};
 
     use super::{
-        HistorySqlField, ReadServiceError, snapshot_key_present_predicate, snapshot_read_error,
-        stored_bytes,
+        snapshot_key_present_predicate, snapshot_read_error, stored_bytes, HistorySqlField,
+        ReadServiceError,
     };
 
     /// A stored snapshot the JSON reader will not accept must refuse the read

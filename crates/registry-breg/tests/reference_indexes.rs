@@ -6,11 +6,11 @@
 #[path = "support/consent_fixture.rs"]
 mod consent_fixture;
 
-use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_json};
-use serde_json::{Value, json};
+use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
+use serde_json::{json, Value};
 
-const UNINDEXED_FILTER: &str = "breg.entity.list-unindexed-filter";
-const UNINDEXED_SORT: &str = "breg.entity.list-unindexed-sort";
+const UNINDEXED_FILTER: &str = "breg.record-type.list-unindexed-filter";
+const UNINDEXED_SORT: &str = "breg.record-type.list-unindexed-sort";
 
 fn source() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],
@@ -136,19 +136,15 @@ fn a_leading_index_or_whole_table_unique_constraint_replaces_the_reference_index
     let asset = &registry.entities()["asset"];
     assert!(!asset.indexes.contains_key("reference:site"));
     assert!(!asset.indexes.contains_key("reference:owner"));
-    assert!(
-        !registry.physical_names().entities["asset"]
-            .indexes
-            .keys()
-            .any(|member| member.starts_with("reference:"))
-    );
-    assert!(
-        !registry
-            .ddl()
-            .statements
-            .iter()
-            .any(|statement| statement.id.starts_with("entity.asset.index.reference:"))
-    );
+    assert!(!registry.physical_names().entities["asset"]
+        .indexes
+        .keys()
+        .any(|member| member.starts_with("reference:")));
+    assert!(!registry
+        .ddl()
+        .statements
+        .iter()
+        .any(|statement| statement.id.starts_with("entity.asset.index.reference:")));
     // The foreign keys themselves are unchanged.
     assert!(statement_sql(&registry, "entity.asset.field.site.reference").is_some());
     assert!(statement_sql(&registry, "entity.asset.field.owner.reference").is_some());
@@ -374,8 +370,8 @@ fn a_consent_records_scope_column_leads_the_consent_key_index() {
 #[cfg(feature = "runtime")]
 mod migration {
     use registry_breg::package::{
-        CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
         compiled_registry_change_set, compiled_registry_change_set_from_baseline,
+        CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
     };
 
     use super::*;
@@ -466,11 +462,9 @@ mod migration {
                 "entity.site.source-view",
             ]
         );
-        assert!(
-            plan.statements[..2]
-                .iter()
-                .all(|statement| statement.sql.starts_with("CREATE INDEX \"breg_ri_asset_"))
-        );
+        assert!(plan.statements[..2]
+            .iter()
+            .all(|statement| statement.sql.starts_with("CREATE INDEX \"breg_ri_asset_")));
         assert!(plan.statements[2..].iter().all(|statement| {
             statement
                 .sql

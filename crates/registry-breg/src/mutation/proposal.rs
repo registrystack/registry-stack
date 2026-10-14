@@ -110,6 +110,28 @@ pub(crate) fn proposal_http_method(input: &ProposalMutationInput<'_>) -> HttpMet
     }
 }
 
+fn validate_recovery_actor(
+    action: &CompiledAction,
+    input: &ProposalMutationInput<'_>,
+) -> Result<(), MutationError> {
+    if matches!(
+        input.operation,
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply | ProposalOperation::Retry)
+    ) && !input.authority.is_system()
+    {
+        let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+            return Err(MutationError::InvalidRequest);
+        };
+        if !crate::api::proposals::external_recovery_actor_allowed(
+            &proposal.application,
+            input.claims,
+        ) {
+            return Err(MutationError::PreconditionFailed);
+        }
+    }
+    Ok(())
+}
+
 impl MutationCoordinator {
     pub(crate) async fn read_proposal_attachment(
         &self,
@@ -690,6 +712,8 @@ impl MutationCoordinator {
         registry: &CompiledRegistry,
         input: &ProposalMutationInput<'_>,
     ) -> Result<ProposalApplyPreflight, MutationError> {
+        let action = proposal_action(registry, input.action_id)?;
+        validate_recovery_actor(action, input)?;
         let id = input.proposal_id.ok_or(MutationError::InvalidRequest)?;
         let guarded = begin_proposal_transaction(
             client,
@@ -748,6 +772,14 @@ impl MutationCoordinator {
             return Err(MutationError::PreconditionFailed);
         }
         verify_apply_binding(input, proposal)?;
+        if !input.authority.is_system()
+            && !crate::api::proposals::external_recovery_actor_allowed(
+                proposal.application_policy(),
+                input.claims,
+            )
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
         let accepted = match proposal.review_requirement() {
             CompiledProposalReview::None => None,
             CompiledProposalReview::Required {
@@ -815,6 +847,7 @@ impl MutationCoordinator {
         deadline: tokio::time::Instant,
     ) -> Result<MutationOutcome, MutationError> {
         let action = proposal_action(registry, input.action_id)?;
+        validate_recovery_actor(action, &input)?;
         let guarded = begin_proposal_transaction(
             client,
             self.lock_key,
@@ -1252,6 +1285,12 @@ impl MutationCoordinator {
                         let frozen = workflow
                             .current_proposal()
                             .ok_or(MutationError::PreconditionFailed)?;
+                        if !crate::api::proposals::external_recovery_actor_allowed(
+                            frozen.application_policy(),
+                            input.claims,
+                        ) {
+                            return Err(MutationError::PreconditionFailed);
+                        }
                         crate::review_store::retry_submission_work(tx, &action.id, id, frozen)
                             .await?;
                         let workflow = workflow
@@ -1281,6 +1320,14 @@ impl MutationCoordinator {
                             .current_proposal()
                             .ok_or(MutationError::PreconditionFailed)?;
                         verify_apply_binding(&input, frozen)?;
+                        if !input.authority.is_system()
+                            && !crate::api::proposals::external_recovery_actor_allowed(
+                                frozen.application_policy(),
+                                input.claims,
+                            )
+                        {
+                            return Err(MutationError::PreconditionFailed);
+                        }
                         verify_proposal_evidence(action, frozen, commit_evidence)?;
                         self.verify_proposal_attachment_binding(tx).await?;
                         let manifest = crate::attachment_store::manifest(
@@ -1388,6 +1435,9 @@ impl MutationCoordinator {
         let event_source = self.event_source();
         crate::proposal_events::insert_proposal_lifecycle_event(
             tx,
+            registry,
+            action,
+            self.event_destinations.as_deref(),
             crate::proposal_events::ProposalLifecycleEvent {
                 action_id: &action.id,
                 action_revision: &document.action_revision,
@@ -2395,6 +2445,13 @@ impl MutationCoordinator {
                 "digest":frozen.effect_digest().as_str()},
             "context":{"reference":format!("breg:{}:{}:{}:{}",registry.registry_id(),action.id,document.proposal_id,frozen.version().get())},
             "reviewable":document.header.state=="submitted"&&document.blocked_reason.is_none()});
+        if let Some(contract) = crate::compiler::review_context::compile_schema(registry, action)
+            .map_err(|_| MutationError::Unavailable)?
+        {
+            value["context"]["contract"] = json!({
+                "id":contract.id,"revision":contract.revision,"schemaDigest":contract.digest
+            });
+        }
         if let CompiledProposalReview::Required {
             authority,
             source,
@@ -2507,7 +2564,6 @@ impl MutationCoordinator {
                     };
                     projected.insert(field.clone(), resolved);
                 }
-                value["context"]["id"] = json!(mapping.id);
                 value["context"]["fields"] = Value::Object(projected);
             }
             _ => return Err(MutationError::PreconditionFailed),
@@ -2543,6 +2599,10 @@ impl MutationCoordinator {
             .and_then(|workflow| workflow.current_proposal())
         {
             value["effectDigest"] = json!(proposal.effect_digest().as_str());
+            if claims.is_some() {
+                value["applicationStatus"] =
+                    proposal_application_status(tx, document, proposal).await?;
+            }
         }
         if let Some(application) = workflow
             .as_ref()
@@ -2816,7 +2876,7 @@ impl MutationCoordinator {
                     if let Some(metadata) = metadata.get(id) {
                         descriptor["value"] = json!({"submissionVersion":document.header.submission_version,
                             "sha256":metadata.sha256,"byteSize":metadata.byte_size,"contentType":metadata.content_type,
-                            "uploadedAt":metadata.uploaded_at,"uploadedBy":metadata.uploaded_by,"verificationStatus":metadata.verification_status});
+                            "uploadedAt":metadata.uploaded_at,"verificationStatus":metadata.verification_status});
                         if metadata.verification_status.permits_content() {
                             descriptor["links"]["download"] = json!({"method":"GET","path":format!("{path}?submissionVersion={}",document.header.submission_version),
                                 "accessProfile":current.common.access_profile(),"operation":"download",
@@ -2864,6 +2924,150 @@ fn public_inputs(
             })
             .collect(),
     )
+}
+
+/// Observe only BReg's retained state for the current frozen binding. No
+/// authority polling or guard execution belongs in a Proposal observation.
+async fn proposal_application_status(
+    tx: &Transaction<'_>,
+    document: &ProposalDocument,
+    frozen: &crate::proposal_workflow::ProposalSnapshot,
+) -> Result<Value, MutationError> {
+    let automatic = frozen.application_policy().is_automatic();
+    let mut value = json!({"mode":if automatic {"automatic"} else {"manual"}});
+    match document.header.state.as_str() {
+        "applied" | "cancelled" => {
+            value["state"] = json!(document.header.state);
+            return Ok(value);
+        }
+        "submitted" => {}
+        _ => return Err(MutationError::PreconditionFailed),
+    }
+    if document.blocked_reason.is_some() && !automatic {
+        value["state"] = json!("blocked");
+        value["reason"] = json!("contract-changed");
+        value["recovery"] = json!("correct-input");
+        return Ok(value);
+    }
+    if !automatic {
+        value["state"] = json!("pending");
+        return Ok(value);
+    }
+    let row = tx
+        .query_opt(
+            "SELECT state,proposal_digest,system_grant_revision,executor,
+        attempt_count,maximum_attempts,last_error_code,next_attempt_at<=clock_timestamp()
+        FROM registry_internal.registry_proposal_application_jobs
+        WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+            &[
+                &document.action_id,
+                &document.proposal_id,
+                &document.header.submission_version,
+            ],
+        )
+        .await
+        .map_err(map_database_error)?;
+    let Some(row) = row else {
+        let CompiledProposalReview::Required {
+            authority, policy, ..
+        } = frozen.review_requirement()
+        else {
+            return Err(MutationError::PreconditionFailed);
+        };
+        // Review precedes application-job creation. This is an observation of
+        // the exact retained local binding, not a fetch of review authority.
+        let review = tx
+            .query_opt(
+                "SELECT s.proposal_digest,s.authority,s.expected_policy,
+            s.on_approved_mode,s.executor,s.withdrawn,s.state,r.status
+            FROM registry_internal.registry_proposal_review_submissions s
+            LEFT JOIN registry_internal.registry_proposal_review_results r
+              USING(action_id,proposal_id,submission_version)
+            WHERE s.action_id=$1 AND s.proposal_id=$2 AND s.submission_version=$3",
+                &[
+                    &document.action_id,
+                    &document.proposal_id,
+                    &document.header.submission_version,
+                ],
+            )
+            .await
+            .map_err(map_database_error)?
+            .ok_or(MutationError::PreconditionFailed)?;
+        if review.get::<_, String>(0) != frozen.effect_digest().as_str()
+            || review.get::<_, String>(1) != *authority
+            || review.get::<_, Value>(2)
+                != serde_json::to_value(policy).map_err(|_| MutationError::Unavailable)?
+            || review.get::<_, String>(3) != "automatic"
+            || review.get::<_, Option<String>>(4).as_deref() != Some("builtin")
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let result: Option<String> = review.get(7);
+        if result.as_deref() == Some("approved") {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let blocked = document.blocked_reason.is_some()
+            || review.get::<_, bool>(5)
+            || review.get::<_, String>(6) == "failed"
+            || result.is_some();
+        value["state"] = json!(if blocked { "blocked" } else { "pending" });
+        value["automaticRetry"] = json!({"scheduled":false,"attempts":0,
+            "maximumAttempts":frozen.application_policy().maximum_attempts()});
+        if blocked {
+            value["reason"] = json!(if document.blocked_reason.is_some() {
+                "contract-changed"
+            } else {
+                "application-refused"
+            });
+            value["recovery"] = json!("correct-input");
+        }
+        return Ok(value);
+    };
+    if row.get::<_, String>(1) != frozen.effect_digest().as_str()
+        || Some(row.get::<_, String>(2).as_str()) != frozen.system_grant_revision()
+        || row.get::<_, String>(3) != "builtin"
+        || row.get::<_, i32>(5) != i32::from(frozen.application_policy().maximum_attempts())
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    let state: String = row.get(0);
+    let attempts: i32 = row.get(4);
+    let maximum: i32 = row.get(5);
+    let error: Option<String> = row.get(6);
+    let lease_expired: bool = row.get(7);
+    let exhausted = attempts >= maximum && (state != "applying" || lease_expired);
+    value["state"] = json!(match state.as_str() {
+        "queued" if !exhausted => "pending",
+        "applying" if !exhausted => "applying",
+        "queued" | "applying" | "blocked" => "blocked",
+        _ => return Err(MutationError::PreconditionFailed),
+    });
+    value["automaticRetry"] = json!({
+        "scheduled":!exhausted && (state=="queued" || state=="applying" && lease_expired),
+        "attempts":attempts,"maximumAttempts":maximum
+    });
+    if document.blocked_reason.is_some() {
+        value["state"] = json!("blocked");
+        value["reason"] = json!("contract-changed");
+        value["recovery"] = json!("correct-input");
+        value["automaticRetry"]["scheduled"] = json!(false);
+        return Ok(value);
+    }
+    if exhausted {
+        value["reason"] = json!("attempts-exhausted");
+        value["recovery"] = json!("correct-input");
+    } else if value["state"] == "blocked" || error.is_some() {
+        let (reason, recovery) = match error.as_deref() {
+            Some("dependency-outage" | "source-unavailable" | "executor-unavailable") => {
+                ("dependency-outage", "retry")
+            }
+            Some("lease-expired") => ("lease-expired", "retry"),
+            _ => ("application-refused", "correct-input"),
+        };
+        value["reason"] = json!(reason);
+        value["recovery"] = json!(recovery);
+    }
+    Ok(value)
 }
 
 fn public_application(application: &crate::proposal_workflow::ApplicationReceipt) -> Value {

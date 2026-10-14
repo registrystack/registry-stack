@@ -10,11 +10,11 @@
 //! violation. Runtime execution is covered separately; these admission tests
 //! never run a guest.
 
-use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
-use registry_breg::contract::{ACTION_PLAN_ABI_V1, ModuleAssetSource, parse_project_json};
+use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource, ACTION_PLAN_ABI_V1};
 use registry_breg::model::CompiledPlanFunctionKind;
-use registry_breg::wasm_handler::{MAX_PACKAGE_WASM_MODULES, MAXIMUM_WASM_MODULE_BYTES};
-use serde_json::{Value, json};
+use registry_breg::wasm_handler::{MAXIMUM_WASM_MODULE_BYTES, MAX_PACKAGE_WASM_MODULES};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 /// A minimal module satisfying the guest byte ABI: zero imports, the exact
@@ -517,8 +517,8 @@ fn the_per_package_wasm_module_count_is_bounded() {
 mod package_closure {
     use super::*;
     use registry_breg::package::{
-        PackageBuildRequest, PackageError, PackageMigrationPlanInput, PackageSourceFile,
-        PreparedPackage, inspect_package_integrity, prepare_package_with_project_assets,
+        inspect_package_integrity, prepare_package_with_project_assets, PackageBuildRequest,
+        PackageError, PackageMigrationPlanInput, PackageSourceFile, PreparedPackage,
     };
 
     /// Build and prepare the wasm admission project as a package carrying

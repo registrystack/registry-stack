@@ -2,9 +2,9 @@
 
 //! Compiler contract for the governed subject-facing access log.
 
-use registry_breg::{CompileFailure, CompileProfile, compile_project, parse_project_json};
+use registry_breg::{compile_project, parse_project_json, CompileFailure, CompileProfile};
 use registry_platform_canonical_json::parse_json_strict;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn source() -> Value {
     json!({"datasets":[{"id": "people"}],
@@ -200,12 +200,10 @@ fn generated_openapi_publishes_the_subject_owned_bounded_route() {
         operation["x-registry-accessProfiles"],
         json!(["investigator", "subject"])
     );
-    assert!(
-        operation["description"]
-            .as_str()
-            .unwrap()
-            .contains("subject field must exactly match the verified principal")
-    );
+    assert!(operation["description"]
+        .as_str()
+        .unwrap()
+        .contains("subject field must exactly match the verified principal"));
     let parameters = operation["parameters"].as_array().unwrap();
     let limit = parameters
         .iter()
@@ -260,16 +258,12 @@ fn generated_openapi_omits_access_log_route_without_entity_opt_in() {
     let compiled = compile(&value).expect("ordinary entity compiles");
     let artifact = compiled.artifacts().get("generated/openapi.json").unwrap();
     let openapi = parse_json_strict(&artifact.bytes).unwrap();
-    assert!(
-        openapi["paths"]
-            .get("/v1/records/people/{record_id}/access-log")
-            .is_none()
-    );
-    assert!(
-        openapi["components"]["schemas"]
-            .get("SubjectAccessLogPage")
-            .is_none()
-    );
+    assert!(openapi["paths"]
+        .get("/v1/records/people/{record_id}/access-log")
+        .is_none());
+    assert!(openapi["components"]["schemas"]
+        .get("SubjectAccessLogPage")
+        .is_none());
 }
 
 #[test]
@@ -322,11 +316,9 @@ fn trusted_intermediaries_are_explicit_and_bounded() {
     }
 
     let mut too_many = source();
-    too_many["recordTypes"][0]["accessLog"]["trustedIntermediaries"] = json!(
-        (0..65)
-            .map(|index| format!("client-{index}"))
-            .collect::<Vec<_>>()
-    );
+    too_many["recordTypes"][0]["accessLog"]["trustedIntermediaries"] = json!((0..65)
+        .map(|index| format!("client-{index}"))
+        .collect::<Vec<_>>());
     assert_refused(&too_many, "breg.access-log.trusted-intermediaries-too-many");
 }
 
@@ -368,7 +360,7 @@ fn relationship_exemptions_bind_the_authority_entity_and_read_path() {
     let mut value = source();
     add_relationship_reader(&mut value);
     value["recordTypes"][0]["accessLog"]["exemptions"]["relationship-investigator"] = json!({
-        "sourceEntity": "case",
+        "sourceRecordType": "case",
         "reason": "active-investigation",
         "delayDays": 7
     });
@@ -389,7 +381,7 @@ fn relationship_exemptions_bind_the_authority_entity_and_read_path() {
     assert_refused(&wrong_target, "breg.access-log.exemption-profile-invalid");
 
     let mut unknown_source = value;
-    unknown_source["recordTypes"][0]["accessLog"]["exemptions"]["relationship-investigator"]["sourceEntity"] =
-        json!("missing");
+    unknown_source["recordTypes"][0]["accessLog"]["exemptions"]["relationship-investigator"]
+        ["sourceRecordType"] = json!("missing");
     assert_refused(&unknown_source, "breg.access-log.exemption-profile-invalid");
 }

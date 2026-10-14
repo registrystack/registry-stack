@@ -1,0 +1,860 @@
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+# Every timestamp on 2026-09-01 is an anchor: the PostgreSQL acceptance harness
+# rebases that date to the day before the run, so gives that must be in force
+# stay inside the 365 days of maximumDurationDays whenever the suite runs.
+# Timestamps on other dates are fixed on purpose: 2020 is past
+# maximumDurationDays, 2099 is future.
+journeys:
+  - id: self-give-read-withdraw-and-backdated-regive
+    steps:
+      - id: publish-notice
+        recordType: person-privacy-notice
+        accessProfile: person-consent-steward
+        claims:
+          principal: synthetic-consent-steward
+          scopes: ["consent:person:steward"]
+        request:
+          type: create
+          data:
+            noticeVersion: "2026.1"
+            language: en
+            title: Sharing your person record
+            controllerName: Person Registry Authority
+            controllerContact: privacy@consent-person-registry.example.gov
+            jurisdiction: Solmara
+            legalBasis: Consent of the registered person.
+            withdrawalMethod: Withdraw at any registry office or through the self-service portal.
+            publishedAt: "2026-01-01T00:00:00Z"
+        expect: {outcome: success, status: 201}
+        capture: notice
+      - id: publish-food-agency-clause
+        recordType: person-notice-clause
+        accessProfile: person-consent-steward
+        claims:
+          principal: synthetic-consent-steward
+          scopes: ["consent:person:steward"]
+        request:
+          type: create
+          data:
+            notice: {recordCapture: notice}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            description: The food assistance agency reads your person record to target food assistance.
+        expect: {outcome: success, status: 201}
+        capture: food-agency-clause
+      - id: register-amina
+        recordType: person
+        accessProfile: person-registry-operator
+        claims:
+          principal: synthetic-registry-operator
+          scopes: ["registry:person:operate"]
+          actorKind: human
+          requesterClient: person-registry-console
+        request:
+          type: create
+          data: {personCode: P-AMINA, legalName: Amina Okafor, district: north-district}
+        expect: {outcome: success, status: 201}
+        capture: amina
+      - id: register-bruno
+        recordType: person
+        accessProfile: person-registry-operator
+        claims:
+          principal: synthetic-registry-operator
+          scopes: ["registry:person:operate"]
+          actorKind: human
+          requesterClient: person-registry-console
+        request:
+          type: create
+          data: {personCode: P-BRUNO-1, legalName: Bruno Keller, district: north-district}
+        expect: {outcome: success, status: 201}
+        capture: bruno
+      - id: link-amina
+        recordType: person-consent-link
+        accessProfile: person-consent-link-steward
+        claims:
+          principal: synthetic-link-steward
+          scopes: ["consent:person:link"]
+        request:
+          type: create
+          data: {subject: {recordCapture: amina}, principal: amina-self, active: true}
+        expect: {outcome: success, status: 201}
+        capture: amina-link
+      - id: food-agency-cannot-read-before-consent
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-food-agency
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: food-agency-portal
+        request: {type: get, recordCapture: amina}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: amina-gives-consent
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: amina-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: amina-self
+        request:
+          type: invoke
+          idempotencyKey: amina-give
+          input:
+            link: {recordCapture: amina-link}
+            subject: {recordCapture: amina}
+            clause: {recordCapture: food-agency-clause}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T00:00:00Z"
+        expect: {outcome: success, status: 200}
+      # A replay records no second decision: the feed and self counts below
+      # stay at three.
+      - id: amina-retries-lost-give-response
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: amina-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: amina-self
+        request:
+          type: invoke
+          idempotencyKey: amina-give
+          input:
+            link: {recordCapture: amina-link}
+            subject: {recordCapture: amina}
+            clause: {recordCapture: food-agency-clause}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T00:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: reused-give-key-with-different-body-is-refused
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: amina-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: amina-self
+        request:
+          type: invoke
+          idempotencyKey: amina-give
+          input:
+            link: {recordCapture: amina-link}
+            subject: {recordCapture: amina}
+            clause: {recordCapture: food-agency-clause}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T01:00:00Z"
+        expect: {outcome: refusal, status: 409, problemCode: idempotency.conflict}
+      - id: food-agency-reads-after-consent
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-food-agency
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: food-agency-portal
+        request: {type: get, recordCapture: amina}
+        expect:
+          outcome: success
+          status: 200
+          fields: {personCode: P-AMINA, legalName: Amina Okafor}
+      - id: food-agency-list-shows-only-consented-rows
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-food-agency
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: food-agency-portal
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 1}
+      - id: health-ngo-cannot-read-food-agency-consent
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-health-ngo
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: health-ngo-portal
+        request: {type: get, recordCapture: amina}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: amina-cannot-give-for-bruno
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: amina-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: amina-self
+        request:
+          type: invoke
+          idempotencyKey: amina-give-for-bruno
+          input:
+            link: {recordCapture: amina-link}
+            subject: {recordCapture: bruno}
+            clause: {recordCapture: food-agency-clause}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T00:00:00Z"
+        expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
+      - id: food-agency-still-cannot-read-bruno
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-food-agency
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: food-agency-portal
+        request: {type: get, recordCapture: bruno}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: amina-withdraws-consent
+        action: withdraw-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: amina-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: amina-self
+        request:
+          type: invoke
+          idempotencyKey: amina-withdraw
+          input:
+            link: {recordCapture: amina-link}
+            subject: {recordCapture: amina}
+            clause: {recordCapture: food-agency-clause}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            decision: withdrawn
+            channel: self-service
+            effectiveAt: "2026-09-01T02:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: food-agency-cannot-read-after-withdrawal
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-food-agency
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: food-agency-portal
+        request: {type: get, recordCapture: amina}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: late-synced-backdated-give
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: amina-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: amina-self
+        request:
+          type: invoke
+          idempotencyKey: amina-backdated-give
+          input:
+            link: {recordCapture: amina-link}
+            subject: {recordCapture: amina}
+            clause: {recordCapture: food-agency-clause}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T01:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: backdated-give-stays-ineffective-after-withdrawal
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-food-agency
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: food-agency-portal
+        request: {type: get, recordCapture: amina}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: food-agency-feed-shows-gives-and-the-withdrawal
+        recordType: person-consent-decision
+        accessProfile: person-consent-recipient
+        claims:
+          principal: synthetic-food-agency-feed
+          scopes: ["consent:person:read"]
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 3}
+      - id: health-ngo-feed-is-empty
+        recordType: person-consent-decision
+        accessProfile: person-consent-recipient
+        claims:
+          principal: synthetic-health-ngo-feed
+          scopes: ["consent:person:read"]
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 0}
+      - id: amina-lists-her-own-decisions
+        recordType: person-consent-decision
+        accessProfile: person-consent-self
+        claims:
+          principal: amina-self
+          scopes: ["consent:person:self"]
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 3}
+  - id: refusal-future-give-and-expiry
+    steps:
+      - id: publish-notice
+        recordType: person-privacy-notice
+        accessProfile: person-consent-steward
+        claims:
+          principal: synthetic-consent-steward
+          scopes: ["consent:person:steward"]
+        request:
+          type: create
+          data:
+            noticeVersion: "2026.1"
+            language: en
+            title: Sharing your person record
+            controllerName: Person Registry Authority
+            controllerContact: privacy@consent-person-registry.example.gov
+            jurisdiction: Solmara
+            legalBasis: Consent of the registered person.
+            withdrawalMethod: Withdraw at any registry office or through the self-service portal.
+            publishedAt: "2026-01-01T00:00:00Z"
+        expect: {outcome: success, status: 201}
+        capture: notice
+      - id: publish-health-ngo-clause
+        recordType: person-notice-clause
+        accessProfile: person-consent-steward
+        claims:
+          principal: synthetic-consent-steward
+          scopes: ["consent:person:steward"]
+        request:
+          type: create
+          data:
+            notice: {recordCapture: notice}
+            recipient: health-ngo
+            purpose: food-assistance
+            scope: food-targeting
+            description: The health referral NGO reads your person record to coordinate food assistance referrals.
+        expect: {outcome: success, status: 201}
+        capture: health-ngo-clause
+      - id: register-chen
+        recordType: person
+        accessProfile: person-registry-operator
+        claims:
+          principal: synthetic-registry-operator
+          scopes: ["registry:person:operate"]
+          actorKind: human
+          requesterClient: person-registry-console
+        request:
+          type: create
+          data: {personCode: P-CHEN, legalName: Chen Wei, district: south-district}
+        expect: {outcome: success, status: 201}
+        capture: chen
+      - id: register-dara
+        recordType: person
+        accessProfile: person-registry-operator
+        claims:
+          principal: synthetic-registry-operator
+          scopes: ["registry:person:operate"]
+          actorKind: human
+          requesterClient: person-registry-console
+        request:
+          type: create
+          data: {personCode: P-DARA, legalName: Dara Nsubuga, district: south-district}
+        expect: {outcome: success, status: 201}
+        capture: dara
+      - id: register-eli
+        recordType: person
+        accessProfile: person-registry-operator
+        claims:
+          principal: synthetic-registry-operator
+          scopes: ["registry:person:operate"]
+          actorKind: human
+          requesterClient: person-registry-console
+        request:
+          type: create
+          data: {personCode: P-ELI, legalName: Eli Haddad, district: south-district}
+        expect: {outcome: success, status: 201}
+        capture: eli
+      - id: register-farid
+        recordType: person
+        accessProfile: person-registry-operator
+        claims:
+          principal: synthetic-registry-operator
+          scopes: ["registry:person:operate"]
+          actorKind: human
+          requesterClient: person-registry-console
+        request:
+          type: create
+          data: {personCode: P-FARID, legalName: Farid Mensah, district: south-district}
+        expect: {outcome: success, status: 201}
+        capture: farid
+      - id: link-chen
+        recordType: person-consent-link
+        accessProfile: person-consent-link-steward
+        claims:
+          principal: synthetic-link-steward
+          scopes: ["consent:person:link"]
+        request:
+          type: create
+          data: {subject: {recordCapture: chen}, principal: chen-self, active: true}
+        expect: {outcome: success, status: 201}
+        capture: chen-link
+      - id: link-dara
+        recordType: person-consent-link
+        accessProfile: person-consent-link-steward
+        claims:
+          principal: synthetic-link-steward
+          scopes: ["consent:person:link"]
+        request:
+          type: create
+          data: {subject: {recordCapture: dara}, principal: dara-self, active: true}
+        expect: {outcome: success, status: 201}
+        capture: dara-link
+      - id: link-eli
+        recordType: person-consent-link
+        accessProfile: person-consent-link-steward
+        claims:
+          principal: synthetic-link-steward
+          scopes: ["consent:person:link"]
+        request:
+          type: create
+          data: {subject: {recordCapture: eli}, principal: eli-self, active: true}
+        expect: {outcome: success, status: 201}
+        capture: eli-link
+      - id: link-farid
+        recordType: person-consent-link
+        accessProfile: person-consent-link-steward
+        claims:
+          principal: synthetic-link-steward
+          scopes: ["consent:person:link"]
+        request:
+          type: create
+          data: {subject: {recordCapture: farid}, principal: farid-self, active: true}
+        expect: {outcome: success, status: 201}
+        capture: farid-link
+      - id: chen-refuses-consent
+        action: refuse-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: chen-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: chen-self
+        request:
+          type: invoke
+          idempotencyKey: chen-refuse
+          input:
+            link: {recordCapture: chen-link}
+            subject: {recordCapture: chen}
+            clause: {recordCapture: health-ngo-clause}
+            recipient: health-ngo
+            purpose: food-assistance
+            scope: food-targeting
+            decision: refused
+            channel: self-service
+            effectiveAt: "2026-09-01T00:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: health-ngo-cannot-read-after-refusal
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-health-ngo
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: health-ngo-portal
+        request: {type: get, recordCapture: chen}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: refusal-is-never-in-the-feed
+        recordType: person-consent-decision
+        accessProfile: person-consent-recipient
+        claims:
+          principal: synthetic-health-ngo-feed
+          scopes: ["consent:person:read"]
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 0}
+      - id: dara-gives-future-dated-consent
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: dara-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: dara-self
+        request:
+          type: invoke
+          idempotencyKey: dara-future-give
+          input:
+            link: {recordCapture: dara-link}
+            subject: {recordCapture: dara}
+            clause: {recordCapture: health-ngo-clause}
+            recipient: health-ngo
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2099-01-01T00:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: future-dated-give-is-not-yet-in-force
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-health-ngo
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: health-ngo-portal
+        request: {type: get, recordCapture: dara}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: eli-gives-consent-that-expired-by-maximum-duration
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: eli-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: eli-self
+        request:
+          type: invoke
+          idempotencyKey: eli-old-give
+          input:
+            link: {recordCapture: eli-link}
+            subject: {recordCapture: eli}
+            clause: {recordCapture: health-ngo-clause}
+            recipient: health-ngo
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2020-01-01T00:00:00Z"
+            expiresAt: "2099-12-31T00:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: give-past-maximum-duration-is-not-in-force
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-health-ngo
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: health-ngo-portal
+        request: {type: get, recordCapture: eli}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: farid-gives-consent-that-has-already-ended
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: farid-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: farid-self
+        request:
+          type: invoke
+          idempotencyKey: farid-ended-give
+          input:
+            link: {recordCapture: farid-link}
+            subject: {recordCapture: farid}
+            clause: {recordCapture: health-ngo-clause}
+            recipient: health-ngo
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T00:00:00Z"
+            expiresAt: "2026-09-01T00:30:00Z"
+        expect: {outcome: success, status: 200}
+      - id: give-past-its-end-is-not-in-force
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-health-ngo
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: health-ngo-portal
+        request: {type: get, recordCapture: farid}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+  - id: group-recipient-and-assisted-capture
+    steps:
+      - id: publish-notice
+        recordType: person-privacy-notice
+        accessProfile: person-consent-steward
+        claims:
+          principal: synthetic-consent-steward
+          scopes: ["consent:person:steward"]
+        request:
+          type: create
+          data:
+            noticeVersion: "2026.1"
+            language: en
+            title: Sharing your person record
+            controllerName: Person Registry Authority
+            controllerContact: privacy@consent-person-registry.example.gov
+            jurisdiction: Solmara
+            legalBasis: Consent of the registered person.
+            withdrawalMethod: Withdraw at any registry office or through the self-service portal.
+            publishedAt: "2026-01-01T00:00:00Z"
+        expect: {outcome: success, status: 201}
+        capture: notice
+      - id: publish-referral-network-clause
+        recordType: person-notice-clause
+        accessProfile: person-consent-steward
+        claims:
+          principal: synthetic-consent-steward
+          scopes: ["consent:person:steward"]
+        request:
+          type: create
+          data:
+            notice: {recordCapture: notice}
+            recipient: referral-network
+            purpose: food-assistance
+            scope: food-targeting
+            description: Every member of the referral network reads your person record to coordinate food assistance.
+        expect: {outcome: success, status: 201}
+        capture: referral-network-clause
+      - id: publish-food-agency-clause
+        recordType: person-notice-clause
+        accessProfile: person-consent-steward
+        claims:
+          principal: synthetic-consent-steward
+          scopes: ["consent:person:steward"]
+        request:
+          type: create
+          data:
+            notice: {recordCapture: notice}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            description: The food assistance agency reads your person record to target food assistance.
+        expect: {outcome: success, status: 201}
+        capture: food-agency-clause
+      - id: register-grace
+        recordType: person
+        accessProfile: person-registry-operator
+        claims:
+          principal: synthetic-registry-operator
+          scopes: ["registry:person:operate"]
+          actorKind: human
+          requesterClient: person-registry-console
+        request:
+          type: create
+          data: {personCode: P-GRACE, legalName: Grace Achieng, district: east-district}
+        expect: {outcome: success, status: 201}
+        capture: grace
+      - id: register-hamid
+        recordType: person
+        accessProfile: person-registry-operator
+        claims:
+          principal: synthetic-registry-operator
+          scopes: ["registry:person:operate"]
+          actorKind: human
+          requesterClient: person-registry-console
+        request:
+          type: create
+          data: {personCode: P-HAMID, legalName: Hamid Rahimi, district: east-district}
+        expect: {outcome: success, status: 201}
+        capture: hamid
+      - id: link-grace
+        recordType: person-consent-link
+        accessProfile: person-consent-link-steward
+        claims:
+          principal: synthetic-link-steward
+          scopes: ["consent:person:link"]
+        request:
+          type: create
+          data: {subject: {recordCapture: grace}, principal: grace-self, active: true}
+        expect: {outcome: success, status: 201}
+        capture: grace-link
+      - id: link-hamid-inactive
+        recordType: person-consent-link
+        accessProfile: person-consent-link-steward
+        claims:
+          principal: synthetic-link-steward
+          scopes: ["consent:person:link"]
+        request:
+          type: create
+          data: {subject: {recordCapture: hamid}, principal: hamid-self, active: false}
+        expect: {outcome: success, status: 201}
+        capture: hamid-link
+      - id: grace-gives-consent-to-the-referral-network
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: grace-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: grace-self
+        request:
+          type: invoke
+          idempotencyKey: grace-group-give
+          input:
+            link: {recordCapture: grace-link}
+            subject: {recordCapture: grace}
+            clause: {recordCapture: referral-network-clause}
+            recipient: referral-network
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T00:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: food-agency-reads-through-the-group
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-food-agency
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: food-agency-portal
+        request: {type: get, recordCapture: grace}
+        expect:
+          outcome: success
+          status: 200
+          fields: {personCode: P-GRACE}
+      - id: health-ngo-reads-through-the-group
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-health-ngo
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: health-ngo-portal
+        request: {type: get, recordCapture: grace}
+        expect:
+          outcome: success
+          status: 200
+          fields: {personCode: P-GRACE}
+      - id: inactive-link-cannot-act
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims:
+          principal: hamid-self
+          scopes: ["consent:person:self"]
+          directClaims:
+            registry_principal: hamid-self
+        request:
+          type: invoke
+          idempotencyKey: hamid-inactive-give
+          input:
+            link: {recordCapture: hamid-link}
+            subject: {recordCapture: hamid}
+            clause: {recordCapture: food-agency-clause}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T00:00:00Z"
+        expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
+      - id: steward-captures-assisted-consent
+        action: record-person-consent-assisted
+        accessProfile: person-consent-assisted-capture
+        claims:
+          principal: synthetic-field-officer
+          scopes: ["consent:person:capture"]
+        request:
+          type: invoke
+          idempotencyKey: hamid-assisted-give
+          input:
+            subject: {recordCapture: hamid}
+            clause: {recordCapture: food-agency-clause}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: assisted
+            effectiveAt: "2026-09-01T00:00:00Z"
+            evidence: signed paper form 2026-0042 held at the east district office
+        expect: {outcome: success, status: 200}
+      - id: food-agency-reads-after-assisted-capture
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-food-agency
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: food-agency-portal
+        request: {type: get, recordCapture: hamid}
+        expect:
+          outcome: success
+          status: 200
+          fields: {personCode: P-HAMID}
+      - id: health-ngo-cannot-read-food-agency-assisted-consent
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-health-ngo
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: health-ngo-portal
+        request: {type: get, recordCapture: hamid}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      # Journeys share one database, so the feed holds every decision addressed
+      # to health-ngo or its group so far: the three earlier gives (future,
+      # expired, ended) and the group give, but never Chen's refusal.
+      - id: health-ngo-feed-has-gives-but-no-refusal
+        recordType: person-consent-decision
+        accessProfile: person-consent-recipient
+        claims:
+          principal: synthetic-health-ngo-feed
+          scopes: ["consent:person:read"]
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 4}
+      - id: steward-imports-legacy-consent-without-optional-inputs
+        action: import-person-consent
+        accessProfile: person-consent-steward
+        claims:
+          principal: synthetic-consent-steward
+          scopes: ["consent:person:steward"]
+        request:
+          type: invoke
+          idempotencyKey: hamid-legacy-import
+          input:
+            subject: {recordCapture: hamid}
+            recipient: health-ngo
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: import
+            effectiveAt: "2026-09-01T00:00:00Z"
+            sourceReference: legacy-consent-register-row-0042
+        expect: {outcome: success, status: 200}
+      - id: health-ngo-reads-after-import
+        recordType: person
+        accessProfile: food-targeting
+        claims:
+          principal: synthetic-health-ngo
+          scopes: ["registry:person:read"]
+          purpose: food-assistance
+          actorKind: service
+          requesterClient: health-ngo-portal
+        request: {type: get, recordCapture: hamid}
+        expect:
+          outcome: success
+          status: 200
+          fields: {personCode: P-HAMID}

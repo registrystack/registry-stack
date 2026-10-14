@@ -32,25 +32,25 @@ use crate::mutation::install_mutation_schema;
 use crate::package::CompiledRegistryMigrationBaseline;
 
 use super::{
-    ConnectionConfig, ExpectedRegistryIdentity, PostgresKernelError, Result, SqlIdentifier,
     catalog::{
-        ExpectedManagedCatalog, RegistryStateShape, install_registry_state_schema,
-        registry_state_shape, verify_managed_catalog,
+        install_registry_state_schema, registry_state_shape, verify_managed_catalog,
+        ExpectedManagedCatalog, RegistryStateShape,
     },
     config::ConnectionTls,
     migration_ledger::{
-        ActivationPlanKind, MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
         in_flight_activation, migration_phase_state, record_applied, record_chunk_progress,
         record_failed, record_postconditions_complete, record_preconditions_complete,
         record_reverted, record_started, record_step_complete, statement_checksum, step_progress,
-        verify_resumable,
+        verify_resumable, ActivationPlanKind, MigrationLedgerEntry, MigrationLedgerStep,
+        MigrationLedgerStepKind,
     },
     schema::{
         execute_compiled_ddl_statement, is_spatial_candidate_view_drop_sql,
         is_spatial_candidate_view_sql, map_pattern_database_error, pattern_field_for_constraint,
         reconcile_compiled_runtime_acl, retire_spatial_bbox_role, transfer_spatial_candidate_views,
     },
-    verify_btree_gist, verify_migration_role, verify_postgis,
+    verify_btree_gist, verify_migration_role, verify_postgis, ConnectionConfig,
+    ExpectedRegistryIdentity, PostgresKernelError, Result, SqlIdentifier,
 };
 
 // These defense-in-depth bounds match the verified package manifest envelope:
@@ -3925,7 +3925,7 @@ mod tests {
     #[cfg(feature = "postgres-test")]
     use tokio_postgres::Config;
 
-    use crate::compiler::{CompileProfile, compile_project};
+    use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::parse_project_json;
     use crate::migration_plan::{
         ChunkCursorProtocol, ReviewedMigrationObject, ReviewedMigrationObjectKind,
@@ -3975,22 +3975,18 @@ mod tests {
             validate_verified_ddl_request(true, &[oversized.as_str()], Duration::from_secs(1)),
             Err(PostgresKernelError::Configuration(_))
         ));
-        assert!(
-            validate_verified_ddl_request(
-                true,
-                &["CREATE TABLE registry_data.probe (id int)"],
-                Duration::from_millis(1),
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_verified_ddl_request(
-                true,
-                &["CREATE TABLE registry_data.probe (id int)"],
-                MAX_VERIFIED_DDL_STATEMENT_TIMEOUT,
-            )
-            .is_ok()
-        );
+        assert!(validate_verified_ddl_request(
+            true,
+            &["CREATE TABLE registry_data.probe (id int)"],
+            Duration::from_millis(1),
+        )
+        .is_ok());
+        assert!(validate_verified_ddl_request(
+            true,
+            &["CREATE TABLE registry_data.probe (id int)"],
+            MAX_VERIFIED_DDL_STATEMENT_TIMEOUT,
+        )
+        .is_ok());
         assert!(matches!(
             validate_verified_ddl_request(
                 true,

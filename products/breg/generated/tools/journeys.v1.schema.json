@@ -381,9 +381,6 @@
           "minimum": 0,
           "type": "integer"
         },
-        "entityId": {
-          "type": "string"
-        },
         "fieldId": {
           "type": "string"
         },
@@ -397,6 +394,9 @@
           "$ref": "#/$defs/ExpectedOutcome"
         },
         "problemCode": {
+          "type": "string"
+        },
+        "recordType": {
           "type": "string"
         },
         "refusalCode": {

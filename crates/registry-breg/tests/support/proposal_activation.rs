@@ -2,16 +2,16 @@
 //! Native successor activation for Proposal compatibility tests.
 use super::client_http::ClientFixture;
 use registry_breg::migration::{
-    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, apply_verified_package,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest,
 };
 use registry_breg::package::{
-    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile,
-    PreparedPackage, load_package, prepare_package,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageSourceFile, PreparedPackage,
 };
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, managed_schema_fingerprint,
-    reconcile_compiled_runtime_acl_for_test,
+    managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};

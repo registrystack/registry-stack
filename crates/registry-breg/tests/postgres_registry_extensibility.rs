@@ -9,38 +9,39 @@ mod postgres_harness;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, authenticated_router,
+    authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema,
+    RegistryStateTestIdentity,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_platform_audit::AuditProfile;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{MockIdp, oidc_verifier_config};
-use serde_json::{Value, json};
+use registry_platform_testing::{oidc_verifier_config, MockIdp};
+use serde_json::{json, Value};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
 const AUDIENCE: &str = "urn:breg:facility-registry-actions";
 const REGISTRY_ID: &str = "facility-registry-actions";
-const PROJECT: &[u8] =
-    include_bytes!("../../../products/breg/fixtures/facility-registry-actions/registry.yaml");
+const PROJECT: &[u8] = include_bytes!(
+    "fixtures/native-models/products/breg/fixtures/facility-registry-actions/registry.yaml"
+);
 const MODULE: &[u8] = include_bytes!(
-    "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
+    "fixtures/native-models/products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
 );
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -53,7 +54,7 @@ async fn facility_registration_transfer_and_events_use_governed_actions() {
     );
     registry_breg::fixtures::validate_fixture_journeys(
         include_bytes!(
-            "../../../products/breg/fixtures/facility-registry-actions/tests/journeys.yaml"
+            "fixtures/native-models/products/breg/fixtures/facility-registry-actions/tests/journeys.yaml"
         ),
         &registry,
     )

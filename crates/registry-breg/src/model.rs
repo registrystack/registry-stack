@@ -207,6 +207,7 @@ pub struct CompiledStatisticalReleases {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledSourceRelation {
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub sql_name: String,
     pub stored_fields: Vec<String>,
@@ -284,6 +285,7 @@ pub enum CompiledCommitEvidenceExpected {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledPlanWrite {
+    #[serde(rename = "targetRecordType")]
     pub target_entity_id: String,
     pub target_from_input: Option<String>,
     pub operation: Operation,
@@ -378,6 +380,8 @@ impl CompiledActionExecution {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledProposalPolicy {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<CompiledProposalHook>,
     pub review: CompiledProposalReview,
     pub application: CompiledProposalApplication,
     pub retention: CompiledProposalRetentionMode,
@@ -402,6 +406,7 @@ pub struct CompiledSystemApplyGrant {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledSystemApplyTarget {
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub operation: Operation,
     pub fields: BTreeSet<String>,
@@ -482,6 +487,7 @@ pub struct CompiledProposalPermission {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledProposalTargetPermission {
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub row_boundaries: Vec<RowBoundarySource>,
 }
@@ -490,6 +496,7 @@ pub struct CompiledProposalTargetPermission {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledCommitGuard {
     pub input: String,
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub field: String,
     #[serde(
@@ -580,6 +587,7 @@ pub struct CompiledPlanEffect {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledPlanTarget {
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub binding: CompiledPlanTargetBinding,
 }
@@ -672,6 +680,7 @@ pub struct CompiledActionPermission {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledActionTargetPermission {
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     /// The action target operation this permission entry governs.
     pub operation: Operation,
@@ -702,6 +711,7 @@ impl CompiledActionPermission {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledActionTargetUse {
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub operation: Operation,
     pub fields: BTreeSet<String>,
@@ -928,7 +938,9 @@ pub struct CompiledEntity {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledRelationship {
     pub name: String,
+    #[serde(rename = "sourceRecordType")]
     pub source_entity_id: String,
+    #[serde(rename = "targetRecordType")]
     pub target_entity_id: String,
     pub field_id: String,
     pub cardinality: RelationshipCardinality,
@@ -1082,6 +1094,7 @@ pub enum HttpMethod {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledRoute {
     pub id: String,
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub method: HttpMethod,
     pub path: String,
@@ -1107,9 +1120,8 @@ pub struct CompiledRouteInventory {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledEventDelivery {
     pub id: String,
-    pub entity_id: String,
+    pub owner: CompiledEventOwner,
     pub event_id: String,
-    pub trigger: crate::contract::EventTrigger,
     /// The bound destination this delivery is sent to. Present for the `url`
     /// handler kind and absent for a local kind, which is sent nowhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1146,6 +1158,34 @@ pub struct CompiledEventDelivery {
     pub maximum_payload_bytes: u32,
     pub dead_letter: WebhookDeadLetterMode,
     pub operator_replay: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum CompiledEventOwner {
+    RecordType {
+        record_type: String,
+        trigger: crate::contract::EventTrigger,
+    },
+    ProposalAction {
+        action: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledProposalHook {
+    pub id: String,
+    pub transitions: BTreeSet<crate::contract::ProposalEventTransition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handler: Option<CompiledHookHandler>,
 }
 
 impl CompiledEventDelivery {
@@ -1244,6 +1284,7 @@ pub enum CompiledRevisionKind {
 pub struct CompiledAccessEntry {
     #[serde(default)]
     pub route_id: String,
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub operation: Operation,
     pub profile_ids: BTreeSet<String>,
@@ -1262,6 +1303,7 @@ pub struct CompiledMetadataEntry {
     pub route_id: String,
     pub operation: Operation,
     pub access_profile: String,
+    #[serde(rename = "responseRecordType")]
     pub response_entity_id: String,
     pub readable_fields: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1282,6 +1324,7 @@ pub struct CompiledMetadataEntity {
 pub struct CompiledMetadataInventory {
     pub registry_id: String,
     pub version: String,
+    #[serde(rename = "recordTypes")]
     pub entities: Vec<CompiledMetadataEntity>,
 }
 
@@ -1353,6 +1396,7 @@ pub enum CompiledQueryTemporalSemantics {
 pub struct CompiledQueryOperation {
     pub id: String,
     pub route_id: String,
+    #[serde(rename = "recordType")]
     pub entity_id: String,
     pub profile_id: String,
     pub kind: CompiledQueryKind,

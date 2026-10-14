@@ -97,7 +97,7 @@ class ActionRefusalTests(unittest.TestCase):
                 self.assertEqual(error.refusal_code, document["refusalCode"])
                 self.assertEqual(error.field_path, document.get("fieldPath"))
                 self.assertEqual(error.trace_id, TRACE_ID)
-                self.assertIsNone(error.plan_refusal)
+                self.assertFalse(hasattr(error, "plan_refusal"))
 
     def test_a_refusal_outside_the_published_bounds_fails_closed(self) -> None:
         silent = refusal()

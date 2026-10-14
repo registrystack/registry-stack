@@ -40,8 +40,8 @@ artifacts:
   - {path: quickstart, kind: generic-first-hour-quickstart, state: authored}
   - {path: generated/authoring/registry-project.schema.json, kind: generated-authoring-schema, state: authored}
   - {path: generated/runtime/runtime.schema.json, kind: generated-runtime-schema, state: authored}
-  - {path: generated/asset-site-placement, kind: generated-baseline, state: authored}
-  - {path: generated/business-establishments, kind: generated-baseline, state: authored}
+  - {path: generated/refactor, kind: generated-baseline, state: authored}
+  - {path: generated/refactor-minimal, kind: generated-baseline, state: authored}
   - {path: scripts/check-generated.sh, kind: generated-artifact-gate, state: authored}
   - {path: scripts/compare-generated-tree.py, kind: generated-tree-comparator, state: authored}
   - {path: scripts/test-postgres.sh, kind: real-postgresql-entrypoint, state: authored}
@@ -51,4 +51,3 @@ artifacts:
   - {path: scripts/test-historical-workflow.sh, kind: historical-workflow-entrypoint, state: authored}
   - {"path": "STATISTICS.md", "kind": "statistical-dataset-guide", "state": "authored"}
   - {"path": "scripts/test-statistics-workflow.sh", "kind": "statistical-adopter-workflow-entrypoint", "state": "authored"}
-  - {"path": "generated/facility", "kind": "generated-baseline", "state": "authored"}

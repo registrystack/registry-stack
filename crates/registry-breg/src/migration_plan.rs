@@ -10,12 +10,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(feature = "tooling")]
-use pg_query::NodeRef;
-#[cfg(feature = "tooling")]
 use pg_query::protobuf::{
-    AExprKind, AlterTableType, ConstrType, ObjectType, SetOperation, SubLinkType, a_const,
-    node::Node as PgNode,
+    a_const, node::Node as PgNode, AExprKind, AlterTableType, ConstrType, ObjectType, SetOperation,
+    SubLinkType,
 };
+#[cfg(feature = "tooling")]
+use pg_query::NodeRef;
 #[cfg(feature = "tooling")]
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_yaml::{
@@ -1341,13 +1341,11 @@ fn validate_field_encryption_drop_order(
 pub fn reviewed_artifact_kind(path: &str) -> Option<ReviewedArtifactKind> {
     let components = path.split('/').collect::<Vec<_>>();
     match components.as_slice() {
-        [
-            "modules",
-            module,
-            "migrations",
-            migration,
-            "descriptor.json",
-        ] if valid_id(module) && valid_id(migration) => Some(ReviewedArtifactKind::Descriptor),
+        ["modules", module, "migrations", migration, "descriptor.json"]
+            if valid_id(module) && valid_id(migration) =>
+        {
+            Some(ReviewedArtifactKind::Descriptor)
+        }
         ["modules", module, "migrations", migration, "steps", file]
             if valid_id(module)
                 && valid_id(migration)
@@ -1355,16 +1353,10 @@ pub fn reviewed_artifact_kind(path: &str) -> Option<ReviewedArtifactKind> {
         {
             Some(ReviewedArtifactKind::StepSql)
         }
-        [
-            "modules",
-            module,
-            "migrations",
-            migration,
-            "assertions",
-            file,
-        ] if valid_id(module)
-            && valid_id(migration)
-            && file.strip_suffix(".sql").is_some_and(valid_id) =>
+        ["modules", module, "migrations", migration, "assertions", file]
+            if valid_id(module)
+                && valid_id(migration)
+                && file.strip_suffix(".sql").is_some_and(valid_id) =>
         {
             Some(ReviewedArtifactKind::AssertionSql)
         }

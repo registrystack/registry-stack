@@ -7,12 +7,12 @@
 mod postgres_harness;
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema, install_statistics_store_for_test,
-    verify_catalog_identity_for_catalog,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    install_statistics_store_for_test, verify_catalog_identity_for_catalog, ExpectedManagedCatalog,
+    RegistryStateTestIdentity,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -161,9 +161,7 @@ async fn statistics_store_has_exact_runtime_acl_and_withdrawal_function_shape() 
         .collect::<Vec<_>>();
     assert_eq!(
         actual,
-        vec![
-            true, true, false, false, true, true, false, false, true, false, false, false, true,
-        ]
+        vec![true, true, false, false, true, true, false, false, true, false, false, false, true,]
     );
 
     let function = migration
@@ -201,10 +199,8 @@ async fn statistics_store_has_exact_runtime_acl_and_withdrawal_function_shape() 
         database.migration_role.as_str()
     );
     let definition = function.get::<_, String>(7);
-    assert!(
-        definition
-            .contains("INSERT INTO registry_internal.registry_statistical_release_withdrawals")
-    );
+    assert!(definition
+        .contains("INSERT INTO registry_internal.registry_statistical_release_withdrawals"));
     assert!(
         definition.contains("ON CONFLICT (dataset_id, period_code, release_version) DO NOTHING")
     );
@@ -228,30 +224,26 @@ async fn withdrawal_records_reason_and_removes_only_content_atomically() {
     insert_release(&migration, 1).await;
 
     set_role(&database, database.runtime_role.as_str()).await;
-    assert!(
-        database
-            .admin
-            .query_one(
-                "SELECT registry_internal.withdraw_statistical_release(
+    assert!(database
+        .admin
+        .query_one(
+            "SELECT registry_internal.withdraw_statistical_release(
                  'households', '2026-08', 1, 'source-data-error')",
-                &[],
-            )
-            .await
-            .expect("runtime can invoke the exact function")
-            .get::<_, bool>(0)
-    );
-    assert!(
-        !database
-            .admin
-            .query_one(
-                "SELECT registry_internal.withdraw_statistical_release(
+            &[],
+        )
+        .await
+        .expect("runtime can invoke the exact function")
+        .get::<_, bool>(0));
+    assert!(!database
+        .admin
+        .query_one(
+            "SELECT registry_internal.withdraw_statistical_release(
                  'households', '2026-08', 1, 'source-data-error')",
-                &[],
-            )
-            .await
-            .expect("a repeated withdrawal is a closed refusal")
-            .get::<_, bool>(0)
-    );
+            &[],
+        )
+        .await
+        .expect("a repeated withdrawal is a closed refusal")
+        .get::<_, bool>(0));
     reset_role(&database).await;
 
     let state = migration
@@ -280,17 +272,15 @@ async fn invalid_withdrawal_reason_leaves_content_and_journal_unchanged() {
     insert_release(&migration, 1).await;
 
     set_role(&database, database.runtime_role.as_str()).await;
-    assert!(
-        database
-            .admin
-            .query_one(
-                "SELECT registry_internal.withdraw_statistical_release(
+    assert!(database
+        .admin
+        .query_one(
+            "SELECT registry_internal.withdraw_statistical_release(
                  'households', '2026-08', 1, 'free-text-reason')",
-                &[],
-            )
-            .await
-            .is_err()
-    );
+            &[],
+        )
+        .await
+        .is_err());
     reset_role(&database).await;
 
     let state = migration

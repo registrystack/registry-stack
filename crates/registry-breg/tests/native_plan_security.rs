@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Native named-function inputs, execution budgets, and failures stay closed.
-use registry_breg::action_handler::{ActionHandlerError, ActionHandlerOutcome, evaluate_action};
+use registry_breg::action_handler::{evaluate_action, ActionHandlerError, ActionHandlerOutcome};
 use registry_breg::contract::ModuleAssetSource;
-use registry_breg::{CompileProfile, compile_project_with_assets, parse_project_json};
-use serde_json::{Value, json};
+use registry_breg::{compile_project_with_assets, parse_project_json, CompileProfile};
+use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
 fn source() -> Value {

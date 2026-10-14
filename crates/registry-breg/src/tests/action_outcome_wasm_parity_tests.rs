@@ -27,14 +27,14 @@ use std::time::{Duration, Instant};
 
 use registry_platform_script::wasm::{Backend, Budgets, Executor, InvokeError};
 
-use super::{ProposedValue, decode_wasm_outcome, validate_proposed_outcome};
+use super::{decode_wasm_outcome, validate_proposed_outcome, ProposedValue};
 use crate::action_handler::{
-    ActionHandlerDiagnostic, ActionHandlerError, ActionHandlerOutcome, evaluate_action_detailed,
+    evaluate_action_detailed, ActionHandlerDiagnostic, ActionHandlerError, ActionHandlerOutcome,
 };
-use crate::compiler::{CompileProfile, compile_project_with_assets};
-use crate::contract::{ModuleAssetSource, parse_project_json};
+use crate::compiler::{compile_project_with_assets, CompileProfile};
+use crate::contract::{parse_project_json, ModuleAssetSource};
 use crate::model::CompiledAction;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 /// The fixture with a reference field and three write slots (two creates and
 /// one patch from an input field), so reference-envelope and patch-clear

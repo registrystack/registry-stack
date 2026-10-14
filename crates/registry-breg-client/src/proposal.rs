@@ -46,6 +46,52 @@ pub enum BRegProposalState {
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalApplicationState {
+    Pending,
+    Applying,
+    Blocked,
+    Applied,
+    Cancelled,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalApplicationMode {
+    Automatic,
+    Manual,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalApplicationReason {
+    ContractChanged,
+    DependencyOutage,
+    LeaseExpired,
+    ApplicationRefused,
+    AttemptsExhausted,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalAutomaticRetry {
+    pub scheduled: bool,
+    pub attempts: u16,
+    pub maximum_attempts: u16,
+}
+/// Local application progress for the enclosing exact frozen submission.
+/// It neither follows a successor nor reconciles an unknown mutation command.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalApplicationStatus {
+    pub state: BRegProposalApplicationState,
+    pub mode: BRegProposalApplicationMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<BRegProposalApplicationReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<BRegRecoveryHint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_retry: Option<BRegProposalAutomaticRetry>,
+}
+
 /// Inert server-issued link. Only a client-bound Proposal promotes its use.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -107,8 +153,6 @@ pub struct BRegProposalAttachmentValue {
     byte_size: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     uploaded_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    uploaded_by: Option<String>,
     verification_status: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -159,9 +203,17 @@ pub struct BRegProposalReviewSubject {
 pub struct BRegProposalReviewContext {
     pub reference: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    pub contract: Option<BRegProposalReviewContextContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<BTreeMap<String, Value>>,
+}
+/// Exact local interface exported by the governed producer, independent of a review policy pin.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalReviewContextContract {
+    pub id: String,
+    pub revision: String,
+    pub schema_digest: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -222,6 +274,8 @@ pub struct BRegProposal {
     attachments: BTreeMap<String, BRegProposalAttachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application: Option<BRegProposalApplication>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    application_status: Option<BRegProposalApplicationStatus>,
     #[serde(skip)]
     source: Option<String>,
 }
@@ -255,6 +309,48 @@ impl BRegProposal {
         {
             return Err(refusal());
         }
+        if self.application_status.as_ref().is_some_and(|status| {
+            self.effect_digest.is_none()
+                || self.submission_version == 0
+                || self.state == BRegProposalState::Draft
+                || status.reason.is_some() != status.recovery.is_some()
+                || status.state == BRegProposalApplicationState::Blocked && status.reason.is_none()
+                || matches!(
+                    status.state,
+                    BRegProposalApplicationState::Applied | BRegProposalApplicationState::Cancelled
+                ) && (status.reason.is_some() || status.automatic_retry.is_some())
+                || status.mode == BRegProposalApplicationMode::Automatic
+                    && matches!(
+                        status.state,
+                        BRegProposalApplicationState::Pending
+                            | BRegProposalApplicationState::Applying
+                            | BRegProposalApplicationState::Blocked
+                    )
+                    && status.automatic_retry.is_none()
+                || match status.state {
+                    BRegProposalApplicationState::Applied => {
+                        self.state != BRegProposalState::Applied || self.application.is_none()
+                    }
+                    BRegProposalApplicationState::Cancelled => {
+                        self.state != BRegProposalState::Cancelled
+                    }
+                    _ => self.state != BRegProposalState::Submitted,
+                }
+                || status.automatic_retry.as_ref().is_some_and(|retry| {
+                    status.mode != BRegProposalApplicationMode::Automatic
+                        || !(1..=1000).contains(&retry.maximum_attempts)
+                        || retry.attempts > retry.maximum_attempts
+                        || retry.scheduled
+                            && (retry.attempts == retry.maximum_attempts
+                                || !matches!(
+                                    status.state,
+                                    BRegProposalApplicationState::Pending
+                                        | BRegProposalApplicationState::Applying
+                                ))
+                })
+        }) {
+            return Err(refusal());
+        }
         if self
             .title
             .as_ref()
@@ -263,13 +359,15 @@ impl BRegProposal {
             return Err(refusal());
         }
         if self.application.as_ref().is_some_and(|application| {
-            Uuid::parse_str(&application.application_id).is_err()
+            self.state != BRegProposalState::Applied
+                || self.submission_version == 0
+                || Uuid::parse_str(&application.application_id).is_err()
                 || application.submission_version != self.submission_version
                 || !digest(&application.effect_digest)
                 || self
                     .effect_digest
                     .as_ref()
-                    .is_some_and(|digest| digest != &application.effect_digest)
+                    .is_none_or(|digest| digest != &application.effect_digest)
                 || application.result_links.len() > 16
                 || application.result_links.iter().any(|reference| {
                     !identifier(&reference.record_type)
@@ -381,10 +479,6 @@ impl BRegProposal {
                         .uploaded_at
                         .as_ref()
                         .is_some_and(|value| value.len() > 64)
-                    || value
-                        .uploaded_by
-                        .as_ref()
-                        .is_some_and(|value| value.len() > 512)
             }) {
                 return Err(refusal());
             }
@@ -408,6 +502,9 @@ impl BRegProposal {
     }
     pub fn application(&self) -> Option<&BRegProposalApplication> {
         self.application.as_ref()
+    }
+    pub fn application_status(&self) -> Option<&BRegProposalApplicationStatus> {
+        self.application_status.as_ref()
     }
     pub const fn revision(&self) -> u64 {
         self.revision
@@ -821,6 +918,13 @@ impl BaseRegistryClient {
             || document.subject.source.len() > 512
             || document.context.reference.is_empty()
             || document.context.reference.len() > 2048
+            || document.context.contract.as_ref().is_some_and(|contract| {
+                !contract.id.starts_with("urn:registry:breg:review-context:")
+                    || contract.id.len() > 2048
+                    || contract.id.chars().any(char::is_control)
+                    || !digest(&contract.revision)
+                    || !digest(&contract.schema_digest)
+            })
             || document.authority.is_some() != document.policy.is_some()
             || document.policy.as_ref().is_some_and(|policy| {
                 !digest(&policy.digest) || policy.id.is_empty() || policy.version.is_empty()
@@ -842,7 +946,7 @@ impl BaseRegistryClient {
                     .is_some_and(|id| Uuid::parse_str(id).is_err())
             })
             || operation == "reviewContext"
-                && (document.context.id.is_none() || document.context.fields.is_none())
+                && (document.context.contract.is_none() || document.context.fields.is_none())
         {
             return Err(refusal());
         }
@@ -1261,6 +1365,302 @@ mod tests {
     const REVISION: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ID: &str = "00000000-0000-4000-8000-000000000001";
+    #[tokio::test]
+    async fn review_context_exchange_requires_a_closed_producer_contract_binding() {
+        use axum::{extract::State, routing::get, Json, Router};
+        use std::sync::{Arc, Mutex};
+
+        let valid = json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,
+            "submissionVersion":1,"revision":2,"effectDigest":REVISION,
+            "subject":{"source":"directory","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},
+            "context":{"reference":"breg:directory:correct-address:proposal:1",
+                "contract":{"id":"urn:registry:breg:review-context:directory:correct-address:review-address",
+                    "revision":REVISION,"schemaDigest":REVISION},"fields":{"proposedAddress":"Allowed"}},
+            "reviewable":true});
+        let response = Arc::new(Mutex::new(valid.clone()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                &format!("/v1/proposals/{ID}/review-context"),
+                get(|State(value): State<Arc<Mutex<Value>>>| async move {
+                    (
+                        [
+                            (
+                                "traceparent",
+                                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                            ),
+                            ("cache-control", "no-store"),
+                        ],
+                        Json(value.lock().unwrap().clone()),
+                    )
+                }),
+            )
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = client(&format!("http://{address}/"));
+        let mut promoted = document();
+        promoted["links"]["reviewContext"] = json!({"method":"GET",
+            "path":format!("/v1/proposals/{ID}/review-context"),"accessProfile":"author","operation":"get-review-context"});
+        let promoted = proposal(&client, promoted);
+        let accepted = client
+            .read_proposal_review_context(&promoted)
+            .await
+            .unwrap();
+        assert_eq!(
+            accepted.value.context.contract.unwrap().schema_digest,
+            REVISION
+        );
+        let mut refused = Vec::new();
+        for field in ["id", "revision", "schemaDigest"] {
+            let mut changed = valid.clone();
+            changed["context"]["contract"][field] = json!("unbound-contract-canary");
+            refused.push(changed);
+        }
+        for field in ["contract", "fields"] {
+            let mut changed = valid.clone();
+            changed["context"].as_object_mut().unwrap().remove(field);
+            refused.push(changed);
+        }
+        for field in ["id", "revision", "schemaDigest"] {
+            let mut changed = valid.clone();
+            changed["context"]["contract"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            refused.push(changed);
+        }
+        for (field, malformed) in [
+            ("contract", Value::Null),
+            ("contract", json!([])),
+            ("fields", Value::Null),
+            ("fields", json!([])),
+        ] {
+            let mut changed = valid.clone();
+            changed["context"][field] = malformed;
+            refused.push(changed);
+        }
+        let mut widened_contract = valid.clone();
+        widened_contract["context"]["contract"]["authority"] = json!("private-canary");
+        refused.push(widened_contract);
+        let mut missing_reference = valid.clone();
+        missing_reference["context"]
+            .as_object_mut()
+            .unwrap()
+            .remove("reference");
+        refused.push(missing_reference);
+        let mut old_local_id = valid.clone();
+        old_local_id["context"]["id"] = json!("review-address");
+        refused.push(old_local_id);
+        for changed in refused {
+            *response.lock().unwrap() = changed;
+            assert!(client
+                .read_proposal_review_context(&promoted)
+                .await
+                .is_err());
+        }
+        server.abort();
+    }
+    fn application_status_document(state: &str, mode: &str) -> Value {
+        let mut value = document();
+        value["effectDigest"] = json!(REVISION);
+        value["state"] = json!(match state {
+            "applied" => "applied",
+            "cancelled" => "cancelled",
+            _ => "submitted",
+        });
+        let mut status = json!({"state":state,"mode":mode});
+        if mode == "automatic" && matches!(state, "pending" | "applying" | "blocked") {
+            status["automaticRetry"] = json!({"scheduled":state == "pending", "attempts":if state == "pending" { 0 } else { 1 }, "maximumAttempts":3});
+        }
+        if state == "blocked" {
+            status["reason"] = json!("dependency-outage");
+            status["recovery"] = json!("retry");
+        }
+        if state == "applied" {
+            value["application"] = json!({"applicationId":ID,"submissionVersion":1,"effectDigest":REVISION,"resultLinks":[]});
+        }
+        value["applicationStatus"] = status;
+        value
+    }
+
+    #[test]
+    fn application_status_preserves_current_progress_and_retained_evidence_absence() {
+        for (state, mode) in [
+            ("pending", "automatic"),
+            ("applying", "automatic"),
+            ("blocked", "automatic"),
+            ("pending", "manual"),
+            ("applied", "automatic"),
+            ("cancelled", "manual"),
+        ] {
+            let value = application_status_document(state, mode);
+            let decoded = BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(decoded.application_status().unwrap()).unwrap(),
+                value["applicationStatus"],
+                "{state}/{mode}"
+            );
+        }
+        // A scheduled job has performed zero attempts initially. An exhausted
+        // blocked job remains inspectable, but may not claim another attempt.
+        let mut exhausted = application_status_document("blocked", "automatic");
+        exhausted["applicationStatus"]["reason"] = json!("attempts-exhausted");
+        exhausted["applicationStatus"]["recovery"] = json!("refresh");
+        exhausted["applicationStatus"]["automaticRetry"]["attempts"] = json!(3);
+        assert!(BRegProposal::from_slice(&serde_json::to_vec(&exhausted).unwrap()).is_ok());
+        for state in ["applied", "cancelled"] {
+            let mut erased = application_status_document(state, "automatic");
+            for field in ["applicationStatus", "application", "effectDigest"] {
+                erased.as_object_mut().unwrap().remove(field);
+            }
+            let decoded = BRegProposal::from_slice(&serde_json::to_vec(&erased).unwrap()).unwrap();
+            assert!(decoded.application_status().is_none(), "{state}");
+        }
+    }
+
+    #[test]
+    fn application_status_rejects_unbound_inconsistent_and_unbounded_retry_claims() {
+        let cases: &[(&str, fn(&mut Value))] = &[
+            ("missing frozen digest", |v| {
+                v.as_object_mut().unwrap().remove("effectDigest");
+            }),
+            ("malformed frozen digest", |v| {
+                v["effectDigest"] = json!("sha256:UPPERCASE");
+            }),
+            ("missing submission version", |v| {
+                v.as_object_mut().unwrap().remove("submissionVersion");
+            }),
+            ("zero submission version", |v| {
+                v["submissionVersion"] = json!(0);
+            }),
+            ("overflowing submission version", |v| {
+                v["submissionVersion"] = json!(4_294_967_296_u64);
+            }),
+            ("receipt version differs from frozen version", |v| {
+                *v = application_status_document("applied", "automatic");
+                v["application"]["submissionVersion"] = json!(2);
+            }),
+            ("receipt digest differs from frozen digest", |v| {
+                *v = application_status_document("applied", "automatic");
+                v["application"]["effectDigest"] = json!(format!("sha256:{}", "b".repeat(64)));
+            }),
+            (
+                "submitted pending status cannot retain an application receipt",
+                |v| {
+                    v["application"] = json!({"applicationId":ID,"submissionVersion":1,"effectDigest":REVISION,"resultLinks":[]});
+                },
+            ),
+            ("recovery without a reason is not a status", |v| {
+                v["applicationStatus"]["recovery"] = json!("retry");
+            }),
+            (
+                "cancelled proposal cannot retain an application receipt",
+                |v| {
+                    *v = application_status_document("applied", "automatic");
+                    v["state"] = json!("cancelled");
+                    v.as_object_mut().unwrap().remove("applicationStatus");
+                },
+            ),
+            ("retained receipt requires top-level frozen digest", |v| {
+                *v = application_status_document("applied", "automatic");
+                v.as_object_mut().unwrap().remove("applicationStatus");
+                v.as_object_mut().unwrap().remove("effectDigest");
+            }),
+            ("retained receipt requires positive frozen version", |v| {
+                *v = application_status_document("applied", "automatic");
+                v.as_object_mut().unwrap().remove("applicationStatus");
+                v["submissionVersion"] = json!(0);
+                v["application"]["submissionVersion"] = json!(0);
+            }),
+            ("draft has no frozen application", |v| {
+                v["state"] = json!("draft");
+            }),
+            ("pending status on applied proposal", |v| {
+                v["state"] = json!("applied");
+            }),
+            ("applied status on submitted proposal", |v| {
+                *v = application_status_document("applied", "automatic");
+                v["state"] = json!("submitted");
+            }),
+            ("applied status without receipt", |v| {
+                *v = application_status_document("applied", "automatic");
+                v.as_object_mut().unwrap().remove("application");
+            }),
+            ("cancelled status on submitted proposal", |v| {
+                *v = application_status_document("cancelled", "automatic");
+                v["state"] = json!("submitted");
+            }),
+            ("blocked status missing reason", |v| {
+                *v = application_status_document("blocked", "automatic");
+                v["applicationStatus"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("reason");
+            }),
+            ("blocked status missing recovery", |v| {
+                *v = application_status_document("blocked", "automatic");
+                v["applicationStatus"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("recovery");
+            }),
+            ("automatic status missing retry bounds", |v| {
+                v["applicationStatus"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("automaticRetry");
+            }),
+            ("manual status cannot promise automatic retry", |v| {
+                v["applicationStatus"]["mode"] = json!("manual");
+            }),
+            ("zero maximum attempts", |v| {
+                v["applicationStatus"]["automaticRetry"]["maximumAttempts"] = json!(0);
+            }),
+            ("maximum attempts exceeds governed ceiling", |v| {
+                v["applicationStatus"]["automaticRetry"]["maximumAttempts"] = json!(1001);
+            }),
+            ("overflowing attempts", |v| {
+                v["applicationStatus"]["automaticRetry"]["attempts"] = json!(65_536);
+            }),
+            ("negative attempts", |v| {
+                v["applicationStatus"]["automaticRetry"]["attempts"] = json!(-1);
+            }),
+            ("attempts exceed maximum", |v| {
+                v["applicationStatus"]["automaticRetry"]["attempts"] = json!(4);
+            }),
+            ("exhausted job cannot be scheduled", |v| {
+                v["applicationStatus"]["automaticRetry"]["attempts"] = json!(3);
+            }),
+            ("blocked job cannot be scheduled", |v| {
+                *v = application_status_document("blocked", "automatic");
+                v["applicationStatus"]["automaticRetry"]["scheduled"] = json!(true);
+            }),
+            ("terminal job cannot be scheduled", |v| {
+                *v = application_status_document("applied", "automatic");
+                v["applicationStatus"]["automaticRetry"] =
+                    json!({"scheduled":true,"attempts":1,"maximumAttempts":3});
+            }),
+            ("unknown status member", |v| {
+                v["applicationStatus"]["workerId"] = json!("private-canary");
+            }),
+            ("unknown retry member", |v| {
+                v["applicationStatus"]["automaticRetry"]["nextAttemptAt"] = json!("private-canary");
+            }),
+            ("unknown status state", |v| {
+                v["applicationStatus"]["state"] = json!("ready");
+            }),
+        ];
+        for (label, mutate) in cases {
+            let mut value = application_status_document("pending", "automatic");
+            mutate(&mut value);
+            assert!(
+                BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_err(),
+                "{label}"
+            );
+        }
+    }
+
     #[test]
     fn purpose_bindings_require_the_exact_advertised_action_and_profile() {
         let actions = json!([
@@ -1334,6 +1734,7 @@ mod tests {
     fn application_receipts_refuse_internal_actor_and_reason_projections() {
         let mut value = document();
         value["state"] = json!("applied");
+        value["effectDigest"] = json!(REVISION);
         value["application"] = json!({"applicationId":ID,"submissionVersion":1,"effectDigest":REVISION,"resultLinks":[]});
         assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_ok());
         for field in ["appliedBy", "appliedAt", "reason", "reasonPresent"] {

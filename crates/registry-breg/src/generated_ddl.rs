@@ -19,8 +19,8 @@ use crate::model::{
     CompiledPlanMutation, REFERENCE_INDEX_PREFIX,
 };
 use crate::physical_names::{
-    PhysicalNameInventory, hex_prefix, spatial_candidate_view_name, spatial_geometry_column_name,
-    spatial_geometry_index_name,
+    hex_prefix, spatial_candidate_view_name, spatial_geometry_column_name,
+    spatial_geometry_index_name, PhysicalNameInventory,
 };
 
 const RECORD_ID_COLUMN: &str = "record_id";
@@ -2862,11 +2862,12 @@ pub(crate) fn quote_literal(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::compiler::{CompileProfile, compile_project};
+    use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::parse_project_json;
     use crate::generated_ddl::{
-        DdlStatementKind, SPATIAL_BBOX_FUNCTION_NAME, drop_spatial_bbox_function_statement,
-        spatial_bbox_function_statement, spatial_projection_fields, spatial_projection_statements,
+        drop_spatial_bbox_function_statement, spatial_bbox_function_statement,
+        spatial_projection_fields, spatial_projection_statements, DdlStatementKind,
+        SPATIAL_BBOX_FUNCTION_NAME,
     };
 
     #[cfg(feature = "runtime")]
@@ -2925,55 +2926,41 @@ mod tests {
 
         let statements = spatial_projection_statements(entity, "location");
         assert_eq!(statements.add_column.kind, DdlStatementKind::Column);
-        assert!(
-            statements
-                .add_column
-                .sql
-                .contains("registry_spatial_ext.geometry(Point,4326)")
-        );
+        assert!(statements
+            .add_column
+            .sql
+            .contains("registry_spatial_ext.geometry(Point,4326)"));
         assert!(statements.add_column.sql.contains("GENERATED ALWAYS AS"));
-        assert!(
-            statements
-                .add_column
-                .sql
-                .contains("registry_spatial_ext.ST_SetSRID")
-        );
-        assert!(
-            statements
-                .add_column
-                .sql
-                .contains("registry_spatial_ext.ST_MakePoint")
-        );
+        assert!(statements
+            .add_column
+            .sql
+            .contains("registry_spatial_ext.ST_SetSRID"));
+        assert!(statements
+            .add_column
+            .sql
+            .contains("registry_spatial_ext.ST_MakePoint"));
         assert!(statements.create_index.sql.contains("USING gist"));
         assert!(statements.create_index.sql.contains("WHERE \"breg_spgeom_"));
-        assert!(
-            statements
-                .drop_index
-                .sql
-                .starts_with("DROP INDEX IF EXISTS registry_data.")
-        );
+        assert!(statements
+            .drop_index
+            .sql
+            .starts_with("DROP INDEX IF EXISTS registry_data."));
         assert!(statements.drop_column.sql.contains("DROP COLUMN IF EXISTS"));
 
         let create_function = spatial_bbox_function_statement();
         assert_eq!(create_function.kind, DdlStatementKind::Function);
-        assert!(
-            create_function
-                .sql
-                .contains("RETURNS registry_spatial_ext.geometry")
-        );
+        assert!(create_function
+            .sql
+            .contains("RETURNS registry_spatial_ext.geometry"));
         assert!(create_function.sql.contains("SECURITY INVOKER"));
-        assert!(
-            create_function
-                .sql
-                .contains("registry_spatial_ext.ST_MakeEnvelope")
-        );
-        assert!(
-            drop_spatial_bbox_function_statement()
-                .sql
-                .contains(&format!(
-                    "DROP FUNCTION IF EXISTS registry_context.{SPATIAL_BBOX_FUNCTION_NAME}()"
-                ))
-        );
+        assert!(create_function
+            .sql
+            .contains("registry_spatial_ext.ST_MakeEnvelope"));
+        assert!(drop_spatial_bbox_function_statement()
+            .sql
+            .contains(&format!(
+                "DROP FUNCTION IF EXISTS registry_context.{SPATIAL_BBOX_FUNCTION_NAME}()"
+            )));
     }
 
     fn compile_spatial_registry() -> crate::CompiledRegistry {

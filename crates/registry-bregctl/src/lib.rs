@@ -6022,7 +6022,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     command,
                     diagnostic(
                         "field-encryption.lookup.collision",
-                        &format!("entities[{entity_id}]"),
+                        &format!("recordTypes[{entity_id}]"),
                         &format!(
                             "Existing records normalize onto one unique blind index, so the \
                              field-encryption backfill refused before sealing anything. The exact \
@@ -7624,7 +7624,7 @@ fn explain(
             read_bounded_source_file(path, "access.scenario.unavailable", "scenario", 65_536)
                 .map_err(explain_usage_error)?;
         let source = parse_json_strict(&bytes).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "provide a strict JSON access scenario with synthetic claims; duplicate keys and malformed JSON are refused")))?;
-        let scenario = serde_json::from_value(source).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "use entity, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, directClaims, actorKind, requesterClient")))?;
+        let scenario = serde_json::from_value(source).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "use recordType, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, directClaims, actorKind, requesterClient")))?;
         Some(
             registry_breg::access_preview::preview_access(&compiled, scenario).map_err(
                 |message| {
@@ -8037,6 +8037,14 @@ fn load_project_planner_asset_files(
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
     let mut paths = BTreeMap::new();
     let mut wasm_module_paths = BTreeMap::new();
+    for (action, hook) in registry_breg::proposal_hooks::source_hooks(&project.actions) {
+        partition_handler_source(
+            Some(&hook.handler),
+            &format!("actions[{action}].execution.proposal.hooks[{}]", hook.id),
+            &mut paths,
+            &mut wasm_module_paths,
+        );
+    }
     for function in &project.functions {
         let location = format!("functions[{}].source", function.id);
         match function.runtime {
@@ -8052,7 +8060,7 @@ fn load_project_planner_asset_files(
         for hook in &entity.hooks {
             partition_handler_source(
                 hook.handler.as_ref(),
-                &format!("entities[{}].hooks[{}]", entity.id, hook.id),
+                &format!("recordTypes[{}].hooks[{}]", entity.id, hook.id),
                 &mut paths,
                 &mut wasm_module_paths,
             );
@@ -8179,6 +8187,17 @@ fn load_module_asset_files(
         .collect::<Result<Vec<_>, _>>()?;
     let mut planner_paths = BTreeMap::new();
     let mut wasm_module_paths = BTreeMap::new();
+    for (action, hook) in registry_breg::proposal_hooks::source_hooks(&module.actions) {
+        partition_handler_source(
+            Some(&hook.handler),
+            &format!(
+                "modules[{module_id}].actions[{action}].execution.proposal.hooks[{}]",
+                hook.id
+            ),
+            &mut planner_paths,
+            &mut wasm_module_paths,
+        );
+    }
     for function in &module.functions {
         let location = format!("modules[{module_id}].functions[{}].source", function.id);
         match function.runtime {
@@ -8195,7 +8214,7 @@ fn load_module_asset_files(
             partition_handler_source(
                 hook.handler.as_ref(),
                 &format!(
-                    "modules[{module_id}].entities[{}].hooks[{}]",
+                    "modules[{module_id}].recordTypes[{}].hooks[{}]",
                     entity.id, hook.id
                 ),
                 &mut planner_paths,
@@ -8208,7 +8227,7 @@ fn load_module_asset_files(
             partition_handler_source(
                 hook.handler.as_ref(),
                 &format!(
-                    "modules[{module_id}].extendEntities[{}].hooks[{}]",
+                    "modules[{module_id}].extendRecordTypes[{}].hooks[{}]",
                     extension.entity, hook.id
                 ),
                 &mut planner_paths,
@@ -8679,12 +8698,16 @@ fn init_media_type(path: &str) -> &'static str {
 /// comment an author wrote inside the `modules` block survives. A project that gained or lost a
 /// module, or whose `modules` block is not the ordinary block list the in-place patch understands,
 /// has the whole block rewritten instead: that normalizes the entries a lock refresh has to
-/// reorder, at the cost of the comments between them.
+/// reorder, at the cost of the comments between them. An existing flow-style `modules`
+/// sequence is replaced within its shared-reader span, preserving the enclosing mapping.
 fn render_project_module_locks(
     original: &[u8],
     authored: &[ModuleLockSource],
     locks: &[ModuleLockSource],
 ) -> Result<Vec<u8>, Diagnostic> {
+    if let Some(patched) = module_lock_patch::patch_flow_module_locks(original, locks) {
+        return Ok(patched);
+    }
     let same_modules = authored.len() == locks.len()
         && authored
             .iter()
@@ -8857,6 +8880,7 @@ impl ArtifactSelector {
             ArtifactSelector::Openapi => path == "generated/openapi.json",
             ArtifactSelector::Schemas => {
                 path.starts_with("generated/schemas/")
+                    || path.starts_with("generated/event-schemas/")
                     || path.starts_with("generated/action-schemas/")
                     || path.starts_with("generated/review-context-schemas/")
             }
@@ -8957,7 +8981,7 @@ fn explain_proposals(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
 }
 
 fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
-    // The explain payload mixes two record shapes in one array (entity routes and
+    // The explain payload mixes two record shapes in one array (record routes and
     // action routes, which share no field), so every record needs an explicit `type`
     // discriminator. It is distinct from `actionRouteKind`, which says which action
     // route a record is rather than which shape it has. The field lives here, not on
@@ -8973,7 +8997,7 @@ fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
         route
             .as_object_mut()
             .expect("compiled routes serialize as objects")
-            .insert("type".to_string(), Value::from("entity"));
+            .insert("type".to_string(), Value::from("record"));
     }
     routes.extend(compiled.actions().routes.iter().map(|route| {
         json!({
@@ -9078,7 +9102,7 @@ fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                 "id": operation.id,
                 "routeId": operation.route_id,
                 "profile": operation.profile_id,
-                "entity": operation.entity_id,
+                "recordType": operation.entity_id,
                 "kind": operation.kind,
                 "apiFields": api_fields,
                 "filterable": filterable,
@@ -9873,7 +9897,7 @@ fn derived_source_path(source: &CapturedProjectSource, diagnostic_path: &str) ->
     for module in &source.modules {
         for entity in &module.module.entities {
             for derived in &entity.derived {
-                let path = format!("entities[{}].derived[{}].sql", entity.id, derived.id);
+                let path = format!("recordTypes[{}].derived[{}].sql", entity.id, derived.id);
                 if path == diagnostic_path {
                     return Some(format!(
                         "modules/{}/module.yaml:{}",
@@ -9884,7 +9908,10 @@ fn derived_source_path(source: &CapturedProjectSource, diagnostic_path: &str) ->
         }
         for extension in &module.module.extend_entities {
             for derived in &extension.derived {
-                let path = format!("entities[{}].derived[{}].sql", extension.entity, derived.id);
+                let path = format!(
+                    "recordTypes[{}].derived[{}].sql",
+                    extension.entity, derived.id
+                );
                 if path == diagnostic_path {
                     return Some(format!(
                         "modules/{}/module.yaml:{}",
@@ -10241,14 +10268,14 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
             lines.listed(1, sentence);
         }
     }
-    if let Some(entities) = explanation["entities"].as_array() {
+    if let Some(entities) = explanation["recordTypes"].as_array() {
         for entity in entities {
             lines.blank();
             lines.item_at(
                 1,
                 &format!(
-                    "entity {} ({})",
-                    entity["entity"].as_str().unwrap_or(""),
+                    "record type {} ({})",
+                    entity["recordType"].as_str().unwrap_or(""),
                     entity["classification"].as_str().unwrap_or("")
                 ),
             );
@@ -10289,7 +10316,10 @@ fn push_consent_module_explanation(explanation: &Value, lines: &mut report::Line
     ]);
     lines.blank();
     lines.pairs(&[
-        ("entities", joined_or(&explanation["entities"], "none")),
+        (
+            "record types",
+            joined_or(&explanation["recordTypes"], "none"),
+        ),
         ("actions", joined_or(&explanation["actions"], "none")),
         (
             "access profiles",
@@ -10318,7 +10348,7 @@ fn push_consent_module_explanation(explanation: &Value, lines: &mut report::Line
             lines.pairs_at(
                 2,
                 &[(
-                    requirement["entity"].as_str().unwrap_or(""),
+                    requirement["recordType"].as_str().unwrap_or(""),
                     requirement["line"].as_str().unwrap_or("").to_owned(),
                 )],
             );
@@ -10393,7 +10423,7 @@ fn push_consent_explanation(consent: &Value, lines: &mut report::Lines) {
             &format!(
                 "permission {} over {}",
                 permission["profile"].as_str().unwrap_or(""),
-                permission["entity"].as_str().unwrap_or("")
+                permission["recordType"].as_str().unwrap_or("")
             ),
         );
         lines.prose(2, permission["condition"].as_str().unwrap_or(""));
@@ -14098,14 +14128,14 @@ mod tests {
     }
 
     #[test]
-    fn an_access_explanation_names_the_entity_and_the_profile_it_groups() {
+    fn an_access_explanation_names_the_record_type_and_the_profile_it_groups() {
         let explanation = json!({
             "scopeMatching": "all required scopes must be present",
             "purposeMatching": "",
             "rowMatching": "",
             "profileSelection": "",
-            "entities": [{
-                "entity": "record",
+            "recordTypes": [{
+                "recordType": "record",
                 "classification": "internal",
                 "requirements": null,
                 "profiles": [{
@@ -14121,8 +14151,8 @@ mod tests {
 
         let rendered = plain(lines.finish().as_bytes());
         assert!(
-            rendered.contains("\n  entity record (internal)\n"),
-            "the entity group names what it groups: {rendered}"
+            rendered.contains("\n  record type record (internal)\n"),
+            "the record type group names what it groups: {rendered}"
         );
         assert!(
             rendered.contains("\n    profile record-reader\n"),

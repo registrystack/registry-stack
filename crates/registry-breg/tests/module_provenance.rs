@@ -6,8 +6,8 @@
 //! error), so provenance is exactly one `Option<String>` per id, `Some`
 //! naming a module or absent meaning the project root.
 
-use registry_breg::compiler::{CompileProfile, compile_project};
-use registry_breg::contract::{RegistryModule, parse_module_json, parse_project_json};
+use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::contract::{parse_module_json, parse_project_json, RegistryModule};
 use registry_breg::model::CompiledEntity;
 
 fn provenance_project() -> registry_breg::contract::RegistryProject {

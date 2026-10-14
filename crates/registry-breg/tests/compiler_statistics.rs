@@ -5,15 +5,15 @@ mod source_bytes;
 
 use std::collections::BTreeSet;
 
-use registry_breg::compiler::{CompileProfile, compile_project, compile_project_with_assets};
-use registry_breg::contract::{ModuleAssetSource, parse_project_json, parse_project_yaml};
+use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, parse_project_yaml, ModuleAssetSource};
 #[cfg(feature = "runtime")]
 use registry_breg::package::{
-    CompiledRegistryChangeClass, CompiledRegistryChangeCode, compiled_registry_change_set,
+    compiled_registry_change_set, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
 };
 #[cfg(all(feature = "runtime", feature = "tooling"))]
-use registry_breg::tooling::{DiffClassification, classify_registry_diff};
-use serde_json::{Value, json};
+use registry_breg::tooling::{classify_registry_diff, DiffClassification};
+use serde_json::{json, Value};
 
 fn source() -> Value {
     serde_json::from_value(json!({"datasets":[{"id": "statistics-test"}],
@@ -595,11 +595,9 @@ fn a_profile_writes_its_dataset_permissions_back_into_its_permissions() {
             "datasets":[{"dataset":"records-by-category","operations":["read-releases"]}]
         })
     );
-    assert!(
-        written["accessProfiles"][ANALYST]
-            .get("datasetPermissions")
-            .is_none()
-    );
+    assert!(written["accessProfiles"][ANALYST]
+        .get("datasetPermissions")
+        .is_none());
     let reread = parse_project_json(&source_bytes::source_bytes(&written))
         .expect("the written project parses");
     assert_eq!(reread, project);
@@ -1391,11 +1389,9 @@ fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
     }
     value["statisticalDatasets"][0]["population"] = json!("longName eq true");
     let compiled = compile(&value).expect("camel-case API field compiles");
-    assert!(
-        compiled.statistical_datasets()["records-by-category"]
-            .referenced_fields
-            .contains("long-name")
-    );
+    assert!(compiled.statistical_datasets()["records-by-category"]
+        .referenced_fields
+        .contains("long-name"));
 
     for population in ["active lt true", "active eq 1", "category eq 'missing'"] {
         assert_refused(
@@ -1463,12 +1459,10 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
     bounded_string["statisticalDatasets"][0]["population"] =
         json!("contains(label,'thirteenchars')");
     let failure = compile(&bounded_string).expect_err("a term beyond maximumLength is refused");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.statistical-dataset.population-invalid")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.statistical-dataset.population-invalid"));
 }
 
 #[test]
@@ -1479,12 +1473,10 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
         effective["statisticalDatasets"]["records-by-category"]["definitionDigest"],
         compiled.statistical_datasets()["records-by-category"].definition_digest
     );
-    assert!(
-        compiled
-            .artifacts()
-            .get("compiled/statistical-datasets.json")
-            .is_some()
-    );
+    assert!(compiled
+        .artifacts()
+        .get("compiled/statistical-datasets.json")
+        .is_some());
 
     let metadata = artifact_json(&compiled, "generated/metadata/registry.json");
     let dataset = &metadata["statisticalDatasets"][0];
@@ -1583,16 +1575,18 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
         true
     );
     assert_eq!(
-        openapi["paths"]["/v1/statistics/records-by-category/releases:series"]["get"]["x-registry-accessProfiles"],
+        openapi["paths"]["/v1/statistics/records-by-category/releases:series"]["get"]
+            ["x-registry-accessProfiles"],
         json!(["analyst", "publisher", "reader"])
     );
-    let release_access_profile = &openapi["paths"]["/v1/statistics/records-by-category/releases:series"]
-        ["get"]["parameters"][0];
+    let release_access_profile = &openapi["paths"]
+        ["/v1/statistics/records-by-category/releases:series"]["get"]["parameters"][0];
     assert_eq!(release_access_profile["name"], "accessProfile");
     assert_eq!(release_access_profile["required"], true);
     assert!(release_access_profile["schema"].get("default").is_none());
     assert_eq!(
-        openapi["paths"]["/v1/statistics/records-by-category/releases:series"]["get"]["x-registry-defaultAccessProfile"],
+        openapi["paths"]["/v1/statistics/records-by-category/releases:series"]["get"]
+            ["x-registry-defaultAccessProfile"],
         Value::Null
     );
     let live = &openapi["paths"]["/v1/statistics/records-by-category:live"]["get"];
@@ -1605,13 +1599,14 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
     assert_eq!(publish["parameters"][0]["schema"]["default"], "publisher");
     assert_eq!(publish["x-registry-defaultAccessProfile"], "publisher");
     assert_eq!(
-        openapi["paths"]["/v1/statistics/records-by-category/releases/{period}/versions/{version}/withdrawal"]
+        openapi["paths"]
+            ["/v1/statistics/records-by-category/releases/{period}/versions/{version}/withdrawal"]
             ["post"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/StatisticalReleaseHeader"
     );
     assert_eq!(
-        openapi["components"]["schemas"]["StatisticalDatasetDocument"]["properties"]["live"]["properties"]
-            ["evaluatedAt"]["format"],
+        openapi["components"]["schemas"]["StatisticalDatasetDocument"]["properties"]["live"]
+            ["properties"]["evaluatedAt"]["format"],
         "date"
     );
     for path in [
@@ -1652,11 +1647,9 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
             assert_eq!(declared_parameters, template_parameters, "{path}");
         }
     }
-    assert!(
-        openapi["components"]["schemas"]
-            .get("StatisticalWithdrawalResponse")
-            .is_none()
-    );
+    assert!(openapi["components"]["schemas"]
+        .get("StatisticalWithdrawalResponse")
+        .is_none());
 
     let mut with_default = source();
     with_default["accessProfiles"][2]["default"] = json!(true);
@@ -1676,25 +1669,21 @@ fn generated_openapi_omits_undeclared_statistical_route_families() {
     grant(&mut live_only, READER, &[]);
     let compiled = compile(&live_only).expect("live-only dataset compiles");
     let openapi = artifact_json(&compiled, "generated/openapi.json");
-    assert!(
-        openapi["paths"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .filter(|path| path.starts_with("/v1/statistics/"))
-            .all(|path| path.ends_with(":live"))
-    );
+    assert!(openapi["paths"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|path| path.starts_with("/v1/statistics/"))
+        .all(|path| path.ends_with(":live")));
 
     let mut released_only = source();
     grant(&mut released_only, ANALYST, &[]);
     let compiled = compile(&released_only).expect("released-only dataset compiles");
     let openapi = artifact_json(&compiled, "generated/openapi.json");
-    assert!(
-        !openapi["paths"]
-            .as_object()
-            .unwrap()
-            .contains_key("/v1/statistics/records-by-category:live")
-    );
+    assert!(!openapi["paths"]
+        .as_object()
+        .unwrap()
+        .contains_key("/v1/statistics/records-by-category:live"));
 }
 
 #[test]
@@ -1778,12 +1767,10 @@ fn tooling_classifies_statistical_grant_direction_and_definition_review() {
     swap_population_api_names(&mut swapped_source);
     let swapped = compile(&swapped_source).expect("swapped API names compile");
     let changes = compiled_registry_change_set(&alias_baseline, &swapped, "sha256:before");
-    assert!(
-        changes
-            .changes
-            .iter()
-            .any(|change| change.code == CompiledRegistryChangeCode::StatisticalDatasetChanged)
-    );
+    assert!(changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::StatisticalDatasetChanged));
     let diff = classify_registry_diff(&alias_baseline, &swapped, "sha256:before");
     assert!(diff.changes.iter().any(|change| {
         change.change.code == CompiledRegistryChangeCode::StatisticalDatasetChanged
@@ -1864,8 +1851,8 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let mut additional_mutation = value.clone();
     additional_mutation["accessProfiles"][PUBLISHER]["permissions"]["records"][1]["operations"] =
         json!(["list", "patch"]);
-    additional_mutation["accessProfiles"][PUBLISHER]["permissions"]["records"][1]["writableFields"] =
-        json!(["flag"]);
+    additional_mutation["accessProfiles"][PUBLISHER]["permissions"]["records"][1]
+        ["writableFields"] = json!(["flag"]);
     let additional_mutation = compile_with_sql(&additional_mutation, sql)
         .expect("an unrelated dependency mutation grant compiles");
     assert_eq!(

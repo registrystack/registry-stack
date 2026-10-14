@@ -4,14 +4,14 @@ use std::time::{Duration, Instant};
 
 use registry_breg::{
     action_handler::{
-        ActionHandlerError, ActionHandlerOutcome, compile_source, evaluate_action,
-        evaluate_action_detailed,
+        compile_source, evaluate_action, evaluate_action_detailed, ActionHandlerError,
+        ActionHandlerOutcome,
     },
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_json},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_json, ModuleAssetSource},
     model::{CompiledAction, CompiledPlanMutation, CompiledPlanValue},
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(5)
@@ -88,12 +88,10 @@ fn handler_value(outcome: &ActionHandlerOutcome, field: &str) -> Value {
 
 #[test]
 fn entrypoints_accept_named_parameters_and_private_helpers() {
-    assert!(
-        compile_source(
-            "private fn label(value) { value.trim(); value } fn plan(context) { label(` Alpha `) }"
-        )
-        .is_ok()
-    );
+    assert!(compile_source(
+        "private fn label(value) { value.trim(); value } fn plan(context) { label(` Alpha `) }"
+    )
+    .is_ok());
 }
 #[test]
 fn entrypoint_errors_are_distinct_from_parse_errors() {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 pub fn project() -> Value {
     json!({

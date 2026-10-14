@@ -12,7 +12,7 @@ mod source_bytes;
 
 use action_evidence_provider::EvidenceProvider;
 use axum::{
-    body::{Body, to_bytes},
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
 use postgres_harness::TestDatabase;
@@ -20,21 +20,21 @@ use registry_breg as breg;
 use registry_breg::{
     action_evidence::ActionEvidenceEvaluator,
     api::{
-        HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-        VerifiedRequestClaims, router,
+        router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+        VerifiedClaimValue, VerifiedRequestClaims,
     },
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_yaml},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_yaml, ModuleAssetSource},
     cursor::CursorCodec,
     mutation::MutationFaultPoint,
     postgres::{
+        initialize_compiled_registry_state_for_test, install_compiled_schema,
         ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
         RegistryLockKey, RegistryStateTestIdentity, RuntimePool,
-        initialize_compiled_registry_state_for_test, install_compiled_schema,
     },
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,

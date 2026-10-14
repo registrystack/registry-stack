@@ -10,30 +10,30 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{CompileProfile, compile_project};
-use registry_breg::contract::{Operation, parse_project_json};
+use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::idempotency::{IdempotencyPolicy, PermittedResponseHeader};
 use registry_breg::mutation::{
-    MutationBody, MutationCoordinator, MutationError, MutationFaultPoint, MutationOutcome,
-    MutationPlan, MutationRequest, PatchOperation, install_mutation_schema,
+    install_mutation_schema, MutationBody, MutationCoordinator, MutationError, MutationFaultPoint,
+    MutationOutcome, MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_breg::postgres::{
-    ClaimContext, PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity, RowBoundaryContext, initialize_compiled_registry_state_for_test,
-    install_compiled_schema, test_activation_id, test_package_digest,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
+    test_package_digest, ClaimContext, PostgresRecordMutationService, PostgresRecordReadService,
+    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_breg::problem_location::{PatchMember, RequestLocation};
 use registry_platform_audit::AuditProfile;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -670,12 +670,10 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         .expect("nonempty authorized partial patch commits");
     assert!(!patched.replayed());
     assert_eq!(patched.response().status(), 200);
-    assert!(
-        !patched
-            .response()
-            .headers()
-            .contains_key(&PermittedResponseHeader::Location)
-    );
+    assert!(!patched
+        .response()
+        .headers()
+        .contains_key(&PermittedResponseHeader::Location));
     let patched_body: Value =
         serde_json::from_slice(patched.response().body()).expect("patch response is JSON");
     assert_eq!(patched_body["data"]["domainData"]["label"], "after-patch");
@@ -1354,12 +1352,10 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
         refusal_audit_count(&database).await,
         before_create_refusals + 1
     );
-    assert!(
-        !database
-            .audit_records()
-            .iter()
-            .any(|record| record.to_string().contains("concealed-create-value"))
-    );
+    assert!(!database
+        .audit_records()
+        .iter()
+        .any(|record| record.to_string().contains("concealed-create-value")));
 
     let created = response_parts(
         send(
@@ -1412,12 +1408,10 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
         refusal_audit_count(&database).await,
         before_patch_refusals + 1
     );
-    assert!(
-        !database
-            .audit_records()
-            .iter()
-            .any(|record| record.to_string().contains("zone-b"))
-    );
+    assert!(!database
+        .audit_records()
+        .iter()
+        .any(|record| record.to_string().contains("zone-b")));
     let preserved = response_parts(
         send(
             &app,
@@ -1583,12 +1577,10 @@ async fn real_postgres_row_boundary_refusals_reveal_no_hidden_row_and_batches_wr
         refusal_audit_count(&database).await,
         before_batch_refusals + 1
     );
-    assert!(
-        !database
-            .audit_records()
-            .iter()
-            .any(|record| record.to_string().contains("batch-concealed-value"))
-    );
+    assert!(!database
+        .audit_records()
+        .iter()
+        .any(|record| record.to_string().contains("batch-concealed-value")));
 
     // A patch on a row outside the boundary is absent, byte for byte the same
     // answer as a record that does not exist, even with the row's own ETag
@@ -1793,11 +1785,9 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .await,
     )
     .await;
-    assert!(
-        operator_openapi["paths"]["/v1/records/widgets"]
-            .get("post")
-            .is_some()
-    );
+    assert!(operator_openapi["paths"]["/v1/records/widgets"]
+        .get("post")
+        .is_some());
     assert_eq!(
         operator_openapi["paths"]["/v1/records/widgets"]["post"]["security"],
         json!([{"bearerAuth": []}])
@@ -1813,11 +1803,9 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             .get("Location")
             .is_some()
     );
-    assert!(
-        operator_openapi["paths"]["/v1/records/widgets/{record_id}"]
-            .get("patch")
-            .is_some()
-    );
+    assert!(operator_openapi["paths"]["/v1/records/widgets/{record_id}"]
+        .get("patch")
+        .is_some());
     assert_eq!(
         query_parameter_names(
             &operator_openapi["paths"]["/v1/records/widgets/{record_id}"]["patch"]["parameters"]
@@ -1843,11 +1831,9 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             .get("$ref")
             .is_some()
     );
-    assert!(
-        operator_openapi["paths"]["/v1/records/widgets/{record_id}"]
-            .get("delete")
-            .is_some()
-    );
+    assert!(operator_openapi["paths"]["/v1/records/widgets/{record_id}"]
+        .get("delete")
+        .is_some());
     assert!(operator_openapi["paths"].get("/v1/records/logs").is_none());
 
     let case_openapi = body_json(
@@ -1862,29 +1848,21 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .await,
     )
     .await;
-    assert!(
-        case_openapi["paths"]["/v1/records/logs"]
-            .get("post")
-            .is_some()
-    );
-    assert!(
-        case_openapi["paths"]
-            .get("/v1/records/logs/{record_id}")
-            .and_then(|path| path.get("patch"))
-            .is_none()
-    );
-    assert!(
-        case_openapi["paths"]
-            .get("/v1/records/logs/{record_id}")
-            .and_then(|path| path.get("delete"))
-            .is_none()
-    );
-    assert!(
-        case_openapi["paths"]
-            .get("/v1/records/archives/{record_id}")
-            .and_then(|path| path.get("delete"))
-            .is_none()
-    );
+    assert!(case_openapi["paths"]["/v1/records/logs"]
+        .get("post")
+        .is_some());
+    assert!(case_openapi["paths"]
+        .get("/v1/records/logs/{record_id}")
+        .and_then(|path| path.get("patch"))
+        .is_none());
+    assert!(case_openapi["paths"]
+        .get("/v1/records/logs/{record_id}")
+        .and_then(|path| path.get("delete"))
+        .is_none());
+    assert!(case_openapi["paths"]
+        .get("/v1/records/archives/{record_id}")
+        .and_then(|path| path.get("delete"))
+        .is_none());
     assert!(case_openapi["paths"].get("/v1/records/widgets").is_none());
 
     let operator_metadata = body_json(
@@ -1909,11 +1887,9 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             .and_then(|entity| entity["operations"].as_array())
             .expect("operator entity metadata operations")
     };
-    assert!(
-        operator_operations("widget")
-            .iter()
-            .any(|operation| operation["operation"] == "tombstone")
-    );
+    assert!(operator_operations("widget")
+        .iter()
+        .any(|operation| operation["operation"] == "tombstone"));
     assert!(!operator_entities.iter().any(|entity| entity["id"] == "log"));
 
     let case_metadata = body_json(
@@ -1938,16 +1914,12 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             .and_then(|entity| entity["operations"].as_array())
             .expect("case entity metadata operations")
     };
-    assert!(
-        !case_operations("log")
-            .iter()
-            .any(|operation| operation["operation"] == "tombstone")
-    );
-    assert!(
-        !case_operations("archive")
-            .iter()
-            .any(|operation| operation["operation"] == "tombstone")
-    );
+    assert!(!case_operations("log")
+        .iter()
+        .any(|operation| operation["operation"] == "tombstone"));
+    assert!(!case_operations("archive")
+        .iter()
+        .any(|operation| operation["operation"] == "tombstone"));
 
     let create_body =
         br#"{"data":{"jurisdiction":"zone-a","label":"http-created","quantity":3}}"#.to_vec();
@@ -2204,13 +2176,11 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     .await;
     assert!(listed_response.headers().get("etag").is_none());
     let listed = body_json(listed_response).await;
-    assert!(
-        listed["items"]
-            .as_array()
-            .expect("items")
-            .iter()
-            .any(|item| item["recordIdentifier"] == record_id)
-    );
+    assert!(listed["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .any(|item| item["recordIdentifier"] == record_id));
 
     let log_created = response_parts(
         send(
@@ -2598,11 +2568,9 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     .await;
     assert_eq!(stale_delete.status(), StatusCode::PRECONDITION_FAILED);
     let stale_bytes = response_bytes(stale_delete).await;
-    assert!(
-        !stale_bytes
-            .windows(b"http-patched".len())
-            .any(|window| window == b"http-patched")
-    );
+    assert!(!stale_bytes
+        .windows(b"http-patched".len())
+        .any(|window| window == b"http-patched"));
 
     let changed_context = send(
         &app,
@@ -2618,11 +2586,9 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     .await;
     assert_eq!(changed_context.status(), StatusCode::PRECONDITION_FAILED);
     let changed_context_bytes = response_bytes(changed_context).await;
-    assert!(
-        !changed_context_bytes
-            .windows(b"http-patched".len())
-            .any(|window| window == b"http-patched")
-    );
+    assert!(!changed_context_bytes
+        .windows(b"http-patched".len())
+        .any(|window| window == b"http-patched"));
 
     let tombstoned = response_parts(
         send(
@@ -2679,11 +2645,9 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     assert_eq!(concealed_tombstone.status(), StatusCode::NOT_FOUND);
     assert!(concealed_tombstone.headers().get("etag").is_none());
     let concealed_tombstone_bytes = response_bytes(concealed_tombstone).await;
-    assert!(
-        !concealed_tombstone_bytes
-            .windows(b"http-patched".len())
-            .any(|window| window == b"http-patched")
-    );
+    assert!(!concealed_tombstone_bytes
+        .windows(b"http-patched".len())
+        .any(|window| window == b"http-patched"));
 
     let before_bad_query = durable_counts(&database, &table).await;
     let bad_query = send(
@@ -2731,11 +2695,9 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     let refusal_fault_json: Value =
         serde_json::from_slice(&refusal_fault_body).expect("problem JSON");
     assert_eq!(refusal_fault_json["code"], "service.unavailable");
-    assert!(
-        !refusal_fault_body
-            .windows(b"unsupported.media_type".len())
-            .any(|window| window == b"unsupported.media_type")
-    );
+    assert!(!refusal_fault_body
+        .windows(b"unsupported.media_type".len())
+        .any(|window| window == b"unsupported.media_type"));
     assert_eq!(
         durable_counts(&database, &table).await,
         before_refusal_fault,
@@ -2812,12 +2774,10 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         json_ld_created.body["data"]["domainData"]["label"],
         "json-ld-created"
     );
-    assert!(
-        !json_ld_created
-            .body
-            .to_string()
-            .contains("attacker.example.invalid")
-    );
+    assert!(!json_ld_created
+        .body
+        .to_string()
+        .contains("attacker.example.invalid"));
     assert!(!json_ld_created.link.contains("attacker.example.invalid"));
 
     let json_ld_replay = response_parts(
@@ -4527,28 +4487,24 @@ fn compiled_fixture_exposes_create_patch_and_configured_tombstone_plans() {
     assert!(compiled.routes().routes.iter().any(|route| {
         route.id == "records.widget.create" && route.operation == Operation::Create
     }));
-    assert!(
-        compiled
-            .routes()
-            .routes
-            .iter()
-            .any(|route| route.id == "records.widget.patch" && route.operation == Operation::Patch)
-    );
+    assert!(compiled
+        .routes()
+        .routes
+        .iter()
+        .any(|route| route.id == "records.widget.patch" && route.operation == Operation::Patch));
     assert!(compiled.routes().routes.iter().any(|route| {
         route.id == "records.widget.tombstone" && route.operation == Operation::Tombstone
     }));
-    assert!(
-        !compiled
-            .routes()
-            .routes
-            .iter()
-            .any(|route| { route.entity_id == "log" && route.operation == Operation::Tombstone })
-    );
-    assert!(
-        !compiled.routes().routes.iter().any(|route| {
-            route.entity_id == "archive" && route.operation == Operation::Tombstone
-        })
-    );
+    assert!(!compiled
+        .routes()
+        .routes
+        .iter()
+        .any(|route| { route.entity_id == "log" && route.operation == Operation::Tombstone }));
+    assert!(!compiled
+        .routes()
+        .routes
+        .iter()
+        .any(|route| { route.entity_id == "archive" && route.operation == Operation::Tombstone }));
 }
 
 fn query_parameter_names(parameters: &Value) -> Vec<String> {

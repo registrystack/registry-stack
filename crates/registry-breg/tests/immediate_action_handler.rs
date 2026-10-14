@@ -2,14 +2,14 @@
 
 use registry_breg::{
     action_handler::{
-        ActionHandlerError, ActionHandlerOutcome, compile_source, evaluate_action,
-        evaluate_action_detailed,
+        compile_source, evaluate_action, evaluate_action_detailed, ActionHandlerError,
+        ActionHandlerOutcome,
     },
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_json},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_json, ModuleAssetSource},
     model::{CompiledAction, CompiledPlanMutation, CompiledPlanValue},
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
 fn project() -> Value {
@@ -87,12 +87,10 @@ fn handler_computes_from_authored_input_ids_and_omits_slots() {
     )
     .unwrap();
     assert_eq!(action.effects.len(), 3);
-    assert!(
-        action
-            .target_uses
-            .iter()
-            .any(|target| target.condition_required)
-    );
+    assert!(action
+        .target_uses
+        .iter()
+        .any(|target| target.condition_required));
 }
 
 #[test]
@@ -598,13 +596,11 @@ fn handler_string_declarations_cover_the_full_unicode_boundary() {
         assert_eq!(diagnostic.field.as_deref(), Some("extra"));
 
         source["actions"][0]["inputs"][3]["maximumLength"] = json!(4097);
-        assert!(
-            compile(source, &script)
-                .unwrap_err()
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == "breg.action.handler-input-string-bound")
-        );
+        assert!(compile(source, &script)
+            .unwrap_err()
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.action.handler-input-string-bound"));
     }
 }
 
@@ -653,13 +649,11 @@ fn handler_accepts_supported_scalars_and_rejects_oversized_timestamp_input() {
         ));
         if input["extra"].as_str() == Some("2026-09-08T12:00:00.123456789+07:00") {
             let oversized = format!("2026-09-08T12:00:00.{}Z", "1".repeat(17_000));
-            assert!(
-                time::OffsetDateTime::parse(
-                    &oversized,
-                    &time::format_description::well_known::Rfc3339
-                )
-                .is_ok()
-            );
+            assert!(time::OffsetDateTime::parse(
+                &oversized,
+                &time::format_description::well_known::Rfc3339
+            )
+            .is_ok());
             input["extra"] = json!(oversized);
             let diagnostic = evaluate_action_detailed(
                 &action,
@@ -687,15 +681,13 @@ fn handler_cannot_write_an_existing_field_outside_its_narrower_slot() {
         &result(r#"#{effects:[#{id:"existing",set:#{friend:#{fromInput:"person"}}}]}"#),
     )
     .unwrap();
-    assert!(
-        action
-            .handler
-            .as_ref()
-            .unwrap()
-            .writes
-            .iter()
-            .any(|slot| { slot.id == "person" && slot.ceiling.fields.contains("friend") })
-    );
+    assert!(action
+        .handler
+        .as_ref()
+        .unwrap()
+        .writes
+        .iter()
+        .any(|slot| { slot.id == "person" && slot.ceiling.fields.contains("friend") }));
     let diagnostic = evaluate_action_detailed(
         &action,
         inputs().as_object().unwrap(),
@@ -983,14 +975,12 @@ fn handler_bounds_execution_inputs_and_decoded_results() {
         json!({"given-name":null}),
         json!({"given-name":"Mina","extra":true}),
     ] {
-        assert!(
-            evaluate_action(
-                &action,
-                input.as_object().unwrap(),
-                Instant::now() + Duration::from_secs(5)
-            )
-            .is_err()
-        );
+        assert!(evaluate_action(
+            &action,
+            input.as_object().unwrap(),
+            Instant::now() + Duration::from_secs(5)
+        )
+        .is_err());
     }
     let mut action = action;
     action.maximum_snapshot_bytes = 100;
@@ -1010,8 +1000,8 @@ fn handler_bounds_execution_inputs_and_decoded_results() {
 #[test]
 fn handler_package_captures_exact_project_and_module_script_origins() {
     use registry_breg::package::{
-        PackageBuildRequest, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
-        inspect_package_integrity, prepare_package_with_project_assets,
+        inspect_package_integrity, prepare_package_with_project_assets, PackageBuildRequest,
+        PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
     };
     let script = result(r#"#{effects:[#{id:"person",set:#{name:"Mina"}}]}"#);
     let asset = PackageSourceFile {
@@ -1115,12 +1105,10 @@ fn fixed_action_fingerprints_omit_handler_and_bind_native_patterns() {
             .clone()
     };
     let before = compile(&source);
-    assert!(
-        serde_json::to_value(&before)
-            .unwrap()
-            .get("handler")
-            .is_none()
-    );
+    assert!(serde_json::to_value(&before)
+        .unwrap()
+        .get("handler")
+        .is_none());
     assert_eq!(
         before.definition_revision,
         compile(&source).definition_revision

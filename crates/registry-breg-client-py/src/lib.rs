@@ -52,7 +52,6 @@ struct MappedError {
     kind: &'static str,
     message: String,
     code: Option<String>,
-    plan_refusal: Option<String>,
     refusal_code: Option<String>,
     reason_code: Option<String>,
     field_path: Option<String>,
@@ -81,9 +80,6 @@ fn to_py_err(py: Python<'_>, mapped: MappedError) -> PyErr {
         .expect("fresh exception accepts attributes");
     instance
         .setattr("code", mapped.code)
-        .expect("fresh exception accepts attributes");
-    instance
-        .setattr("plan_refusal", mapped.plan_refusal)
         .expect("fresh exception accepts attributes");
     instance
         .setattr("refusal_code", mapped.refusal_code)
@@ -170,9 +166,6 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
             mapped.status = Some(status);
             mapped.code = Some(code.code().to_owned());
             mapped.trace_id = Some(trace_id.as_str().to_owned());
-            if let BRegProblemCode::RequestPlanRefused(value) = code {
-                mapped.plan_refusal = Some(value.kind().to_owned());
-            }
             // Problem detail codes travel as bounded strings after their
             // operation-specific vocabulary has been checked by the Rust client.
             mapped.refusal_code = refusal_code.map(|value| value.as_str().to_owned());

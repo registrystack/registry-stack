@@ -17,28 +17,28 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
-use registry_breg::CompiledRegistry;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
 };
-use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::migration::{
-    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, apply_verified_package,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest,
 };
 use registry_breg::package::{
-    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile, load_package, prepare_package,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
 };
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordReadService, RegistryLockKey,
-    install_compiled_schema, managed_schema_fingerprint,
+    install_compiled_schema, managed_schema_fingerprint, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, PostgresRecordReadService, RegistryLockKey,
 };
+use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use serde_json::Value;
 use tower::Service as _;

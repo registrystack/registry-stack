@@ -3,11 +3,11 @@
 //! Pool orchestration keeps authenticated external review observations outside
 //! PostgreSQL transactions and connections. The coordinator owns effects.
 use super::*;
-use crate::api::VerifiedRequestClaims;
 use crate::api::proposals::{ProposalListQuery, ProposalMutationInput};
+use crate::api::VerifiedRequestClaims;
 use crate::model::ProposalOperation;
 use crate::mutation::ProposalApplyPreflight;
-use crate::postgres::{ProposalAuthority, ProposalAuthorityOperation, begin_proposal_transaction};
+use crate::postgres::{begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation};
 use crate::proposal_store;
 use std::collections::BTreeMap;
 

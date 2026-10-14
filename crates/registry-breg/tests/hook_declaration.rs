@@ -7,14 +7,14 @@
 //! `HookDeclaration`, and the phases and handler kinds the engine cannot run
 //! are refused rather than compiled into something that never fires.
 
-use registry_breg::compiler::{CompileProfile, compile_project, compile_project_with_assets};
+use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{
-    HookSource, ModuleAssetSource, parse_module_json, parse_project_json,
+    parse_module_json, parse_project_json, HookSource, ModuleAssetSource,
 };
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::model::CompiledHookHandlerKind;
 use registry_platform_hooks::{HookDeclaration, HookHandlerKind, HookHandlerSource, HookPhase};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 #[cfg(feature = "wasm")]
 use sha2::{Digest, Sha256};
 

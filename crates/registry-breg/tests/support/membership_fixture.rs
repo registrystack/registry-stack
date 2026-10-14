@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_json};
-use serde_json::{Value, json};
+use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
+use serde_json::{json, Value};
 
 pub fn source(root: &str) -> Value {
     let mut value: Value = serde_json::from_str(include_str!(

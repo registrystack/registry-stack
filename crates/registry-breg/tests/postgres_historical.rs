@@ -13,26 +13,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, Response, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
-use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
-use registry_breg::contract::{ModuleAssetSource, parse_project_json};
+use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::cursor::CursorCodec;
-use registry_breg::history_schema::{HistorySchemaDescriptor, serialize_descriptor};
+use registry_breg::history_schema::{serialize_descriptor, HistorySchemaDescriptor};
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordReadService,
-    PostgresSnapshotReadService, RegistryLockKey, RegistryStateTestIdentity,
-    initialize_registry_state_for_catalog_test, install_compiled_schema,
+    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, PostgresRecordReadService, PostgresSnapshotReadService,
+    RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_breg_client::{BRegRecordOptions, BRegSnapshotListRequest};
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio_postgres::{Client, Transaction};
 use tower::Service as _;
 use uuid::Uuid;
@@ -291,12 +291,10 @@ async fn snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional
     )
     .await;
     assert_eq!(before_start.status(), StatusCode::OK);
-    assert!(
-        body_json(before_start).await["items"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(body_json(before_start).await["items"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     let before_end = send(
         &app,
@@ -321,12 +319,10 @@ async fn snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional
     )
     .await;
     assert_eq!(end_exclusive.status(), StatusCode::OK);
-    assert!(
-        body_json(end_exclusive).await["items"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(body_json(end_exclusive).await["items"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     let no_valid_at = send(
         &app,

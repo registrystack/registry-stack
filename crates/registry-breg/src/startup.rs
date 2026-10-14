@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
-use axum::{Router, middleware};
+use axum::{middleware, Router};
 use registry_platform_audit::AuditWriter;
 use registry_platform_oidc::JwksFetcher;
 use thiserror::Error;
@@ -21,7 +21,7 @@ use tokio_postgres::{Client, GenericClient};
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, authenticated_router,
+    authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
 use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::audit::RegistryAudit;
@@ -31,15 +31,15 @@ use crate::metrics::{self, LastSuccess, Metrics, ProgressWorker};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
 use crate::package::{
-    PackageError, PackageLoadContext, VerifiedPackage, load_package_with_verified_envelope,
+    load_package_with_verified_envelope, PackageError, PackageLoadContext, VerifiedPackage,
 };
 use crate::postgres::{
-    AdvisorySeverity, BaselineAdvisory, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
-    PostgresSnapshotReadService, RegistryLockKey, RoleMode, RuntimePool, SqlIdentifier,
-    inspect_baseline, verify_catalog_identity_for_catalog,
+    inspect_baseline, verify_catalog_identity_for_catalog, AdvisorySeverity, BaselineAdvisory,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
+    PostgresRecordReadService, PostgresRevisionReadService, PostgresSnapshotReadService,
+    RegistryLockKey, RoleMode, RuntimePool, SqlIdentifier,
 };
-use crate::runtime_config::{RuntimeConfig, RuntimeConfigError, load_runtime_config};
+use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use crate::webhook::{WebhookDeliveryService, WebhookRetainedBindingError, WebhookWorker};
 
 /// Bounded startup refusal. Package paths, request identifiers, stored review

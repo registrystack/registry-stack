@@ -394,6 +394,26 @@ path = "tests/postgres_proposal.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
+name = "postgres_proposal_human_recovery"
+path = "tests/postgres_proposal_human_recovery.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_reviewed_change_example"
+path = "tests/postgres_reviewed_change_example.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_proposal_hooks"
+path = "tests/postgres_proposal_hooks.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_proposal_review_delivery"
+path = "tests/postgres_proposal_review_delivery.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
 name = "postgres_proposal_security"
 path = "tests/postgres_proposal_security.rs"
 required-features = ["postgres-test", "tooling"]

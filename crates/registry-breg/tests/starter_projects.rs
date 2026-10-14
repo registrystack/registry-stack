@@ -4,7 +4,7 @@
 )]
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_yaml;
 
 const STARTERS: [(&[u8], &[u8]); 4] = [

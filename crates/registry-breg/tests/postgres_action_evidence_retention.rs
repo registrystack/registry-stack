@@ -7,16 +7,16 @@ mod postgres_harness;
 
 use postgres_harness::TestDatabase;
 use registry_breg::{
-    CompiledRegistry,
     action_evidence_maintenance::ActionEvidenceRetentionOperatorService,
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_yaml},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_yaml, ModuleAssetSource},
     mutation::MutationError,
     postgres::{
-        ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
-        RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-        install_compiled_schema,
+        initialize_compiled_registry_state_for_test, install_compiled_schema, ConnectionConfig,
+        ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
+        RegistryStateTestIdentity,
     },
+    CompiledRegistry,
 };
 use std::{sync::Arc, time::Duration};
 

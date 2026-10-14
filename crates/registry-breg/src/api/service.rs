@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 use super::context::{AuthorizedActionContext, AuthorizedRequestContext};
 use crate::contract::FieldTypeSource;

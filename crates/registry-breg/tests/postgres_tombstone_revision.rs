@@ -10,21 +10,21 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{CompileProfile, compile_project};
-use registry_breg::contract::{Operation, parse_project_json};
+use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::idempotency::PermittedResponseHeader;
 use registry_breg::mutation::{
     MutationBody, MutationCoordinator, MutationError, MutationFaultPoint, MutationOutcome,
     MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_breg::postgres::{
-    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity,
-    RowBoundaryContext, initialize_compiled_registry_state_for_test, install_compiled_schema,
-    test_activation_id, test_package_digest,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
+    test_package_digest, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
+    RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 const PRINCIPAL_CANARY: &str = "tombstone-principal-canary";
 const IDEMPOTENCY_CANARY: &str = "tombstone-idempotency-canary";

@@ -13,6 +13,18 @@ const document = () => ({id, actionId: 'correct', actionRevision: digest, submis
   application: {applicationId: id, submissionVersion: 2, effectDigest: digest,
     resultLinks: [{recordType: 'person', recordId: targetId, revision: 4}]}});
 
+const statusDocument = state => {
+  const value = document();
+  value.state = ['applied', 'cancelled'].includes(state) ? state : 'submitted';
+  if (state !== 'applied') delete value.application;
+  value.applicationStatus = {state, mode: 'automatic'};
+  if (['pending', 'blocked'].includes(state)) {
+    value.applicationStatus.automaticRetry = {scheduled: state === 'pending', attempts: state === 'pending' ? 0 : 1, maximumAttempts: 3};
+  }
+  if (state === 'blocked') Object.assign(value.applicationStatus, {reason: 'dependency-outage', recovery: 'retry'});
+  return value;
+};
+
 test('authorized Proposal receipts preserve inert result references and refuse widened or malformed projections', async () => {
   let value = document();
   const requests = [];
@@ -35,6 +47,22 @@ test('authorized Proposal receipts preserve inert result references and refuse w
     const count = requests.length;
     assert.throws(() => client.prepareProposal(proposal, 'apply', '{}', 'ungranted'), error => error.kind === 'invalid-request');
     assert.equal(requests.length, count);
+    for (const state of ['pending', 'blocked', 'applied', 'cancelled']) {
+      value = statusDocument(state);
+      const observed = JSON.parse((await client.getProposal(binding, id)).documentJson);
+      assert.deepEqual(observed.applicationStatus, value.applicationStatus, state);
+      assert.equal(observed.submissionVersion, 2);
+      assert.equal(observed.effectDigest, digest);
+    }
+    for (const state of ['applied', 'cancelled']) {
+      value = statusDocument(state);
+      delete value.applicationStatus;
+      delete value.application;
+      delete value.effectDigest;
+      const observed = JSON.parse((await client.getProposal(binding, id)).documentJson);
+      assert.ok(!Object.hasOwn(observed, 'applicationStatus'), `${state}: erased retained evidence`);
+    }
+    value = document();
     value.application.resultLinks = [];
     assert.deepEqual(JSON.parse((await client.getProposal(binding, id)).documentJson).application.resultLinks, []);
     delete value.application;

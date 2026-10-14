@@ -154,14 +154,12 @@ mod tests {
     }
     #[test]
     fn folded_groups_ignore_internal_edges_and_refuse_invalid_graphs() {
-        assert!(
-            order_effect_groups(
-                vec![vec![effect("a", &[]), effect("b", &["a"])]],
-                |effect| effect.0.as_str(),
-                |effect| &effect.1
-            )
-            .is_ok()
-        );
+        assert!(order_effect_groups(
+            vec![vec![effect("a", &[]), effect("b", &["a"])]],
+            |effect| effect.0.as_str(),
+            |effect| &effect.1
+        )
+        .is_ok());
         for (groups, error) in [
             (
                 vec![vec![effect("a", &[])], vec![effect("a", &[])]],

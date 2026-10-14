@@ -4,16 +4,16 @@
 use std::{path::Path, time::Duration};
 
 use registry_platform_audit::AuditEntry;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::audit::RegistryAudit;
-use crate::history_maintenance::{HistoryMaintenanceError, lock_registry};
-use crate::mutation::{MutationError, erase_expired_action_evidence};
+use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
+use crate::mutation::{erase_expired_action_evidence, MutationError};
 use crate::package::PackageError;
 use crate::postgres::{
-    ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
-    SqlIdentifier, verify_catalog_identity_for_catalog, verify_migration_role,
+    verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
 };
 use crate::runtime_config::load_runtime_config;
 

@@ -9,27 +9,27 @@ mod postgres_harness;
 mod support;
 
 use axum::{
-    body::{Body, to_bytes},
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
 use postgres_harness::TestDatabase;
 use registry_breg::{
     api::{
-        HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-        VerifiedRequestClaims, router,
+        router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+        VerifiedClaimValue, VerifiedRequestClaims,
     },
-    compiler::{CompileProfile, compile_project},
+    compiler::{compile_project, CompileProfile},
     contract::parse_project_json,
     cursor::CursorCodec,
     mutation::MutationFaultPoint,
     postgres::{
+        initialize_compiled_registry_state_for_test, install_compiled_schema,
         ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-        RegistryLockKey, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-        install_compiled_schema,
+        RegistryLockKey, RegistryStateTestIdentity,
     },
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -380,12 +380,10 @@ async fn action_requirements_hold_reference_lock_against_concurrent_inactivation
     transaction.commit().await.unwrap();
     let refused = pending.await.unwrap();
     assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
-    assert!(
-        counts(&database, &registry)
-            .await
-            .iter()
-            .all(|count| *count == 0)
-    );
+    assert!(counts(&database, &registry)
+        .await
+        .iter()
+        .all(|count| *count == 0));
     database
         .admin
         .execute(
@@ -441,12 +439,10 @@ async fn action_requirements_hold_reference_lock_against_concurrent_inactivation
     assert_eq!(accepted.0, StatusCode::OK, "{}", accepted.1);
     assert_eq!(write.await.unwrap().unwrap(), 1);
     writer_task.abort();
-    assert!(
-        counts(&database, &registry)
-            .await
-            .iter()
-            .all(|count| *count == 1)
-    );
+    assert!(counts(&database, &registry)
+        .await
+        .iter()
+        .all(|count| *count == 1));
     database.cleanup().await;
 }
 
@@ -476,12 +472,10 @@ async fn action_requirements_preserve_fault_rollback() {
     );
     let refused = invoke(app, "fault", ID).await;
     assert!(!refused.0.is_success());
-    assert!(
-        counts(&database, &registry)
-            .await
-            .iter()
-            .all(|count| *count == 0)
-    );
+    assert!(counts(&database, &registry)
+        .await
+        .iter()
+        .all(|count| *count == 0));
     database.cleanup().await;
 }
 

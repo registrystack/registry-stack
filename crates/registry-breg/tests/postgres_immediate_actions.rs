@@ -20,25 +20,25 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
+    begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
     ClaimContext, PostgresRecordMutationService, PostgresRecordReadService,
     PostgresRevisionReadService, PostgresSnapshotReadService, RegistryLockKey,
-    RegistryStateTestIdentity, RowBoundaryContext, begin_record_transaction,
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -878,8 +878,8 @@ async fn set_journal_operation(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_required_inputs_refuse()
- {
+async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_required_inputs_refuse(
+) {
     let project = registry_breg::contract::parse_project_yaml(include_bytes!(
         "fixtures/absent-optional-action-inputs.yaml"
     ))

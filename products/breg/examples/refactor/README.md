@@ -1,6 +1,11 @@
 # Standalone BReg examples
 
 `minimal/registry.yaml` is a directory with one Record type and generated CRUD.
+`reviewed-change/registry.yaml` adds one fixed-plan name correction to one Record
+type. It requires an external review authority and uses the omitted automatic
+application default. Its explicit profile grants record creation and reading,
+Action Start, and caller-owned Proposal submission. A separate reviewer profile
+can inspect the current and proposed name; direct Patch is unavailable.
 `facility/registry.yaml` adds reusable value types, one named Rhai function,
 an immediate multi-record Action, and durable Proposals. Action execution mode
 is governed configuration. Proposal lifecycle operations use promoted links.
@@ -9,6 +14,7 @@ From the repository root:
 
 ```sh
 cargo run --locked -p registry-bregctl -- check products/breg/examples/refactor/minimal
+cargo run --locked -p registry-bregctl -- check products/breg/examples/refactor/reviewed-change
 cargo run --locked -p registry-bregctl -- check products/breg/examples/refactor/facility
 cargo run --locked -p registry-bregctl -- --format json explain actions products/breg/examples/refactor/facility
 cargo run --locked -p registry-bregctl -- --format json explain proposals products/breg/examples/refactor/facility
@@ -21,12 +27,19 @@ role can create disposable test databases and roles, then run:
 ```sh
 export BREG_TEST_DATABASE_URL='postgresql://USER:PASSWORD@HOST:PORT/DATABASE'
 cargo test --locked -p registry-breg --features runtime,tooling,postgres-test \
-  --test postgres_refactor --test postgres_facility_proposal -- --test-threads=1
+  --test postgres_refactor --test postgres_reviewed_change_example \
+  --test postgres_facility_proposal -- --test-threads=1
 ```
 
 The minimal journey proves CRUD, row concealment, revision conditions and exact
-receipt recovery. The facility journey creates a facility and assignment atomically,
-freezes its named-function correction, binds the exact review result, applies it
+receipt recovery. The reviewed-change journey starts and submits a correction,
+performs the authenticated external review handoff, obtains fresh approval before
+automatic application, and recovers the original submission receipt. Its small
+conforming test authority proves protocol binding, not a real policy decision.
+The example's policy pin is synthetic and must be replaced with an independently
+compiled policy for deployment. The facility journey creates a facility and
+assignment atomically, freezes its named-function correction, binds the exact
+review result, applies it
 through the built-in executor, and resumes from promoted Proposal links. Its small
 conforming review authority replaces an external Casework deployment. The policy
 pin in this example is synthetic; bind your independently compiled policy before
@@ -40,8 +53,19 @@ and activation:
 ```sh
 cargo test --locked -p registry-breg --features runtime,tooling,postgres-test \
   --test postgres_proposal --test postgres_proposal_security \
-  --test postgres_proposal_s3 --test postgres_native_retention -- --test-threads=1
+  --test postgres_proposal_human_recovery --test postgres_proposal_review_delivery \
+  --test postgres_proposal_hooks --test postgres_proposal_s3 \
+  --test postgres_native_retention -- --test-threads=1
 ```
+
+For retained frozen submissions, ordinary authorized Proposal Get exposes
+`actionId`, `actionRevision`, `submissionVersion`, `effectDigest`, and local
+`applicationStatus`. Preserve that exact binding when observing progress; a later
+revise/rebase does not satisfy a wait for the earlier submission. Applied work
+includes retained application evidence. Recover an uncertain Start or Submit
+with its original prepared command, rather than inferring execution from a later Get.
+External Apply or Retry of automatic work requires a verified human and an explicit
+operation grant. Manual-mode Apply keeps its independently configured authority.
 
 `products/breg/generated/refactor-minimal/` and `products/breg/generated/refactor/`
 contain the canonical contracts. The latter includes generated TypeScript and

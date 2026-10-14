@@ -18,28 +18,28 @@
 mod postgres_harness;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use axum::Router;
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
 };
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordReadService, PostgresRevisionReadService, PostgresSnapshotReadService,
     ReadFaultPoint, RegistryLockKey, RegistryStateTestIdentity, RevisionReadFaultPoint,
-    RuntimePool, SnapshotReadFaultPoint, initialize_compiled_registry_state_for_test,
-    install_compiled_schema,
+    RuntimePool, SnapshotReadFaultPoint,
 };
 use registry_breg::startup::with_request_timeout_for_test;
-use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_json};
+use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt;
 use zeroize::Zeroizing;
 

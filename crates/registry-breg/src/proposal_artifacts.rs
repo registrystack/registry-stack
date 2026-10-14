@@ -212,10 +212,18 @@ fn operation_document(
 
 fn review_document_schema(context: bool) -> Value {
     let mut properties = json!({"id":{"type":"string","format":"uuid"},"actionId":{"type":"string"},"actionRevision":{"type":"string"},"submissionVersion":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"effectDigest":{"type":"string"},"subject":{"type":"object","additionalProperties":false,"required":["source","subjectType","id","version","digest"],"properties":{"source":{"type":"string"},"subjectType":{"const":"proposal"},"id":{"type":"string","format":"uuid"},"version":{"type":"string"},"digest":{"type":"string"}}},"context":{"type":"object","additionalProperties":false,"required":["reference"],"properties":{"reference":{"type":"string"}}},"authority":{"type":"string"},"policy":{"type":"object","additionalProperties":false,"required":["id","version","digest"],"properties":{"id":{"type":"string"},"version":{"type":"string"},"digest":{"type":"string"}}},"reviewable":{"type":"boolean"},"result":{"type":"object","additionalProperties":false,"required":["state"],"properties":{"state":{"enum":["pending","approved","rejected","changes-requested","answered","cancelled","superseded","expired"]},"resultId":{"type":"string","format":"uuid"},"completedAt":{"type":"string","format":"date-time"},"availableUntil":{"type":"string","format":"date-time"}}}});
+    properties["context"]["properties"]["contract"] = json!({
+        "type":"object","additionalProperties":false,
+        "required":["id","revision","schemaDigest"],
+        "properties":{
+            "id":{"type":"string","pattern":"^urn:registry:breg:review-context:","maxLength":2048},
+            "revision":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+            "schemaDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}
+        }
+    });
     if context {
-        properties["context"]["properties"]["id"] = json!({"type":"string"});
         properties["context"]["properties"]["fields"] = json!({"type":"object"});
-        properties["context"]["required"] = json!(["reference", "id", "fields"]);
+        properties["context"]["required"] = json!(["reference", "contract", "fields"]);
     }
     json!({"type":"object","additionalProperties":false,"required":["id","actionId","actionRevision","submissionVersion","revision","effectDigest","subject","context","reviewable"],"properties":properties})
 }

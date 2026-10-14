@@ -9,12 +9,12 @@ mod pilot_acceptance_harness;
 mod postgres_harness;
 
 use axum::http::{Method, StatusCode};
-use pilot_acceptance_harness::{PilotHarness, response_bytes, response_json};
+use pilot_acceptance_harness::{response_bytes, response_json, PilotHarness};
 use registry_breg::data::{
-    DataError, DataHttpMethod, DataHttpRequest, DataHttpResponse, DataImportCheckpoint,
-    DataImportOperation, DataImportPlan, execute_import_chunk,
+    execute_import_chunk, DataError, DataHttpMethod, DataHttpRequest, DataHttpResponse,
+    DataImportCheckpoint, DataImportOperation, DataImportPlan,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const PROFILE: &str = "facility-operator";
 
@@ -128,19 +128,17 @@ async fn real_postgres_facility_import_is_authenticated_chunked_resumable_and_ra
     assert_eq!(second.chunk_index(), 1);
     assert_eq!(second.committed_items(), 1);
     assert!(second.is_complete());
-    assert!(
-        execute_import_chunk(
-            &plan,
-            &mut resumed,
-            &package_revision,
-            &schema_fingerprint,
-            &import_id,
-            |request| dispatch(&harness, Some(&north_token), request),
-        )
-        .await
-        .expect("a completed checkpoint is stable")
-        .is_none()
-    );
+    assert!(execute_import_chunk(
+        &plan,
+        &mut resumed,
+        &package_revision,
+        &schema_fingerprint,
+        &import_id,
+        |request| dispatch(&harness, Some(&north_token), request),
+    )
+    .await
+    .expect("a completed checkpoint is stable")
+    .is_none());
     let after = effect_counts(&harness).await;
     assert_eq!(after.current - before.current, 5);
     assert_eq!(after.revisions - before.revisions, 5);

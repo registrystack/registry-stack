@@ -162,7 +162,7 @@ fn explain_access_states_consent_gates_recipients_and_the_ungated_client() {
     fs::write(
         &scenario,
         serde_json::to_vec(&json!({
-            "entity": "person",
+            "recordType": "person",
             "accessProfile": "food-targeting",
             "operation": "get",
             "claims": {
@@ -196,7 +196,7 @@ fn explain_access_states_consent_gates_recipients_and_the_ungated_client() {
         "{human}"
     );
 
-    fs::write(&scenario, br#"{"entity":"person","accessProfile":"food-targeting","operation":"get","claims":{"requester":"wfp-scope"}}"#).unwrap();
+    fs::write(&scenario, br#"{"recordType":"person","accessProfile":"food-targeting","operation":"get","claims":{"requester":"wfp-scope"}}"#).unwrap();
     let output = bregctl(&[
         "--format",
         "json",
@@ -261,7 +261,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "required scopes (all)",
         "allowed purposes (any)",
         "row restrictions (all)",
-        "  entity record (internal)\n",
+        "  record type record (internal)\n",
         "    profile district-reader\n",
         "principal claim         registry_principal",
     ] {
@@ -270,12 +270,12 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
     let scenario_path = project.path().join("scenario.json");
     for (source, expected, reason) in [
         (
-            &include_bytes!("../../../products/breg/examples/access-review/allowed.json")[..],
+            &include_bytes!("fixtures/retained-native/access-review/allowed.json")[..],
             true,
             "profile_requirements_satisfied",
         ),
         (
-            &include_bytes!("../../../products/breg/examples/access-review/missing-scope.json")[..],
+            &include_bytes!("fixtures/retained-native/access-review/missing-scope.json")[..],
             false,
             "required-scope-missing",
         ),
@@ -299,7 +299,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-district"));
     }
     for malformed in [
-        r#"{"entity":"record","entity":"other","secret":"private-scenario-canary"}"#,
+        r#"{"recordType":"record","recordType":"other","secret":"private-scenario-canary"}"#,
         r#"{"unexpected":"private-scenario-canary"}"#,
     ] {
         fs::write(&scenario_path, malformed).unwrap();
@@ -3280,11 +3280,11 @@ fn explain_reports_are_derived_from_compiled_inventories() {
     assert!(model.status.success(), "{model:?}");
     assert!(queries.status.success(), "{queries:?}");
     assert_eq!(
-        json_stdout(&routes)["explanation"]["routes"][0]["entityId"],
+        json_stdout(&routes)["explanation"]["routes"][0]["recordType"],
         "asset-item"
     );
     assert_eq!(
-        json_stdout(&access)["explanation"]["routes"]["entries"][0]["entityId"],
+        json_stdout(&access)["explanation"]["routes"]["entries"][0]["recordType"],
         "asset-item"
     );
     assert_eq!(
@@ -3377,7 +3377,7 @@ fn explain_routes_preserves_action_free_output_shape() {
     let routes = explanation["routes"].as_array().expect("routes are listed");
     assert!(!routes.is_empty());
     assert!(routes.iter().all(|route| route.get("actionId").is_none()));
-    assert!(routes.iter().all(|route| route["type"] == "entity"));
+    assert!(routes.iter().all(|route| route["type"] == "record"));
 }
 
 #[test]
@@ -3397,11 +3397,11 @@ fn explain_routes_includes_served_immediate_action_routes() {
     let all_routes = explanation["routes"].as_array().expect("routes are listed");
     assert!(!all_routes.is_empty());
     // Every route must carry a discriminator that matches which shape it actually is:
-    // entity routes carry entityId and no actionId, action routes carry actionId and no
-    // entityId, and no route is missing both or carrying both.
+    // record routes carry recordType and no actionId, action routes carry actionId and no
+    // recordType, and no route is missing both or carrying both.
     assert!(all_routes.iter().all(|route| {
-        match (route.get("entityId"), route.get("actionId")) {
-            (Some(_), None) => route["type"] == "entity",
+        match (route.get("recordType"), route.get("actionId")) {
+            (Some(_), None) => route["type"] == "record",
             (None, Some(_)) => route["type"] == "action",
             (None, None) | (Some(_), Some(_)) => false,
         }
@@ -3460,7 +3460,7 @@ fn explain_routes_discriminates_mixed_entity_and_action_route_shapes() {
     // below would pass vacuously.
     let entity_routes = routes
         .iter()
-        .filter(|route| route.get("entityId").is_some())
+        .filter(|route| route.get("recordType").is_some())
         .count();
     let action_routes = routes
         .iter()
@@ -3471,11 +3471,11 @@ fn explain_routes_discriminates_mixed_entity_and_action_route_shapes() {
     assert_eq!(entity_routes + action_routes, routes.len());
 
     for route in routes {
-        match (route.get("entityId"), route.get("actionId")) {
-            (Some(_), None) => assert_eq!(route["type"], "entity", "{route:?}"),
+        match (route.get("recordType"), route.get("actionId")) {
+            (Some(_), None) => assert_eq!(route["type"], "record", "{route:?}"),
             (None, Some(_)) => assert_eq!(route["type"], "action", "{route:?}"),
-            (None, None) => panic!("route has neither entityId nor actionId: {route:?}"),
-            (Some(_), Some(_)) => panic!("route carries both entityId and actionId: {route:?}"),
+            (None, None) => panic!("route has neither recordType nor actionId: {route:?}"),
+            (Some(_), Some(_)) => panic!("route carries both recordType and actionId: {route:?}"),
         }
     }
 }
@@ -3493,7 +3493,7 @@ fn explain_access_includes_action_only_grants_and_target_reach() {
     assert!(output.status.success(), "{output:?}");
     let report = json_stdout(&output);
     let explanation = &report["explanation"];
-    assert!(explanation["entities"]
+    assert!(explanation["recordTypes"]
         .as_array()
         .unwrap()
         .iter()
@@ -3593,7 +3593,7 @@ fn explain_actions_reports_reference_acceptance_conditions() {
         .expect("registration action is explained");
     let requirement = &action["commitGuards"][0];
     assert_eq!(requirement["input"], "register");
-    assert_eq!(requirement["entityId"], "register");
+    assert_eq!(requirement["recordType"], "register");
     assert_eq!(requirement["field"], "active");
     assert_eq!(requirement["equals"], true);
     assert_eq!(action["plan"]["function"]["kind"], "rhai");
@@ -4179,6 +4179,10 @@ recordTypes:
         report["explanation"]["deliveries"][0]["destinationId"],
         "case-operations"
     );
+    assert_eq!(
+        report["explanation"]["deliveries"][0]["owner"],
+        json!({"type":"record-type","recordType":"case","trigger":"created"})
+    );
     let delivery_keys = report["explanation"]["deliveries"][0]
         .as_object()
         .expect("delivery is an object")
@@ -4197,7 +4201,6 @@ recordTypes:
             "deadLetter",
             "deliveryMode",
             "destinationId",
-            "entityId",
             "eventId",
             "exponentialBackoffMultiplier",
             "id",
@@ -4206,10 +4209,10 @@ recordTypes:
             "maximumBackoffMs",
             "maximumPayloadBytes",
             "operatorReplay",
+            "owner",
             "projectionFields",
             "retryDelaysMs",
             "retryProfile",
-            "trigger",
         ])
     );
     let rendered = String::from_utf8(first.stdout).expect("report is UTF-8");

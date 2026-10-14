@@ -15,7 +15,7 @@ mod statistics;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::extract::{Path, RawQuery, State};
 use axum::http::header::{
     ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, LINK, VARY,
@@ -23,16 +23,19 @@ use axum::http::header::{
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
-use axum::{Extension, Json, Router, middleware};
+use axum::{middleware, Extension, Json, Router};
 use registry_platform_canonical_json::parse_json_strict;
-use registry_platform_httpsec::{CspBuilder, security_headers};
-use serde_json::{Map, Value, json};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use registry_platform_httpsec::{security_headers, CspBuilder};
+use serde_json::{json, Map, Value};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 pub(crate) use context::Authenticated;
 pub use context::{
     AuthorizedActionContext, AuthorizedRequestContext, RowBoundaryOperator, VerifiedClaimValue,
     VerifiedContextError, VerifiedRequestClaims, VerifiedRowBoundary,
+};
+pub(crate) use service::{
+    cursor_query_reference_value, valid_text_search_term, CursorQueryReferenceInput,
 };
 pub use service::{
     ActionTargetConditionsInput, BatchMutationInput, CompiledLookupSelector, CompiledReadQuery,
@@ -43,21 +46,17 @@ pub use service::{
     RecordReadRequest, RecordReadService, RevisionReadRefusal, RevisionReadRequest,
     RevisionReadService, ServiceFuture, SnapshotReadRequest, SnapshotReadService,
 };
-pub(crate) use service::{
-    CursorQueryReferenceInput, cursor_query_reference_value, valid_text_search_term,
-};
 
-use crate::auth::{RegistryAuthenticator, authenticate_request};
+use crate::auth::{authenticate_request, RegistryAuthenticator};
 use crate::contract::{
     AccessProfileSource, BoundaryOperator, FieldTypeSource, LookupValueOrigin, Operation,
     RowBoundarySource,
 };
 use crate::correlation::RequestCorrelation;
 use crate::cursor::{
-    CursorAdapter, CursorBboxQuery, CursorBinding, CursorError, CursorFilterExpr,
+    now_unix_seconds, CursorAdapter, CursorBboxQuery, CursorBinding, CursorError, CursorFilterExpr,
     CursorFilterOperator, CursorFilterPredicate, CursorLogicalOp, CursorOrderClause,
     CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
-    now_unix_seconds,
 };
 use crate::idempotency::{HeldResponse, PermittedResponseHeader};
 use crate::model::{
@@ -65,7 +64,7 @@ use crate::model::{
     CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRevisionKind,
     CompiledRoute, MAX_REVISION_HISTORY_RECORDS,
 };
-use crate::mutation::{BatchMutationItem, MutationError, parse_json_patch_document};
+use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
 use crate::problem::ProblemCode;
 use crate::problem_location::{BatchItemMember, RequestLocation};
 use crate::query as strict_query;
@@ -74,9 +73,9 @@ use crate::record_profile::{self, RecordRepresentation};
 use uuid::Uuid;
 
 use crate::artifacts::{
-    ACCESS_LOG_RESPONSE_SCHEMA_ID, OpenApiAccessProfiles, OpenApiOperationSpec, access_log_path,
-    openapi_access_log_operation, openapi_access_log_response_schema, openapi_components,
-    openapi_entity_input_schema, openapi_input_schema_id, openapi_operation,
+    access_log_path, openapi_access_log_operation, openapi_access_log_response_schema,
+    openapi_components, openapi_entity_input_schema, openapi_input_schema_id, openapi_operation,
+    OpenApiAccessProfiles, OpenApiOperationSpec, ACCESS_LOG_RESPONSE_SCHEMA_ID,
 };
 
 const MAX_MUTATION_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -4580,7 +4579,11 @@ fn public_deployment_prefix(service: &HttpService) -> &str {
 
 fn public_deployment_base_path(service: &HttpService) -> &str {
     let prefix = public_deployment_prefix(service);
-    if prefix.is_empty() { "/" } else { prefix }
+    if prefix.is_empty() {
+        "/"
+    } else {
+        prefix
+    }
 }
 
 fn exact_read(
@@ -5149,27 +5152,6 @@ fn mutation_problem(error: MutationError) -> Response {
         MutationError::FieldEncryptionUnavailable => {
             fixed_problem(ProblemCode::RuntimeFieldEncryptionUnavailable)
         }
-        MutationError::PlannerFailure(error) => {
-            let (code, detail) = planner_failure_problem(error);
-            problem_with_detail(code, detail)
-        }
-    }
-}
-
-/// The status, problem code, and detail for one bounded planner failure.
-///
-/// The detail is the planner's own, so it names the failure kind from the
-/// closed vocabulary and nothing else. A planner that ran out of time is a
-/// service outage rather than a refusal, so it keeps the unavailable mapping
-/// every other timeout carries.
-const fn planner_failure_problem(
-    error: crate::rhai_planner::PlanError,
-) -> (ProblemCode, &'static str) {
-    use crate::rhai_planner::PlanError as Kind;
-
-    match error {
-        Kind::Deadline => (ProblemCode::ServiceUnavailable, error.problem_detail()),
-        _ => (ProblemCode::RequestPlanRefused, error.problem_detail()),
     }
 }
 
@@ -5261,14 +5243,14 @@ mod held_body_encryption_tests {
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-    use registry_platform_crypto::KeyProviderKind;
     use registry_platform_crypto::field_encryption::envelope_member_json;
-    use serde_json::{Map, Value, json};
+    use registry_platform_crypto::KeyProviderKind;
+    use serde_json::{json, Map, Value};
     use zeroize::Zeroizing;
 
     use super::exact_mutation;
-    use crate::compiler::{CompileProfile, MAX_BATCH_ITEMS, compile_project};
-    use crate::contract::{MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, parse_project_json};
+    use crate::compiler::{compile_project, CompileProfile, MAX_BATCH_ITEMS};
+    use crate::contract::{parse_project_json, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS};
     use crate::field_encryption::FieldEncryptionService;
     use crate::history_schema::ENVELOPE_MEMBER_TAG;
     use crate::idempotency::{HeldResponse, PermittedResponseHeader};
@@ -5561,11 +5543,9 @@ mod held_body_encryption_tests {
             problem["code"],
             json!("runtime.field_encryption.unavailable")
         );
-        assert!(
-            !bytes
-                .windows(FIRST_PLAINTEXT.len())
-                .any(|window| window == FIRST_PLAINTEXT.as_bytes())
-        );
+        assert!(!bytes
+            .windows(FIRST_PLAINTEXT.len())
+            .any(|window| window == FIRST_PLAINTEXT.as_bytes()));
     }
 
     #[tokio::test]
@@ -5602,26 +5582,49 @@ mod held_body_encryption_tests {
 }
 
 #[cfg(test)]
-mod planner_failure_problem_tests {
-    use super::planner_failure_problem;
-    use crate::problem::ProblemCode;
-    use crate::rhai_planner::PlanError;
+mod native_handler_problem_tests {
+    use super::mutation_problem;
+    use crate::action_handler::ActionHandlerError;
+    use crate::mutation::MutationError;
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
 
-    #[test]
-    fn every_planner_refusal_names_its_kind_and_nothing_else() {
-        for error in PlanError::PLAN_REFUSALS {
-            let (code, detail) = planner_failure_problem(error);
-            assert_eq!(code, ProblemCode::RequestPlanRefused);
-            assert!(
-                detail.ends_with(&format!("{}.", error.code())),
-                "the detail must end with the closed planner vocabulary: {detail}"
+    #[tokio::test]
+    async fn native_function_faults_keep_the_fixed_handler_problem_without_internal_details() {
+        for kind in [
+            ActionHandlerError::Source,
+            ActionHandlerError::Entrypoint,
+            ActionHandlerError::Execution,
+            ActionHandlerError::Result,
+            ActionHandlerError::Ceiling,
+            ActionHandlerError::Resource,
+        ] {
+            let response = mutation_problem(MutationError::ActionHandlerFailure(kind));
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["code"], "action.handler_failed");
+            assert_eq!(
+                body["detail"],
+                "The action handler could not produce an accepted result."
+            );
+            assert!(!String::from_utf8_lossy(&bytes).contains(kind.code()));
+        }
+        for (kind, status) in [
+            (ActionHandlerError::Input, StatusCode::BAD_REQUEST),
+            (
+                ActionHandlerError::Evidence,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                ActionHandlerError::Deadline,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            assert_eq!(
+                mutation_problem(MutationError::ActionHandlerFailure(kind)).status(),
+                status
             );
         }
-    }
-
-    #[test]
-    fn a_planner_deadline_stays_the_unavailable_refusal() {
-        let (code, _) = planner_failure_problem(PlanError::Deadline);
-        assert_eq!(code, ProblemCode::ServiceUnavailable);
     }
 }

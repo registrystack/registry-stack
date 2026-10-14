@@ -7,9 +7,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::contract::{
-    AccessProfileSource, ActorKindSource, DatasetOperation, FieldTypeSource,
-    MAX_EXACT_JSON_INTEGER, Operation, RegistryProject, StatisticalPeriodGranularitySource,
-    StatisticalPeriodSource, StatisticalValiditySource,
+    AccessProfileSource, ActorKindSource, DatasetOperation, FieldTypeSource, Operation,
+    RegistryProject, StatisticalPeriodGranularitySource, StatisticalPeriodSource,
+    StatisticalValiditySource, MAX_EXACT_JSON_INTEGER,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
@@ -18,7 +18,7 @@ use crate::model::{
     CompiledStatisticalValidity,
 };
 use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
-use crate::statistics::{DisclosureParameters, PeriodGranularity, period_for_code};
+use crate::statistics::{period_for_code, DisclosureParameters, PeriodGranularity};
 
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
 
@@ -1049,12 +1049,10 @@ fn definition_digest(
                         membership_boundaries: json!(profile.membership_boundaries),
                         required_purposes: json!(profile.required_purposes),
                         require_consent: json!(profile.require_consent),
-                        access_requirement_row_boundaries: json!(
-                            entity
-                                .access_requirements
-                                .as_ref()
-                                .map(|requirements| &requirements.row_boundaries)
-                        ),
+                        access_requirement_row_boundaries: json!(entity
+                            .access_requirements
+                            .as_ref()
+                            .map(|requirements| &requirements.row_boundaries)),
                     })
                 })
                 .collect::<Vec<_>>()

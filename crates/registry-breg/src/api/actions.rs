@@ -6,7 +6,7 @@
 mod tests;
 
 use super::*;
-use crate::data::{FieldValue, validate_field_value};
+use crate::data::{validate_field_value, FieldValue};
 use crate::model::{ActionRouteKind, CompiledAction, CompiledActionRoute};
 
 pub(super) struct AuthorizedActionSurface<'a> {

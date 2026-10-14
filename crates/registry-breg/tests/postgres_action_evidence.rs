@@ -14,7 +14,7 @@ mod real_action_evidence_provider;
 
 use action_evidence_provider::EvidenceProvider;
 use axum::{
-    body::{Body, to_bytes},
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
 use postgres_harness::TestDatabase;
@@ -22,21 +22,21 @@ use registry_breg as breg;
 use registry_breg::{
     action_evidence::ActionEvidenceEvaluator,
     api::{
-        HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
-        router,
+        router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+        VerifiedRequestClaims,
     },
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_yaml},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_yaml, ModuleAssetSource},
     cursor::CursorCodec,
     mutation::MutationFaultPoint,
     postgres::{
+        initialize_compiled_registry_state_for_test, install_compiled_schema,
         ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
         RegistryLockKey, RegistryStateTestIdentity, RuntimePool,
-        initialize_compiled_registry_state_for_test, install_compiled_schema,
     },
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -552,12 +552,10 @@ async fn signed_evidence_actions_release_postgres_and_commit_atomic_transcripts(
         .unwrap();
     for row in retained {
         let retained: Value = row.get(0);
-        assert!(
-            retained["signedResponse"]
-                .as_str()
-                .unwrap()
-                .contains("signature")
-        );
+        assert!(retained["signedResponse"]
+            .as_str()
+            .unwrap()
+            .contains("signature"));
         assert!(retained["verification"].is_object());
         let verification: registry_evidence_client::RetainedEvidenceVerification =
             serde_json::from_value(retained["verification"].clone()).unwrap();

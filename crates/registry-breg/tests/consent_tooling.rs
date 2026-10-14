@@ -7,13 +7,13 @@
 #[path = "support/consent_fixture.rs"]
 mod consent_fixture;
 
-use consent_fixture::{CONSENT_RECORD, compile, self_issued_project, source};
+use consent_fixture::{compile, self_issued_project, source, CONSENT_RECORD};
 use registry_breg::package::CompiledRegistryChangeCode as Code;
 use registry_breg::tooling::{
-    AccessChangeDetail, AccessChangeDirection, ClassifiedRegistryChange, CompiledRegistryDiff,
-    DiffClassification, classify_registry_diff,
+    classify_registry_diff, AccessChangeDetail, AccessChangeDirection, ClassifiedRegistryChange,
+    CompiledRegistryDiff, DiffClassification,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const PACKAGE_REVISION: &str =
     "sha256:1111111111111111111111111111111111111111111111111111111111111111";
@@ -312,12 +312,10 @@ fn widened_action_codes_require_review_while_record_vocabulary_stays_additive() 
         organization.classification,
         DiffClassification::AccessChange
     );
-    assert!(
-        organization
-            .access_details
-            .iter()
-            .all(|d| d.reason.is_none())
-    );
+    assert!(organization
+        .access_details
+        .iter()
+        .all(|d| d.reason.is_none()));
 }
 
 #[test]
@@ -354,7 +352,7 @@ fn food_targeting_scenario(claims: Value) -> Value {
         .unwrap()
         .extend(claims.as_object().unwrap().clone());
     json!({
-        "entity": "person",
+        "recordType": "person",
         "accessProfile": "food-targeting",
         "operation": "get",
         "claims": base,
@@ -400,7 +398,7 @@ fn a_preview_admits_a_gated_profile_and_names_the_client_recipients() {
 fn a_preview_fills_the_recipient_feed_boundary_from_the_requester_client() {
     let feed = |claims: Value| {
         preview(json!({
-            "entity": "consent-decision",
+            "recordType": "consent-decision",
             "accessProfile": "recipient-feed",
             "operation": "list",
             "claims": claims,

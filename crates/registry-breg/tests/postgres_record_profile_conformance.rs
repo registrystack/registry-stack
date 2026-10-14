@@ -15,13 +15,13 @@ mod postgres_harness;
 use axum::body::Body;
 use axum::http::{Method, Response, StatusCode};
 use jsonschema::{Draft, JSONSchema};
-use pilot_acceptance_harness::{PilotHarness, response_bytes, response_json};
+use pilot_acceptance_harness::{response_bytes, response_json, PilotHarness};
 use registry_breg_client::{
     BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey, BRegListRequest, BRegPatchRequest,
     BRegProblemCode, BRegRecordFormat, BRegRecordOptions, BaseRegistryClient,
     BaseRegistryClientConfig, StaticToken,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 const PROFILE_IDENTIFIER: &str = "https://id.registrystack.org/profiles/registry-record/v1";
@@ -149,16 +149,12 @@ async fn real_postgres_registry_record_profile_matches_the_cross_product_semanti
 
     let protected_openapi =
         caller_openapi(&harness, "protected-reader", Some(&protected_reader)).await;
-    assert!(
-        protected_openapi["paths"]
-            .get("/v1/records/protected-units/{record_id}")
-            .is_some()
-    );
-    assert!(
-        protected_openapi["paths"]
-            .get("/v1/records/public-units/{record_id}")
-            .is_none()
-    );
+    assert!(protected_openapi["paths"]
+        .get("/v1/records/protected-units/{record_id}")
+        .is_some());
+    assert!(protected_openapi["paths"]
+        .get("/v1/records/public-units/{record_id}")
+        .is_none());
     let protected_validator = exact_response_validator(
         &protected_openapi,
         "/v1/records/protected-units/{record_id}",
@@ -257,13 +253,11 @@ async fn breg_client_executes_metadata_bound_direct_writes_against_real_postgres
         metadata.value.registry_revision(),
         harness.registry.revision()
     );
-    assert!(
-        metadata
-            .value
-            .operations()
-            .iter()
-            .all(|operation| operation.access_profile() == "asset-operator")
-    );
+    assert!(metadata
+        .value
+        .operations()
+        .iter()
+        .all(|operation| operation.access_profile() == "asset-operator"));
 
     let BRegDirectWrite::Create(create) = metadata
         .value
@@ -570,11 +564,9 @@ async fn exercise_breg_client(
         .expect("the public reader receives its filtered OpenAPI");
     let public_openapi: Value = serde_json::from_slice(public_openapi.value.as_bytes())
         .expect("client preserves strict OpenAPI bytes");
-    assert!(
-        public_openapi["paths"]
-            .get("/v1/records/public-units/{record_id}")
-            .is_some()
-    );
+    assert!(public_openapi["paths"]
+        .get("/v1/records/public-units/{record_id}")
+        .is_some());
     assert!(public_openapi.to_string().find("protected-units").is_none());
 
     let protected_openapi = protected_client
@@ -583,16 +575,12 @@ async fn exercise_breg_client(
         .expect("authorized caller receives its filtered OpenAPI");
     let protected_openapi: Value = serde_json::from_slice(protected_openapi.value.as_bytes())
         .expect("client preserves strict protected OpenAPI bytes");
-    assert!(
-        protected_openapi["paths"]
-            .get("/v1/records/protected-units/{record_id}")
-            .is_some()
-    );
-    assert!(
-        protected_openapi["paths"]
-            .get("/v1/records/public-units/{record_id}")
-            .is_none()
-    );
+    assert!(protected_openapi["paths"]
+        .get("/v1/records/protected-units/{record_id}")
+        .is_some());
+    assert!(protected_openapi["paths"]
+        .get("/v1/records/public-units/{record_id}")
+        .is_none());
 
     let public_options = BRegRecordOptions::default()
         .access_profile("public-reader")
@@ -623,13 +611,11 @@ async fn exercise_breg_client(
         )
         .await
         .expect("public reader client decodes one JSON-LD Registry Record");
-    assert!(
-        public_json_ld
-            .value
-            .json_ld_context
-            .as_ref()
-            .is_some_and(|context| context.is_shared_only())
-    );
+    assert!(public_json_ld
+        .value
+        .json_ld_context
+        .as_ref()
+        .is_some_and(|context| context.is_shared_only()));
 
     let first_page = public_client
         .list_records(
@@ -745,11 +731,9 @@ fn assert_shared_single(document: &Value, gold: &Value, dataset: &Value, json_ld
         document["data"]["domainData"],
         dataset["records"][0]["domainData"]
     );
-    assert!(
-        document["data"]["recordIdentifier"]
-            .as_str()
-            .is_some_and(|identifier| !identifier.is_empty())
-    );
+    assert!(document["data"]["recordIdentifier"]
+        .as_str()
+        .is_some_and(|identifier| !identifier.is_empty()));
     if json_ld {
         assert_eq!(document["@context"], CONTEXT_IDENTIFIER);
     } else {
@@ -815,13 +799,11 @@ async fn assert_concealed_equivalence(
     assert_eq!(unauthorized["code"], "resource.not_found");
     let rendered = unauthorized.to_string();
     assert!(!rendered.contains("protected-units"));
-    assert!(
-        !rendered.contains(
-            protected["records"][0]["domainData"]["label"]
-                .as_str()
-                .unwrap()
-        )
-    );
+    assert!(!rendered.contains(
+        protected["records"][0]["domainData"]["label"]
+            .as_str()
+            .unwrap()
+    ));
 }
 
 async fn json_from_response(response: Response<Body>) -> Value {

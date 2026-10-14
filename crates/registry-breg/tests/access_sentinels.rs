@@ -10,9 +10,9 @@ mod source_bytes;
 
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::{
-    CompileFailure, CompileProfile, CompiledRegistry, compile_project, parse_project_json,
+    compile_project, parse_project_json, CompileFailure, CompileProfile, CompiledRegistry,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn boundary() -> Value {
     json!({"field":"district","claim":"districts","operator":"in"})
@@ -127,18 +127,14 @@ fn required_scopes_is_written_as_unrestricted_or_as_a_list_of_at_least_one_scope
     let project = read(&value).expect("unrestricted is accepted");
     assert!(project.access_profiles[0].required_scopes.is_empty());
     let compiled = compile(&value).expect("the project compiles");
-    assert!(
-        compiled.entities()["entry"].access_profiles["reader"]
-            .required_scopes
-            .is_empty()
-    );
+    assert!(compiled.entities()["entry"].access_profiles["reader"]
+        .required_scopes
+        .is_empty());
 
     let listed = read(&source()).expect("a list of scopes is accepted");
-    assert!(
-        listed.access_profiles[0]
-            .required_scopes
-            .contains("entry:read")
-    );
+    assert!(listed.access_profiles[0]
+        .required_scopes
+        .contains("entry:read"));
 }
 
 #[test]
@@ -194,11 +190,9 @@ fn row_reach_is_written_as_unrestricted_or_as_a_list_of_at_least_one_boundary() 
     };
     assert!(entity.row_boundaries.is_empty());
     assert!(action.targets[0].row_boundaries.is_empty());
-    assert!(
-        permissions.proposals[0].targets[0]
-            .row_boundaries
-            .is_empty()
-    );
+    assert!(permissions.proposals[0].targets[0]
+        .row_boundaries
+        .is_empty());
 }
 
 #[test]
@@ -357,16 +351,12 @@ fn an_unrestricted_profile_beside_a_narrower_one_is_reported_without_changing_au
         "the finding names the narrower profile: {}",
         finding.message
     );
-    assert!(
-        compiled.entities()["entry"].access_profiles["open"]
-            .required_scopes
-            .is_empty()
-    );
-    assert!(
-        compiled.entities()["entry"].access_profiles["reader"]
-            .required_scopes
-            .contains("entry:read")
-    );
+    assert!(compiled.entities()["entry"].access_profiles["open"]
+        .required_scopes
+        .is_empty());
+    assert!(compiled.entities()["entry"].access_profiles["reader"]
+        .required_scopes
+        .contains("entry:read"));
 
     // A profile that requires no scope alone opens no door another profile
     // closed.
@@ -492,11 +482,9 @@ fn an_item_spelled_like_a_wildcard_is_reported_as_one_name() {
             "recordTypes[id=entry].accessRequirements.requiredScopes",
         ]
     );
-    assert!(
-        compiled.entities()["entry"].access_profiles["reader"]
-            .required_scopes
-            .contains("*")
-    );
+    assert!(compiled.entities()["entry"].access_profiles["reader"]
+        .required_scopes
+        .contains("*"));
 }
 
 fn module_profile() -> Value {
@@ -680,11 +668,9 @@ fn a_module_profile_is_reported_by_the_project_profile_findings() {
         .find(|finding| finding.code == "breg.access.profile-subsumes-narrower")
         .unwrap();
     assert!(finding.message.contains("`mod`"), "{}", finding.message);
-    assert!(
-        compiled.entities()["entry"].access_profiles["open"]
-            .required_scopes
-            .is_empty()
-    );
+    assert!(compiled.entities()["entry"].access_profiles["open"]
+        .required_scopes
+        .is_empty());
 
     // An unrestricted module profile beside the project's narrower one.
     let mut alone = module_profile();

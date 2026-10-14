@@ -382,10 +382,6 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             },
             "status": status,
             "code": code.code(),
-            "planRefusal": match code {
-                BRegProblemCode::RequestPlanRefused(value) => Some(value.kind()),
-                _ => None,
-            },
             // Problem detail codes travel as bounded strings after their
             // operation-specific vocabulary has been checked by the Rust client.
             "refusalCode": match code {

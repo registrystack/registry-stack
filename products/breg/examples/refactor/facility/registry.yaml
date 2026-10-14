@@ -145,8 +145,8 @@ actions:
           type: required
           authority: casework
           source: facility-registry
-          # Synthetic example pin. The proving fixture exports the real compiled
-          # PolicyBinding from Casework and supplies that exact binding here.
+          # Synthetic example pin used by the conforming test review authority.
+          # Replace it with an independently compiled policy before deployment.
           policy: {id: facility-address-review, version: '1', digest: 'sha256:dd9b98ab50aff324d6d3e5b4d2413653917fdb18461b9dfad3415966b692acbf'}
         reviewContext:
           id: facility-address-context

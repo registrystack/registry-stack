@@ -83,6 +83,10 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_refactor \
     --test postgres_proposal \
     --test postgres_native_retention \
+    --test postgres_proposal_human_recovery \
+    --test postgres_reviewed_change_example \
+    --test postgres_proposal_hooks \
+    --test postgres_proposal_review_delivery \
     --test postgres_proposal_security \
     --test postgres_proposal_s3 \
     --test postgres_facility_proposal \
@@ -95,7 +99,6 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_immediate_action_examples \
     --test postgres_immediate_action_activation \
     --test postgres_consent_examples \
-    --test postgres_citizen_address_correction \
     --test postgres_registry_extensibility \
     --test postgres_action_handlers \
     --test postgres_field_encryption \

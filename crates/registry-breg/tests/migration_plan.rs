@@ -4,26 +4,26 @@
 
 use std::fs;
 
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::generated_ddl::DdlStatementKind;
 use registry_breg::migration_plan::{
+    read_backup_binding_document, read_migration_descriptor, read_rehearsal_receipt,
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
     RehearsalFixture, RehearsalRowAssertion, ReviewedChangeCover, ReviewedFieldEncryptionHistory,
     ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationError,
     ReviewedMigrationFile, ReviewedMigrationObject, ReviewedMigrationObjectKind,
     ReviewedMigrationRecovery, ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
-    read_backup_binding_document, read_migration_descriptor, read_rehearsal_receipt,
 };
 use registry_breg::package::{
+    compiled_registry_change_set, inspect_package_integrity, prepare_package,
     CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest, PackageError,
     PackageFileRole, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
-    compiled_registry_change_set, inspect_package_integrity, prepare_package,
 };
+use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::package::{
-    PackageLimits as SharedPackageLimits, REVISION_FILE, SUM_FILE, write_sum_file,
+    write_sum_file, PackageLimits as SharedPackageLimits, REVISION_FILE, SUM_FILE,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -71,12 +71,10 @@ fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
     );
     assert!(columns[0].sql.contains(" ADD COLUMN ") && !columns[0].sql.contains("NOT NULL"));
     assert!(columns[1].sql.contains(" ALTER COLUMN ") && columns[1].sql.ends_with(" SET NOT NULL"));
-    assert!(
-        statements
-            .iter()
-            .all(|statement| statement.kind == DdlStatementKind::View
-                || statement.kind == DdlStatementKind::Column)
-    );
+    assert!(statements
+        .iter()
+        .all(|statement| statement.kind == DdlStatementKind::View
+            || statement.kind == DdlStatementKind::Column));
     assert_eq!(
         prepared.manifest().migration_plan.reviewed_descriptors,
         vec!["modules/core/migrations/required-field/descriptor.json"]
@@ -96,13 +94,11 @@ fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
         PackageFileRole::MigrationRehearsalReceipt,
         PackageFileRole::MigrationRehearsalFixture,
     ] {
-        assert!(
-            prepared
-                .manifest()
-                .files
-                .iter()
-                .any(|file| file.role == role)
-        );
+        assert!(prepared
+            .manifest()
+            .files
+            .iter()
+            .any(|file| file.role == role));
     }
 
     let root = tempfile::Builder::new()
@@ -138,13 +134,11 @@ fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
     )
     .expect("destructive plan naming its backup binding prepares");
     let backup_path = "modules/core/migrations/remove-field/backup.json";
-    assert!(
-        !destructive_package
-            .manifest()
-            .files
-            .iter()
-            .any(|file| file.path == backup_path)
-    );
+    assert!(!destructive_package
+        .manifest()
+        .files
+        .iter()
+        .any(|file| file.path == backup_path));
     let destructive_plan = destructive_package
         .reviewed_migration_plan()
         .expect("destructive plan revalidates")
@@ -188,12 +182,10 @@ fn reviewed_package_whose_receipt_carries_the_retired_proofs_is_refused() {
     assert_eq!(diagnostics[0].code, "config.removed-key");
     assert_eq!(diagnostics[0].path, "/proofs");
     assert!(diagnostics[0].suggested_action.contains("Delete `proofs`"));
-    assert!(
-        diagnostics[0]
-            .source
-            .as_ref()
-            .is_some_and(|source| source.line.is_some())
-    );
+    assert!(diagnostics[0]
+        .source
+        .as_ref()
+        .is_some_and(|source| source.line.is_some()));
 }
 
 #[test]
@@ -240,14 +232,12 @@ fn reviewed_migration_documents_refuse_their_previous_spellings_at_each_key() {
     item["sha256"] = sql_digest;
     let report = read_rehearsal_receipt("rehearsal.json", &canonical(&receipt))
         .expect_err("the reader refuses the previous digest item spelling");
-    assert!(
-        report
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "config.removed-key"
-                && diagnostic.path == "/sqlDigests/0/sha256"
-                && diagnostic.suggested_action.contains("`digest`"))
-    );
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "config.removed-key"
+            && diagnostic.path == "/sqlDigests/0/sha256"
+            && diagnostic.suggested_action.contains("`digest`")));
 
     let mut binding = serde_json::json!({
         "apiVersion": registry_breg::migration_plan::BACKUP_BINDING_API_VERSION,
@@ -257,14 +247,12 @@ fn reviewed_migration_documents_refuse_their_previous_spellings_at_each_key() {
     binding["backupFile"] = serde_json::Value::String("/backups/prior.dump".to_owned());
     let report = read_backup_binding_document("binding.json", &canonical(&binding))
         .expect_err("the reader refuses the previous binding spelling");
-    assert!(
-        report
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "config.removed-key"
-                && diagnostic.path == "/databaseId"
-                && diagnostic.suggested_action.contains("`database`"))
-    );
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "config.removed-key"
+            && diagnostic.path == "/databaseId"
+            && diagnostic.suggested_action.contains("`database`")));
 }
 
 /// Every word a descriptor enumerates is written in kebab-case (CFG-NAME-2).
@@ -750,11 +738,9 @@ fn reviewed_encryption_flip_binds_envelope_blind_index_and_views() {
     // reviewed backfill that fills them.
     let envelope_column = statement(statements, "entity.asset.field.secret.column");
     assert_eq!(envelope_column.kind, DdlStatementKind::Column);
-    assert!(
-        envelope_column
-            .sql
-            .contains(&format!("ADD COLUMN \"{envelope}\" bytea"))
-    );
+    assert!(envelope_column
+        .sql
+        .contains(&format!("ADD COLUMN \"{envelope}\" bytea")));
     let blind_column = statement(statements, "entity.asset.field.secret.lookup-column");
     assert_eq!(blind_column.kind, DdlStatementKind::Column);
     assert_eq!(
@@ -765,11 +751,9 @@ fn reviewed_encryption_flip_binds_envelope_blind_index_and_views() {
         )
     );
     // The optional flip field defers nothing: no NOT NULL interlock exists.
-    assert!(
-        statements
-            .iter()
-            .all(|statement| statement.id != "entity.asset.field.secret.column.not-null")
-    );
+    assert!(statements
+        .iter()
+        .all(|statement| statement.id != "entity.asset.field.secret.column.not-null"));
     let lookup_index = statement(statements, "entity.asset.field.secret.lookup-unique");
     assert_eq!(lookup_index.kind, DdlStatementKind::Index);
     assert!(lookup_index.sql.starts_with("CREATE UNIQUE INDEX "));

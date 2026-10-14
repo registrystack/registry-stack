@@ -3,10 +3,10 @@
 use std::collections::BTreeSet;
 
 use jsonschema::{Draft, JSONSchema};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::compiler::{CompileProfile, compile_project};
-use crate::contract::{Operation, parse_project_json};
+use crate::compiler::{compile_project, CompileProfile};
+use crate::contract::{parse_project_json, Operation};
 use crate::model::{CompiledRegistry, HttpMethod};
 
 #[test]
@@ -24,11 +24,9 @@ fn change_context_request_schema_rejects_present_empty_text() {
         .with_draft(Draft::Draft202012)
         .compile(&super::change_context_request_schema())
         .expect("generated ChangeContext request schema compiles");
-    assert!(
-        schema
-            .validate(&json!({"reasonText": "why", "sourceReferences": ["case-1"]}))
-            .is_ok()
-    );
+    assert!(schema
+        .validate(&json!({"reasonText": "why", "sourceReferences": ["case-1"]}))
+        .is_ok());
     assert!(schema.validate(&json!({"reasonText": ""})).is_err());
     assert!(schema.validate(&json!({"sourceReferences": [""]})).is_err());
 }
@@ -254,13 +252,11 @@ fn immediate_action_metadata_and_operation_filter_selected_profile() {
     );
     assert_eq!(metadata["inputMode"], "fixed");
     assert!(metadata["maximumInputStringBytes"].is_null());
-    assert!(
-        metadata["inputs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|input| input["nullable"] == false)
-    );
+    assert!(metadata["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|input| input["nullable"] == false));
     let operation = super::openapi_action_operation(
         route,
         action,
@@ -364,8 +360,8 @@ fn immediate_action_input_and_condition_schemas_are_strict_envelopes() {
 }
 
 fn response_validator(openapi: &Value, path: &str, method: &str, status: &str) -> JSONSchema {
-    let response_schema = &openapi["paths"][path][method]["responses"][status]["content"]["application/json"]
-        ["schema"];
+    let response_schema = &openapi["paths"][path][method]["responses"][status]["content"]
+        ["application/json"]["schema"];
     JSONSchema::options()
         .with_draft(Draft::Draft202012)
         .compile(&json!({

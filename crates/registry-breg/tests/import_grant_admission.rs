@@ -8,15 +8,15 @@ use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::data::{
-    DataError, DataHttpResponse, DataImportCheckpoint, DataImportOperation, DataImportPlan,
-    execute_import_chunk,
+    execute_import_chunk, DataError, DataHttpResponse, DataImportCheckpoint, DataImportOperation,
+    DataImportPlan,
 };
 use registry_breg::generated_ddl::{PolicyCommand, TablePrivilege};
-use serde_json::{Value, json};
+use registry_breg::CompiledRegistry;
+use serde_json::{json, Value};
 
 fn project(loader_operations: &[&str]) -> Value {
     json!({
@@ -174,15 +174,11 @@ fn an_import_grant_inserts_without_a_standing_read() {
         .filter(|policy| policy.command == PolicyCommand::Select)
         .collect::<Vec<_>>();
     assert_eq!(reads.len(), 1, "only the create-returning read: {reads:?}");
-    assert!(
-        reads[0]
-            .using_expression
-            .as_deref()
-            .is_some_and(|expression| expression.contains("registry.created_record_id"))
-    );
-    assert!(
-        loader
-            .iter()
-            .all(|policy| policy.command != PolicyCommand::Update)
-    );
+    assert!(reads[0]
+        .using_expression
+        .as_deref()
+        .is_some_and(|expression| expression.contains("registry.created_record_id")));
+    assert!(loader
+        .iter()
+        .all(|policy| policy.command != PolicyCommand::Update));
 }

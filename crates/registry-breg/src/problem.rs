@@ -40,7 +40,6 @@ pub enum ProblemCode {
     QueryCursorInvalid,
     QueryInvalid,
     RequestInvalid,
-    RequestPlanRefused,
     RequestTimeout,
     ResourceNotFound,
     RuntimeFieldEncryptionUnavailable,
@@ -75,7 +74,6 @@ impl ProblemCode {
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
         Self::RequestInvalid,
-        Self::RequestPlanRefused,
         Self::RequestTimeout,
         Self::ResourceNotFound,
         Self::RuntimeFieldEncryptionUnavailable,
@@ -111,7 +109,6 @@ impl ProblemCode {
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
         Self::RequestInvalid,
-        Self::RequestPlanRefused,
         Self::RequestTimeout,
         Self::ResourceNotFound,
         Self::RuntimeFieldEncryptionUnavailable,
@@ -145,7 +142,6 @@ impl ProblemCode {
             Self::QueryCursorInvalid => "query.cursor_invalid",
             Self::QueryInvalid => "query.invalid",
             Self::RequestInvalid => "request.invalid",
-            Self::RequestPlanRefused => "request.plan_refused",
             Self::RequestTimeout => "request.timeout",
             Self::ResourceNotFound => "resource.not_found",
             Self::RuntimeFieldEncryptionUnavailable => "runtime.field_encryption.unavailable",
@@ -164,10 +160,7 @@ impl ProblemCode {
     #[must_use]
     pub const fn status(self) -> u16 {
         match self {
-            Self::QueryCursorInvalid
-            | Self::QueryInvalid
-            | Self::RequestInvalid
-            | Self::RequestPlanRefused => 400,
+            Self::QueryCursorInvalid | Self::QueryInvalid | Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
             Self::IngestionProfileMismatch => 403,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
@@ -244,9 +237,6 @@ impl ProblemCode {
             Self::QueryCursorInvalid => "The query cursor is invalid.",
             Self::QueryInvalid => "The query request is invalid.",
             Self::RequestInvalid => "The request is invalid.",
-            Self::RequestPlanRefused => {
-                "The change-request planner refused the submission, naming the failure kind."
-            }
             Self::RequestTimeout => "The request timed out.",
             Self::ResourceNotFound => "The requested resource was not found.",
             Self::RuntimeFieldEncryptionUnavailable => {

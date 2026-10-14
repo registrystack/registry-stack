@@ -8,20 +8,19 @@ mod postgres_harness;
 use std::{collections::BTreeSet, fs, os::unix::fs::PermissionsExt as _, time::Duration};
 
 use postgres_harness::TestDatabase;
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::field_encryption_backfill::{
-    FieldEncryptionBackfillPreflightRequest, FieldEncryptionBackfillTimeouts,
-    preflight_field_encryption_backfill,
+    preflight_field_encryption_backfill, FieldEncryptionBackfillPreflightRequest,
+    FieldEncryptionBackfillTimeouts,
 };
 use registry_breg::migration::{
-    ActivationDeployment, ActivationPlan, AppliedFieldEncryptionKeySource, ApplyPrecondition,
-    ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence,
-    MigrationError, PlannedActivation, RecordedRegistryState, ReviewedMigrationFaultPoint,
     apply_verified_package, bind_active_package, plan_verified_package, read_activation_status,
-    read_recorded_registry_state,
+    read_recorded_registry_state, ActivationDeployment, ActivationPlan,
+    AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, PlannedActivation,
+    RecordedRegistryState, ReviewedMigrationFaultPoint,
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
@@ -31,28 +30,29 @@ use registry_breg::migration_plan::{
     ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::migration_reconcile::{
-    ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport, ReconcileRequest,
-    ReconcileTimeouts, UNRESOLVABLE_CATALOG_UNMATCHED, reconcile_failed_migration,
+    reconcile_failed_migration, ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport,
+    ReconcileRequest, ReconcileTimeouts, UNRESOLVABLE_CATALOG_UNMATCHED,
 };
 use registry_breg::package::{
-    CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
-    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile, PreparedPackage, VerifiedPackage, compiled_registry_change_set,
-    load_package, prepare_package,
+    compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
+    CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline, PackageBuildRequest,
+    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+    PreparedPackage, VerifiedPackage,
 };
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, MigrationRehearsalError, PostgresFailure,
-    PostgresKernelError, RehearsalAssertionPhase, RehearsalOutcome, SuccessorMigrationRehearsal,
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
-    verify_catalog_identity_for_catalog,
+    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    MigrationRehearsalError, PostgresFailure, PostgresKernelError, RehearsalAssertionPhase,
+    RehearsalOutcome, SuccessorMigrationRehearsal,
 };
+use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use registry_platform_crypto::field_encryption::ENVELOPE_MEMBER_TAG;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
 const ENVIRONMENT: &str = "local";
@@ -257,8 +257,8 @@ async fn activate_without_access_log_collection(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_and_activation_closed()
- {
+async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_and_activation_closed(
+) {
     let database = TestDatabase::create(1).await;
     let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
     database
@@ -392,11 +392,9 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
 
     let ledger_before_destructive = ledger_snapshot(&database).await;
     assert_eq!(ledger_before_destructive.len(), 2);
-    assert!(
-        ledger_before_destructive
-            .iter()
-            .all(|entry| entry.2 == "applied")
-    );
+    assert!(ledger_before_destructive
+        .iter()
+        .all(|entry| entry.2 == "applied"));
     let immutable_replay = apply(
         &database,
         &required_package,
@@ -433,11 +431,9 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     );
     let view_transition = &destructive_package.manifest().migration_plan.statements;
     assert_eq!(view_transition.len(), 1);
-    assert!(
-        view_transition[0]
-            .sql
-            .starts_with("CREATE VIEW registry_source.")
-    );
+    assert!(view_transition[0]
+        .sql
+        .starts_with("CREATE VIEW registry_source."));
     assert!(!view_transition[0].sql.contains("CASCADE"));
     let backup_root = tempfile::Builder::new()
         .prefix("registry-backup-canary-")
@@ -710,12 +706,10 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     assert_ready_target(&database, &destructive_active).await;
     assert_legacy_column_absent(&database, &required).await;
     assert_eq!(ledger_snapshot(&database).await.len(), 3);
-    assert!(
-        ledger_snapshot(&database)
-            .await
-            .iter()
-            .all(|entry| entry.2 == "applied")
-    );
+    assert!(ledger_snapshot(&database)
+        .await
+        .iter()
+        .all(|entry| entry.2 == "applied"));
     // The destructive activation records the backup the applying attempt was
     // bound to, as the binding described it, so the ledger names what a
     // restore would use.
@@ -1063,8 +1057,8 @@ async fn real_postgres_reconciliation_completes_reverts_or_refuses_a_pinned_targ
 /// entry leaves the pinned target, the ledger, and the journal as they were,
 /// and a later writer can still revert the same target.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_reconciliation_changes_nothing_when_the_audit_writer_refuses_its_request_entry()
- {
+async fn real_postgres_reconciliation_changes_nothing_when_the_audit_writer_refuses_its_request_entry(
+) {
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -1826,11 +1820,9 @@ async fn real_postgres_a_resumed_activation_keeps_its_roles_and_records_its_oper
             runtime_role: database.runtime_role.as_str().to_owned(),
         }
     );
-    assert!(
-        other_roles
-            .to_string()
-            .contains("rerun the apply with the database roles it started with")
-    );
+    assert!(other_roles
+        .to_string()
+        .contains("rerun the apply with the database roles it started with"));
 
     let resumed = apply_verified_package(
         request(
@@ -2215,8 +2207,8 @@ async fn real_postgres_a_failed_role_change_activation_keeps_the_serving_runtime
 /// role it would have served with no grant, so the registry keeps the exact
 /// catalog its serving roles verify.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_a_role_change_refused_before_maintenance_grants_the_new_runtime_role_nothing()
- {
+async fn real_postgres_a_role_change_refused_before_maintenance_grants_the_new_runtime_role_nothing(
+) {
     let (database, package) = initial_package_database().await;
     let single = apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.migration_config,
@@ -2372,11 +2364,9 @@ async fn real_postgres_a_successor_with_other_roles_is_refused_before_maintenanc
             runtime_role: database.runtime_role.as_str().to_owned(),
         }
     );
-    assert!(
-        refused
-            .to_string()
-            .contains("apply the active package with the new roles first")
-    );
+    assert!(refused
+        .to_string()
+        .contains("apply the active package with the new roles first"));
     let activations: i64 = database
         .admin
         .query_one(

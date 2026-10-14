@@ -214,30 +214,24 @@ mod tests {
     #[test]
     fn an_action_declaring_no_evidence_activates_no_evaluator_and_extra_bindings_fail_closed() {
         let compiled = super::evidence_fixture::registry(false);
-        assert!(
-            compiled
-                .actions()
-                .actions
-                .iter()
-                .any(|action| action.handler.is_some())
-        );
-        assert!(
-            compiled
-                .actions()
-                .actions
-                .iter()
-                .all(|action| action.evidence.is_empty() && action.commit_evidence.is_empty())
-        );
+        assert!(compiled
+            .actions()
+            .actions
+            .iter()
+            .any(|action| action.handler.is_some()));
+        assert!(compiled
+            .actions()
+            .actions
+            .iter()
+            .all(|action| action.evidence.is_empty() && action.commit_evidence.is_empty()));
         let secrets = SecretResolver::new(
             [registry_platform_config::SecretProvider::File],
             "/private/tmp",
         )
         .unwrap();
-        assert!(
-            activate(&compiled, &BTreeMap::new(), &secrets)
-                .unwrap()
-                .is_none()
-        );
+        assert!(activate(&compiled, &BTreeMap::new(), &secrets)
+            .unwrap()
+            .is_none());
         let binding = EvidenceProviderConfig {
             base_url: Url::new("https://invalid.example").unwrap(),
             trust_binding_id: "unused".into(),
@@ -339,24 +333,20 @@ mod tests {
     #[test]
     fn proposal_commit_guards_require_activation_without_plan_evidence() {
         let compiled = super::evidence_fixture::registry(true);
-        assert!(
-            compiled
-                .actions()
-                .actions
-                .iter()
-                .all(|action| action.evidence.is_empty())
-        );
-        assert!(
-            compiled
-                .actions()
-                .actions
-                .iter()
-                .any(|action| !action.commit_evidence.is_empty()
-                    && matches!(
-                        action.execution,
-                        crate::model::CompiledActionExecution::Proposal { .. }
-                    ))
-        );
+        assert!(compiled
+            .actions()
+            .actions
+            .iter()
+            .all(|action| action.evidence.is_empty()));
+        assert!(compiled
+            .actions()
+            .actions
+            .iter()
+            .any(|action| !action.commit_evidence.is_empty()
+                && matches!(
+                    action.execution,
+                    crate::model::CompiledActionExecution::Proposal { .. }
+                )));
         assert_eq!(
             required_provider_ids(&compiled),
             BTreeSet::from(["farmer-registry".to_owned()])
@@ -415,14 +405,12 @@ mod tests {
             trusted_jwks_ref: SecretReference::parse("secret:file/jwks").unwrap(),
             ..binding
         };
-        assert!(
-            activate(
-                &compiled,
-                &BTreeMap::from([("farmer-registry".into(), binding)]),
-                &secrets
-            )
-            .unwrap()
-            .is_some()
-        );
+        assert!(activate(
+            &compiled,
+            &BTreeMap::from([("farmer-registry".into(), binding)]),
+            &secrets
+        )
+        .unwrap()
+        .is_some());
     }
 }

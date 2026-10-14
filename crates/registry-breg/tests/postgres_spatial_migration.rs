@@ -9,12 +9,11 @@ mod postgres_harness;
 use std::{fs, os::unix::fs::PermissionsExt as _, path::PathBuf, time::Duration};
 
 use postgres_harness::TestDatabase;
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::migration::{
-    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, apply_verified_package,
+    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ExternalBackupBinding, MigrationRehearsalReceipt, RehearsalFixture,
@@ -23,22 +22,23 @@ use registry_breg::migration_plan::{
     ReviewedMigrationRecovery, ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
-    CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest,
-    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
-    VerifiedPackage, compiled_registry_change_set, load_package, prepare_package,
+    compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
+    CompiledRegistryChangeCode, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
+    PackageModuleSource, PackageSourceFile, VerifiedPackage,
 };
 use registry_breg::postgres::{
+    begin_record_transaction, install_compiled_schema, managed_schema_fingerprint,
+    provision_postgis_prerequisites, verify_catalog_identity_for_catalog, verify_postgis,
     ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresFailure,
-    RegistryLockKey, SqlIdentifier, begin_record_transaction, install_compiled_schema,
-    managed_schema_fingerprint, provision_postgis_prerequisites,
-    verify_catalog_identity_for_catalog, verify_postgis,
+    RegistryLockKey, SqlIdentifier,
 };
-use registry_breg::startup::{StartupError, prepare_startup};
+use registry_breg::startup::{prepare_startup, StartupError};
+use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
@@ -115,26 +115,22 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
         .expect("reviewed bbox successor package prepares"),
         local_context(),
     );
-    assert!(
-        spatial_package
-            .verified
-            .manifest()
-            .migration_plan
-            .statements
-            .iter()
-            .any(|statement| statement
-                .sql
-                .contains("registry_spatial_ext.geometry(Point,4326)"))
-    );
-    assert!(
-        spatial_package
-            .verified
-            .manifest()
-            .migration_plan
-            .statements
-            .iter()
-            .any(|statement| statement.sql.contains("USING gist"))
-    );
+    assert!(spatial_package
+        .verified
+        .manifest()
+        .migration_plan
+        .statements
+        .iter()
+        .any(|statement| statement
+            .sql
+            .contains("registry_spatial_ext.geometry(Point,4326)")));
+    assert!(spatial_package
+        .verified
+        .manifest()
+        .migration_plan
+        .statements
+        .iter()
+        .any(|statement| statement.sql.contains("USING gist")));
 
     let missing_postgis = apply(
         &database,
@@ -498,7 +494,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         r#",{"id":"legacy","type":"string","maximumLength":16,"classification":"internal"}"#
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maximumLength":16,"required":true,"classification":"internal"}},{{"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}}{legacy}],"geojson":{{"geometryField":"location"}},"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code","location"],"writableFields":["code","location"]{spatial_queries}}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maximumLength":16,"required":true,"classification":"internal"}},{{"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}}{legacy}],"geojson":{{"geometryField":"location"}},"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code","location"],"writableFields":["code","location"]{spatial_queries}}}]}}]}}"#
     )
     .into_bytes()
 }

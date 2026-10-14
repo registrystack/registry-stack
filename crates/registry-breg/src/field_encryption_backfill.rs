@@ -30,16 +30,16 @@ use zeroize::Zeroizing;
 use crate::audit::RegistryAudit;
 use crate::history_commit::lock_history_head;
 use crate::history_erasure::{
-    HistoryErasureError, HistoryErasureRequest, MAX_ERASURE_REVISIONS, RecordHistoryErasureTarget,
-    erase_record_history_for_lifecycle,
+    erase_record_history_for_lifecycle, HistoryErasureError, HistoryErasureRequest,
+    RecordHistoryErasureTarget, MAX_ERASURE_REVISIONS,
 };
 use crate::history_maintenance::{
-    HistoryMaintenanceTimeouts, append_maintenance_entries, begin_maintenance_request,
-    lock_registry, profile_is_keyed, set_local_timeouts, verify_ready_identity,
+    append_maintenance_entries, begin_maintenance_request, lock_registry, profile_is_keyed,
+    set_local_timeouts, verify_ready_identity, HistoryMaintenanceTimeouts,
 };
 use crate::history_rebaseline::{
-    HistoryRebaselineError, HistoryRebaselineOutcome, HistoryRebaselineRequest,
-    history_rebaseline_entry, rebaseline_history_coverage_in_transaction,
+    history_rebaseline_entry, rebaseline_history_coverage_in_transaction, HistoryRebaselineError,
+    HistoryRebaselineOutcome, HistoryRebaselineRequest,
 };
 use crate::migration_plan::{
     ReviewedFieldEncryptionHistory, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
@@ -47,11 +47,10 @@ use crate::migration_plan::{
 use crate::model::CompiledRegistry;
 use crate::package::CompiledRegistryMigrationBaseline;
 use crate::postgres::{
-    ConnectionConfig, ExpectedRegistryIdentity, FieldEncryptionCoveredField, RegistryLockKey,
-    SqlIdentifier, covered_field_encryption_fields, field_plaintext_string,
-    prepare_unique_blind_index_preflight, prior_plaintext_projection,
-    record_unique_blind_index_page, recursive_member_path, set_force_row_security,
-    verify_migration_role,
+    covered_field_encryption_fields, field_plaintext_string, prepare_unique_blind_index_preflight,
+    prior_plaintext_projection, record_unique_blind_index_page, recursive_member_path,
+    set_force_row_security, verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity,
+    FieldEncryptionCoveredField, RegistryLockKey, SqlIdentifier,
 };
 
 pub use crate::history_maintenance::HistoryMaintenanceTimeouts as FieldEncryptionBackfillTimeouts;

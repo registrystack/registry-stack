@@ -22,8 +22,8 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Instant;
 
 use registry_platform_script::wasm::{
-    Backend, Budgets, DEFAULT_INTERVAL, EpochTicker, Executor, InvokeError, PreparedModule,
-    TickerSpawnError,
+    Backend, Budgets, EpochTicker, Executor, InvokeError, PreparedModule, TickerSpawnError,
+    DEFAULT_INTERVAL,
 };
 use serde_json::{Map as JsonMap, Value};
 

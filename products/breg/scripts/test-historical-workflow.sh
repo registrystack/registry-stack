@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/../../.." && pwd)
 . "$repository_root/scripts/cargo-runtime-library-path.sh"
-fixture="$repository_root/products/breg/acceptance/household-history"
+fixture="$repository_root/crates/registry-breg/tests/fixtures/native-models/products/breg/acceptance/household-history"
 temporary_root=""
 breg_pid=""
 history_tls_ca_pem_path=""
@@ -928,15 +928,19 @@ checkpoint "v1 restart preserved snapshot bookmark"
 
 cp -R "$fixture" "$temporary_root/project-v2"
 python3 - "$temporary_root/project-v2/registry.yaml" <<'PY'
+import json
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
-source = path.read_text(encoding="utf-8")
-needle = "      - {id: source-reference, type: string, required: false, maximumLength: 120, classification: internal}\n"
-replacement = needle + "      - {id: review-note, type: string, required: false, maximumLength: 120, classification: internal}\n"
-if needle not in source:
-    raise SystemExit("membership field insertion point was not found")
-path.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+source = json.loads(path.read_text(encoding="utf-8"))
+record_type = next(item for item in source["recordTypes"] if item["id"] == "membership-record")
+if any(field["id"] == "review-note" for field in record_type["fields"]):
+    raise SystemExit("membership successor field already exists")
+record_type["fields"].append({
+    "id": "review-note", "type": "string", "required": False,
+    "maximumLength": 120, "classification": "internal",
+})
+path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
 PY
 render_runtime_config "$temporary_root/runtime-test-v2.yaml" "$temporary_root/build-v1/package" \
   "secret:file/schema-test-v2-runtime-url" \
@@ -981,14 +985,17 @@ checkpoint "v2 post-upgrade write produced a queryable new snapshot"
 
 cp -R "$temporary_root/project-v2" "$temporary_root/project-v3"
 python3 - "$temporary_root/project-v3/registry.yaml" <<'PY'
+import json
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
-source = path.read_text(encoding="utf-8")
-old = "operations: [list, snapshot]"
-if old not in source:
-    raise SystemExit("consumer snapshot grant was not found")
-path.write_text(source.replace(old, "operations: [list]", 1), encoding="utf-8")
+source = json.loads(path.read_text(encoding="utf-8"))
+profile = next(item for item in source["accessProfiles"] if item["id"] == "eligibility-consumer")
+permission = next(item for item in profile["permissions"]["records"] if item["recordType"] == "membership-record")
+if permission["operations"] != ["list", "snapshot"]:
+    raise SystemExit("consumer snapshot grant was not the expected predecessor")
+permission["operations"].remove("snapshot")
+path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
 PY
 render_runtime_config "$temporary_root/runtime-test-v3.yaml" "$temporary_root/build-v2/package" \
   "secret:file/schema-test-v3-runtime-url" \

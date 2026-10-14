@@ -4,11 +4,11 @@
 )]
 // SPDX-License-Identifier: Apache-2.0
 use registry_breg::{
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_json},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_json, ModuleAssetSource},
     model::CompiledRegistry,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 fn project() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
@@ -74,11 +74,9 @@ fn offline_contract_is_exact_and_fingerprinted() {
             .actions()
             .actions[0]
     );
-    assert!(
-        action.evidence[0]
-            .contract_fingerprint
-            .starts_with("sha256:")
-    );
+    assert!(action.evidence[0]
+        .contract_fingerprint
+        .starts_with("sha256:"));
     assert_eq!(
         action.evidence[0].definition.subjects[0]
             .selector
@@ -190,11 +188,9 @@ fn the_evidence_declaration_selects_the_capability_under_the_one_handler_abi() {
         "registry.action-plan/v1"
     );
     assert_eq!(action.evidence.len(), 1);
-    assert!(
-        compile(project(), None).unwrap().actions().actions[0]
-            .evidence
-            .is_empty()
-    );
+    assert!(compile(project(), None).unwrap().actions().actions[0]
+        .evidence
+        .is_empty());
 }
 #[test]
 fn the_retired_evidence_abi_is_refused_where_it_is_declared() {
@@ -230,8 +226,8 @@ fn contract_paths_are_confined() {
 #[test]
 fn imported_contract_is_sealed_and_rederived() {
     use registry_breg::package::{
-        PackageBuildRequest, PackageMigrationPlanInput, PackageSourceFile,
-        inspect_package_integrity, prepare_package_with_project_assets,
+        inspect_package_integrity, prepare_package_with_project_assets, PackageBuildRequest,
+        PackageMigrationPlanInput, PackageSourceFile,
     };
     let mut source = configured();
     source["package"] = json!({"sourceRevision":"compiler-source-revision"});

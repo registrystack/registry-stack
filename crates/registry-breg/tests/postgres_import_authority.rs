@@ -15,31 +15,30 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
-use registry_breg::CompiledRegistry;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::import_authority::{
-    DEFAULT_IMPORT_AUTHORITY_WINDOW, ImportAuthority, ImportAuthorityCloseRequest,
-    ImportAuthorityError, ImportAuthorityOpenRequest, ImportAuthorityOperatorService,
-    ImportAuthorityStatus,
+    ImportAuthority, ImportAuthorityCloseRequest, ImportAuthorityError, ImportAuthorityOpenRequest,
+    ImportAuthorityOperatorService, ImportAuthorityStatus, DEFAULT_IMPORT_AUTHORITY_WINDOW,
 };
 use registry_breg::instance_claim::{InstanceClaimError, InstanceClaimService};
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
-    PostgresRecordReadService, RegistryLockKey, RegistryStateTestIdentity,
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
+    RegistryLockKey, RegistryStateTestIdentity,
 };
+use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use uuid::Uuid;
@@ -931,14 +930,12 @@ async fn close_expired_records_every_due_transition_once() {
     assert_eq!(moved.len(), 1);
     assert_eq!(moved[0].authority_id, widget.authority_id);
     assert_eq!(moved[0].status, ImportAuthorityStatus::Expired);
-    assert!(
-        harness
-            .operator()
-            .close_expired()
-            .await
-            .expect("a second sweep")
-            .is_empty()
-    );
+    assert!(harness
+        .operator()
+        .close_expired()
+        .await
+        .expect("a second sweep")
+        .is_empty());
     let listed = harness.operator().list().await.expect("list answers");
     assert_eq!(listed.len(), 2);
     let status = |id: Uuid| {
@@ -1192,11 +1189,9 @@ async fn every_chunk_counts_against_the_authority_until_it_is_exhausted() {
         .filter(|record| record["outcome"] == "committed")
         .collect::<Vec<_>>();
     assert_eq!(committed.len(), 2);
-    assert!(
-        committed
-            .iter()
-            .all(|record| record["importAuthorityId"] == authority.authority_id.to_string())
-    );
+    assert!(committed
+        .iter()
+        .all(|record| record["importAuthorityId"] == authority.authority_id.to_string()));
     harness
         .refused_run("widgets", "loader", &plan("after-exhaustion", 1))
         .await;

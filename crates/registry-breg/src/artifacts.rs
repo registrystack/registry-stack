@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::contract::{
@@ -21,8 +21,8 @@ use crate::model::{
     CompiledQueryTemporalValueKind, CompiledRecipients, CompiledRevisionKind, CompiledRoute,
     CompiledRouteInventory, CompiledStatisticalDataset, HttpMethod,
 };
-use crate::physical_names::{PhysicalNameInventory, hex_prefix};
-use crate::record_profile::{CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER, link_header_value};
+use crate::physical_names::{hex_prefix, PhysicalNameInventory};
+use crate::record_profile::{link_header_value, CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER};
 
 #[path = "project_sdk.rs"]
 mod project_sdk;
@@ -175,8 +175,17 @@ pub(crate) fn generate_artifacts(
         schemas.insert(entity.id.clone(), schema);
     }
     for delivery in &event_deliveries.deliveries {
+        let crate::model::CompiledEventOwner::RecordType { record_type, .. } = &delivery.owner
+        else {
+            insert_json_value(
+                &mut artifacts,
+                crate::proposal_hooks::PROPOSAL_EVENT_SCHEMA_PATH,
+                &crate::proposal_hooks::proposal_event_schema(),
+            )?;
+            continue;
+        };
         let entity = entities
-            .get(&delivery.entity_id)
+            .get(record_type)
             .expect("compiled event delivery refers to a compiled entity");
         let event = entity
             .hooks
@@ -377,7 +386,7 @@ fn entity_schema(entity: &CompiledEntity) -> Value {
 
     let mut schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("urn:breg:entity:{}", entity.id),
+        "$id": format!("urn:breg:record-type:{}", entity.id),
         "type": "object",
         "additionalProperties": false,
         "properties": properties,
@@ -421,7 +430,7 @@ pub(crate) fn openapi_entity_input_schema(
     }
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("urn:breg:entity:{}:input", entity.id),
+        "$id": format!("urn:breg:record-type:{}:input", entity.id),
         "type": "object",
         "additionalProperties": false,
         "properties": properties,
@@ -885,6 +894,7 @@ pub fn proposal_schema() -> Value {
         "title":{"type":"string","maxLength":1024},
         "input":{"type":"object"},
         "application":proposal_application_schema(),
+        "applicationStatus":proposal_application_status_schema(),
         "blockedReason":{"enum":["package-changed"]},"effectDigest":{"type":"string"},
         "attachments":{"type":"object","maxProperties":8,"additionalProperties":proposal_attachment_schema()},
         "links":{"type":"object","additionalProperties":{
@@ -894,6 +904,21 @@ pub fn proposal_schema() -> Value {
                 "accessProfile":{"type":"string"},"operation":{"type":"string"},
                 "ifMatch":{"type":"string"},"availability":availability_schema()}
         }}
+    }})
+}
+
+fn proposal_application_status_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["state","mode"],
+    "properties":{
+        "state":{"enum":["pending","applying","blocked","applied","cancelled"]},
+        "mode":{"enum":["automatic","manual"]},
+        "reason":{"enum":["contract-changed","dependency-outage","lease-expired","application-refused","attempts-exhausted"]},
+        "recovery":{"enum":["refresh","retry","correct-input","terminal","receipt-only"]},
+        "automaticRetry":{"type":"object","additionalProperties":false,
+            "required":["scheduled","attempts","maximumAttempts"],"properties":{
+                "scheduled":{"type":"boolean"},"attempts":{"type":"integer","minimum":0,"maximum":1000},
+                "maximumAttempts":{"type":"integer","minimum":1,"maximum":1000}
+            }}
     }})
 }
 
@@ -912,7 +937,7 @@ fn proposal_attachment_schema() -> Value {
         "required":["submissionVersion","sha256","contentType","byteSize","verificationStatus"],
         "properties":{"submissionVersion":{"type":"integer","minimum":0},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
             "contentType":{"type":"string"},"byteSize":{"type":"integer","minimum":1},
-            "uploadedAt":{"type":"string"},"uploadedBy":{"type":"string"},
+            "uploadedAt":{"type":"string"},
             "verificationStatus":{"enum":["notRequired","pending","approved","rejected"]}}});
     let link = json!({"type":"object","additionalProperties":false,
         "required":["method","path","accessProfile","operation"],
@@ -1566,7 +1591,7 @@ pub(crate) fn openapi_access_log_operation(
             "operationId".to_owned(),
             json!(format!("{}.access-log", route.id)),
         ),
-        ("x-registry-entity".to_owned(), json!(entity.id)),
+        ("x-registry-recordType".to_owned(), json!(entity.id)),
         ("x-registry-operation".to_owned(), json!("access_log")),
         (
             "x-registry-responseShape".to_owned(),
@@ -1809,9 +1834,12 @@ pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
     let geojson_profiles = geojson_profiles(spec);
     let mut operation = Map::from_iter([
         ("operationId".to_owned(), json!(spec.route.id)),
-        ("x-registry-entity".to_owned(), json!(spec.route.entity_id)),
         (
-            "x-registry-responseEntity".to_owned(),
+            "x-registry-recordType".to_owned(),
+            json!(spec.route.entity_id),
+        ),
+        (
+            "x-registry-responseRecordType".to_owned(),
             json!(spec.response_entity.id),
         ),
         (
@@ -2633,7 +2661,7 @@ fn registry_record_success_response(
     let mut response = success_response(description, headers, json_schema);
     response["content"]["application/ld+json"] = json!({"schema": json_ld_schema});
     response["headers"]["Link"] = json!({
-        "description": "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers.",
+        "description": "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible record type schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers.",
         "schema": {
             "type": "string",
             "example": link_header_value(spec.response_entity, "")
@@ -3343,7 +3371,7 @@ fn problem_schema() -> Value {
                 "type": "string",
                 "enum": ["computation-error", "source-data-error", "disclosure-risk"]
             },
-            "entityId": {"type": "string", "minLength": 1, "maxLength": 128},
+            "recordType": {"type": "string", "minLength": 1, "maxLength": 128},
             "fieldId": {"type": "string", "minLength": 1, "maxLength": 128},
             "code": {
                 "type": "string",
@@ -3401,9 +3429,9 @@ fn problem_schema() -> Value {
                 "then": {"properties": {"status": {"const": 500}}}
             },
             {
-                "if": {"anyOf": [{"required": ["entityId"]}, {"required": ["fieldId"]}]},
+                "if": {"anyOf": [{"required": ["recordType"]}, {"required": ["fieldId"]}]},
                 "then": {
-                    "required": ["entityId", "fieldId"],
+                    "required": ["recordType", "fieldId"],
                     "properties": {"code": {"const": "mutation.conflict"}, "status": {"const": 409}}
                 }
             }
@@ -3935,7 +3963,7 @@ mod problem_contract_tests {
             .unwrap();
         let mut problem = problem_example("409", "mutation.conflict", "The write was refused.");
         assert!(validator.is_valid(&problem));
-        problem["entityId"] = json!("person");
+        problem["recordType"] = json!("person");
         assert!(!validator.is_valid(&problem));
         problem["fieldId"] = json!("identifier");
         assert!(validator.is_valid(&problem));
@@ -3953,7 +3981,7 @@ mod problem_contract_tests {
 #[cfg(test)]
 mod spatial_tests {
     use super::*;
-    use crate::compiler::{CompileProfile, compile_project};
+    use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::parse_project_json;
     use crate::model::CompiledRegistry;
 
@@ -4006,13 +4034,11 @@ mod spatial_tests {
     fn selected_profile_controls_bbox_and_geojson_advertisement() {
         let registry = registry();
         let map = operation(&registry, Operation::List, "map");
-        assert!(
-            map["parameters"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["name"] == "bbox")
-        );
+        assert!(map["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "bbox"));
         assert_eq!(
             map["x-registry-queryProfile"]["spatialQueries"]["bbox"]["geometryProperty"],
             "position"
@@ -4034,14 +4060,12 @@ mod spatial_tests {
             map["x-registry-responseProfile"], PROFILE_IDENTIFIER,
             "the stable profile marker governs only the JSON and JSON-LD shapes in the media map"
         );
-        let feature = &map["responses"]["200"]["content"]["application/geo+json"]["schema"]["properties"]
-            ["features"]["items"];
+        let feature = &map["responses"]["200"]["content"]["application/geo+json"]["schema"]
+            ["properties"]["features"]["items"];
         assert!(feature["properties"]["properties"]["properties"]["code"].is_object());
-        assert!(
-            feature["properties"]["properties"]["properties"]
-                .get("position")
-                .is_none()
-        );
+        assert!(feature["properties"]["properties"]["properties"]
+            .get("position")
+            .is_none());
         assert_eq!(
             feature["properties"]["geometry"]["anyOf"][1]["type"],
             "null"
@@ -4051,12 +4075,10 @@ mod spatial_tests {
             json!(["revision"])
         );
         let collection = &map["responses"]["200"]["content"]["application/geo+json"]["schema"];
-        assert!(
-            collection["required"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("numberReturned"))
-        );
+        assert!(collection["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("numberReturned")));
         assert_eq!(
             collection["properties"]["numberReturned"],
             json!({"type": "integer", "minimum": 0})
@@ -4074,18 +4096,14 @@ mod spatial_tests {
         );
 
         let plain = operation(&registry, Operation::List, "plain");
-        assert!(
-            !plain["parameters"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["name"] == "bbox")
-        );
-        assert!(
-            plain["responses"]["200"]["content"]
-                .get("application/geo+json")
-                .is_none()
-        );
+        assert!(!plain["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "bbox"));
+        assert!(plain["responses"]["200"]["content"]
+            .get("application/geo+json")
+            .is_none());
         assert_eq!(
             plain["x-registry-responseShape"],
             "RegistryRecordCollectionV1"
@@ -4093,11 +4111,9 @@ mod spatial_tests {
         assert_eq!(plain["x-registry-responseProfile"], PROFILE_IDENTIFIER);
         assert!(plain.get("x-registry-responseShapes").is_none());
         assert!(plain.get("x-registry-geojsonProfiles").is_none());
-        assert!(
-            plain["x-registry-queryProfile"]
-                .get("spatialQueries")
-                .is_none()
-        );
+        assert!(plain["x-registry-queryProfile"]
+            .get("spatialQueries")
+            .is_none());
     }
 
     #[test]
@@ -4117,13 +4133,11 @@ mod spatial_tests {
         let schema = &content["application/geo+json"]["schema"];
         assert_eq!(schema["properties"]["type"]["const"], "Feature");
         assert_eq!(schema["properties"]["properties"]["properties"], json!({}));
-        assert!(
-            !get["parameters"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["name"] == "bbox")
-        );
+        assert!(!get["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "bbox"));
     }
 }
 
@@ -4143,6 +4157,9 @@ mod attachment_tests {
         value["value"]["verificationStatus"] = json!("unknown");
         assert!(!validator.is_valid(&value));
         value["value"]["verificationStatus"] = json!("approved");
+        value["value"]["uploadedBy"] = json!("private-actor-reference");
+        assert!(!validator.is_valid(&value));
+        value["value"].as_object_mut().unwrap().remove("uploadedBy");
         value["value"]["legacyRecordProjection"] = json!(true);
         assert!(!validator.is_valid(&value));
     }
