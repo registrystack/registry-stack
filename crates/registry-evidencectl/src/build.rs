@@ -231,8 +231,10 @@ pub(crate) fn local_dev_target_inputs(target: &Path) -> Result<(Value, Value)> {
         registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?.value;
     if target
         .assurance_profile
-        .as_deref()
-        .is_some_and(|profile| profile != "local")
+        .is_some_and(|profile| {
+            profile
+                != registry_evidence_authoring::target::TargetAssuranceProfile::Local
+        })
     {
         bail!("dev requires a local target");
     }

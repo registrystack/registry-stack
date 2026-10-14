@@ -73,9 +73,17 @@ pub struct TargetPackage {
 pub struct TargetService {
     pub provider_id: String,
     pub issuer: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub public_origin: Option<Url>,
+    pub public_origin: Url,
     pub trust_domain: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum TargetAssuranceProfile {
+    Local,
+    Production,
+    EvidenceGrade,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]

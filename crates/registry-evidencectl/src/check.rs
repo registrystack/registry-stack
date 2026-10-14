@@ -24,8 +24,11 @@ pub(crate) fn check(
             registry_evidence_authoring::target::read_target(&target.to_string_lossy(), &bytes)?
                 .value;
         if !matches!(
-            target.assurance_profile.as_deref(),
-            Some("production" | "evidence-grade")
+            target.assurance_profile,
+            Some(
+                registry_evidence_authoring::target::TargetAssuranceProfile::Production
+                    | registry_evidence_authoring::target::TargetAssuranceProfile::EvidenceGrade
+            )
         ) {
             anyhow::bail!("--production requires production or evidence-grade target assurance");
         }
@@ -84,7 +87,7 @@ pub(crate) fn check(
     Ok(checked)
 }
 
-fn refuses_warnings(diagnostics: &Report, deny_warnings: bool) -> bool {
+pub(crate) fn refuses_warnings(diagnostics: &Report, deny_warnings: bool) -> bool {
     deny_warnings && diagnostics.warning_count() > 0
 }
 pub(crate) fn explain(project: &Path, target: Option<&Path>) -> Result<Checked> {

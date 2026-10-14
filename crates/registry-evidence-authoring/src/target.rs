@@ -116,7 +116,7 @@ pub struct EvidenceTarget {
     pub audit: TargetAudit,
     pub rate_limits: TargetRateLimits,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assurance_profile: Option<String>,
+    pub assurance_profile: Option<TargetAssuranceProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publication: Option<TargetPublication>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

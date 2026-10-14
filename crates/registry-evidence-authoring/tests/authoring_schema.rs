@@ -359,6 +359,24 @@ fn schema(file: &str) -> JSONSchema {
     compile(&documents().expect("the schemas generate")[file])
 }
 
+fn project_with_boolean_outputs(count: usize) -> Value {
+    let mut document = yaml_as_json(NORMALIZED_PROJECT);
+    let outputs = document["assertionDefinitions"]["adult-status"]["outputs"]
+        .as_object_mut()
+        .expect("the normalized project declares outputs");
+    outputs.clear();
+    for index in 1..=count {
+        outputs.insert(
+            format!("output-{index}"),
+            serde_json::json!({
+                "concept": format!("urn:example:concept:output-{index}"),
+                "type": "boolean"
+            }),
+        );
+    }
+    document
+}
+
 #[test]
 fn the_generated_set_is_exactly_the_normalized_authored_documents() {
     let documents = documents().expect("the authoring schemas generate");
@@ -500,6 +518,48 @@ fn canonical_project_target_and_authority_satisfy_schema_and_reader() {
         &project,
     )
     .expect("the authority reads");
+}
+
+#[test]
+fn target_service_requires_the_runtime_public_origin() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["service"]
+        .as_object_mut()
+        .expect("the normalized target declares a service")
+        .remove("publicOrigin");
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+
+    let report = target::read_target(
+        "local-target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("a target without the runtime's public origin is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("`publicOrigin`"))
+        .expect("the missing public origin is diagnosed");
+    assert_eq!(diagnostic.code, "config.missing-key");
+    assert_eq!(diagnostic.path, "/service");
+}
+
+#[test]
+fn target_assurance_profile_is_the_runtime_closed_vocabulary() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["assuranceProfile"] = serde_json::json!("high-assurance");
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+
+    let report = target::read_target(
+        "local-target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("an unknown runtime assurance profile is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.path == "/assuranceProfile")
+        .expect("the unknown assurance profile has an exact path");
+    assert_eq!(diagnostic.code, "config.unknown-variant");
 }
 
 #[test]
@@ -711,6 +771,34 @@ fn a_definition_cannot_declare_an_empty_output_set() {
     assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&document));
     let bytes = serde_json::to_vec(&document).expect("the project renders");
     assert!(project::read_project("evidence.yaml", &bytes).is_err());
+}
+
+#[test]
+fn project_output_ceiling_matches_the_runtime_requirement_ceiling() {
+    let maximum = project_with_boolean_outputs(project::MAX_OUTPUTS_PER_ASSERTION);
+    assert!(schema(PROJECT_SCHEMA_FILE).is_valid(&maximum));
+    let bytes = serde_json::to_vec(&maximum).expect("the project renders");
+    project::read_project("evidence.yaml", &bytes)
+        .expect("the runtime requirement ceiling is accepted by authoring");
+
+    let over_limit = project_with_boolean_outputs(project::MAX_OUTPUTS_PER_ASSERTION + 1);
+    assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&over_limit));
+    let bytes = serde_json::to_vec(&over_limit).expect("the project renders");
+    let report = project::read_project("evidence.yaml", &bytes)
+        .expect_err("one output beyond the runtime requirement ceiling is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.project.output-count")
+        .expect("the output ceiling is diagnosed");
+    assert_eq!(
+        diagnostic.path,
+        "/assertionDefinitions/adult-status/outputs"
+    );
+    assert_eq!(
+        diagnostic.message,
+        "declare between one and 16 public Outputs"
+    );
 }
 
 #[test]

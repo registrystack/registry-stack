@@ -1368,7 +1368,7 @@ fn target_document() -> Value {
         "apiVersion":"id.registrystack.org/formats/evidence/target/v1alpha1", "kind":"EvidenceTarget",
         "id":"production","project":"production-fixture","authority":"authority.yaml","assuranceProfile":"production",
         "package":{"root":"/srv/evidence/candidate/bundle"},
-        "service":{"providerId":"urn:example:providers:evidence","issuer":"urn:example:issuers:evidence","trustDomain":"urn:example:trust-domains:evidence"},
+        "service":{"providerId":"urn:example:providers:evidence","issuer":"urn:example:issuers:evidence","publicOrigin":"https://evidence.invalid","trustDomain":"urn:example:trust-domains:evidence"},
         "authentication":{"oidc":{"issuer":"https://issuer.invalid","audience":"evidence","jwksSource":{"type":"uri","uri":"https://issuer.invalid/.well-known/jwks.json"},"tokenTypes":["at+jwt"],"algorithms":["ES256"],"principalClaim":"sub","requesterTagsClaim":"evidence_tags","evidenceAudienceClaim":"evidence_audience","allowedClients":"unrestricted","requiredScopes":"unrestricted","maximumTokenLifetimeSeconds":300,"revokedKeyIds":[]}},
         "connections":{"registry-http":{"origin":"https://registry.invalid","authentication":{"type":"bearer","tokenRef":"secret:file/source-token"}}},
         "secretProviders":{"file":{"root":"/run/secrets/evidence"}},

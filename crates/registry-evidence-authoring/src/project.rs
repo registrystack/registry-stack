@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub const MAX_VALIDITY_SECONDS: u64 = 31_536_000;
+pub const MAX_OUTPUTS_PER_ASSERTION: usize = 16;
 
 pub const PROJECT_FILE: &str = "evidence.yaml";
 pub const PROJECT_API_VERSION: &str = "id.registrystack.org/formats/evidence/project/v1alpha1";
@@ -178,7 +179,13 @@ pub struct AssertionDefinition {
     pub subjects: Vec<Subject>,
     pub acquisition: Acquisition,
     pub derive: FunctionCall,
-    #[cfg_attr(feature = "schema", schemars(extend("minProperties" = 1, "maxProperties" = 32)))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend(
+            "minProperties" = 1,
+            "maxProperties" = MAX_OUTPUTS_PER_ASSERTION
+        ))
+    )]
     pub outputs: BTreeMap<LocalId, Output>,
     pub validity_seconds: BoundedU64<1, MAX_VALIDITY_SECONDS>,
     pub subject_binding: BindingMode,
@@ -773,11 +780,13 @@ pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
                 "derive must name an assertion-derive/v1 Function",
             );
         }
-        if definition.outputs.is_empty() || definition.outputs.len() > 32 {
+        if definition.outputs.is_empty()
+            || definition.outputs.len() > MAX_OUTPUTS_PER_ASSERTION
+        {
             push(
                 at.clone().key("outputs"),
                 "output-count",
-                "declare between one and 32 public Outputs",
+                "declare between one and 16 public Outputs",
             );
         }
         let mut selector_roles = BTreeSet::new();

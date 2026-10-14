@@ -43,6 +43,14 @@
         }
       ]
     },
+    "TargetAssuranceProfile": {
+      "enum": [
+        "local",
+        "production",
+        "evidence-grade"
+      ],
+      "type": "string"
+    },
     "TargetAudit": {
       "additionalProperties": false,
       "properties": {
@@ -862,14 +870,7 @@
           "type": "string"
         },
         "publicOrigin": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Url"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/Url"
         },
         "trustDomain": {
           "type": "string"
@@ -878,6 +879,7 @@
       "required": [
         "providerId",
         "issuer",
+        "publicOrigin",
         "trustDomain"
       ],
       "type": "object"
@@ -1026,9 +1028,13 @@
       "type": "string"
     },
     "assuranceProfile": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TargetAssuranceProfile"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "audit": {

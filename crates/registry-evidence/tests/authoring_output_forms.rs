@@ -16,7 +16,7 @@ use registry_evidence::{
 use registry_evidence_authoring::{
     compile,
     output::Bound,
-    project::{self, EvidenceProject, Output},
+    project::{self, EvidenceProject, Output, MAX_OUTPUTS_PER_ASSERTION},
 };
 use registry_platform_config::{write_sum_file, PackageLimits};
 use registry_platform_yaml::Reader;
@@ -112,6 +112,27 @@ fn project_document() -> Value {
             }
         }
     })
+}
+
+fn project_document_with_output_count(count: usize) -> Value {
+    let mut document = project_document();
+    let outputs = document["assertionDefinitions"]["all-forms"]["outputs"]
+        .as_object_mut()
+        .expect("the authored project declares outputs");
+    assert!(
+        count >= outputs.len(),
+        "the bridge helper only adds outputs to the retained vocabulary"
+    );
+    for index in outputs.len() + 1..=count {
+        outputs.insert(
+            format!("additional-output-{index}"),
+            json!({
+                "concept": format!("urn:example:concept:additional-output-{index}"),
+                "type": "boolean"
+            }),
+        );
+    }
+    document
 }
 
 fn authored_project() -> EvidenceProject {
@@ -249,6 +270,51 @@ fn invalid_output_tags_bounds_and_selector_codelist_identity_are_refused_at_thei
             && finding.field.to_json_pointer()
                 == "/selectorProfiles/record-by-code/fields/record-code/codelist"
     }));
+}
+
+#[test]
+fn authored_output_ceiling_compiles_into_the_runtime_and_refuses_one_more() {
+    let maximum_document = project_document_with_output_count(MAX_OUTPUTS_PER_ASSERTION);
+    let maximum_bytes =
+        serde_json::to_vec_pretty(&maximum_document).expect("maximum project serializes");
+    let maximum_project = project::read_project("evidence.yaml", &maximum_bytes)
+        .expect("the authoring ceiling is accepted")
+        .value;
+    let compiled = compile::compile(&maximum_project, &assets()).expect("project compiles");
+    assert_eq!(
+        compiled.model["requirements"][0]["concepts"]
+            .as_array()
+            .expect("compiled concepts")
+            .len(),
+        MAX_OUTPUTS_PER_ASSERTION
+    );
+
+    let temporary = tempfile::tempdir().expect("temporary package root");
+    let package = temporary.path().join("package");
+    fs::create_dir(&package).expect("package directory");
+    let _permissions = RestorePermissions(&package);
+    write_runtime_bundle(&package, compiled.model, compiled.artifacts);
+    seal_tree(&package, 0o400, 0o500);
+    let bundle = Bundle::load(&package).expect("the runtime accepts the authored ceiling");
+    assert_eq!(
+        bundle.config.requirements[0].concepts.len(),
+        MAX_OUTPUTS_PER_ASSERTION
+    );
+
+    let over_limit = project_document_with_output_count(MAX_OUTPUTS_PER_ASSERTION + 1);
+    let over_limit_bytes =
+        serde_json::to_vec_pretty(&over_limit).expect("over-limit project serializes");
+    let report = project::read_project("evidence.yaml", &over_limit_bytes)
+        .expect_err("authoring refuses a project the runtime cannot load");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.project.output-count")
+        .expect("the output ceiling is diagnosed");
+    assert_eq!(
+        diagnostic.path,
+        "/assertionDefinitions/all-forms/outputs"
+    );
 }
 
 #[test]

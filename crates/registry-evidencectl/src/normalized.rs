@@ -4,6 +4,7 @@ use anyhow::{bail, Context as _, Result};
 use registry_evidence_authoring::{
     compile::{self, CompiledProject},
     project::{self, EvidenceProject},
+    target::TargetAssuranceProfile,
 };
 use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
 use serde_json::{json, Value};
@@ -260,7 +261,10 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
     std::fs::set_permissions(stage.path(), std::fs::Permissions::from_mode(0o700))?;
     let root = stage.path().canonicalize()?;
     let key = target.signer.public_jwk_file();
-    if target.assurance_profile.as_deref().unwrap_or("local") == "local"
+    let assurance_profile = target
+        .assurance_profile
+        .unwrap_or(TargetAssuranceProfile::Local);
+    if assurance_profile == TargetAssuranceProfile::Local
         && !source_root.join(key).exists()
         && key == ".generated/secrets/signing-p256-public.jwk.json"
     {
@@ -289,7 +293,7 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
     let mut governance = crate::authoring::local_target_governance(&key_path)?;
     governance["apiVersion"] = json!(crate::evidence_binary::EVIDENCE_BUNDLE_API_VERSION);
     governance["kind"] = json!(crate::evidence_binary::EVIDENCE_BUNDLE_KIND);
-    governance["assuranceProfile"] = json!(target.assurance_profile.as_deref().unwrap_or("local"));
+    governance["assuranceProfile"] = serde_json::to_value(assurance_profile)?;
     let (service, issuer) = target.service.governed_values()?;
     governance["service"] = service;
     governance["issuer"] = issuer;

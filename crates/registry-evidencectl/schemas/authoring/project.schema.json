@@ -133,7 +133,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/Output"
           },
-          "maxProperties": 32,
+          "maxProperties": 16,
           "minProperties": 1,
           "propertyNames": {
             "$ref": "#/$defs/LocalId"
