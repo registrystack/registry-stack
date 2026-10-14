@@ -7,10 +7,10 @@
 //! form and adopter tooling's idea of the form come from one place and cannot
 //! drift apart.
 //!
-//! Only a document with a Rust type behind it appears here. Sources, selectors,
-//! derivations, schemas, fixtures, and sources are authored too, but this crate
-//! holds no closed model of them yet, and a schema written by hand
-//! for one of them would be the drift this module exists to prevent.
+//! The normalized project, target, and target authority are the three authored
+//! documents this crate owns. Sources, selectors, functions, assertion
+//! definitions, and outputs are members of that one project document rather
+//! than parallel formats.
 //!
 //! What the derived schema describes is shape: which keys exist, which are
 //! required, which values are one of a closed set. It does not describe
@@ -32,28 +32,19 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use crate::{
-    formats::{
-        ACCESS_POLICY_API_VERSION, ACCESS_POLICY_KIND, ACCESS_POLICY_SCHEMA_ID,
-        AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND, AUTHORING_PROJECT_SCHEMA_ID,
-        QUESTION_API_VERSION, QUESTION_KIND, QUESTION_SCHEMA_ID,
-    },
-    marker::ProjectMarker,
-    model::{AccessPolicy, Question},
-};
-
 /// The JSON Schema dialect every generated document declares.
 const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
-/// The schema for one authored question, the documents under `questions/`.
-pub const QUESTION_SCHEMA_FILE: &str = "question.schema.json";
+/// The schema for the one normalized `evidence.yaml` project.
+pub const PROJECT_SCHEMA_FILE: &str = "project.schema.json";
+/// The schema for an environment's target bindings.
+pub const TARGET_SCHEMA_FILE: &str = "target.schema.json";
+/// The schema for the target's separately governed authority.
+pub const TARGET_AUTHORITY_SCHEMA_FILE: &str = "target-authority.schema.json";
 
-/// The schema for one local access policy, the documents under
-/// `access/policies/`.
-pub const ACCESS_POLICY_SCHEMA_FILE: &str = "access-policy.schema.json";
-
-/// The schema for the marker that anchors a project root.
-pub const PROJECT_MARKER_SCHEMA_FILE: &str = "project-marker.schema.json";
+const TARGET_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/target/target.v1alpha1.schema.json";
+const TARGET_AUTHORITY_SCHEMA_ID: &str = "https://id.registrystack.org/schemas/evidence/target-authority/target-authority.v1alpha1.schema.json";
 
 /// Every generated schema, keyed by the filename it is committed under.
 ///
@@ -64,25 +55,36 @@ pub const PROJECT_MARKER_SCHEMA_FILE: &str = "project-marker.schema.json";
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let entries = [
         (
-            ACCESS_POLICY_SCHEMA_FILE,
-            "Evidence local access policy",
-            ACCESS_POLICY_SCHEMA_ID,
-            (ACCESS_POLICY_API_VERSION, ACCESS_POLICY_KIND),
-            serde_json::to_value(schemars::schema_for!(AccessPolicy))?,
+            PROJECT_SCHEMA_FILE,
+            "Evidence project",
+            crate::project::PROJECT_SCHEMA_ID,
+            (
+                crate::project::PROJECT_API_VERSION,
+                crate::project::PROJECT_KIND,
+            ),
+            serde_json::to_value(schemars::schema_for!(crate::project::EvidenceProject))?,
         ),
         (
-            QUESTION_SCHEMA_FILE,
-            "Evidence authored question",
-            QUESTION_SCHEMA_ID,
-            (QUESTION_API_VERSION, QUESTION_KIND),
-            serde_json::to_value(schemars::schema_for!(Question))?,
+            TARGET_SCHEMA_FILE,
+            "Evidence target",
+            TARGET_SCHEMA_ID,
+            (
+                crate::target::TARGET_API_VERSION,
+                crate::target::TARGET_KIND,
+            ),
+            serde_json::to_value(schemars::schema_for!(crate::target::EvidenceTarget))?,
         ),
         (
-            PROJECT_MARKER_SCHEMA_FILE,
-            "Evidence authoring project marker",
-            AUTHORING_PROJECT_SCHEMA_ID,
-            (AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND),
-            serde_json::to_value(schemars::schema_for!(ProjectMarker))?,
+            TARGET_AUTHORITY_SCHEMA_FILE,
+            "Evidence target authority",
+            TARGET_AUTHORITY_SCHEMA_ID,
+            (
+                crate::target::AUTHORITY_API_VERSION,
+                crate::target::AUTHORITY_KIND,
+            ),
+            serde_json::to_value(schemars::schema_for!(
+                crate::target::EvidenceTargetAuthority
+            ))?,
         ),
     ];
     entries
@@ -247,17 +249,21 @@ fn render(value: Value) -> Result<String, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        documents, type_map_keys, ACCESS_POLICY_SCHEMA_FILE, PROJECT_MARKER_SCHEMA_FILE,
-        QUESTION_SCHEMA_FILE,
+        documents, type_map_keys, PROJECT_SCHEMA_FILE, TARGET_AUTHORITY_SCHEMA_FILE,
+        TARGET_SCHEMA_FILE,
     };
 
     #[test]
-    fn both_documents_are_generated_under_their_committed_filenames() {
+    fn normalized_documents_are_generated_under_their_committed_filenames() {
         let documents = documents().expect("the authoring schemas generate");
-        assert!(documents.contains_key(QUESTION_SCHEMA_FILE));
-        assert!(documents.contains_key(PROJECT_MARKER_SCHEMA_FILE));
-        assert!(documents.contains_key(ACCESS_POLICY_SCHEMA_FILE));
-        assert_eq!(documents.len(), 3);
+        assert_eq!(
+            documents.keys().copied().collect::<Vec<_>>(),
+            vec![
+                PROJECT_SCHEMA_FILE,
+                TARGET_AUTHORITY_SCHEMA_FILE,
+                TARGET_SCHEMA_FILE,
+            ]
+        );
     }
 
     #[test]
@@ -265,16 +271,22 @@ mod tests {
         let documents = documents().expect("the authoring schemas generate");
         for (file, format, kind, id) in [
             (
-                QUESTION_SCHEMA_FILE,
-                "question",
-                "EvidenceQuestion",
-                "https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json",
+                PROJECT_SCHEMA_FILE,
+                "project",
+                "EvidenceProject",
+                "https://id.registrystack.org/schemas/evidence/project/project.v1alpha1.schema.json",
             ),
             (
-                PROJECT_MARKER_SCHEMA_FILE,
-                "authoring-project",
-                "EvidenceAuthoringProject",
-                "https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json",
+                TARGET_SCHEMA_FILE,
+                "target",
+                "EvidenceTarget",
+                "https://id.registrystack.org/schemas/evidence/target/target.v1alpha1.schema.json",
+            ),
+            (
+                TARGET_AUTHORITY_SCHEMA_FILE,
+                "target-authority",
+                "EvidenceTargetAuthority",
+                "https://id.registrystack.org/schemas/evidence/target-authority/target-authority.v1alpha1.schema.json",
             ),
         ] {
             let document: serde_json::Value =
@@ -294,7 +306,7 @@ mod tests {
     fn a_derived_description_reaches_the_published_document() {
         let documents = documents().expect("the authoring schemas generate");
         assert!(
-            documents[QUESTION_SCHEMA_FILE].contains("which governed concepts the answer carries"),
+            documents[PROJECT_SCHEMA_FILE].contains("Optional presentation label"),
             "the model's own prose must reach the editor, or the schema explains nothing",
         );
     }

@@ -211,24 +211,12 @@ formats:
     prepare:
       - evidencectl keygen signing --output-dir {project}/secrets
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: fixtures/record-status.yaml}
-  evidence/question:
-    project: crates/registry-evidencectl/templates/sqlite-extract
-    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: questions/record-status.yaml}
-  evidence/source:
-    project: crates/registry-evidencectl/templates/sqlite-extract
-    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: sources/record-status.yaml}
-  evidence/selector:
-    project: crates/registry-evidencectl/templates/sqlite-extract
-    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: selectors/record-reference-v1.yaml}
-  evidence/target-governance:
-    project: crates/registry-evidencectl/templates/sqlite-extract
-    copies:
-      target:
-        from: products/evidence/reference/deployment-targets/environments/local/evidence
-  evidence/target-settings:
-    project: products/evidence/reference/authoring-projects/example
-  evidence/access-policy:
-    project: products/evidence/reference/authoring-projects/example
+  evidence/project:
+    project: products/evidence/examples/standalone
+  evidence/target:
+    project: products/evidence/examples/standalone
+  evidence/target-authority:
+    project: products/evidence/examples/standalone
   evidence/access-client:
     project: products/evidence/reference/authoring-projects/example
   evidence/mock-plan:
@@ -355,5 +343,3 @@ formats:
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: casework.yaml}
   scheduling/records:
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: records.yaml}
-  evidence/authoring-project:
-    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: evidence-project.yaml}

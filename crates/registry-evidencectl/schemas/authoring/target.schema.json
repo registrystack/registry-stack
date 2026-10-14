@@ -1,0 +1,92 @@
+{
+  "$defs": {
+    "AcquisitionCapability": {
+      "enum": [
+        "search-then-fetch-set",
+        "source-batch"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/target/target.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acquisitionCapabilities": {
+      "description": "Operator opt-ins, intersected with the package's acquisition capabilities.",
+      "items": {
+        "$ref": "#/$defs/AcquisitionCapability"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/target/v1alpha1",
+      "type": "string"
+    },
+    "assuranceProfile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "audit": true,
+    "authentication": true,
+    "authority": {
+      "type": "string"
+    },
+    "connections": {
+      "additionalProperties": true,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object",
+      "x-registry-passthrough": "Named target connection bindings, compiled into the retained Evidence runtime connection contract."
+    },
+    "extracts": true,
+    "id": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "kind": {
+      "const": "EvidenceTarget",
+      "type": "string"
+    },
+    "listener": true,
+    "outboundTls": true,
+    "package": true,
+    "project": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "publication": true,
+    "rateLimits": true,
+    "responseFormats": true,
+    "secretProviders": true,
+    "service": true,
+    "signer": true,
+    "subjectBinding": true
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "id",
+    "project",
+    "package",
+    "authority",
+    "service",
+    "listener",
+    "authentication",
+    "connections",
+    "secretProviders",
+    "signer",
+    "subjectBinding",
+    "audit",
+    "rateLimits"
+  ],
+  "title": "Evidence target",
+  "type": "object"
+}

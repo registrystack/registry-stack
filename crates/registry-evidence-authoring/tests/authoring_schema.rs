@@ -16,13 +16,16 @@
 //! the wrong thing about the project.
 
 #![cfg(feature = "schema")]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "this test target embeds the public canonical fixtures; the library performs no I/O"
+)]
 
 use jsonschema::{Draft, JSONSchema};
 use registry_evidence_authoring::{
-    formats::check_question,
-    schema::{
-        documents, ACCESS_POLICY_SCHEMA_FILE, PROJECT_MARKER_SCHEMA_FILE, QUESTION_SCHEMA_FILE,
-    },
+    project,
+    schema::{documents, PROJECT_SCHEMA_FILE, TARGET_AUTHORITY_SCHEMA_FILE, TARGET_SCHEMA_FILE},
+    target,
 };
 use registry_platform_yaml::Reader;
 use serde_json::Value;
@@ -31,6 +34,13 @@ use serde_json::Value;
 /// members after it, so each departure stays visible.
 const QUESTION_ENVELOPE: &str =
     "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\n";
+
+const NORMALIZED_PROJECT: &str =
+    include_str!("../../../products/evidence/examples/standalone/evidence.yaml");
+const NORMALIZED_TARGET: &str =
+    include_str!("../../../products/evidence/examples/standalone/local-target.yaml");
+const NORMALIZED_AUTHORITY: &str =
+    include_str!("../../../products/evidence/examples/standalone/dev-authority.yaml");
 
 /// A question that satisfies both the schema and the checks, and the base every
 /// rejected document below departs from in exactly one way.
@@ -345,30 +355,19 @@ fn yaml_as_json(document: &str) -> Value {
         .to_json_value()
 }
 
-fn question_as_json(document: &str) -> Value {
-    yaml_as_json(&format!("{QUESTION_ENVELOPE}{document}"))
-}
-
-/// Read one authored question the way adopter tooling does: read it through
-/// the shared reader into the closed model, then run the checks. Either step
-/// may turn the document away.
-fn question_is_accepted_by_the_checks(document: &str) -> bool {
-    check_question(
-        "questions/adult-status.yaml",
-        format!("{QUESTION_ENVELOPE}{document}").as_bytes(),
-    )
-    .is_ok()
+fn schema(file: &str) -> JSONSchema {
+    compile(&documents().expect("the schemas generate")[file])
 }
 
 #[test]
-fn the_generated_set_is_exactly_the_documents_a_rust_type_stands_behind() {
+fn the_generated_set_is_exactly_the_normalized_authored_documents() {
     let documents = documents().expect("the authoring schemas generate");
     assert_eq!(
         documents.keys().copied().collect::<Vec<_>>(),
         vec![
-            ACCESS_POLICY_SCHEMA_FILE,
-            PROJECT_MARKER_SCHEMA_FILE,
-            QUESTION_SCHEMA_FILE
+            PROJECT_SCHEMA_FILE,
+            TARGET_AUTHORITY_SCHEMA_FILE,
+            TARGET_SCHEMA_FILE
         ],
     );
 }
@@ -431,135 +430,216 @@ fn every_generated_document_is_canonical_pretty_json_with_a_trailing_newline() {
 }
 
 #[test]
-fn the_question_schema_closes_its_shape_and_requires_the_authored_keys() {
+fn the_project_schema_closes_its_shape_and_requires_the_normalized_keys() {
     let documents = documents().expect("the authoring schemas generate");
-    let value: Value = serde_json::from_str(&documents[QUESTION_SCHEMA_FILE])
-        .expect("the question schema is JSON");
+    let value: Value =
+        serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).expect("the project schema is JSON");
     assert_eq!(value.get("additionalProperties"), Some(&Value::Bool(false)));
     let required = value
         .get("required")
         .and_then(Value::as_array)
-        .expect("the question schema names its required keys")
+        .expect("the project schema names its required keys")
         .iter()
         .filter_map(Value::as_str)
         .collect::<Vec<_>>();
     for key in [
         "apiVersion",
         "kind",
-        "answers",
-        "derivation",
-        "disclosure",
         "id",
-        "purpose",
-        "question",
-        "source",
+        "selectorProfiles",
+        "functions",
+        "sources",
+        "assertionDefinitions",
     ] {
         assert!(
             required.contains(&key),
-            "the question schema does not require {key}"
+            "the project schema does not require {key}"
         );
     }
-    for key in ["governance", "responseFormats", "subject", "subjects"] {
+    for key in ["label", "description"] {
         assert!(
             !required.contains(&key),
-            "the question schema requires {key}, which an author may omit",
+            "the project schema requires {key}, which is presentation only",
         );
     }
 }
 
 #[test]
-fn the_project_marker_schema_names_the_one_project_kind() {
+fn the_project_schema_exposes_presentation_variants_and_function_contracts() {
     let documents = documents().expect("the authoring schemas generate");
-    let document = &documents[PROJECT_MARKER_SCHEMA_FILE];
-    assert!(
-        document.contains("\"EvidenceAuthoringProject\""),
-        "the marker schema does not offer the one project kind this crate names",
-    );
-    let value: Value = serde_json::from_str(document).expect("the marker schema is JSON");
-    assert_eq!(value.get("additionalProperties"), Some(&Value::Bool(false)));
+    let document = &documents[PROJECT_SCHEMA_FILE];
+    for member in [
+        "assertionDefinitions",
+        "selectorProfiles",
+        "label",
+        "description",
+        "source-prepare/v1",
+        "source-extract/v1",
+        "assertion-derive/v1",
+        "search-then-fetch",
+        "search-then-fetch-set",
+        "selectorInputs",
+    ] {
+        assert!(document.contains(member), "schema omits {member}");
+    }
 }
 
 #[test]
-fn the_base_question_satisfies_both_the_schema_and_the_checks() {
-    let documents = documents().expect("the authoring schemas generate");
-    let schema = compile(&documents[QUESTION_SCHEMA_FILE]);
-    assert!(
-        schema.is_valid(&question_as_json(VALID_QUESTION)),
-        "the corpus base must satisfy the schema, or every rejection below proves nothing",
-    );
-    assert!(
-        question_is_accepted_by_the_checks(VALID_QUESTION),
-        "the corpus base must satisfy the checks, or every rejection below proves nothing",
-    );
+fn canonical_project_target_and_authority_satisfy_schema_and_reader() {
+    assert!(schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(NORMALIZED_PROJECT)));
+    let project = project::read_project("evidence.yaml", NORMALIZED_PROJECT.as_bytes())
+        .expect("the canonical project reads")
+        .value;
+    assert!(schema(TARGET_SCHEMA_FILE).is_valid(&yaml_as_json(NORMALIZED_TARGET)));
+    target::read_target("local-target.yaml", NORMALIZED_TARGET.as_bytes())
+        .expect("the target reads");
+    assert!(schema(TARGET_AUTHORITY_SCHEMA_FILE).is_valid(&yaml_as_json(NORMALIZED_AUTHORITY)));
+    target::read_authority(
+        "dev-authority.yaml",
+        NORMALIZED_AUTHORITY.as_bytes(),
+        &project,
+    )
+    .expect("the authority reads");
 }
 
 #[test]
-fn a_question_the_schema_turns_away_is_turned_away_by_the_checks() {
-    let documents = documents().expect("the authoring schemas generate");
-    let schema = compile(&documents[QUESTION_SCHEMA_FILE]);
-    for (departure, document) in REJECTED_QUESTIONS {
+fn every_retired_question_corpus_case_is_refused_as_a_normalized_project() {
+    let schema = schema(PROJECT_SCHEMA_FILE);
+    for (departure, document) in
+        std::iter::once(&("the former valid base", VALID_QUESTION)).chain(REJECTED_QUESTIONS.iter())
+    {
+        let document = format!("{QUESTION_ENVELOPE}{document}");
         assert!(
-            !schema.is_valid(&question_as_json(document)),
-            "the schema accepts {departure}, so this case tests nothing",
+            !schema.is_valid(&yaml_as_json(&document)),
+            "the normalized schema accepts {departure}",
         );
         assert!(
-            !question_is_accepted_by_the_checks(document),
-            "the schema turns away {departure} but adopter tooling accepts it",
+            project::read_project("evidence.yaml", document.as_bytes()).is_err(),
+            "the normalized reader accepts {departure}",
         );
     }
 }
 
 #[test]
-fn a_marker_the_schema_turns_away_is_turned_away_by_the_parser() {
-    let documents = documents().expect("the authoring schemas generate");
-    let schema = compile(&documents[PROJECT_MARKER_SCHEMA_FILE]);
+fn retired_parallel_authoring_documents_are_refused_as_normalized_projects() {
+    let schema = schema(PROJECT_SCHEMA_FILE);
     for (departure, document) in REJECTED_MARKERS {
         assert!(
             !schema.is_valid(&yaml_as_json(document)),
-            "the schema accepts {departure}, so this case tests nothing",
+            "the normalized schema accepts {departure}",
         );
         assert!(
-            registry_evidence_authoring::parse_project_marker(
-                "evidence-project.yaml",
-                document.as_bytes()
-            )
-            .is_err(),
-            "the schema turns away {departure} but the marker parser accepts it",
+            project::read_project("evidence.yaml", document.as_bytes()).is_err(),
+            "the normalized reader accepts {departure}",
         );
+    }
+    for document in [
+        "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\n",
+        "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nfields: {}\n",
+        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nid: old\nquestions: [old]\n",
+    ] {
+        assert!(!schema.is_valid(&yaml_as_json(document)));
+        assert!(project::read_project("evidence.yaml", document.as_bytes()).is_err());
     }
 }
 
 #[test]
-fn a_question_the_schema_accepts_may_still_be_turned_away_by_the_checks() {
-    let documents = documents().expect("the authoring schemas generate");
-    let schema = compile(&documents[QUESTION_SCHEMA_FILE]);
-    // A capitalized purpose is a string of the right type in the right
-    // place, so the schema has nothing to say about it. The form does.
-    let document = VALID_QUESTION.replace("purpose: age-check", "purpose: AgeCheck");
+fn a_missing_source_passes_shape_validation_and_is_diagnosed_at_its_reference() {
+    let document =
+        NORMALIZED_PROJECT.replacen("source: person-record", "source: missing-source", 1);
     assert!(
-        schema.is_valid(&question_as_json(&document)),
-        "the asymmetry case must satisfy the schema, or it does not show the asymmetry",
+        schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(&document)),
+        "cross-member references are semantic",
     );
-    assert!(
-        !question_is_accepted_by_the_checks(&document),
-        "the checks must still turn this document away; the schema is structural, not semantic",
+    let report = project::read_project("evidence.yaml", document.as_bytes()).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.project.acquisition-source")
+        .expect("the missing source is diagnosed");
+    assert_eq!(
+        diagnostic.path,
+        "/assertionDefinitions/adult-status/acquisition/source"
+    );
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+}
+
+#[test]
+fn a_bad_typed_value_is_rejected_by_schema_and_reader_at_the_authored_field() {
+    let document = NORMALIZED_PROJECT.replacen(
+        "maximumAggregateBytes: 64",
+        "maximumAggregateBytes: \"64\"",
+        1,
+    );
+    assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(&document)));
+    let report = project::read_project("evidence.yaml", document.as_bytes()).unwrap_err();
+    let diagnostic = &report.diagnostics()[0];
+    assert_eq!(
+        diagnostic.path,
+        "/selectorProfiles/record-by-id/maximumAggregateBytes"
+    );
+    assert_eq!(diagnostic.source.as_ref().unwrap().file, "evidence.yaml");
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+}
+
+#[test]
+fn source_function_refs_are_closed_while_derivation_calls_expose_bindings() {
+    let document = NORMALIZED_PROJECT.replacen(
+        "extract:\n      function: extract-person",
+        "extract:\n      function: extract-person\n      parameters: {}",
+        1,
+    );
+    assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(&document)));
+    assert!(project::read_project("evidence.yaml", document.as_bytes()).is_err());
+
+    let document = NORMALIZED_PROJECT.replacen(
+        "derive:\n      function: derive-adult-status",
+        "derive:\n      function: derive-adult-status\n      parameters:\n        threshold: 18\n      selectorInputs: []",
+        1,
+    );
+    assert!(schema(PROJECT_SCHEMA_FILE).is_valid(&yaml_as_json(&document)));
+}
+
+#[test]
+fn a_definition_cannot_declare_an_empty_output_set() {
+    let mut document = yaml_as_json(NORMALIZED_PROJECT);
+    document["assertionDefinitions"]["adult-status"]["outputs"] = serde_json::json!({});
+    assert!(!schema(PROJECT_SCHEMA_FILE).is_valid(&document));
+    let bytes = serde_json::to_vec(&document).expect("the project renders");
+    assert!(project::read_project("evidence.yaml", &bytes).is_err());
+}
+
+#[test]
+fn authority_references_are_checked_without_unioning_grants() {
+    let project = project::read_project("evidence.yaml", NORMALIZED_PROJECT.as_bytes())
+        .unwrap()
+        .value;
+    let document = NORMALIZED_AUTHORITY.replacen(
+        "definition: adult-status",
+        "definition: missing-definition",
+        1,
+    );
+    assert!(schema(TARGET_AUTHORITY_SCHEMA_FILE).is_valid(&yaml_as_json(&document)));
+    let report =
+        target::read_authority("dev-authority.yaml", document.as_bytes(), &project).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.authority.definition")
+        .expect("the missing definition is diagnosed");
+    assert_eq!(
+        diagnostic.path,
+        "/accessProfiles/standalone-service/grants/0/definition"
     );
 }
 
 #[test]
-fn an_access_policy_the_schema_turns_away_is_turned_away_by_the_reader() {
-    let documents = documents().expect("the authoring schemas generate");
-    let schema = compile(&documents[ACCESS_POLICY_SCHEMA_FILE]);
-    let accepted = yaml_as_json(
-        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\n\
-         kind: EvidenceAccessPolicy\nid: readers\nquestions: [record-status]\n",
-    );
-    assert!(schema.is_valid(&accepted));
-    for refused in [
-        "kind: EvidenceAccessPolicy\nid: readers\nquestions: []\n",
-        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nid: readers\nquestions: []\nextra: 1\n",
-        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nquestions: []\n",
+fn retired_target_documents_are_refused() {
+    for document in [
+        "apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1\nkind: EvidenceTargetGovernance\nassuranceProfile: local\n",
+        "apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1\nkind: EvidenceTargetSettings\ngovernance: {}\nruntime: {}\n",
     ] {
-        assert!(!schema.is_valid(&yaml_as_json(refused)), "{refused}");
+        assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&yaml_as_json(document)));
+        assert!(target::read_target("local-target.yaml", document.as_bytes()).is_err());
     }
 }

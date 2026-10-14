@@ -794,94 +794,156 @@ same promise. These schemas are adopter tooling. A key path leaving this
 inventory is a tooling change, not a break in the Version 1 configuration
 contract.
 
-### `questions/<name>.yaml`
+### `evidence.yaml`
 
-<!-- evidence-authoring-question-key-paths:start -->
+The normalized project document owns stable source, selector-profile, function,
+assertion-definition, and output identifiers. Presentation labels and
+descriptions remain optional metadata.
+
+<!-- evidence-authoring-project-key-paths:start -->
 ```text
-answers
-answers[]
-answers[].concept
-answers[].maximum
-answers[].maximumBytes
-answers[].maximumSerializedBytes
-answers[].minimum
-answers[].minimumBytes
-answers[].prefix
-answers[].schema
-answers[].sdJwtVc
-answers[].sdJwtVc.claim
-answers[].sdJwtVc.disclosure
-answers[].type
-answers[].uri
-answers[].values
-answers[].values[]
+acquisitionCapabilities
+acquisitionCapabilities[]
 apiVersion
-derivation
-disclosure
-disclosure.allow
-disclosure.allow[]
-governance
-governance.disclosureFamilies
-governance.disclosureFamilies[]
-governance.evidenceType
-governance.fixtures
-governance.kind
-governance.observationTimezone
-governance.referenceFrameworks
-governance.referenceFrameworks[]
-governance.requirement
-governance.validitySeconds
+assertionDefinitions
+assertionDefinitions.*
+assertionDefinitions.*.acquisition
+assertionDefinitions.*.acquisition.fetch
+assertionDefinitions.*.acquisition.fetch[]
+assertionDefinitions.*.acquisition.fetch[].factInputs
+assertionDefinitions.*.acquisition.fetch[].factInputs[]
+assertionDefinitions.*.acquisition.fetch[].source
+assertionDefinitions.*.acquisition.maximumAcquisitionMilliseconds
+assertionDefinitions.*.acquisition.search
+assertionDefinitions.*.acquisition.source
+assertionDefinitions.*.acquisition.type
+assertionDefinitions.*.derive
+assertionDefinitions.*.derive.function
+assertionDefinitions.*.derive.parameters
+assertionDefinitions.*.derive.selectorInputs
+assertionDefinitions.*.description
+assertionDefinitions.*.disclosureGuard
+assertionDefinitions.*.existenceDisclosure
+assertionDefinitions.*.fixtures
+assertionDefinitions.*.grantCeiling
+assertionDefinitions.*.grantCeiling.actorKinds
+assertionDefinitions.*.grantCeiling.actorKinds[]
+assertionDefinitions.*.grantCeiling.audiences
+assertionDefinitions.*.grantCeiling.audiences[]
+assertionDefinitions.*.grantCeiling.authorities
+assertionDefinitions.*.grantCeiling.authorities[]
+assertionDefinitions.*.grantCeiling.valueOrigins
+assertionDefinitions.*.grantCeiling.valueOrigins[]
+assertionDefinitions.*.label
+assertionDefinitions.*.observationTimezone
+assertionDefinitions.*.outputs
+assertionDefinitions.*.outputs.*
+assertionDefinitions.*.outputs.*.concept
+assertionDefinitions.*.outputs.*.description
+assertionDefinitions.*.outputs.*.label
+assertionDefinitions.*.outputs.*.maximum
+assertionDefinitions.*.outputs.*.maximumBytes
+assertionDefinitions.*.outputs.*.maximumItems
+assertionDefinitions.*.outputs.*.maximumSerializedBytes
+assertionDefinitions.*.outputs.*.minimum
+assertionDefinitions.*.outputs.*.minimumBytes
+assertionDefinitions.*.outputs.*.minimumItems
+assertionDefinitions.*.outputs.*.prefix
+assertionDefinitions.*.outputs.*.schema
+assertionDefinitions.*.outputs.*.sdJwtVc
+assertionDefinitions.*.outputs.*.type
+assertionDefinitions.*.outputs.*.values
+assertionDefinitions.*.outputs.*.values[]
+assertionDefinitions.*.purpose
+assertionDefinitions.*.question
+assertionDefinitions.*.representations
+assertionDefinitions.*.representations[]
+assertionDefinitions.*.semantics
+assertionDefinitions.*.semantics.evidenceType
+assertionDefinitions.*.semantics.kind
+assertionDefinitions.*.semantics.referenceFrameworks
+assertionDefinitions.*.semantics.referenceFrameworks[]
+assertionDefinitions.*.semantics.requirement
+assertionDefinitions.*.subjectBinding
+assertionDefinitions.*.subjects
+assertionDefinitions.*.subjects[]
+assertionDefinitions.*.subjects[].role
+assertionDefinitions.*.subjects[].selectors
+assertionDefinitions.*.subjects[].selectors[]
+assertionDefinitions.*.validitySeconds
+description
+functions
+functions[]
+functions[].description
+functions[].id
+functions[].interface
+functions[].label
+functions[].source
 id
 kind
-purpose
-question
-responseFormats
-responseFormats[]
-source
-source.collectionBounds
-source.collectionBounds.*
-source.facts
-source.facts[]
-source.facts[].combine
-source.facts[].name
-source.facts[].path
-source.operation
-source.ref
-subject
-subject.derivation
-subject.profile
-subject.profiles
-subject.profiles[]
-subject.role
-subject.selector
-subject.source
-subjects
-subjects[]
-subjects[].derivation
-subjects[].profile
-subjects[].profiles
-subjects[].profiles[]
-subjects[].role
-subjects[].selector
-subjects[].source
+label
+maximumHolderBoundBatchSize
+selectorProfiles
+selectorProfiles.*
+selectorProfiles.*.description
+selectorProfiles.*.fields
+selectorProfiles.*.label
+selectorProfiles.*.maximumAggregateBytes
+sources
+sources.*
+sources.*.acquisitionPosture
+sources.*.adapterParameters
+sources.*.adapterParametersSchema
+sources.*.batch
+sources.*.batch.extract
+sources.*.batch.extract.function
+sources.*.batch.maximumItems
+sources.*.batch.prepare
+sources.*.batch.prepare.function
+sources.*.batch.response
+sources.*.batch.response.projection
+sources.*.batch.response.projection[]
+sources.*.batch.response.shape
+sources.*.behaviorRevision
+sources.*.connection
+sources.*.description
+sources.*.evidence
+sources.*.extract
+sources.*.extract.function
+sources.*.extractProfile
+sources.*.facts
+sources.*.forwardAccessAttribution
+sources.*.label
+sources.*.limits
+sources.*.limits.attemptTimeoutMilliseconds
+sources.*.limits.maximumConcurrency
+sources.*.maximumExtractAgeSeconds
+sources.*.preparationLimits
+sources.*.prepare
+sources.*.prepare.function
+sources.*.request
+sources.*.response
+sources.*.response.maximumBytes
+sources.*.response.projection
+sources.*.response.projection[]
+sources.*.response.shape
+sources.*.selectors
+sources.*.selectors[]
+sources.*.selectors[].profiles
+sources.*.selectors[].profiles[]
+sources.*.selectors[].role
+sources.*.type
+sources.*.unresolvedProblem
 ```
-<!-- evidence-authoring-question-key-paths:end -->
-
-### `evidence-project.yaml`
-
-<!-- evidence-authoring-project-marker-key-paths:start -->
-```text
-apiVersion
-kind
-```
-<!-- evidence-authoring-project-marker-key-paths:end -->
+<!-- evidence-authoring-project-key-paths:end -->
 
 ### `access/clients/<id>.yaml`
 
 A local access client document names one caller of a development Evidence
 runtime. `apiVersion` and `kind` are the envelope in the table above.
 `clientId` is the lowercase client identifier, `status` is `active` or
-`revoked`, and `policies` lists the access policies the client is assigned.
+`revoked`, and `accessProfiles` lists the target authority profiles assigned to
+the client.
 `principal` and `evidenceAudience` must both equal the local URI derived from
 `clientId`. `keys` holds exactly one public JWK for the client. `exchange` is
 optional local issuer wiring for a client whose authority comes from a task
@@ -896,6 +958,8 @@ governed task policy. A `first-party` exchange also requires
 
 <!-- evidence-authoring-access-client-key-paths:start -->
 ```text
+accessProfiles
+accessProfiles[]
 apiVersion
 clientId
 evidenceAudience
@@ -906,46 +970,10 @@ exchange.kind
 exchange.sourceIssuer
 keys
 kind
-policies
-policies[]
 principal
 status
 ```
 <!-- evidence-authoring-access-client-key-paths:end -->
-
-### `access/policies/<id>.yaml`
-
-The policy document is described in "Local access policies" above: `id` is the
-policy identifier and `questions` lists the question ids it covers.
-`taskGrant` is optional and names the trusted task-grant origin for every
-question in the policy. Its `kind` names the grant kind, `sourceIssuer` is the
-issuer URL, and `requesterClients` lists the client identifiers allowed to
-request under it. Each entry of `bindings` ties one authored selector field to
-a verified-token claim path: `question` is the question id, `selectorProfile`
-the selector profile, `role` the role within it, and `valueClaims` maps each
-local identifier of the selector's fields to the claim path that supplies it.
-
-<!-- evidence-authoring-access-policy-key-paths:start -->
-```text
-apiVersion
-id
-kind
-questions
-questions[]
-taskGrant
-taskGrant.bindings
-taskGrant.bindings[]
-taskGrant.bindings[].question
-taskGrant.bindings[].role
-taskGrant.bindings[].selectorProfile
-taskGrant.bindings[].valueClaims
-taskGrant.bindings[].valueClaims.*
-taskGrant.kind
-taskGrant.requesterClients
-taskGrant.requesterClients[]
-taskGrant.sourceIssuer
-```
-<!-- evidence-authoring-access-policy-key-paths:end -->
 
 ### `mocks/source.yaml`
 
@@ -991,34 +1019,6 @@ operations[].response.status
 ```
 <!-- evidence-authoring-mock-plan-key-paths:end -->
 
-### `selectors/<name>.yaml`
-
-A selector profile is a member of the Evidence bundle grammar. Only the
-envelope is checked when the file is read; `evidencectl check` validates every
-other key against `bundle.schema.yaml` after the compile, so the keys a profile
-may carry are those of that grammar and are not listed here.
-
-<!-- evidence-authoring-selector-key-paths:start -->
-```text
-apiVersion
-kind
-```
-<!-- evidence-authoring-selector-key-paths:end -->
-
-### `sources/<name>.yaml`
-
-A source definition is a member of the Evidence bundle grammar. Only the
-envelope is checked when the file is read; `evidencectl check` validates every
-other key against `bundle.schema.yaml` after the compile, so the keys a source
-may carry are those of that grammar and are not listed here.
-
-<!-- evidence-authoring-source-key-paths:start -->
-```text
-apiVersion
-kind
-```
-<!-- evidence-authoring-source-key-paths:end -->
-
 ### Source import resolution file
 
 A resolution file records what to do with each artifact a source import could
@@ -1039,53 +1039,74 @@ kind
 ```
 <!-- evidence-authoring-source-resolution-key-paths:end -->
 
-### A target's `governance.yaml`
+### `<target>.yaml`
 
-A target's governance document carries the governance members of the bundle
-grammar into the bundle as written. `assuranceProfile` is `local`,
-`production`, or `evidence-grade`. Every other member (`service`, `issuer`,
-`authentication`, `audit`, `subjectBinding`, `rateLimits`, `signing`,
-`authorityProfiles`, and the optional `publication`, `responseFormats`, and
-`sourceConnections`) is a passthrough node: the reader does not look inside
-it, and `evidencectl check` validates it against `bundle.schema.yaml` after the
-compile. Every member except the last three is required.
+The normalized target document selects one project and declares the target's
+acquisition capabilities. Its authority reference points to a separate
+operator-owned target authority document.
 
-<!-- evidence-authoring-target-governance-key-paths:start -->
+<!-- evidence-authoring-target-key-paths:start -->
 ```text
+acquisitionCapabilities
+acquisitionCapabilities[]
 apiVersion
 assuranceProfile
 audit
 authentication
-authorityProfiles
-issuer
+authority
+connections
+extracts
+id
 kind
+listener
+outboundTls
+package
+project
 publication
 rateLimits
 responseFormats
+secretProviders
 service
-signing
-sourceConnections
+signer
 subjectBinding
 ```
-<!-- evidence-authoring-target-governance-key-paths:end -->
+<!-- evidence-authoring-target-key-paths:end -->
 
-### `settings.yaml` for `target new`
+### `<target>-authority.yaml`
 
-The settings file is what `target new --settings` writes a target from.
-`publicKeys` maps the name of each public key file the target carries to the path of the file that supplies it, read relative to the settings file. `governance` is a
-passthrough node holding the governance members of the bundle grammar;
-`evidencectl check` validates it against `bundle.schema.yaml` after the
-compile. `runtime` is a passthrough node holding the runtime document of the
-runtime grammar; `target new` validates it against `runtime.schema.yaml` before
-it writes the target.
+The normalized target authority document owns issuer, signing, access,
+authentication, audit, rate-limit, and optional publication configuration for
+one target. It is compiled separately from the project and target documents.
 
-<!-- evidence-authoring-target-settings-key-paths:start -->
+<!-- evidence-authoring-target-authority-key-paths:start -->
 ```text
+accessProfiles
+accessProfiles.*
+accessProfiles.*.actorKind
+accessProfiles.*.authority
+accessProfiles.*.grantSourceIssuer
+accessProfiles.*.grants
+accessProfiles.*.grants[]
+accessProfiles.*.grants[].audienceFrom
+accessProfiles.*.grants[].definition
+accessProfiles.*.grants[].purpose
+accessProfiles.*.grants[].representations
+accessProfiles.*.grants[].representations[]
+accessProfiles.*.grants[].subjectBinding
+accessProfiles.*.grants[].subjects
+accessProfiles.*.grants[].subjects[]
+accessProfiles.*.grants[].subjects[].role
+accessProfiles.*.grants[].subjects[].selectorProfile
+accessProfiles.*.grants[].subjects[].valueClaims
+accessProfiles.*.grants[].subjects[].valueClaims.*
+accessProfiles.*.grants[].subjects[].valueOrigin
+accessProfiles.*.requesterClients
+accessProfiles.*.requesterClients[]
+accessProfiles.*.requesterTags
+accessProfiles.*.requesterTags[]
 apiVersion
-governance
 kind
-publicKeys
-publicKeys.*
-runtime
+project
+target
 ```
-<!-- evidence-authoring-target-settings-key-paths:end -->
+<!-- evidence-authoring-target-authority-key-paths:end -->
