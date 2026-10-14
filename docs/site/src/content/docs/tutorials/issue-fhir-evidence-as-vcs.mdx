@@ -1,6 +1,6 @@
 ---
 title: Issue minimum-disclosure credentials from FHIR
-description: Connect Evidence Gateway to a public FHIR R4 server and verify patient-coverage and healthcare-establishment answers as SD-JWT VC responses.
+description: Connect a normalized Evidence project to a public FHIR R4 server and verify two narrow administrative answers as SD-JWT VC responses.
 status: current
 owner: registry-docs
 source_repos:
@@ -15,21 +15,26 @@ standards_referenced:
   - sd-jwt-vc
 tutorial_test:
   toolset: evidence
+  checkout: true
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Connect Evidence Gateway to the public SMART Health IT FHIR R4 server through a minimal local
+Connect Evidence Gateway to the public SMART Health IT FHIR R4 server through a bounded local
 read-through adapter, then verify two minimum-disclosure answers as Selective Disclosure JSON Web
-Token Verifiable Credential (SD-JWT VC) responses. One answer protects a patient: it discloses a
-coverage result instead of the FHIR resource behind it. The other applies the same pattern to a
-healthcare establishment, where the subject is an organization rather than a person.
+Token Verifiable Credential (SD-JWT VC) responses. You will return a coverage-record result for a
+patient and a healthcare-provider result for an organization without disclosing either FHIR resource.
 
 <QuickstartMeta
-  outcome="Two verified SD-JWT VC responses derived from live FHIR R4 Coverage and Organization resources."
+  outcome="Two verified SD-JWT VC responses from FHIR Coverage and Organization resources."
   time="About 25 minutes"
   level="Local development against a public synthetic-data server"
-  prerequisites={['The Evidence Gateway toolset', 'A shell with curl', 'Python 3', 'An editor', 'Internet access', 'Linux or macOS']}
+  prerequisites={[
+    'Matching evidence and evidencectl binaries on PATH',
+    'The Registry Stack source archive for the same release',
+    'Python 3.9 or later, curl, and Docker',
+    'Internet access on Linux or macOS',
+  ]}
 />
 
 ## Before you start
@@ -37,213 +42,53 @@ healthcare establishment, where the subject is an organization rather than a per
 Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) if you have not
 used `evidencectl` before.
 
-This tutorial was last run end to end against the [SMART Health IT R4 open
-endpoint](https://docs.smarthealthit.org/) at `https://r4.smarthealthit.org` on 10 August 2026. It
-is a public demonstration server containing synthetic data. Its operator can add, change, or reset
-records, so the discovery result and expected `true` answers can change. Do not send real patient
-identifiers or other sensitive data to it.
+The previous version of this tutorial was run against the [SMART Health IT R4 open
+endpoint](https://docs.smarthealthit.org/) at `https://r4.smarthealthit.org` on 10 August 2026.
+The current commands are replayed against sanitized local FHIR responses. The public endpoint
+contains synthetic data, and its operator can add, change, or reset records. Discovery and the
+answers can therefore change. Do not send real patient identifiers or other sensitive data to it.
 
-The steps below work with this server as written. Both scripts carry a test-only origin override
-that accepts only a numeric-loopback HTTP endpoint, so Registry Docs can replay the same steps
-against sanitized local records. Another FHIR server may use different resource profiles, data,
-authorization, search behavior, or JSON shapes. Do not swap the server URL and assume the same
-evidence claim still holds.
-
-The two questions return narrow administrative facts:
+The example returns two narrow administrative facts:
 
 | Subject | FHIR resource | Governed answer |
 | --- | --- | --- |
 | Patient and coverage record | `Coverage` | The selected record reports `active` and names the selected patient as beneficiary. |
-| Healthcare establishment | `Organization` | The selected record reports `active` and carries the standard healthcare-provider organization type. |
+| Healthcare establishment | `Organization` | The selected record reports `active` and has exactly one coding, with the standard organization-type system and code `prov`. |
 
-An active `Coverage` record is not an independent insurance-eligibility decision. An active
-healthcare-provider `Organization` is not facility accreditation or a professional licence. A real
+An active Coverage record is not an independent insurance-eligibility decision. An active
+healthcare-provider Organization is not facility accreditation or a professional licence. A real
 deployment can rely on either answer only when its FHIR server is authoritative for that fact and
 the governing rule has been reviewed.
 
-## Select live synthetic records
+## Copy the complete project
 
-Create a working directory:
+From the root of the matching source archive, copy the maintained FHIR example into a writable
+directory. Generated keys, client material, and responses stay in that copy.
 
 ```sh
+evidence --version
+evidencectl --version
 mkdir fhir-evidence-credentials
+cp -R products/evidence/examples/fhir fhir-evidence-credentials/fhir-record-evidence
 cd fhir-evidence-credentials
 ```
 
-Create `discover-fhir-records.py`. The script searches the demo server for one active Coverage
-record whose beneficiary resolves to a Patient that exists, and one active Organization typed as a
-healthcare provider. It writes only their selectors to two owner-only local files, and prints
-neither identifiers nor FHIR resources:
+The versions must match. The copy contains one `evidence.yaml`, four named Functions, synthetic
+fixtures, a `local-target.yaml`, and complete grants in `dev-authority.yaml`. It also contains the
+reviewed FHIR OpenAPI subset and the two Python scripts used in this tutorial.
 
-```python title="discover-fhir-records.py" test-file
-import json
-import os
-import re
-from urllib.parse import urlencode, urlsplit
-from urllib.error import HTTPError
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+The project fixes each GET path, selector role, bounded response projection, private Facts, and
+disclosed Output. The target binds the local connection and keys. Each grant permits the complete
+request shape and both signed JWS and SD-JWT VC.
 
-DEFAULT_BASE_URL = "https://r4.smarthealthit.org"
-BASE_URL = os.environ.get("FHIR_TUTORIAL_TEST_BASE_URL", DEFAULT_BASE_URL)
-if BASE_URL != DEFAULT_BASE_URL:
-    parsed_origin = urlsplit(BASE_URL)
-    if (
-        parsed_origin.scheme != "http"
-        or parsed_origin.hostname != "127.0.0.1"
-        or parsed_origin.port is None
-        or parsed_origin.username is not None
-        or parsed_origin.password is not None
-        or parsed_origin.path not in {"", "/"}
-        or parsed_origin.query
-        or parsed_origin.fragment
-    ):
-        raise RuntimeError("the tutorial test origin must be numeric loopback HTTP")
-BASE_URL = BASE_URL.rstrip("/")
-MAXIMUM_BYTES = 1_048_576
-FHIR_ID = re.compile(r"^[A-Za-z0-9.-]{1,64}$")
-ORGANIZATION_TYPE_SYSTEM = (
-    "http://terminology.hl7.org/CodeSystem/organization-type"
-)
+{/* Evidence: products/evidence/examples/fhir/evidence.yaml, products/evidence/examples/fhir/dev-authority.yaml, products/evidence/examples/fhir/local-target.yaml */}
 
+## Select live synthetic records
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
-        return None
-
-
-OPENER = build_opener(ProxyHandler({}), NoRedirect)
-
-
-def read_fhir(path, parameters=None, missing_ok=False):
-    query = f"?{urlencode(parameters)}" if parameters else ""
-    request = Request(
-        f"{BASE_URL}/{path}{query}",
-        headers={"Accept": "application/fhir+json"},
-    )
-    try:
-        with OPENER.open(request, timeout=20) as response:
-            if response.status != 200:
-                raise RuntimeError("FHIR server returned a non-success status")
-            if response.headers.get_content_type() not in {
-                "application/fhir+json",
-                "application/json",
-            }:
-                raise RuntimeError("FHIR server returned an unexpected media type")
-            body = response.read(MAXIMUM_BYTES + 1)
-    except HTTPError as error:
-        if missing_ok and error.code in {404, 410}:
-            return None
-        raise RuntimeError("FHIR server returned a non-success status") from None
-    if len(body) > MAXIMUM_BYTES:
-        raise RuntimeError("FHIR response exceeded the discovery bound")
-    return json.loads(body)
-
-
-def resources(bundle, resource_type):
-    if bundle.get("resourceType") != "Bundle":
-        raise RuntimeError("FHIR search did not return a Bundle")
-    for entry in bundle.get("entry", []):
-        resource = entry.get("resource", {})
-        if resource.get("resourceType") == resource_type:
-            yield resource
-
-
-coverage_selection = None
-coverage_bundle = read_fhir(
-    "Coverage",
-    {"status": "active", "_count": "100"},
-)
-for coverage in resources(coverage_bundle, "Coverage"):
-    coverage_id = coverage.get("id")
-    reference = coverage.get("beneficiary", {}).get("reference", "")
-    if (
-        coverage.get("status") != "active"
-        or not isinstance(coverage_id, str)
-        or not FHIR_ID.fullmatch(coverage_id)
-        or not reference.startswith("Patient/")
-    ):
-        continue
-    patient_id = reference.removeprefix("Patient/")
-    if not FHIR_ID.fullmatch(patient_id):
-        continue
-    patient = read_fhir(f"Patient/{patient_id}", missing_ok=True)
-    if (
-        patient is not None
-        and patient.get("resourceType") == "Patient"
-        and patient.get("id") == patient_id
-    ):
-        coverage_selection = {
-            "subjects": [
-                {"role": "patient", "field": "patient_id", "value": patient_id},
-                {
-                    "role": "coverage-record",
-                    "field": "coverage_id",
-                    "value": coverage_id,
-                },
-            ]
-        }
-        break
-
-organization_selection = None
-organization_bundle = read_fhir(
-    "Organization",
-    {
-        "active": "true",
-        "type": f"{ORGANIZATION_TYPE_SYSTEM}|prov",
-        "_count": "100",
-    },
-)
-for organization in resources(organization_bundle, "Organization"):
-    organization_id = organization.get("id")
-    organization_types = organization.get("type", [])
-    coding_groups = [
-        organization_type.get("coding", [])
-        for organization_type in organization_types
-    ]
-    codings = [
-        coding
-        for coding_group in coding_groups
-        for coding in coding_group
-    ]
-    if (
-        organization.get("active") is True
-        and isinstance(organization_id, str)
-        and FHIR_ID.fullmatch(organization_id)
-        and 1 <= len(organization_types) <= 4
-        and all(1 <= len(coding_group) <= 8 for coding_group in coding_groups)
-        and len(codings) == 1
-        and codings[0].get("system") == ORGANIZATION_TYPE_SYSTEM
-        and codings[0].get("code") == "prov"
-    ):
-        organization_selection = {
-            "subjects": [
-                {
-                    "role": "organization",
-                    "field": "organization_id",
-                    "value": organization_id,
-                }
-            ]
-        }
-        break
-
-if coverage_selection is None or organization_selection is None:
-    raise RuntimeError("no coherent tutorial records are currently available")
-
-for path, selection in [
-    ("fhir-coverage-subjects.json", coverage_selection),
-    ("fhir-organization-subjects.json", organization_selection),
-]:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as destination:
-        json.dump(selection, destination, separators=(",", ":"))
-        destination.write("\n")
-
-print("Coverage selector file: ready")
-print("Organization selector file: ready")
-```
+Run the discovery script from the tutorial directory:
 
 ```sh
-python3 discover-fhir-records.py
+python3 fhir-record-evidence/discover-records.py
 ```
 
 ```text test-expect
@@ -251,422 +96,106 @@ Coverage selector file: ready
 Organization selector file: ready
 ```
 
-Two ready lines are the whole output: no patient identifier, no coverage identifier, no FHIR
-resource. Those values stay in the selector files, which sit outside the project you create next,
-and Evidence Gateway reads them from there rather than from a shell argument or command output.
+The script selects one active Coverage whose beneficiary resolves to an existing Patient, and one
+active Organization meeting the exact coding rule. It writes only their selectors to owner-only
+`fhir-coverage-subjects.json` and `fhir-organization-subjects.json` files outside the project. It
+prints neither identifiers nor resources.
 
-## Run a live FHIR read-through adapter
+If discovery cannot find coherent records, remove any selector files already created and try again
+later. Do not weaken the beneficiary or coding checks to recover a former answer.
 
-Evidence Gateway's frozen Version 1 bundle grammar permits credential-free source access only on
-numeric loopback under local assurance. The adapter below holds that boundary while forwarding
-each governed read to the real SMART FHIR server. It carries no fixtures or seeded responses,
-binds only to loopback, accepts only the two FHIR resource paths used below, denies redirects,
-validates the returned resource identity, bounds the response, and suppresses request logging so
-selectors never reach a log file.
+## Start the read-through adapter
 
-Create `fhir-read-through.py`:
+In another terminal, enter `fhir-evidence-credentials` and start the source:
 
-```python title="fhir-read-through.py" test-file
-import json
-import os
-import re
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
-from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
-
-DEFAULT_BASE_URL = "https://r4.smarthealthit.org"
-BASE_URL = os.environ.get("FHIR_TUTORIAL_TEST_BASE_URL", DEFAULT_BASE_URL)
-if BASE_URL != DEFAULT_BASE_URL:
-    parsed_origin = urlsplit(BASE_URL)
-    if (
-        parsed_origin.scheme != "http"
-        or parsed_origin.hostname != "127.0.0.1"
-        or parsed_origin.port is None
-        or parsed_origin.username is not None
-        or parsed_origin.password is not None
-        or parsed_origin.path not in {"", "/"}
-        or parsed_origin.query
-        or parsed_origin.fragment
-    ):
-        raise RuntimeError("the tutorial test origin must be numeric loopback HTTP")
-BASE_URL = BASE_URL.rstrip("/")
-MAXIMUM_BYTES = 1_048_576
-RESOURCE_PATH = re.compile(r"^/(Coverage|Organization)/([A-Za-z0-9.-]{1,64})$")
-
-
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
-        return None
-
-
-OPENER = build_opener(ProxyHandler({}), NoRedirect)
-
-
-class FhirReadThrough(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
-    def log_message(self, format, *args):
-        return
-
-    def send_body(self, status, body, content_type):
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def fail(self, status):
-        self.send_body(status, b'{"error":"FHIR read failed"}\n', "application/json")
-
-    def do_GET(self):
-        if self.path == "/healthz":
-            self.send_body(200, b"ready\n", "text/plain")
-            return
-
-        match = RESOURCE_PATH.fullmatch(self.path)
-        if match is None:
-            self.fail(404)
-            return
-        resource_type, resource_id = match.groups()
-        request = Request(
-            f"{BASE_URL}/{resource_type}/{resource_id}",
-            headers={"Accept": "application/fhir+json"},
-        )
-        try:
-            with OPENER.open(request, timeout=20) as response:
-                if response.status != 200 or response.headers.get_content_type() not in {
-                    "application/fhir+json",
-                    "application/json",
-                }:
-                    self.fail(502)
-                    return
-                body = response.read(MAXIMUM_BYTES + 1)
-            if len(body) > MAXIMUM_BYTES:
-                self.fail(502)
-                return
-            resource = json.loads(body)
-            if (
-                resource.get("resourceType") != resource_type
-                or resource.get("id") != resource_id
-            ):
-                self.fail(502)
-                return
-        except HTTPError as error:
-            self.fail(404 if error.code in {404, 410} else 502)
-            return
-        except (URLError, TimeoutError, ValueError):
-            self.fail(502)
-            return
-
-        self.send_body(200, body, "application/json")
-
-
-server = ThreadingHTTPServer(("127.0.0.1", 8000), FhirReadThrough)
-server.daemon_threads = True
-print("FHIR read-through adapter ready on 127.0.0.1:8000", flush=True)
-server.serve_forever()
+```sh test-cwd="fhir-evidence-credentials" test-background="http://127.0.0.1:8000/healthz"
+python3 fhir-record-evidence/serve-source.py
 ```
 
-Start it and confirm that it is ready:
+Leave the terminal running. The adapter binds only to `127.0.0.1:8000`, permits the two resource
+paths, requests `application/fhir+json`, and exposes the same body as `application/json`.
+It denies redirects and ambient proxies, bounds responses, validates resource type and identity,
+and suppresses request logging.
+
+The numeric-loopback, credential-free connection is permitted only under local assurance. A
+deployment needs reviewed authenticated HTTPS source transport. The scripts' test origin override
+accepts only numeric-loopback HTTP and is used for the sanitized documentation replay; another
+institution's FHIR server requires its own reviewed profile and authorization.
+
+{/* Evidence: products/evidence/examples/fhir/serve-source.py, products/evidence/examples/fhir/discover-records.py, products/evidence/examples/fhir/source.openapi.yaml */}
+
+## Prove the project before starting Evidence
+
+Return to the project terminal and generate disposable local material:
 
 ```sh
-umask 077
-python3 fhir-read-through.py >fhir-read-through.log 2>&1 &
-printf '%s\n' "$!" >fhir-read-through.pid
-
-for attempt in 1 2 3 4 5; do
-  if curl --silent --fail http://127.0.0.1:8000/healthz >/dev/null; then
-    break
-  fi
-  sleep 1
-done
-curl --silent --show-error --fail http://127.0.0.1:8000/healthz
-```
-
-```text test-expect
-ready
-```
-
-This is a transport adapter, not a mock FHIR server. Every Coverage or Organization response
-Evidence Gateway uses is fetched live from `https://r4.smarthealthit.org` at request time. The
-adapter asks the upstream server for FHIR JSON, validates the resource, and exposes the same JSON
-body as `application/json`, which is inside Evidence Gateway's frozen v1 source contract. Both
-scripts ignore ambient proxy variables, so a selector cannot be sent through an undeclared
-intermediary.
-
-## Describe the exact FHIR reads
-
-A FHIR server publishes a `CapabilityStatement`, which lists what the server supports but is not
-an OpenAPI description. Evidence Gateway compiles a narrow OpenAPI contract instead, so the
-origin, paths, response media type, projected fields, and bounds are all stated explicitly.
-
-Save this reviewed subset as `fhir-smart-r4.openapi.yaml`:
-
-```yaml title="fhir-smart-r4.openapi.yaml" test-file
-openapi: 3.1.0
-info:
-  title: SMART Health IT public FHIR R4 tutorial subset
-  version: 1.0.0
-servers:
-  - url: http://127.0.0.1:8000
-paths:
-  /Coverage/{coverage_id}:
-    get:
-      operationId: getCoverage
-      parameters:
-        - name: coverage_id
-          in: path
-          required: true
-          schema: {type: string}
-      responses:
-        '200':
-          description: One FHIR R4 Coverage resource
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [resourceType, id, status, beneficiary]
-                properties:
-                  resourceType: {type: string, const: Coverage}
-                  id: {type: string, minLength: 1, maxLength: 64}
-                  status:
-                    type: string
-                    enum: [active, cancelled, draft, entered-in-error]
-                  beneficiary:
-                    type: object
-                    required: [reference]
-                    properties:
-                      reference: {type: string, minLength: 1, maxLength: 128}
-  /Organization/{organization_id}:
-    get:
-      operationId: getOrganization
-      parameters:
-        - name: organization_id
-          in: path
-          required: true
-          schema: {type: string}
-      responses:
-        '200':
-          description: One FHIR R4 Organization resource
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [resourceType, id, active, type]
-                properties:
-                  resourceType: {type: string, const: Organization}
-                  id: {type: string, minLength: 1, maxLength: 64}
-                  active: {type: boolean}
-                  type:
-                    type: array
-                    minItems: 1
-                    maxItems: 4
-                    items:
-                      type: object
-                      required: [coding]
-                      properties:
-                        coding:
-                          type: array
-                          minItems: 1
-                          maxItems: 8
-                          items:
-                            type: object
-                            required: [system, code]
-                            properties:
-                              system:
-                                type: string
-                                const: http://terminology.hl7.org/CodeSystem/organization-type
-                              code: {type: string, minLength: 1, maxLength: 64}
-```
-
-Create an editable local project from that contract:
-
-```sh
-evidencectl init fhir-record-evidence \
-  --openapi fhir-smart-r4.openapi.yaml \
-  --profile local
 cd fhir-record-evidence
+python3 test_source.py
+umask 077
+evidencectl keygen signing --output-dir .generated/secrets
+evidencectl keygen secret --output .generated/secrets/audit-hmac-key
+evidencectl keygen secret --output .generated/secrets/subject-binding-hmac-key
+evidencectl check . --target local-target.yaml
+evidencectl test . --target local-target.yaml
+evidencectl access client add fhir-client \
+  --access-profile fhir-service \
+  --generate-local-key
 ```
 
-```text test-excerpt
-Created an editable OpenAPI authoring project in fhir-record-evidence
-```
+The Python check exercises the bounded adapter and discovery failures without network access.
+`check` compiles the project and target without contacting the FHIR server. `test` evaluates the
+declared synthetic success, false, mismatch, missing-data, bounds, and privacy cases offline.
+This focused local suite does not establish production promotion readiness.
 
-The local compiler recognizes the numeric-loopback server as a credential-free `none` source. The
-adapter owns the system-TLS connection to the public FHIR server. This arrangement is for local
-authoring only; a deployment must use a reviewed authenticated HTTPS source.
+Only the `coverage-record` role fills the Coverage path. The patient selector reaches derivation,
+where the beneficiary must equal that patient. A mismatch refuses the assertion rather than
+signing a result about a different patient. The organization extraction checks each coding's
+system and code together; unrelated coding entries cannot be combined into a provider match.
 
-## Author the patient coverage question
+{/* Evidence: products/evidence/examples/fhir/functions/derive-coverage-status.rhai, products/evidence/examples/fhir/functions/extract-organization.rhai, products/evidence/examples/fhir/fixtures/coverage-status.yaml, products/evidence/examples/fhir/fixtures/healthcare-establishment.yaml */}
 
-Create `questions/fhir-coverage-status.yaml`:
+## Start Evidence Gateway
 
-```yaml title="questions/fhir-coverage-status.yaml" test-file
-apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: fhir-coverage-status
-question: Does this coverage record report active coverage for the selected patient?
-purpose: coverage-record-verification
-subjects:
-  - role: patient
-    selector: patient_id
-    derivation: true
-  - role: coverage-record
-    selector: coverage_id
-    source: true
-    derivation: true
-source:
-  operation: getCoverage
-  facts:
-    - {name: resource_id, path: /id, combine: exactly-one}
-    - {name: status, path: /status, combine: exactly-one}
-    - {name: beneficiary_reference, path: /beneficiary/reference, combine: exactly-one}
-  collectionBounds: {}
-answers:
-  - concept: coverage_record_reports_active
-    type: boolean
-responseFormats: [signed-jws, sd-jwt-vc]
-derivation: derivations/fhir-coverage-status.rhai
-disclosure:
-  allow: [coverage_record_reports_active]
-```
-
-Only the `coverage-record` role, marked `source: true`, fills the FHIR path. The patient identifier
-is derivation-only, so it does not widen the source request or cause Evidence Gateway to fetch a
-Patient resource.
-
-Create `derivations/fhir-coverage-status.rhai`:
-
-```rhai title="derivations/fhir-coverage-status.rhai" test-file
-fn answer(facts, selectors, context) {
-    let coverage_id = selectors["coverage-record"]["values"]["coverage_id"];
-    let patient_id = selectors["patient"]["values"]["patient_id"];
-    if required(facts.resource_id, "coverage_id_missing") != coverage_id {
-        throw("derivation_input_error");
-    }
-    if required(facts.beneficiary_reference, "beneficiary_missing") !=
-       "Patient/" + patient_id {
-        throw("derivation_input_error");
-    }
-    #{
-        coverage_record_reports_active:
-            required(facts.status, "coverage_status_missing") == "active"
-    }
-}
-```
-
-A beneficiary mismatch fails closed. It never becomes a signed `false` answer about a different
-patient. The source projection retains only `id`, `status`, and `beneficiary.reference`; it drops
-the payor, subscriber identifier, coverage class, period, and every other source field.
-
-## Author the healthcare-establishment question
-
-Create `questions/fhir-healthcare-establishment.yaml`:
-
-```yaml title="questions/fhir-healthcare-establishment.yaml" test-file
-apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: fhir-healthcare-establishment
-question: Does this organization record report an active healthcare provider?
-purpose: healthcare-establishment-verification
-subject:
-  role: organization
-  selector: organization_id
-  derivation: true
-source:
-  operation: getOrganization
-  facts:
-    - {name: resource_id, path: /id, combine: exactly-one}
-    - {name: active, path: /active, combine: exactly-one}
-    - {name: type_systems, path: /type/*/coding/*/system, combine: collect}
-    - {name: type_codes, path: /type/*/coding/*/code, combine: collect}
-  collectionBounds:
-    /type: 4
-    /type/*/coding: 8
-answers:
-  - concept: healthcare_provider_record_active
-    type: boolean
-responseFormats: [signed-jws, sd-jwt-vc]
-derivation: derivations/fhir-healthcare-establishment.rhai
-disclosure:
-  allow: [healthcare_provider_record_active]
-```
-
-Create `derivations/fhir-healthcare-establishment.rhai`:
-
-```rhai title="derivations/fhir-healthcare-establishment.rhai" test-file
-fn answer(facts, selectors, context) {
-    let organization_id = selectors["organization"]["values"]["organization_id"];
-    if required(facts.resource_id, "organization_id_missing") != organization_id {
-        throw("derivation_input_error");
-    }
-    let type_systems = required(facts.type_systems, "organization_type_system_missing");
-    let type_codes = required(facts.type_codes, "organization_type_code_missing");
-    #{
-        healthcare_provider_record_active:
-            required(facts.active, "organization_active_missing") &&
-            type_systems.len == 1 &&
-            type_systems[0] ==
-                "http://terminology.hl7.org/CodeSystem/organization-type" &&
-            type_codes.len == 1 &&
-            type_codes[0] == "prov"
-    }
-}
-```
-
-The result reports only what this FHIR record says. It does not claim that a regulator has
-licensed the organization, that a particular practitioner works there, or that the facility is
-accredited.
-
-## Start the project
-
-Compile the two questions and start Evidence Gateway with its stock identity provider:
+Use the target explicitly and select the tutorial ports:
 
 ```sh
-evidencectl dev start .
+evidencectl dev start . \
+  --target local-target.yaml \
+  --evidence-port 18080 \
+  --issuer-port 8082
 ```
 
 ```text test-excerpt
-Evidence ready at http://127.0.0.1:8080
-Issuer ready at http://127.0.0.1:8081
+Evidence ready at http://127.0.0.1:18080
+Issuer ready at http://127.0.0.1:8082
 ```
 
-Evidence Gateway now reads the live SMART server through the loopback adapter. It fixes one GET
-path per question, asks the adapter for `application/json`, applies response-size and timeout
-bounds, and projects the response before the derivation runs. The adapter independently asks the
-upstream server for `application/fhir+json`, denies redirects, and validates the remote FHIR
-resource identity before returning it.
+Evidence Gateway now reads the selected resources through the adapter at request time. Source
+projection removes unselected fields before extraction and derivation. Rust retains destination,
+credentials, transport, response bounds, authorization, signing, and audit ownership.
 
 ## Request the patient coverage credential
 
-Prepare a request bound to the patient and coverage-record roles:
+Prepare a request bound to the patient and coverage-record roles. The selector file keeps
+identifiers out of shell arguments and command output.
 
 ```sh
 evidencectl request prepare fhir-coverage-status \
+  --client fhir-client \
   --purpose coverage-record-verification \
   --subjects-file ../fhir-coverage-subjects.json \
   --response-format sd-jwt-vc \
   --name fhir-coverage-vc
 ```
 
-```text test-expect
-Prepared request: .evidence/requests/fhir-coverage-vc/request.json
-Prepared verification context: .evidence/requests/fhir-coverage-vc/verification.json
-Prepared authorization: .evidence/requests/fhir-coverage-vc/authorization.curl
-```
-
-Preparation writes three files: the request body, the verification context `evidencectl verify`
-checks the response against, and short-lived authorization for the call. Nothing has been read
-from the FHIR server yet; that happens when you send the request.
-
-Request and verify the credential:
+Preparation fixes the nonce, expected definition revision, response format, and verifier pins
+before any source read. Send the prepared body, then verify the exact response offline:
 
 ```sh
 curl --silent --show-error --fail-with-body \
   --config .evidence/requests/fhir-coverage-vc/authorization.curl \
   --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
+  --url http://127.0.0.1:18080/v1/evidence \
   --header 'Content-Type: application/json' \
   --header 'Accept: application/dc+sd-jwt' \
   --data-binary @.evidence/requests/fhir-coverage-vc/request.json \
@@ -683,24 +212,16 @@ HTTP 200
 VERIFIED
 ```
 
-Inspect the verified payload, not the unverified credential:
+Inspect only the verified payload:
 
 ```sh
 python3 -m json.tool fhir-coverage.verified.json
 ```
 
-The verified payload carries one supported value:
-
-```json test-excerpt
-{
-  "providesValueFor": "urn:registrystack:evidence:local:concept:fhir-coverage-status:coverage_record_reports_active",
-  "value": true
-}
-```
-
-Alongside it the payload carries pseudonymous bindings for `patient` and `coverage-record`. Read
-it for what is missing: neither FHIR identifier is there, nor the beneficiary reference, nor any
-of the Coverage fields the question did not select.
+Its `supportedValues` carries the Boolean concept
+`urn:example:concept:coverage-record-reports-active:v1`. Pseudonymous bindings identify the two
+roles within the audience and purpose. Neither selected FHIR identifier, the beneficiary reference,
+nor the unselected Coverage fields belong in the assertion.
 
 ## Request the healthcare-establishment credential
 
@@ -708,6 +229,7 @@ Prepare, request, and verify the second credential:
 
 ```sh
 evidencectl request prepare fhir-healthcare-establishment \
+  --client fhir-client \
   --purpose healthcare-establishment-verification \
   --subjects-file ../fhir-organization-subjects.json \
   --response-format sd-jwt-vc \
@@ -716,7 +238,7 @@ evidencectl request prepare fhir-healthcare-establishment \
 curl --silent --show-error --fail-with-body \
   --config .evidence/requests/fhir-healthcare-establishment-vc/authorization.curl \
   --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
+  --url http://127.0.0.1:18080/v1/evidence \
   --header 'Content-Type: application/json' \
   --header 'Accept: application/dc+sd-jwt' \
   --data-binary @.evidence/requests/fhir-healthcare-establishment-vc/request.json \
@@ -728,81 +250,54 @@ evidencectl verify fhir-healthcare-establishment.sd-jwt \
   --output fhir-healthcare-establishment.verified.json
 ```
 
-```text test-expect
-Prepared request: .evidence/requests/fhir-healthcare-establishment-vc/request.json
-Prepared verification context: .evidence/requests/fhir-healthcare-establishment-vc/verification.json
-Prepared authorization: .evidence/requests/fhir-healthcare-establishment-vc/authorization.curl
+```text test-excerpt
 HTTP 200
 VERIFIED
 ```
 
-The verified payload carries `healthcare_provider_record_active: true`. It does not repeat the
-organization name, source identifier, contact details, address, or FHIR type code. A relying party
-learns that the record describes an active healthcare provider, and not which record it is.
+The verified concept is `urn:example:concept:healthcare-provider-record-active:v1`. The assertion
+does not repeat the organization's source identifier, name, address, contact details, or coding.
+A verified `false` is the source's current administrative answer and does not justify changing
+the rule to recover an earlier `true`.
 
 ## Inspect the audit and clean up
 
-Stop the local services, inspect the last completed operation, and remove generated local state:
+Stop the retained generation, inspect its last completed operation, and remove generated runtime
+state:
 
 ```sh
-evidencectl dev stop
+evidencectl dev stop .
 evidencectl audit show --last-operation
-evidencectl dev clean
+evidencectl dev clean .
+```
+
+The audit view names the authorized definition, purpose, requester pseudonym, and released Output.
+It omits FHIR identifiers, source resources, credentials, and the Boolean value. The tutorial runner
+stops the adapter; if you started it by hand, press `Ctrl+C` in its terminal.
+
+Remove the selector files created by discovery:
+
+```sh
 cd ..
-kill "$(cat fhir-read-through.pid)" 2>/dev/null || true
-rm -f \
-  discover-fhir-records.py \
-  fhir-read-through.py \
-  fhir-read-through.log \
-  fhir-read-through.pid \
-  fhir-coverage-subjects.json \
-  fhir-organization-subjects.json
+rm -f fhir-coverage-subjects.json fhir-organization-subjects.json
 ```
-
-```text test-expect
-Local Evidence stopped
-ACCESS AUTHORIZED fhir-healthcare-establishment healthcare-establishment-verification requester=<pseudonym>
-DISCLOSURE RELEASED healthcare_provider_record_active
-Removed stopped local Evidence state
-```
-
-The audit names the authorized question, the purpose it was authorized under, the requester
-pseudonym, and the concept that was released. Read it for what it leaves out: no selected FHIR
-identifier, no source resource, and not even the boolean value itself. An operator
-can establish that a caller was authorized to receive this answer under a stated purpose, and
-cannot read the answer out of the audit. The last commands remove the discovery script and the
-selector files.
-
-## What you built
-
-- Evidence Gateway read two live resources from one public FHIR R4 server through a local
-  read-through adapter, not a mock data service.
-- The patient question checked the Coverage-to-Patient relationship without fetching or disclosing
-  the Patient resource.
-- The establishment question applied the same bounded pattern outside patient data.
-- Two verified SD-JWT VC responses carried boolean answers and pseudonymous subject bindings
-  instead of FHIR resources or identifiers.
-- The credential-free source stayed loopback-only, and it is not a route to production source
-  authentication.
 
 ## Troubleshooting
 
-| Symptom | Cause | Resolution |
-| --- | --- | --- |
-| Record discovery reports that no coherent records are available | The public demo data changed, was reset, or no current resource matches the tutorial's narrow conditions. | Remove any selector files already created, then rerun the discovery step later. Do not weaken the relationship or organization-type checks. |
-| The read-through adapter does not start | Port 8000 is already in use, Python cannot bind loopback, or the process exited. | Stop the process using port 8000, inspect the owner-only `fhir-read-through.log`, and start the adapter again. Do not change the OpenAPI origin without reviewing the local-source boundary. |
-| Evidence Gateway reports a source dependency failure | The record changed shape, no longer matches the narrow schema, timed out, redirected, or returned a non-success status. | Probe the exact read again. Update the OpenAPI subset only after comparing it with the server's current FHIR profile and reviewing the claim semantics. |
-| The verified answer is `false` | The live record no longer reports the governed status or type. | Treat `false` as the server's current administrative answer. Do not edit the derivation merely to recover the tutorial's former output. |
-| A production FHIR server refuses the request | This tutorial uses an explicitly local, anonymous demo posture and a loopback FHIR-to-JSON adapter. | Deploy a reviewed authenticated HTTPS adapter that applies the institution's FHIR trust and authentication, commonly SMART Backend Services, and exposes the bounded response as `application/json`; then build under production or evidence-grade assurance. |
+| Symptom | Resolution |
+| --- | --- |
+| Discovery finds no coherent records | The public demo may have changed. Remove partial selector files and rerun later without weakening the relationship or coding rule. |
+| The adapter cannot bind port `8000` | Check which process owns the port. Stop only an adapter you started, or use another environment with the documented ports available. |
+| Evidence Gateway refuses a source result | The record may have changed identity or shape, exceeded a bound, redirected, timed out, or disappeared. Review the current source profile before changing the project. |
+| A production FHIR server refuses access | Use a reviewed authenticated HTTPS adapter applying the institution's FHIR trust and authorization, commonly SMART Backend Services. The anonymous public-demo configuration is local only. |
 
 ## Next
 
-- [Connect an institution source from OpenAPI](../connect-an-institution-source/) when the FHIR
-  server belongs to an institution and requires reviewed schemas and credentials.
-- [Configure Evidence Gateway](../../configure/evidence/) for SMART on FHIR Backend Services
-  private-key authentication and production source trust.
-- Model a practitioner licence only after identifying an authoritative FHIR profile, code system,
-  issuer relationship, and revocation semantics. A generic `Practitioner.qualification` entry is
-  not automatically a licence.
-- [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/) when another
-  application will make the trust decision.
+- [Connect an institution source from OpenAPI](../connect-an-institution-source/) for a server
+  requiring reviewed profiles and credentials.
+- [Configure Evidence Gateway](../../configure/evidence/) for production source trust and signing.
+- [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/) for an application's
+  independent trust decision.
+
+A practitioner licence needs an authoritative profile, code system, issuer relationship, and
+revocation semantics. A generic `Practitioner.qualification` entry does not establish those facts.
