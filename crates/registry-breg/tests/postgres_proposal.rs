@@ -479,6 +479,179 @@ async fn explicit_automatic_uses_current_builtin_grant_and_one_atomic_receipt() 
     fixture.finish().await;
 }
 
+// Observe an actual row-lock wait, rather than guessing when the writer has
+// reached the lifecycle boundary. Row locks wait on the owning transaction;
+// its granted relation lock identifies the reader holding the Proposal row.
+async fn proposal_lifecycle_writer_waits(admin: &tokio_postgres::Client, pid: Option<i32>) {
+    loop {
+        let waiting: bool = admin
+            .query_one(
+                "SELECT EXISTS (
+                    SELECT 1 FROM pg_stat_activity writer
+                    JOIN pg_locks pending ON pending.pid=writer.pid AND NOT pending.granted
+                    WHERE writer.datname=current_database()
+                      AND ($1::integer IS NULL OR writer.pid=$1)
+                      AND writer.query LIKE '%registry_proposal_state%'
+                      AND EXISTS (
+                          SELECT 1 FROM pg_locks reader
+                          WHERE reader.pid=ANY(pg_blocking_pids(writer.pid))
+                            AND reader.relation='registry_internal.registry_proposal_state'::regclass
+                            AND reader.mode='RowShareLock' AND reader.granted
+                      )
+                )",
+                &[&pid],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if waiting {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ordinary_get_remains_coherent_while_automatic_application_commits() {
+    use registry_breg_client::BRegProposalApplicationState;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let fixture =
+        client_http::ClientFixture::start(registry(true), claims("author", "zone-a")).await;
+    let draft = start(&fixture, "Concurrent automatic", "observation-auto-start").await;
+    let submit = fixture
+        .http
+        .client
+        .prepare_proposal(&draft, "submit", json!({}), &key("observation-auto-submit"))
+        .unwrap();
+    let submitted = fixture
+        .http
+        .client
+        .execute_proposal(&submit)
+        .await
+        .unwrap()
+        .value;
+    let loaded = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let observer = fixture
+        .client_with_mutations(
+            claims("author", "zone-a"),
+            (*fixture.mutations)
+                .clone()
+                .with_proposal_read_barrier_for_test(loaded.clone(), resume.clone()),
+        )
+        .await;
+    let metadata = observer
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap();
+    let get = metadata.value.select_proposal_get("clerk").unwrap();
+    let (observation, (progress, application)) = tokio::join!(
+        async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                observer.client.get_proposal(&get, submitted.id()),
+            )
+            .await
+        },
+        async {
+            tokio::time::timeout(Duration::from_secs(1), loaded.notified())
+                .await
+                .expect("ordinary HTTP Get loaded its lifecycle header");
+            let application = fixture.mutations.run_automatic_proposal_once_for_test();
+            tokio::pin!(application);
+            // Without the shared lifecycle lock, the worker commits here and
+            // the one resumed Get deterministically composes Submitted with
+            // an Applied job. Do not hide that refusal behind a retry.
+            let progress = tokio::time::timeout(Duration::from_secs(1), async {
+                tokio::select! {
+                    result = &mut application => Some(result),
+                    () = proposal_lifecycle_writer_waits(&fixture.database.admin, None) => None,
+                }
+            })
+            .await;
+            resume.notify_one();
+            match progress {
+                Ok(Some(result)) => (Ok(true), result),
+                other => (
+                    other.map(|_| false),
+                    tokio::time::timeout(Duration::from_secs(3), application)
+                        .await
+                        .expect("automatic application completes after Get releases its row lock"),
+                ),
+            }
+        }
+    );
+    let current = fixture.http.client.read_proposal(&submitted).await;
+    let row = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT state,attempt_count,application_id,
+                    (SELECT count(*) FROM registry_internal.registry_proposal_applications)
+               FROM registry_internal.registry_proposal_application_jobs",
+            &[],
+        )
+        .await
+        .unwrap();
+    let idle = fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await;
+    drop(observer);
+    fixture.finish().await;
+
+    let observed = observation
+        .expect("ordinary Get finishes within its deadline")
+        .expect("an unchanged authorized caller must not receive a transient 404")
+        .value;
+    assert!(progress.is_ok(), "worker reached its lifecycle boundary");
+    assert!(
+        !progress.unwrap(),
+        "Get holds the lifecycle lock until projection finishes"
+    );
+    assert!(application.unwrap());
+    assert_eq!(observed.state(), BRegProposalState::Submitted);
+    assert_eq!(observed.revision(), submitted.revision());
+    assert_eq!(
+        observed.submission_version(),
+        submitted.submission_version()
+    );
+    assert_eq!(observed.effect_digest(), submitted.effect_digest());
+    assert_eq!(
+        observed.application_status().unwrap().state,
+        BRegProposalApplicationState::Applying
+    );
+    assert!(observed.application().is_none());
+    let applied = current.unwrap().value;
+    assert_eq!(applied.state(), BRegProposalState::Applied);
+    assert_eq!(applied.submission_version(), submitted.submission_version());
+    assert_eq!(applied.effect_digest(), submitted.effect_digest());
+    assert_eq!(
+        applied.application_status().unwrap().state,
+        BRegProposalApplicationState::Applied
+    );
+    let receipt = applied.application().unwrap();
+    assert_eq!(receipt.submission_version, submitted.submission_version());
+    assert_eq!(
+        Some(receipt.effect_digest.as_str()),
+        submitted.effect_digest()
+    );
+    assert_eq!(
+        receipt.application_id,
+        row.get::<_, uuid::Uuid>(2).to_string()
+    );
+    assert_eq!(row.get::<_, String>(0), "applied");
+    assert_eq!(row.get::<_, i32>(1), 1);
+    assert_eq!(row.get::<_, i64>(3), 1);
+    assert!(
+        !idle.unwrap(),
+        "one frozen submission is applied exactly once"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn automatic_lease_expiring_during_a_write_rolls_back_and_recovers_within_its_budget() {
     let fixture = client_http::ClientFixture::start_with_mutations(
@@ -666,6 +839,240 @@ impl registry_breg::review_store::ReviewResultSource for LocalReview {
         )
         .map_err(|_| registry_breg::mutation::MutationError::PreconditionFailed)
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ordinary_get_excludes_review_result_and_job_publication_until_observation_finishes() {
+    use registry_breg_client::BRegProposalApplicationState;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let mut source = registry_source(true);
+    source["reviewAuthorities"] =
+        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+    let policy =
+        json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+    let review = Arc::new(LocalReview {
+        calls: 0.into(),
+        mode: 0.into(),
+        result_id: uuid::Uuid::new_v4(),
+    });
+    let injected = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("author", "zone-a"),
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+        },
+    )
+    .await;
+    let draft = start(&fixture, "Concurrent approval", "observation-review-start").await;
+    let submit = fixture
+        .http
+        .client
+        .prepare_proposal(
+            &draft,
+            "submit",
+            json!({}),
+            &key("observation-review-submit"),
+        )
+        .unwrap();
+    let submitted = fixture
+        .http
+        .client
+        .execute_proposal(&submit)
+        .await
+        .unwrap()
+        .value;
+    let row = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT create_request,expected_submission_digest,
+                    (SELECT snapshot FROM registry_internal.registry_proposal_submissions)
+               FROM registry_internal.registry_proposal_review_submissions",
+            &[],
+        )
+        .await
+        .unwrap();
+    let frozen: Value = row.get(2);
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(row.get(0)).unwrap();
+    let accepted = registry_review_client::ReviewRequestAccepted {
+        request_id: uuid::Uuid::new_v4(),
+        subject: create.subject,
+        policy: serde_json::from_value(policy).unwrap(),
+        submission_digest: serde_json::from_value(json!(row.get::<_, String>(1))).unwrap(),
+    };
+    fixture.database.admin.execute(
+        "UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",
+        &[&serde_json::to_value(&accepted).unwrap()],
+    ).await.unwrap();
+    let result = review.result(&accepted);
+    let loaded = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let observer = fixture
+        .client_with_mutations(
+            claims("author", "zone-a"),
+            (*fixture.mutations)
+                .clone()
+                .with_proposal_read_barrier_for_test(loaded.clone(), resume.clone()),
+        )
+        .await;
+    let metadata = observer
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap();
+    let get = metadata.value.select_proposal_get("clerk").unwrap();
+    let (mut migration, connection) = fixture.database.connect_migration().await;
+    let writer_pid: i32 = migration
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let (observation, (progress, before_release, reconciled)) = tokio::join!(
+        async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                observer.client.get_proposal(&get, submitted.id()),
+            )
+            .await
+        },
+        async {
+            tokio::time::timeout(Duration::from_secs(1), loaded.notified())
+                .await
+                .expect("ordinary HTTP Get loaded its lifecycle header");
+            let reconcile = async {
+                let tx = migration.transaction().await.unwrap();
+                registry_breg::review_store::reconcile_result(
+                    &tx,
+                    "local-review",
+                    &accepted,
+                    &result,
+                )
+                .await?;
+                tx.commit()
+                    .await
+                    .map_err(|_| registry_breg::mutation::MutationError::Unavailable)
+            };
+            tokio::pin!(reconcile);
+            // This proves writer exclusion at the lifecycle boundary. The
+            // barrier is before projection, so it does not itself force the
+            // narrower job-None then approved-result statement interleaving.
+            let progress = tokio::time::timeout(Duration::from_secs(1), async {
+                tokio::select! {
+                    result = &mut reconcile => Some(result),
+                    () = proposal_lifecycle_writer_waits(&fixture.database.admin, Some(writer_pid)) => None,
+                }
+            })
+            .await;
+            let before_release = fixture
+                .database
+                .admin
+                .query_one(
+                    "SELECT (SELECT count(*) FROM registry_internal.registry_proposal_review_results),
+                            (SELECT count(*) FROM registry_internal.registry_proposal_application_jobs)",
+                    &[],
+                )
+                .await
+                .unwrap();
+            resume.notify_one();
+            let (progress, reconciled) = match progress {
+                Ok(Some(result)) => (Ok(true), result),
+                other => (
+                    other.map(|_| false),
+                    tokio::time::timeout(Duration::from_secs(3), reconcile)
+                        .await
+                        .expect(
+                            "review publication finishes after the reader releases its row lock",
+                        ),
+                ),
+            };
+            (progress, before_release, reconciled)
+        }
+    );
+    drop(migration);
+    connection.abort();
+    let current = fixture.http.client.read_proposal(&submitted).await;
+    let published = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT r.result_id,r.result,r.status,j.result_id,j.proposal_digest,
+                    j.submission_version,j.system_grant_revision,s.snapshot,
+                    (SELECT count(*) FROM registry_internal.registry_proposal_review_results),
+                    (SELECT count(*) FROM registry_internal.registry_proposal_application_jobs)
+               FROM registry_internal.registry_proposal_review_results r
+               JOIN registry_internal.registry_proposal_application_jobs j
+                 USING(action_id,proposal_id,submission_version)
+               JOIN registry_internal.registry_proposal_submissions s
+                 USING(action_id,proposal_id,submission_version)",
+            &[],
+        )
+        .await;
+    drop(observer);
+    fixture.finish().await;
+
+    assert!(
+        progress.is_ok(),
+        "reconciler reached its lifecycle boundary"
+    );
+    assert!(
+        !progress.unwrap(),
+        "the no-job observer excludes review publication"
+    );
+    assert_eq!(before_release.get::<_, i64>(0), 0);
+    assert_eq!(before_release.get::<_, i64>(1), 0);
+    reconciled.unwrap();
+    let observed = observation
+        .expect("ordinary Get finishes within its deadline")
+        .expect("an unchanged authorized caller can observe the pending review")
+        .value;
+    assert_eq!(observed.state(), BRegProposalState::Submitted);
+    assert_eq!(observed.revision(), submitted.revision());
+    assert_eq!(
+        observed.submission_version(),
+        submitted.submission_version()
+    );
+    assert_eq!(observed.effect_digest(), submitted.effect_digest());
+    let status = observed.application_status().unwrap();
+    assert_eq!(status.state, BRegProposalApplicationState::Pending);
+    assert!(!status.automatic_retry.as_ref().unwrap().scheduled);
+    let current = current.unwrap().value;
+    assert_eq!(current.state(), BRegProposalState::Submitted);
+    assert_eq!(current.revision(), submitted.revision());
+    assert_eq!(current.submission_version(), submitted.submission_version());
+    assert_eq!(current.effect_digest(), submitted.effect_digest());
+    let status = current.application_status().unwrap();
+    assert_eq!(status.state, BRegProposalApplicationState::Pending);
+    assert!(status.automatic_retry.as_ref().unwrap().scheduled);
+    assert!(current.application().is_none());
+    let published = published.expect("approval and its application job are published together");
+    assert_eq!(published.get::<_, uuid::Uuid>(0), result.result_id);
+    assert_eq!(
+        published.get::<_, Value>(1),
+        serde_json::to_value(&result).unwrap()
+    );
+    assert_eq!(published.get::<_, String>(2), "approved");
+    assert_eq!(published.get::<_, uuid::Uuid>(3), result.result_id);
+    assert_eq!(
+        Some(published.get::<_, String>(4).as_str()),
+        submitted.effect_digest()
+    );
+    assert_eq!(
+        published.get::<_, i64>(5),
+        i64::from(submitted.submission_version())
+    );
+    assert_eq!(
+        published.get::<_, String>(6),
+        frozen["systemGrantRevision"].as_str().unwrap()
+    );
+    assert_eq!(published.get::<_, Value>(7), frozen);
+    assert_eq!(published.get::<_, i64>(8), 1);
+    assert_eq!(published.get::<_, i64>(9), 1);
+    assert_eq!(review.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -2883,4 +3290,163 @@ async fn incompatible_or_expired_inventory_cannot_activate_or_change_proposals_a
         );
         fixture.finish().await;
     }
+}
+
+#[test]
+fn automatic_recovery_grants_refuse_known_service_and_agent_profiles() {
+    compile(registry_source(true));
+    for actor in ["service", "agent"] {
+        let mut source = registry_source(true);
+        source["accessProfiles"][0]["actorKind"] = json!(actor);
+        source["accessProfiles"][0]["requesterClients"] = json!(["synthetic-recovery-client"]);
+        // Reach the recovery ceiling rather than the independent standing
+        // agent ceiling on native Record writes.
+        source["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
+            json!(["get", "list"]);
+        source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] = json!([]);
+        let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        let error = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+        assert!(
+            format!("{error:?}").contains("breg.proposal.automatic-recovery-requires-human"),
+            "{error:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exact_application_status_exposes_bounded_block_and_human_recovery() {
+    let mut source = registry_source(true);
+    let mut service = source["accessProfiles"][0].clone();
+    service["id"] = json!("coordinator");
+    service["default"] = json!(false);
+    service["permissions"]["proposals"][0]["operations"] = json!(["get"]);
+    service["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
+    service["permissions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("actions");
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(service);
+    let human_claims = VerifiedRequestClaims::authenticated_with_actor_kind(
+        "sub",
+        "author",
+        BTreeSet::from(["proposal:manage".into()]),
+        Some("registry-administration".into()),
+        BTreeMap::from([(
+            "jurisdiction".into(),
+            VerifiedClaimValue::direct_string("zone-a").unwrap(),
+        )]),
+        registry_platform_oidc::ActorKind::Human,
+    )
+    .unwrap();
+    let fixture = client_http::ClientFixture::start(compile(source), human_claims).await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Human recovery", "status-start").await;
+    assert!(draft.application_status().is_none());
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("status-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let frozen = (
+        submitted.submission_version(),
+        submitted.effect_digest().unwrap().to_string(),
+    );
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_application_jobs SET state='blocked',last_error_code='dependency-outage',attempt_count=1", &[]).await.unwrap();
+    let blocked = client.read_proposal(&submitted).await.unwrap().value;
+    let public = serde_json::to_value(&blocked).unwrap();
+    assert_eq!(
+        public["applicationStatus"],
+        json!({"state":"blocked","mode":"automatic","reason":"dependency-outage","recovery":"retry","automaticRetry":{"scheduled":false,"attempts":1,"maximumAttempts":3}})
+    );
+    assert_eq!(blocked.submission_version(), frozen.0);
+    assert_eq!(blocked.effect_digest(), Some(frozen.1.as_str()));
+    assert!(blocked.application().is_none());
+    let service_claims = VerifiedRequestClaims::authenticated_with_actor_kind(
+        "sub",
+        "author",
+        BTreeSet::from(["proposal:manage".into()]),
+        Some("registry-administration".into()),
+        BTreeMap::from([(
+            "jurisdiction".into(),
+            VerifiedClaimValue::direct_string("zone-a").unwrap(),
+        )]),
+        registry_platform_oidc::ActorKind::Service,
+    )
+    .unwrap();
+    let service = fixture.client_for(service_claims).await;
+    let metadata = service
+        .client
+        .registry_contract(Some("coordinator"))
+        .await
+        .unwrap();
+    let get = metadata.value.select_proposal_get("coordinator").unwrap();
+    let ordinary = service
+        .client
+        .get_proposal(&get, blocked.id())
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(ordinary.application_status(), blocked.application_status());
+    assert!(ordinary.link("apply").is_none());
+    assert!(ordinary.link("retry").is_none());
+    for operation in ["apply", "retry"] {
+        let body = if operation == "apply" {
+            json!({"submissionVersion":blocked.submission_version(),"effectDigest":blocked.effect_digest().unwrap()})
+        } else {
+            json!({})
+        };
+        let prepared = client
+            .prepare_proposal(
+                &blocked,
+                operation,
+                body,
+                &key(&format!("service-denied-{operation}")),
+            )
+            .unwrap();
+        // The second fixture has a distinct HTTP origin. Prepared SDK attempts
+        // are intentionally origin-bound, so send the owner's exact promoted
+        // HTTP contract to exercise the runtime's verified service refusal.
+        let wire: Value = serde_json::from_slice(prepared.as_bytes()).unwrap();
+        let refused = reqwest::Client::new()
+            .post(format!(
+                "{}{}?accessProfile=clerk",
+                service.base_url,
+                wire["link"]["path"].as_str().unwrap()
+            ))
+            .header("if-match", wire["link"]["ifMatch"].as_str().unwrap())
+            .header("idempotency-key", wire["key"].as_str().unwrap())
+            .json(&serde_json::from_str::<Value>(wire["body"].as_str().unwrap()).unwrap())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            refused.status(),
+            reqwest::StatusCode::NOT_FOUND,
+            "a service cannot reuse the explicit human recovery grant"
+        );
+    }
+    let retry = client
+        .prepare_proposal(&blocked, "retry", json!({}), &key("human-status-retry"))
+        .unwrap();
+    let retried = client.execute_proposal(&retry).await.unwrap().value;
+    assert_eq!(
+        retried.application_status().unwrap().state,
+        registry_breg_client::BRegProposalApplicationState::Pending
+    );
+    assert!(fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
+    let applied = client.read_proposal(&retried).await.unwrap().value;
+    assert_eq!(applied.state(), BRegProposalState::Applied);
+    assert_eq!(
+        applied.application_status().unwrap().state,
+        registry_breg_client::BRegProposalApplicationState::Applied
+    );
+    assert_eq!(applied.application().unwrap().effect_digest, frozen.1);
+    drop(service);
+    fixture.finish().await;
 }

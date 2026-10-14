@@ -321,7 +321,7 @@ async fn submitted(fixture: &client_http::ClientFixture, key_name: &str) -> Uuid
                     .clone(),
             )
             .unwrap(),
-            &BRegIdempotencyKey::parse(&format!("{key_name}-record")).unwrap(),
+            &BRegIdempotencyKey::parse(format!("{key_name}-record")).unwrap(),
             BRegRecordFormat::Json,
         )
         .await
@@ -343,7 +343,7 @@ async fn submitted(fixture: &client_http::ClientFixture, key_name: &str) -> Uuid
         .start_proposal(
             &action,
             &input,
-            &BRegIdempotencyKey::parse(&format!("{key_name}-start")).unwrap(),
+            &BRegIdempotencyKey::parse(format!("{key_name}-start")).unwrap(),
         )
         .await
         .unwrap()
@@ -353,7 +353,7 @@ async fn submitted(fixture: &client_http::ClientFixture, key_name: &str) -> Uuid
             &draft,
             "submit",
             json!({}),
-            &BRegIdempotencyKey::parse(&format!("{key_name}-submit")).unwrap(),
+            &BRegIdempotencyKey::parse(format!("{key_name}-submit")).unwrap(),
         )
         .unwrap();
     let value = client.execute_proposal(&submit).await.unwrap().value;
@@ -647,20 +647,21 @@ async fn native_submission_reclaims_exact_work_and_fences_late_success_and_failu
             retained["binding"],
             json!(authority.state.accepted.lock().unwrap().clone().unwrap())
         );
-        let creates = authority.state.creates.lock().unwrap();
-        assert_eq!(creates.len(), 2);
-        assert_eq!(creates[0].1.policy, policy());
-        assert_eq!(creates[1].1.policy, policy());
-        assert_eq!(
-            creates[0].0, creates[1].0,
-            "adoption reuses exact idempotency key"
-        );
-        assert_eq!(
-            json!(creates[0].1),
-            json!(creates[1].1),
-            "adoption reuses exact frozen request"
-        );
-        drop(creates);
+        {
+            let creates = authority.state.creates.lock().unwrap();
+            assert_eq!(creates.len(), 2);
+            assert_eq!(creates[0].1.policy, policy());
+            assert_eq!(creates[1].1.policy, policy());
+            assert_eq!(
+                creates[0].0, creates[1].0,
+                "adoption reuses exact idempotency key"
+            );
+            assert_eq!(
+                json!(creates[0].1),
+                json!(creates[1].1),
+                "adoption reuses exact frozen request"
+            );
+        }
         assert_eq!(result_count(&fixture).await, 0);
         fixture.finish().await;
     }

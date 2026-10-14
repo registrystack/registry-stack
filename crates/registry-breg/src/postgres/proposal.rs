@@ -12,6 +12,14 @@ use crate::proposal_store;
 use std::collections::BTreeMap;
 
 impl PostgresRecordMutationService {
+    #[cfg(feature = "postgres-test")]
+    async fn pause_proposal_read_for_test(&self) {
+        if let Some(barrier) = &self.proposal_read_barrier_for_test {
+            barrier.loaded.notify_one();
+            barrier.resume.notified().await;
+        }
+    }
+
     async fn admitted_proposal_read_client(
         &self,
         authority: &ProposalAuthority,
@@ -175,8 +183,12 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::PreconditionFailed)?;
-                let document =
-                    proposal_store::load_document(guarded.transaction(), id, false).await?;
+                let document = proposal_store::load_document(
+                    guarded.transaction(),
+                    id,
+                    proposal_store::DocumentLock::None,
+                )
+                .await?;
                 let etag = self.coordinator.proposal_etag(&document, &authority)?;
                 guarded
                     .commit()
@@ -268,7 +280,12 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            let document = proposal_store::load_document(guarded.transaction(), id, true).await?;
+            let document = proposal_store::load_document(
+                guarded.transaction(),
+                id,
+                proposal_store::DocumentLock::Update,
+            )
+            .await?;
             self.coordinator
                 .authorize_proposal_document(
                     guarded.transaction(),
@@ -555,7 +572,14 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            let document = proposal_store::load_document(guarded.transaction(), id, false).await?;
+            let document = proposal_store::load_document(
+                guarded.transaction(),
+                id,
+                proposal_store::DocumentLock::Share,
+            )
+            .await?;
+            #[cfg(feature = "postgres-test")]
+            self.pause_proposal_read_for_test().await;
             self.coordinator
                 .authorize_proposal_document(
                     guarded.transaction(),
@@ -642,7 +666,14 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            let document = proposal_store::load_document(guarded.transaction(), id, false).await?;
+            let document = proposal_store::load_document(
+                guarded.transaction(),
+                id,
+                proposal_store::DocumentLock::Share,
+            )
+            .await?;
+            #[cfg(feature = "postgres-test")]
+            self.pause_proposal_read_for_test().await;
             self.coordinator
                 .authorize_proposal_review_read(
                     guarded.transaction(),
@@ -831,8 +862,14 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-                let document =
-                    proposal_store::load_document(guarded.transaction(), id, false).await?;
+                let document = proposal_store::load_document(
+                    guarded.transaction(),
+                    id,
+                    proposal_store::DocumentLock::Share,
+                )
+                .await?;
+                #[cfg(feature = "postgres-test")]
+                self.pause_proposal_read_for_test().await;
                 match self
                     .coordinator
                     .authorize_proposal_document(

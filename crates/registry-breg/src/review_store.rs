@@ -2101,6 +2101,20 @@ pub async fn reconcile_result(
     {
         return Err(MutationError::PreconditionFailed);
     }
+    // Observation holds this row while composing lifecycle, result and job
+    // state. Publish the correlated result and its automatic job under the
+    // same lifecycle-first lock order as Apply, Cancel and detail erasure.
+    let proposal_id =
+        Uuid::parse_str(&accepted.subject.id).map_err(|_| MutationError::PreconditionFailed)?;
+    transaction
+        .query_opt(
+            "SELECT proposal_id FROM registry_internal.registry_proposal_state
+              WHERE proposal_id=$1 FOR UPDATE",
+            &[&proposal_id],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .ok_or(MutationError::PreconditionFailed)?;
     let row = transaction
         .query_opt(
             "SELECT action_id,proposal_id,submission_version,proposal_digest,

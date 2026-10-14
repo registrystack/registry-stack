@@ -192,7 +192,8 @@ impl MutationCoordinator {
             .await
             .map_err(|_| MutationError::Unavailable)?;
         let tx = guarded.transaction();
-        let document = proposal_store::load_document(tx, id, true).await?;
+        let document =
+            proposal_store::load_document(tx, id, proposal_store::DocumentLock::Update).await?;
         self.authorize_proposal_document(tx, registry, &document, input.authority)
             .await?;
         let (binding, _) = self
@@ -725,7 +726,8 @@ impl MutationCoordinator {
         .await
         .map_err(|_| MutationError::Unavailable)?;
         let tx = guarded.transaction();
-        let document = proposal_store::load_document(tx, id, false).await?;
+        let document =
+            proposal_store::load_document(tx, id, proposal_store::DocumentLock::None).await?;
         self.authorize_proposal_document(tx, registry, &document, input.authority)
             .await?;
         let (binding, _) = self
@@ -863,7 +865,8 @@ impl MutationCoordinator {
             .map_err(|_| MutationError::Unavailable)?;
         let tx = guarded.transaction();
         let existing = if let Some(id) = input.proposal_id {
-            let document = proposal_store::load_document(tx, id, true).await?;
+            let document =
+                proposal_store::load_document(tx, id, proposal_store::DocumentLock::Update).await?;
             self.authorize_proposal_document(tx, registry, &document, input.authority)
                 .await?;
             Some(document)
@@ -887,7 +890,9 @@ impl MutationCoordinator {
                     .and_then(Value::as_str)
                     .and_then(|id| Uuid::parse_str(id).ok())
                     .ok_or(MutationError::Unavailable)?;
-                let document = proposal_store::load_document(tx, id, false).await?;
+                let document =
+                    proposal_store::load_document(tx, id, proposal_store::DocumentLock::None)
+                        .await?;
                 self.authorize_start_inputs(tx, registry, action, &document, input.authority)
                     .await?;
                 document
@@ -938,7 +943,9 @@ impl MutationCoordinator {
                 .await?;
                 let targets = input_targets(action, &values)?;
                 proposal_store::save_input_targets(tx, &action.id, id, &targets).await?;
-                let document = proposal_store::load_document(tx, id, false).await?;
+                let document =
+                    proposal_store::load_document(tx, id, proposal_store::DocumentLock::None)
+                        .await?;
                 self.authorize_start_inputs(tx, registry, action, &document, input.authority)
                     .await?;
                 (id, "none".to_owned(), "started")
@@ -1196,7 +1203,12 @@ impl MutationCoordinator {
                             &input_targets(action, &values)?,
                         )
                         .await?;
-                        let replacement = proposal_store::load_document(tx, id, false).await?;
+                        let replacement = proposal_store::load_document(
+                            tx,
+                            id,
+                            proposal_store::DocumentLock::None,
+                        )
+                        .await?;
                         self.authorize_start_inputs(
                             tx,
                             registry,
@@ -1425,7 +1437,8 @@ impl MutationCoordinator {
                 (id, document.header.state.clone(), transition)
             }
         };
-        let document = proposal_store::load_document(tx, id, false).await?;
+        let document =
+            proposal_store::load_document(tx, id, proposal_store::DocumentLock::None).await?;
         let workflow = proposal_store::load(tx, &action.id, id, false).await?;
         let reference = record_reference(
             self.audit.profile(),

@@ -439,16 +439,32 @@ pub(crate) struct ProposalDocument {
     pub header: ProposalWorkflowHeader,
 }
 
+/// The lock order is chosen by the caller: observation precedes related reads,
+/// mutation precedes effects, and exact receipt recovery retains its own order.
+#[derive(Clone, Copy)]
+pub(crate) enum DocumentLock {
+    None,
+    Share,
+    Update,
+}
+
 /// The caller must establish a current per-Action Proposal grant before use.
+/// Keep the lifecycle row stable while the caller projects its separate frozen
+/// snapshot, review binding, application job and receipt. Writers take the
+/// exclusive lock first; observations share it until their transaction ends.
 pub(crate) async fn load_document(
     transaction: &Transaction<'_>,
     proposal_id: Uuid,
-    lock: bool,
+    lock: DocumentLock,
 ) -> Result<ProposalDocument, MutationError> {
     let sql = format!(
         "SELECT action_id, action_revision, action_title, input, blocked_reason, input_targets
            FROM registry_internal.registry_proposal_state WHERE proposal_id=$1{}",
-        if lock { " FOR UPDATE" } else { "" },
+        match lock {
+            DocumentLock::None => "",
+            DocumentLock::Share => " FOR SHARE",
+            DocumentLock::Update => " FOR UPDATE",
+        },
     );
     let row = transaction
         .query_opt(&sql, &[&proposal_id])
@@ -1523,7 +1539,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let document = load_document(&tx, id, false).await.unwrap();
+        let document = load_document(&tx, id, DocumentLock::None).await.unwrap();
         assert_eq!(document.input, Some(input));
         assert!(!document.input.unwrap().contains_key("absent"));
         tx.commit().await.unwrap();
@@ -1536,7 +1552,11 @@ mod tests {
             .await
             .unwrap();
         let tx = migration.transaction().await.unwrap();
-        assert!(load_document(&tx, id, false).await.unwrap().input.is_none());
+        assert!(load_document(&tx, id, DocumentLock::None)
+            .await
+            .unwrap()
+            .input
+            .is_none());
         tx.commit().await.unwrap();
         migration_task.abort();
         database.cleanup().await;

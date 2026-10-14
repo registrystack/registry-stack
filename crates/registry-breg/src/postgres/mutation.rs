@@ -37,6 +37,13 @@ use super::{
 
 const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[cfg(feature = "postgres-test")]
+#[derive(Clone)]
+struct ProposalReadBarrier {
+    loaded: Arc<tokio::sync::Notify>,
+    resume: Arc<tokio::sync::Notify>,
+}
+
 #[derive(Clone)]
 pub struct PostgresRecordMutationService {
     pool: RuntimePool,
@@ -50,6 +57,8 @@ pub struct PostgresRecordMutationService {
     action_timeout: Duration,
     #[cfg(feature = "postgres-test")]
     automatic_proposal_lease_for_test: Option<Duration>,
+    #[cfg(feature = "postgres-test")]
+    proposal_read_barrier_for_test: Option<ProposalReadBarrier>,
     evidence_timeout: Duration,
     evidence_evaluator: Option<Arc<crate::action_evidence::ActionEvidenceEvaluator>>,
     review_result_source: Option<Arc<dyn crate::review_store::ReviewResultSource>>,
@@ -480,6 +489,8 @@ impl PostgresRecordMutationService {
             action_timeout: REQUEST_ACTION_TIMEOUT,
             #[cfg(feature = "postgres-test")]
             automatic_proposal_lease_for_test: None,
+            #[cfg(feature = "postgres-test")]
+            proposal_read_barrier_for_test: None,
             evidence_timeout: REQUEST_ACTION_TIMEOUT,
             evidence_evaluator: None,
             review_result_source: None,
@@ -499,6 +510,18 @@ impl PostgresRecordMutationService {
     pub fn with_automatic_proposal_lease_for_test(mut self, lease: Duration) -> Self {
         assert!(!lease.is_zero());
         self.automatic_proposal_lease_for_test = Some(lease);
+        self
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[must_use]
+    #[doc(hidden)]
+    pub fn with_proposal_read_barrier_for_test(
+        mut self,
+        loaded: Arc<tokio::sync::Notify>,
+        resume: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        self.proposal_read_barrier_for_test = Some(ProposalReadBarrier { loaded, resume });
         self
     }
 
