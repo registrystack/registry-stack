@@ -1,6 +1,8 @@
 {
   "$defs": {
     "ContentDigest": {
+      "maxLength": 71,
+      "minLength": 71,
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
@@ -48,7 +50,11 @@
           "format": "uuid",
           "type": "string"
         },
-        "result": true,
+        "result": {
+          "additionalProperties": true,
+          "type": "object",
+          "x-maximum-canonical-bytes": 16384
+        },
         "resultId": {
           "format": "uuid",
           "type": "string"

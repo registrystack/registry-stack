@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #![allow(dead_code)]
 
+pub mod failed_fixture;
 #[cfg(feature = "postgres-test")]
 pub mod messaging;
 #[cfg(feature = "postgres-test")]

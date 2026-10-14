@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #![cfg(feature = "postgres-test")]
-#[path = "support/failed_fixture.rs"]
-mod failed_fixture;
 mod support;
+use support::failed_fixture;
 
 use registry_coordinator::{
     adapters::HttpAdapters,

@@ -346,6 +346,53 @@ fn generated_owner_action_schemas_specialize_inputs_outputs_and_revision_closure
 }
 
 #[test]
+fn imported_action_reference_errors_point_to_the_authored_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact = include_str!("../../../products/coordinator/examples/proposal-follow-up/generated/facilities.contract.json");
+    fs::write(root.path().join("facilities.json"), artifact).unwrap();
+    let original = json!({"apiVersion":authoring::API_VERSION,"kind":authoring::KIND,"project":{"id":"owner-reference","version":"1"},
+        "contracts":{"facilities":{"type":"breg","source":"facilities.json"}},
+        "operations":{"correction":{"uses":"breg.invoke-action/v1","connection":"facilities","action":{"contract":"facilities","id":"correct-address"}}},
+        "workflow":{"input":{"operationInput":"correction"},"deadlineSeconds":60,"start":"correct","steps":{
+            "correct":{"type":"call","operation":"correction","input":{"type":"input"},"next":"done"},
+            "done":{"type":"finish","outcome":"accepted","output":{"type":"step","step":"correct"}}},
+            "outcomes":{"accepted":{"operationOutput":"correction"}}}});
+    for member in ["contract", "id"] {
+        let mut changed = original.clone();
+        changed["operations"]["correction"]["action"][member] = json!("undeclared");
+        fs::write(
+            root.path().join("workflow.yaml"),
+            serde_json::to_string_pretty(&changed).unwrap(),
+        )
+        .unwrap();
+        let error = Definition::load(root.path())
+            .err()
+            .expect("bad selection refuses");
+        let diagnostic = &error.diagnostics[0];
+        assert_eq!(
+            diagnostic.path,
+            format!("/operations/correction/action/{member}")
+        );
+        assert!(diagnostic.source.as_ref().unwrap().line.unwrap() > 1);
+        assert!(!diagnostic.code.starts_with("coordinator.coordinator."));
+    }
+    fs::write(
+        root.path().join("workflow.yaml"),
+        serde_json::to_string_pretty(&original).unwrap(),
+    )
+    .unwrap();
+    fs::write(root.path().join("facilities.json"), "{}").unwrap();
+    let error = Definition::load(root.path())
+        .err()
+        .expect("invalid export refuses");
+    assert_eq!(error.diagnostics[0].path, "/contracts/facilities/source");
+    assert_eq!(
+        error.diagnostics[0].code,
+        "coordinator.operation.contract-invalid"
+    );
+}
+
+#[test]
 fn literal_schema_data_cannot_declare_resources_or_change_revision_rules() {
     let mut edited = project();
     edited["workflow"]["input"] = json!({"const":{"$id":"literal-value","$ref":"https://example.invalid/data","typeRef":"literal-data"}});
@@ -430,4 +477,33 @@ fn explain_exposes_the_registered_host_contract_pinned_by_the_operation_revision
         restored.explain().unwrap()["operationContracts"]["messaging.submit-message/v1"],
         expected
     );
+}
+
+#[test]
+fn neutral_review_context_modes_use_the_exact_owning_operation_schema() {
+    let project = json!({"apiVersion":authoring::API_VERSION,"kind":authoring::KIND,
+        "project":{"id":"review-context","version":"1"},
+        "operations":{"review":{"uses":"casework.submit-review-request/v1","connection":"review"}},
+        "workflow":{"input":{"operationInput":"review"},"deadlineSeconds":60,"start":"submit",
+            "steps":{"submit":{"type":"call","operation":"review","input":{"type":"input"},"next":"done"},
+                "done":{"type":"finish","outcome":"accepted","output":{"type":"step","step":"submit"}}},
+            "outcomes":{"accepted":{"operationOutput":"review"}}}});
+    let definition = load(&project, "").unwrap();
+    let mut input = json!({
+        "policy":{"id":"notice-review","version":"1","digest":format!("sha256:{}","b".repeat(64))},
+        "subject":{"source":"notices","type":"notice","id":"notice-7","version":"3","digest":format!("sha256:{}","a".repeat(64))},
+        "requesterReference":"notice-request-7",
+        "context":{"mode":"submitted","snapshot":{"summary":"Synthetic notice"}}
+    });
+    definition.validate_input(&input).unwrap();
+    input["context"] = json!({"mode":"current-source","binding":{"reference":"notice-7"}});
+    definition.validate_input(&input).unwrap();
+    for context in [
+        json!({"strategy":"submitted","snapshot":{"summary":"Synthetic notice"}}),
+        json!({"strategy":"current-source","binding":{"reference":"notice-7"}}),
+        json!({"mode":"current-source","reference":"notice-7"}),
+    ] {
+        input["context"] = context;
+        assert!(definition.validate_input(&input).is_err());
+    }
 }

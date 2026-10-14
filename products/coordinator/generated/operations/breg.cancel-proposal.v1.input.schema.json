@@ -88,7 +88,6 @@
     "BRegProposalApplicationReason": {
       "enum": [
         "contract-changed",
-        "review-unavailable",
         "dependency-outage",
         "lease-expired",
         "application-refused",
@@ -108,7 +107,7 @@
     },
     "BRegProposalApplicationStatus": {
       "additionalProperties": false,
-      "description": "Receiver-owned progress for this exact frozen submission, under current\ndisclosure. A blocked submission is not a terminal non-application result.",
+      "description": "Local application progress for the enclosing exact frozen submission.\nIt neither follows a successor nor reconciles an unknown mutation command.",
       "properties": {
         "automaticRetry": {
           "anyOf": [
@@ -224,12 +223,6 @@
           "type": "integer"
         },
         "uploadedAt": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "uploadedBy": {
           "type": [
             "string",
             "null"

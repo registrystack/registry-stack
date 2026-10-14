@@ -58,7 +58,7 @@ fn declared_refusal_project() -> Value {
             "invoke-breg-action": {
                 "uses": "breg.invoke-action/v1",
                 "connection": "registry",
-                "action":{"contract":"registry","id":"test-action"}
+                "action":{"contract":"registry","id":"request-information"}
             }
         },
         "workflow": {
@@ -130,11 +130,9 @@ fn write_project(root: &Path, project: &Value, source: &str) {
     .unwrap();
     fs::write(root.join("functions.rhai"), source).unwrap();
     if project.get("contracts").is_some() {
-        fs::write(root.join("action-contracts.json"), serde_json::to_string(&json!({"actions":[{
-            "id":"test-action", "revision":format!("sha256:{}", "a".repeat(64)), "mode":"immediate",
-            "input":{"type":"object"}, "output":{"type":"object","additionalProperties":false,"properties":{"receipt":{"type":"object"}}},
-            "declaredRefusal":{"type":"object","additionalProperties":false,"required":["refusalCode"],"properties":{"refusalCode":{"type":"string","minLength":1,"maxLength":128}}}
-        }]})).unwrap()).unwrap();
+        fs::write(root.join("action-contracts.json"), include_str!(
+            "../../../products/coordinator/examples/governed-action-follow-up/generated/applications.contract.json"
+        )).unwrap();
     }
 }
 

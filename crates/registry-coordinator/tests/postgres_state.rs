@@ -46,7 +46,7 @@ apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project: {id: synthetic-declared-refusal, version: v1}
 contracts:
-  facilities: {type: breg, source: facilities.json}
+  applications: {type: breg, source: applications.json}
 functions:
   action:
     runtime: rhai
@@ -64,7 +64,7 @@ operations:
   invoke-breg-action:
     uses: breg.invoke-action/v1
     connection: source
-    action: {contract: facilities, id: correct-address}
+    action: {contract: applications, id: request-information}
 workflow:
   input: {type: object}
   deadlineSeconds: 3600
@@ -87,7 +87,7 @@ workflow:
 "#;
 
 const DECLARED_REFUSAL_FUNCTIONS: &str = r#"
-fn action(args) { #{input: #{facilityId: "00000000-0000-4000-8000-000000000001", addressLine: "1 Example Road", city: "Test City", postalCode: "invalid"}} }
+fn action(args) { #{input: #{applicationId: "00000000-0000-4000-8000-000000000001", reason: "Invalid synthetic reason"}} }
 fn keep(args) { let value = args.value;  value }
 "#;
 
@@ -96,7 +96,7 @@ apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project: {id: synthetic-declared-refusal-deadline, version: v1}
 contracts:
-  facilities: {type: breg, source: facilities.json}
+  applications: {type: breg, source: applications.json}
 functions:
   action:
     runtime: rhai
@@ -114,7 +114,7 @@ operations:
   invoke-breg-action:
     uses: breg.invoke-action/v1
     connection: source
-    action: {contract: facilities, id: correct-address}
+    action: {contract: applications, id: request-information}
 workflow:
   input: {type: object}
   deadlineSeconds: 3600
@@ -492,7 +492,7 @@ fn uncertain() -> CallOutcome {
 
 fn declared_refusal() -> CallOutcome {
     CallOutcome::DeclaredRefusal(
-        DeclaredRefusal::new("invalid-postal-code").expect("bounded synthetic refusal"),
+        DeclaredRefusal::new("invalid-reason").expect("bounded synthetic refusal"),
     )
 }
 
@@ -617,10 +617,10 @@ async fn declared_refusal_is_checkpointed_and_prior_uncertainty_cannot_take_its_
     assert!(!routed.uncertain);
     assert_eq!(
         h.output_values(run).await["action"],
-        json!({"refusalCode":"invalid-postal-code"})
+        json!({"refusalCode":"invalid-reason"})
     );
     assert!(
-        !h.durable_rows(run).await.contains("invalid-postal-code"),
+        !h.durable_rows(run).await.contains("invalid-reason"),
         "the branch code is sealed at rest"
     );
     h.sql("UPDATE {schema}.runs SET deadline_at=clock_timestamp()-interval '1 second'")
@@ -637,7 +637,7 @@ async fn declared_refusal_is_checkpointed_and_prior_uncertainty_cannot_take_its_
     assert_eq!(finished.outcome.as_deref(), Some("refused"));
     assert_eq!(
         finished.output,
-        Some(json!({"refusalCode":"invalid-postal-code"}))
+        Some(json!({"refusalCode":"invalid-reason"}))
     );
     assert_eq!(fake.calls.lock().unwrap().len(), 1);
 
@@ -710,7 +710,7 @@ async fn cancellation_racing_a_declared_refusal_records_no_external_effect() {
     assert_eq!(status.step, "action");
     assert_eq!(
         h.output_values(run).await["action"],
-        json!({"refusalCode":"invalid-postal-code"})
+        json!({"refusalCode":"invalid-reason"})
     );
     assert!(
         !Worker::new(h.store.clone(), fake.clone())
@@ -1048,7 +1048,7 @@ async fn prepared_command_survives_restart_without_refreshing_conditions_or_key(
     let mut h = harness().await;
     std::fs::write(
         h.project.path().join("workflow.yaml"),
-        &prepared_action_workflow(),
+        prepared_action_workflow(),
     )
     .unwrap();
     std::fs::write(
@@ -1108,7 +1108,7 @@ async fn refused_preparation_never_dispatches_or_claims_an_uncertain_mutation() 
     let mut h = harness().await;
     std::fs::write(
         h.project.path().join("workflow.yaml"),
-        &prepared_action_workflow(),
+        prepared_action_workflow(),
     )
     .unwrap();
     std::fs::write(
@@ -1670,6 +1670,101 @@ async fn a_call_input_outside_the_operation_input_is_refused_before_dispatch_wit
         ] {
             assert!(!safe.contains(canary));
         }
+    }
+}
+
+#[tokio::test]
+async fn invalid_dictionary_values_never_disclose_member_names_or_dispatch() {
+    let h = harness().await;
+    std::fs::write(
+        h.project.path().join("workflow.yaml"),
+        r#"
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project: {id: synthetic-dictionary-privacy, version: '1'}
+functions:
+  request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: request
+    inputs: {request: {type: object}}
+    output: {type: object}
+operations:
+  read-job:
+    uses: external.get/v1
+    connection: jobs
+    responseSchema: {type: object}
+workflow:
+  input:
+    type: object
+    additionalProperties: false
+    required: [key]
+    properties: {key: {type: string}}
+  deadlineSeconds: 60
+  start: read
+  steps:
+    read:
+      type: call
+      operation: read-job
+      input: {type: function, function: request, inputs: {request: {type: input}}}
+      next: done
+    done: {type: finish, outcome: done}
+  outcomes: {done: {type: 'null'}}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        h.project.path().join("functions.rhai"),
+        r#"
+fn request(args) {
+    let query = #{};
+    query[args.request.key] = 7;
+    #{path: "jobs/status", query: query}
+}
+"#,
+    )
+    .unwrap();
+    let definition = Definition::load(h.project.path()).unwrap();
+    let run = h
+        .store
+        .admit(
+            &definition,
+            json!({"key":"private-person-id-canary"}),
+            "p",
+            "dictionary-privacy",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+    let fake = Fake::new(vec![]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    assert!(worker.tick().await.expect("host refuses malformed query"));
+    let status = h.store.status(run).await.unwrap();
+    assert_eq!(status.state, "failed");
+    assert_eq!(status.failure_code.as_deref(), Some("invalid-command"));
+    assert_eq!(status.failure_path.as_deref(), Some("/query"));
+    assert!(!status.uncertain);
+    let inspection = h.store.inspect(run, "binding-a").await.unwrap();
+    let step = inspection
+        .steps
+        .iter()
+        .find(|step| step.step == "read")
+        .unwrap();
+    assert!(!step.command_prepared);
+    assert_eq!(step.failure_code.as_deref(), Some("invalid-command"));
+    assert_eq!(step.failure_path.as_deref(), Some("/query"));
+    assert!(
+        fake.requests.lock().unwrap().is_empty(),
+        "no adapter dispatch"
+    );
+    for visible in [
+        serde_json::to_string(&status).unwrap(),
+        serde_json::to_string(&inspection).unwrap(),
+    ] {
+        assert!(
+            !visible.contains("private-person-id-canary"),
+            "private dictionary member is not released"
+        );
     }
 }
 

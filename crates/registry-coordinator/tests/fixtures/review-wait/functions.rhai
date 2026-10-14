@@ -16,7 +16,7 @@ fn review_request(args) {
         },
         requesterReference: input.applicationId,
         context: #{
-            strategy: "submitted",
+            mode: "submitted",
             snapshot: #{
                 applicationId: input.applicationId,
                 applicationVersion: input.applicationVersion

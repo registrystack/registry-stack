@@ -33,7 +33,7 @@ fn create() -> Value {
             "id": support::RECORD, "version": "3",
             "digest": format!("sha256:{}", "a".repeat(64))},
         "requesterReference": "application-3",
-        "context": {"strategy": "submitted", "snapshot": {"summary": CANARY}}
+        "context": {"mode": "submitted", "snapshot": {"summary": CANARY}}
     })
 }
 
@@ -361,6 +361,11 @@ async fn invalid_review_commands_never_reach_casework() {
         .as_object_mut()
         .unwrap()
         .remove("reason");
+    let mut retired_context = submit("review-key");
+    retired_context.input["context"] =
+        json!({"strategy":"submitted","snapshot":{"summary":CANARY}});
+    let mut unbound_context = submit("review-key");
+    unbound_context.input["context"] = json!({"mode":"current-source","reference":"application-3"});
     let mut wrong_connection = submit("review-key");
     wrong_connection.connection = "notices".into();
     let mut wrong_operation = submit("review-key");
@@ -370,6 +375,8 @@ async fn invalid_review_commands_never_reach_casework() {
         (without_key, "invalid-command"),
         (spaced_key, "invalid-command"),
         (missing_reason, "invalid-command"),
+        (retired_context, "invalid-command"),
+        (unbound_context, "invalid-command"),
         (wrong_connection, "operation-unbound"),
         (wrong_operation, "operation-unbound"),
     ] {

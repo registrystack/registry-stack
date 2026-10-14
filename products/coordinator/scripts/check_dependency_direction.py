@@ -52,6 +52,13 @@ ALLOWED_DEPENDENTS = {
     UNIFIED_CLIENT: frozenset({"registry-coordinator-client"}),
 }
 
+# The Casework adopter journey verifies the maintained unified client facade.
+# Only its test closure may carry the Coordinator HTTP client. Its shipped
+# tooling and every product runtime remain independent of Coordinator.
+ALLOWED_TEST_DEPENDENTS = {
+    "registry-caseworkctl": frozenset({"registry-coordinator-client"}),
+}
+
 
 def package_graph(
     metadata: dict,
@@ -132,7 +139,11 @@ def violations(metadata: dict) -> list[str]:
             )
         else:
             coordinator = {item for item in reached if item.startswith(COORDINATOR_PREFIX)}
-            refused = sorted(coordinator - ALLOWED_DEPENDENTS.get(name, frozenset()))
+            permitted = ALLOWED_DEPENDENTS.get(name, frozenset())
+            if name in ALLOWED_TEST_DEPENDENTS:
+                shipped = {names[item] for item in closure(package_id, linked, linked)}
+                permitted = permitted | (ALLOWED_TEST_DEPENDENTS[name] - shipped)
+            refused = sorted(coordinator - permitted)
             if refused:
                 failures.append(
                     f"{name} depends on Coordinator package(s) it is not listed for: "

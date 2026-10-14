@@ -40,8 +40,11 @@ const FUNCTIONS: &str = include_str!("fixtures/review-wait/functions.rhai");
 
 /// Variants of the same canonical fixture exercise cleanup and timeout races.
 fn workflow_with_cancel(on_timeout: bool, on_cancel: bool, cleanup_wait: bool) -> String {
-    let mut project: Value =
-        serde_norway::from_str(include_str!("fixtures/review-wait/workflow.yaml")).unwrap();
+    let mut project = registry_platform_yaml::Reader::new("workflow.yaml")
+        .scan(include_str!("fixtures/review-wait/workflow.yaml").as_bytes())
+        .unwrap()
+        .unwrap()
+        .to_json_value();
     let workflow = &mut project["workflow"];
     let steps = workflow["steps"].as_object_mut().unwrap();
     steps.remove("confirm-withdrawal");

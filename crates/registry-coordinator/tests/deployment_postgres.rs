@@ -2948,11 +2948,11 @@ async fn list_flows(http: &reqwest::Client, origin: &str, credential: &str) -> V
     workflows
 }
 
-/// Serve one runtime file's router in process, as its service would.
-async fn serve_runtime(
+/// Build the same activated state shared by HTTP and its durable worker.
+async fn runtime_http_state(
     runtime: &Arc<RuntimeConfig>,
     workflows: &Arc<deployment::Workflows>,
-) -> (String, tokio::task::JoinHandle<()>) {
+) -> HttpState {
     let authenticator = Arc::new(
         deployment::config(runtime)
             .unwrap()
@@ -2961,15 +2961,22 @@ async fn serve_runtime(
             .await
             .unwrap(),
     );
-    serve_fixture(HttpState {
+    HttpState {
         recovery_only: false,
         store: deployment::open(runtime, false).await.unwrap(),
         runtime: runtime.clone(),
         workflows: workflows.clone(),
         authenticator,
         adapters: Arc::new(HttpAdapters::new(runtime).unwrap()),
-    })
-    .await
+    }
+}
+
+/// Serve one runtime file's router in process, as its service would.
+async fn serve_runtime(
+    runtime: &Arc<RuntimeConfig>,
+    workflows: &Arc<deployment::Workflows>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    serve_fixture(runtime_http_state(runtime, workflows).await).await
 }
 
 #[tokio::test]
@@ -4523,30 +4530,61 @@ async fn restoring_a_two_flow_backup_keeps_every_flow_and_its_runs() {
 #[tokio::test]
 #[ignore = "requires built Node/Python bindings, TypeScript compiler, and Pyright"]
 async fn generated_typed_clients_start_get_and_cancel_real_runs() {
+    generated_typed_client_journeys(&[
+        "delayed-follow-up",
+        "external-job",
+        "standalone-review",
+        "proposal-follow-up",
+    ])
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires built Node/Python bindings, TypeScript compiler, and Pyright"]
+async fn generated_external_job_clients_read_a_successful_terminal_outcome() {
+    generated_typed_client_journeys(&["external-job"]).await;
+}
+
+async fn generated_typed_client_journeys(projects: &[&str]) {
     use registry_coordinator::sdk::{generate, Language};
+    use wiremock::{
+        matchers::{method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap();
     let examples = repository.join("products/coordinator/examples");
-    for workflow in [
-        "delayed-follow-up",
-        "external-job",
-        "standalone-review",
-        "proposal-follow-up",
-    ] {
+    for &workflow in projects {
         let mut f = TwoFlowFixture::start().await;
         let project = if workflow == DELAYED {
             f.delayed_project.clone()
         } else {
             examples.join(workflow)
         };
+        let jobs = if workflow == "external-job" {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/jobs/status"))
+                .and(query_param("id", "sdk-synthetic-job"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "jobId":"sdk-synthetic-job", "state":"succeeded"
+                })))
+                .expect(4)
+                .mount(&server)
+                .await;
+            Some(server)
+        } else {
+            None
+        };
         if workflow == "external-job" {
             let external =
                 RuntimeConfig::load(&examples.join("external-job/runtime.yaml")).unwrap();
             f.doc["connections"]["jobs"] =
                 serde_json::to_value(&external.connections["jobs"]).unwrap();
+            f.doc["connections"]["jobs"]["baseUrl"] = json!(jobs.as_ref().unwrap().uri());
         }
         if workflow == "proposal-follow-up" {
             f.doc["connections"]["facilities"] = f.doc["connections"]["applications"].clone();
@@ -4598,6 +4636,17 @@ async fn generated_typed_clients_start_get_and_cancel_real_runs() {
         fs::write(directory.join("typed-input.ts"), format!(
         "import type {{ Input, Outcome }} from './workflow';\nconst input: Input = {};\nexport const output = (value: Outcome) => value.output;\nvoid input;\n", input
     )).unwrap();
+        if workflow == "external-job" {
+            let types = directory.join("typed-input.ts");
+            let mut source = fs::read_to_string(&types).unwrap();
+            source.push_str(r#"
+export function jobId(value: Outcome): string {
+  if (value.outcome === 'job-result' && value.output?.state === 'complete') return value.output.result.jobId;
+  throw new Error('Expected completed external job');
+}
+"#);
+            fs::write(types, source).unwrap();
+        }
         let modules = directory.join("node_modules/@registrystack");
         fs::create_dir_all(&modules).unwrap();
         std::os::unix::fs::symlink(
@@ -4646,6 +4695,20 @@ const { CoordinatorClient } = require(process.env.COORDINATOR_SDK_NODE_CLIENT);
   const token = process.env.COORDINATOR_SDK_TOKEN;
   const contract = (await generic.workflow(token, workflow)).value;
   assert.equal(contract.workflowRevision, workflowRevision);
+  if (process.env.COORDINATOR_SDK_PHASE === 'terminal') {
+    const { jobId } = require('./js/typed-input.js');
+    const started = await client.start(token, 'generated-typescript-terminal', JSON.parse(process.env.COORDINATOR_SDK_INPUT));
+    for (let attempt = 0; attempt < 500; ++attempt) {
+      const read = await client.get(token, started.status.runId);
+      if (read.status.state === 'finished') {
+        assert.deepEqual(read.result, {outcome:'job-result',output:{state:'complete',result:{jobId:'sdk-synthetic-job'}}});
+        assert.equal(jobId(read.result), 'sdk-synthetic-job');
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    throw new Error('External job did not finish');
+  }
   const started = await client.start(token, 'generated-typescript', JSON.parse(process.env.COORDINATOR_SDK_INPUT));
   const read = await client.get(token, started.status.runId);
   assert.equal(read.status.runId, started.status.runId);
@@ -4660,7 +4723,7 @@ const { CoordinatorClient } = require(process.env.COORDINATOR_SDK_NODE_CLIENT);
         fs::write(
             directory.join("python.py"),
             r#"
-import ctypes, glob, json, os
+import ctypes, glob, json, os, time
 runtime = os.environ.get('REGISTRY_CARGO_RUNTIME_LIBRARY_PATH')
 if runtime:
     ctypes.CDLL(glob.glob(runtime + '/libaws_lc_fips*_crypto.dylib')[0], mode=ctypes.RTLD_GLOBAL)
@@ -4671,6 +4734,19 @@ client = WorkflowClient(generic)
 token = os.environ['COORDINATOR_SDK_TOKEN']
 contract = generic.workflow(token, WORKFLOW)['value']
 assert contract['workflowRevision'] == WORKFLOW_REVISION
+if os.environ.get('COORDINATOR_SDK_PHASE') == 'terminal':
+    from typed_input import job_id
+    started = client.start(token, 'generated-python-terminal', json.loads(os.environ['COORDINATOR_SDK_INPUT']))
+    for attempt in range(500):
+        read = client.get(token, started['status']['runId'])
+        if read['status']['state'] == 'finished':
+            assert read['result'] == {'outcome':'job-result','output':{'state':'complete','result':{'jobId':'sdk-synthetic-job'}}}
+            assert job_id(read['result']) == 'sdk-synthetic-job'
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError('External job did not finish')
+    raise SystemExit(0)
 started = client.start(token, 'generated-python', json.loads(os.environ['COORDINATOR_SDK_INPUT']))
 read = client.get(token, started['status']['runId'])
 assert read['status']['runId'] == started['status']['runId']
@@ -4703,6 +4779,21 @@ assert cancelled['status']['state'] == 'cancelled'
         fs::write(directory.join("typed_input.py"), format!(
             "from workflow import Input, Outcome\nrequest: Input = {}\ndef output(value: Outcome) -> object:\n    return value['output']\n", input
         )).unwrap();
+        if workflow == "external-job" {
+            let types = directory.join("typed_input.py");
+            let mut source = fs::read_to_string(&types).unwrap();
+            source.push_str(
+                r#"
+def job_id(value: Outcome) -> str:
+    if value['outcome'] == 'job-result':
+        output = value['output']
+        if output is not None and output['state'] == 'complete':
+            return output['result']['jobId']
+    raise ValueError('Expected completed external job')
+"#,
+            );
+            fs::write(types, source).unwrap();
+        }
         fs::write(
             directory.join("pyrightconfig.json"),
             serde_json::to_vec(&json!({
@@ -4725,39 +4816,87 @@ assert cancelled['status']['state'] == 'cancelled'
         );
         // The exact operator policy explicitly permits start and cancellation of these fixture runs.
         let credential = f.token("operator", "sdk-owner", "coordinator:operate");
-        let (origin, server) = serve_runtime(&runtime, &workflows).await;
+        let state = runtime_http_state(&runtime, &workflows).await;
+        let (origin, server) = serve_fixture(state.clone()).await;
         let python_root = std::env::var("COORDINATOR_SDK_PYTHON_ROOT")
             .expect("COORDINATOR_SDK_PYTHON_ROOT names the built Python module import root");
-        for (binary, script) in [("node", "node.cjs"), ("python3", "python.py")] {
-            let origin = origin.clone();
-            let credential = credential.clone();
-            let input = input.to_string();
-            let directory = directory.clone();
-            let python_root = python_root.clone();
-            let repository = repository.to_owned();
-            let output = tokio::task::spawn_blocking(move || {
-                std::process::Command::new(binary)
-                    .arg(directory.join(script))
-                    .env("COORDINATOR_SDK_ORIGIN", origin)
-                    .env("COORDINATOR_SDK_TOKEN", credential)
-                    .env("COORDINATOR_SDK_INPUT", input)
-                    .env(
-                        "COORDINATOR_SDK_NODE_CLIENT",
-                        repository.join("crates/registry-coordinator-client-node/client.js"),
-                    )
-                    .env("PYTHONPATH", python_root)
-                    .output()
-                    .unwrap()
-            })
-            .await
-            .unwrap();
-            assert!(
-                output.status.success(),
-                "{workflow} {binary}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+        let phases: &[&str] = if workflow == "external-job" {
+            &["cancel", "terminal"]
+        } else {
+            &["cancel"]
+        };
+        for &phase in phases {
+            let worker = if phase == "terminal" {
+                assert!(
+                    jobs.as_ref()
+                        .unwrap()
+                        .received_requests()
+                        .await
+                        .unwrap()
+                        .is_empty(),
+                    "cancelled admissions dispatched no product reads"
+                );
+                let worker = registry_coordinator::worker::Worker::new(
+                    state.store.clone(),
+                    state.adapters.clone(),
+                );
+                let (stop, mut stopped) = tokio::sync::oneshot::channel();
+                let task = tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = &mut stopped => break,
+                            tick = worker.tick() => { tick.expect("external-job durable worker tick"); }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                });
+                Some((stop, task))
+            } else {
+                None
+            };
+            for (binary, script) in [("node", "node.cjs"), ("python3", "python.py")] {
+                let phase = phase.to_owned();
+                let origin = origin.clone();
+                let credential = credential.clone();
+                let input = input.to_string();
+                let directory = directory.clone();
+                let python_root = python_root.clone();
+                let repository = repository.to_owned();
+                let output = tokio::task::spawn_blocking(move || {
+                    std::process::Command::new(binary)
+                        .arg(directory.join(script))
+                        .env("COORDINATOR_SDK_PHASE", phase)
+                        .env("COORDINATOR_SDK_ORIGIN", origin)
+                        .env("COORDINATOR_SDK_TOKEN", credential)
+                        .env("COORDINATOR_SDK_INPUT", input)
+                        .env(
+                            "COORDINATOR_SDK_NODE_CLIENT",
+                            repository.join("crates/registry-coordinator-client-node/client.js"),
+                        )
+                        .env("PYTHONPATH", python_root)
+                        .output()
+                        .unwrap()
+                })
+                .await
+                .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{workflow} {binary}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            if let Some((stop, task)) = worker {
+                stop.send(())
+                    .expect("worker remains alive until the clients finish");
+                task.await.expect("external-job worker completed cleanly");
+            }
+        }
+        if let Some(jobs) = jobs {
+            jobs.verify().await;
         }
         server.abort();
+        let _ = server.await;
+        drop(state);
         f.stop().await;
     }
 }

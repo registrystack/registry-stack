@@ -35,5 +35,5 @@ pub mod protected_state;
 pub mod scenarios;
 
 pub mod cli;
-pub mod service;
 pub mod sdk;
+pub mod service;

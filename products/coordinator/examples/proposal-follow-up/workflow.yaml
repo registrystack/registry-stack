@@ -42,12 +42,6 @@ workflow:
       operation: start-correction
       input: {type: input, path: /correction}
       next: submit
-      onDeclaredRefusal: report-correction-refused
-    report-correction-refused:
-      type: finish
-      outcome: correction-refused
-      # This route sees the declared refusal schema, never the draft result.
-      output: {type: step, step: start-draft}
     submit:
       title: Freeze and submit the Proposal
       type: call
@@ -86,7 +80,6 @@ workflow:
       outcome: application-wait-expired
       # BReg may continue its own work. No implicit cancellation or failure claim.
   outcomes:
-    correction-refused: {operationRefusal: start-correction}
     message-accepted: {operationOutput: send-notice}
     proposal-closed:
       completionOutput: {operation: submit-correction, name: application}

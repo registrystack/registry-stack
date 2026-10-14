@@ -1,6 +1,8 @@
 {
   "$defs": {
     "ContentDigest": {
+      "maxLength": 71,
+      "minLength": 71,
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
@@ -45,14 +47,20 @@
         {
           "additionalProperties": false,
           "properties": {
-            "snapshot": true,
-            "strategy": {
+            "mode": {
               "const": "submitted",
               "type": "string"
+            },
+            "snapshot": {
+              "additionalProperties": true,
+              "type": "object",
+              "x-maximum-canonical-bytes": 65536,
+              "x-maximum-json-depth": 32,
+              "x-maximum-json-nodes": 4096
             }
           },
           "required": [
-            "strategy",
+            "mode",
             "snapshot"
           ],
           "type": "object"
@@ -63,13 +71,13 @@
             "binding": {
               "$ref": "#/$defs/SourceContextBinding"
             },
-            "strategy": {
-              "const": "source",
+            "mode": {
+              "const": "current-source",
               "type": "string"
             }
           },
           "required": [
-            "strategy",
+            "mode",
             "binding"
           ],
           "type": "object"
@@ -139,7 +147,11 @@
     "requesterReference": {
       "type": "string"
     },
-    "resultConstraints": true,
+    "resultConstraints": {
+      "additionalProperties": true,
+      "type": "object",
+      "x-maximum-canonical-bytes": 16384
+    },
     "subject": {
       "$ref": "#/$defs/SubjectBinding"
     }

@@ -3,7 +3,7 @@
 //! contracts: each computed call input must satisfy the operation input, and
 //! each synthetic success value must satisfy the operation output.
 use registry_coordinator::{authoring, definition::Definition, scenarios};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{fs, path::Path, process::Command};
 
 fn workflow() -> Value {

@@ -14,7 +14,7 @@ use registry_coordinator::{
     breg_proposal::{self, ApplicationObservation, Transition},
     protocol::{AdapterSet, CallOutcome, CallRequest, Operation, ReconciliationOutcome},
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
@@ -63,10 +63,13 @@ async fn native_automatic_proposal_application_gates_a_separately_authorized_not
     breg_connection(&mut runtime).profile = "writer".into();
     runtime.minimum_observation_interval_seconds =
         registry_platform_yaml::BoundedU32::new(30).unwrap();
-    let mut project: Value = serde_norway::from_str(include_str!(
-        "../../../products/coordinator/examples/proposal-follow-up/workflow.yaml"
-    ))
-    .unwrap();
+    let mut project: Value = registry_platform_yaml::Reader::new("workflow.yaml")
+        .scan(include_bytes!(
+            "../../../products/coordinator/examples/proposal-follow-up/workflow.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
     project["project"]["id"] = json!("native-proposal-notice");
     project["contracts"]["facilities"]["source"] = json!("breg.contract.json");
     project["operations"]["start-correction"]["action"]["id"] = json!("propose-item");
@@ -926,12 +929,10 @@ fn result(args) {
         && step.state == "delivered"
         && step.command_prepared
         && !step.uncertain));
-    assert!(
-        attention
-            .steps
-            .iter()
-            .any(|step| step.step == "notify" && step.command_prepared && step.uncertain)
-    );
+    assert!(attention
+        .steps
+        .iter()
+        .any(|step| step.step == "notify" && step.command_prepared && step.uncertain));
     assert_eq!(
         messaging.count().await,
         1,
@@ -953,12 +954,10 @@ fn result(args) {
             calls[1].0.clone(),
         )
     };
-    assert!(
-        action_request
-            .idempotency_key
-            .as_ref()
-            .is_some_and(|key| !key.is_empty() && key != "worker-native-start")
-    );
+    assert!(action_request
+        .idempotency_key
+        .as_ref()
+        .is_some_and(|key| !key.is_empty() && key != "worker-native-start"));
     assert_ne!(
         action_request.idempotency_key,
         notice_request.idempotency_key
@@ -966,11 +965,9 @@ fn result(args) {
     let saved: Value = serde_json::from_slice(&prepared).unwrap();
     let action_body = saved["body"].as_str().unwrap();
     let body: Value = serde_json::from_str(action_body).unwrap();
-    assert!(
-        body["preconditions"]["targetId"]["ifMatch"]
-            .as_str()
-            .is_some()
-    );
+    assert!(body["preconditions"]["targetId"]["ifMatch"]
+        .as_str()
+        .is_some());
     let actions_before_reconstruction = action_proxy.observations();
     assert_eq!(
         actions_before_reconstruction["commands"]
@@ -1053,11 +1050,9 @@ fn result(args) {
         finished.output.as_ref().unwrap()["actionApplicationId"],
         notice_request.input["data"]["applicationReference"]
     );
-    assert!(
-        finished.output.as_ref().unwrap()["messageId"]
-            .as_str()
-            .is_some()
-    );
+    assert!(finished.output.as_ref().unwrap()["messageId"]
+        .as_str()
+        .is_some());
     assert_eq!(
         reopened
             .admit_owned(&definition, input, &owner, "worker-native-start", &binding)

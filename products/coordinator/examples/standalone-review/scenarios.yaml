@@ -18,7 +18,7 @@ cases:
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     requesterReference: notice-request-7
     context:
-      strategy: submitted
+      mode: submitted
       snapshot:
         summary: A synthetic notice for review.
   replies:
@@ -98,7 +98,7 @@ cases:
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     requesterReference: notice-request-7
     context:
-      strategy: submitted
+      mode: submitted
       snapshot:
         summary: A synthetic notice for review.
   replies:
@@ -180,7 +180,7 @@ cases:
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     requesterReference: notice-request-7
     context:
-      strategy: submitted
+      mode: submitted
       snapshot:
         summary: A synthetic notice for review.
   replies:
@@ -260,7 +260,7 @@ cases:
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     requesterReference: notice-request-7
     context:
-      strategy: submitted
+      mode: submitted
       snapshot:
         summary: A synthetic notice for review.
   replies:
@@ -347,7 +347,7 @@ cases:
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     requesterReference: notice-request-7
     context:
-      strategy: submitted
+      mode: submitted
       snapshot:
         summary: A synthetic notice for review.
   replies:
@@ -434,7 +434,7 @@ cases:
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     requesterReference: notice-request-7
     context:
-      strategy: submitted
+      mode: submitted
       snapshot:
         summary: A synthetic notice for review.
   replies:
@@ -521,7 +521,7 @@ cases:
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     requesterReference: notice-request-7
     context:
-      strategy: submitted
+      mode: submitted
       snapshot:
         summary: A synthetic notice for review.
   replies:
@@ -608,7 +608,7 @@ cases:
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     requesterReference: notice-request-7
     context:
-      strategy: submitted
+      mode: submitted
       snapshot:
         summary: A synthetic notice for review.
   replies:

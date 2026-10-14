@@ -142,9 +142,11 @@ fn governed_action_example_covers_refusal_unknown_and_exact_command_recovery() {
 fn declared_refusal_without_an_authored_edge_preserves_refused_behavior() {
     let source = example("governed-action-follow-up");
     let root = tempfile::tempdir().unwrap();
-    let mut workflow: serde_json::Value =
-        serde_norway::from_str(&std::fs::read_to_string(source.join("workflow.yaml")).unwrap())
-            .unwrap();
+    let mut workflow = registry_platform_yaml::Reader::new("workflow.yaml")
+        .scan(&std::fs::read(source.join("workflow.yaml")).unwrap())
+        .unwrap()
+        .unwrap()
+        .to_json_value();
     workflow["workflow"]["steps"]["request-information"]
         .as_object_mut()
         .unwrap()

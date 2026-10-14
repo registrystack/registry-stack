@@ -789,18 +789,24 @@ impl RuntimeConfig {
         }
         for (name, step) in &workflow.steps {
             if let crate::definition::Step::Call { call, .. } = step {
-                if call.operation == crate::protocol::Operation::InvokeBregAction
-                    && self
-                        .connections
-                        .get(&call.connection)
-                        .is_some_and(|binding| {
-                            binding
-                                .authorization()
-                                .is_some_and(|auth| auth.task_authority.is_some())
-                        })
+                if matches!(
+                    call.operation,
+                    crate::protocol::Operation::InvokeBregAction
+                        | crate::protocol::Operation::SubmitBregProposal
+                        | crate::protocol::Operation::ApplyBregProposal
+                        | crate::protocol::Operation::RetryBregProposal
+                        | crate::protocol::Operation::CancelBregProposal
+                ) && self
+                    .connections
+                    .get(&call.connection)
+                    .is_some_and(|binding| {
+                        binding
+                            .authorization()
+                            .is_some_and(|auth| auth.task_authority.is_some())
+                    })
                 {
-                    return Err(CoordinatorError::new("workflow-binding", "governed action invocation requires an explicitly permitted BReg service profile")
-                        .at("workflow.yaml", format!("steps.{name}.call"))
+                    return Err(CoordinatorError::new("workflow-binding", "BReg mutations require an explicitly permitted service profile")
+                        .at("workflow.yaml", format!("/workflow/steps/{name}/operation"))
                         .suggest("Use a separately authorized BReg connection without taskAuthority for this operation; task authority cannot fall back to service authority."));
                 }
                 if call.operation == crate::protocol::Operation::CreateAppointment

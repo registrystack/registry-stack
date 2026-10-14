@@ -9,7 +9,7 @@ use registry_breg_client::{
     BRegProposalApplicationState, BRegProposalState, BRegRetryAfter, BaseRegistryClient,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
@@ -259,7 +259,13 @@ pub async fn execute(
                 code: "invalid-response".into(),
             }
         }
-        Err(error) => failure(error, true),
+        Err(error) => match failure(error, true) {
+            // Submit evaluates the Action's plan. The generic lifecycle
+            // Operation has no Action-specific refusal schema, but the owner's
+            // validated no-effect response is still a known refusal.
+            CallOutcome::DeclaredRefusal(_) => refused("action-refused"),
+            outcome => outcome,
+        },
     }
 }
 

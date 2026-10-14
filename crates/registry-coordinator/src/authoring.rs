@@ -682,10 +682,44 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 "uses must name an exact versioned host catalog Operation",
             )
         })?;
+        if let Some(action) = &operation.action {
+            if uses != Operation::InvokeBregAction {
+                return Err(schema_error(
+                    format!("/operations/{id}/action"),
+                    "only BReg Action invocation accepts an Action contract selection",
+                ));
+            }
+            let export = imported.get(action.contract.as_str()).ok_or_else(|| {
+                schema_error(
+                    format!("/operations/{id}/action/contract"),
+                    "select a declared local contract import",
+                )
+            })?;
+            if let Some(entries) = export.get("actions").and_then(Value::as_array) {
+                if entries
+                    .iter()
+                    .filter(|entry| {
+                        entry.get("id").and_then(Value::as_str) == Some(action.id.as_str())
+                    })
+                    .count()
+                    != 1
+                {
+                    return Err(schema_error(
+                        format!("/operations/{id}/action/id"),
+                        "select exactly one Action ID from the imported contract",
+                    ));
+                }
+            }
+        }
+        let contract_field = operation.action.as_ref().map_or_else(
+            || format!("/operations/{id}/action"),
+            |action| format!("/contracts/{}/source", action.contract),
+        );
         let action = operation
             .action
             .map(|action| json!({"contract":action.contract.as_str(),"id":action.id.as_str()}));
-        let contract = crate::contracts::resolve_operation(uses, action.as_ref(), &imported)?;
+        let contract = crate::contracts::resolve_operation(uses, action.as_ref(), &imported)
+            .map_err(|error| error.at("workflow.yaml", contract_field))?;
         if operation.response_schema.is_some() && uses != Operation::ExternalGet {
             return Err(schema_error(
                 format!("/operations/{id}/responseSchema"),
@@ -1591,7 +1625,11 @@ pub(crate) fn positioned(document: &Document, error: CoordinatorError) -> Coordi
             parts.join("/")
         }
     };
-    let code = format!("coordinator.{}", error.code.replace('_', "-"));
+    let code = if error.code.starts_with("coordinator.") {
+        error.code.replace('_', "-")
+    } else {
+        format!("coordinator.{}", error.code.replace('_', "-"))
+    };
     CoordinatorError::from_diagnostics(&[document.diagnostic_at_value(
         Severity::Error,
         &code,

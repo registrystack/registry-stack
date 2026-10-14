@@ -103,6 +103,21 @@ def http(method, url, token=None, body=None, headers=None, expected=(200,)):
     return json.loads(raw) if raw else None
 
 
+def exported_context_schema(artifacts, action):
+    """Read and verify exact bytes published by the owning BReg generator."""
+    artifacts = Path(artifacts).resolve()
+    index = json.loads((artifacts / "generated/review-context-schemas/index.json").read_text())
+    entry = index[action]
+    path = (artifacts / entry["path"]).resolve()
+    assert path.is_relative_to(artifacts), "the owning artifact path must remain in its export"
+    raw = path.read_bytes()
+    assert "sha256:" + hashlib.sha256(raw).hexdigest() == entry["digest"]
+    schema = json.loads(raw)
+    assert schema["$id"] == entry["id"]
+    assert schema["x-registry-definition-revision"] == entry["revision"]
+    return {"bytes": raw, "contract": {"id": entry["id"], "revision": entry["revision"], "schemaDigest": entry["digest"]}}
+
+
 def bind_review_policy(project, binding):
     """Pin one task-owned authored request to the owning compiled PolicyBinding."""
     assert set(binding) == {"id", "version", "digest"}, "require an exact owning PolicyBinding"
@@ -201,6 +216,8 @@ class LostResponseProxy:
                         "subject": claims.get("sub"),
                         "issuer": claims.get("iss"), "audience": claims.get("aud"), "clientId": claims.get("client_id"),
                         "scopes": claims.get("scope", "").split(),
+                        "signedIdentityObject": isinstance(claims.get("identity"), dict),
+                        "signedIdentityClaims": sorted(claims["identity"]) if isinstance(claims.get("identity"), dict) else None,
                         "boundsHash": hashlib.sha256(json.dumps(claims.get("registry_grant_bounds"), sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
                         "grantId": claims.get("registry_grant_id"), "grantExpiresAt": claims.get("registry_grant_exp")})
                 if mutation and 200 <= response.status < 300 and not proxy.lost:
@@ -350,7 +367,11 @@ class Journey:
         private(log, result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace"))
         if success:
             assert result.returncode == 0, f"{binary} {args[0]} failed; inspect private {log}"
-            return json.loads(result.stdout)
+            report = json.loads(result.stdout)
+            if report.get("kind") == "CaseworkReport":
+                assert report["ok"] and report["status"] == "complete"
+                return report["data"]
+            return report
         return result.returncode
 
     def token(self, binary, project, client):
@@ -529,26 +550,46 @@ class Journey:
         assert not failures, f"owned cleanup failed for {', '.join(failures)}; inspect private logs in {self.root}"
 
     def run(self):
-        owner = write_breg(self.root / "breg", self.urls)
+        # Start the issuer owner before compiling the task-grant policy. Its
+        # exact client subjects and audience are part of that policy binding.
+        bootstrap = write_breg(self.root / "breg-schema-bootstrap", self.urls)
+        self.ctl("bregctl", "check", bootstrap)
+        bootstrap_breg, bootstrap_database = free_ports(2)
+        self.sessions.append(("bregctl", bootstrap))
+        bootstrap_report = self.ctl("bregctl", "dev", "start", bootstrap,
+            "--breg-port", bootstrap_breg, "--issuer-port", self.ports["issuer"],
+            "--database-port", bootstrap_database, "--breg-bin", self.bin / "breg")
+        resource = bootstrap_report["resource"]
+        agent = subject(self.token("bregctl", bootstrap, "task-agent"))
+        exported = self.root / "breg-schema-export"
+        self.ctl("bregctl", "generate", "schemas", bootstrap, "--output", exported)
+        context = exported_context_schema(exported, "correct-email")
+        policy_project = write_casework(self.root / "casework-policy-bootstrap", self.urls,
+            resource, agent, context)
+        self.ctl("caseworkctl", "provider", "pair", policy_project, "--provider-id", "applications",
+            "--breg-package", Path(bootstrap_report["stateFile"]).parent / "build/package",
+            "--action-id", "correct-email", "--bregctl-bin", self.bin / "bregctl", "--apply")
+        checked = self.ctl("caseworkctl", "check", policy_project)
+        binding = next(item for item in checked["policyBindings"] if item["id"] == "external-review")
+        # A separate disposable source borrows the same issuer and uses the
+        # actual compiled consumer policy. The producer schema stays acyclic.
+        owner = write_breg(self.root / "breg", self.urls, binding, borrower=True)
         self.ctl("bregctl", "check", owner)
         self.sessions.append(("bregctl", owner))
         report = self.ctl("bregctl", "dev", "start", owner, "--breg-port", self.ports["breg"],
-                          "--issuer-port", self.ports["issuer"], "--database-port", self.ports["bregdb"],
+                          "--database-port", self.ports["bregdb"], "--issuer-project", bootstrap,
                           "--breg-bin", self.bin / "breg")
-        resource = report.get("resource", report.get("audience"))
-        assert resource, "native owner report must identify resource"
+        assert report["resource"] == resource and report["issuer"] == bootstrap_report["issuer"]
         print("BReg and stock issuer ready through native dev tooling.", flush=True)
-        agent = subject(self.token("bregctl", owner, "task-agent"))
-        casework = write_casework(self.root / "casework", self.urls, resource, agent)
-        explanation = self.ctl("bregctl", "explain", "change-requests", owner)
-        request = next(item for item in explanation["explanation"]["requests"] if item["requestEntity"] == "application-change")
-        private(casework / "sources/source.json", {
-            "apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
-            "kind":"CaseworkBregSourceDescription", "sourceId":SOURCE, "authority":"none",
-            "origin":"bregctl explain change-requests", "sourceRevision":explanation["revision"], "requests":[request]})
-        self.ctl("caseworkctl", "check", casework)
+        casework = self.root / "casework"
+        shutil.copytree(policy_project, casework)
+        self.ctl("caseworkctl", "provider", "pair", casework, "--provider-id", "applications",
+                 "--breg-package", Path(report["stateFile"]).parent / "build/package", "--action-id", "correct-email",
+                 "--bregctl-bin", self.bin / "bregctl", "--apply")
+        checked = self.ctl("caseworkctl", "check", casework)
+        assert next(item for item in checked["policyBindings"] if item["id"] == "external-review") == binding, "pairing cannot silently change the frozen review policy"
         self.sessions.append(("caseworkctl", casework))
-        self.casework_start(casework, owner)
+        self.casework_start(casework, bootstrap)
         seed = self.token("bregctl", owner, "seed-client")
         def create(collection, data):
             value = http("POST", self.urls["breg"] + f"/v1/records/{collection}?accessProfile=seeder", seed,
@@ -560,26 +601,23 @@ class Journey:
             "email": "synthetic@example.invalid", "noticeAllowed": True,
             "appointmentAllowed": True,
         })
-        change = create("application-changes", {"tenant":"tenant-a","record":application,
-                                                "proposedEmail":"updated@example.invalid","reason":"Synthetic review"})
-        path = self.urls["breg"] + f"/v1/records/application-changes/{change}?accessProfile=seeder"
-        record = http("GET", path, seed)
-        action = next(a for a in record["data"]["request"]["actions"] if a["operation"] == "submit-request")
-        http("POST", urllib.parse.urljoin(self.urls["breg"], action["href"]), seed, {},
-             {"Idempotency-Key":str(uuid.uuid4()), "If-Match":action["ifMatch"]})
-        record = http("GET", path, seed)
-        http("POST", self.urls["casework"] + "/v1/review-requests", self.token("caseworkctl", casework, "producer"),
-             {"kind":"external-review", "subject":{"source":SOURCE,"type":"application-change","id":change,
-              "version":str(record["data"]["request"]["proposalVersion"]),"digest":record["data"]["request"]["effectDigest"]},
-              "requesterReference":"synthetic-native-journey", "context":{"strategy":"source","binding":{"reference":"synthetic-native-journey"}}},
-             {"Registry-Casework-Profile":"producer","Idempotency-Key":str(uuid.uuid4())}, (201,))
-        # Native retained restart triggers immediate source reconciliation.
-        self.ctl("caseworkctl", "dev", "stop", casework)
-        self.casework_start(casework, owner)
+        draft = self.start_proposal(owner, "correct-email", {"applicationId": application,
+            "proposedEmail": "updated@example.invalid", "reason": "Synthetic native review"})
+        submitted = self.proposal_transition(owner, draft, "submit")
+        assert submitted["state"] == "submitted" and submitted["effectDigest"]
+        # BReg owns review submission. Casework only observes the exact source
+        # binding through its paired, read-only context provider.
         human = self.token("caseworkctl", casework, "staff")
         human_headers = {"Registry-Casework-Profile":"staff","Registry-Source-Profile":"reviewer"}
-        page = http("GET", self.urls["casework"] + "/v1/review-tasks?queue=review&limit=25", human, headers=human_headers)
-        item = next(row for row in page["items"] if row["state"] == "open")
+        deadline = time.monotonic() + 90
+        while True:
+            page = http("GET", self.urls["casework"] + "/v1/review-tasks?queue=review&limit=25", human, headers=human_headers)
+            private(self.root / "native-source-inbox-progress.json", page)
+            item = next((row for row in page["items"] if row["state"] == "open" and row["subject"]["id"] == submitted["id"]), None)
+            if item is not None:
+                break
+            assert time.monotonic() < deadline, "BReg's exact review submission never reached Casework"
+            time.sleep(0.2)
         task_url = self.urls["casework"] + "/v1/review-tasks/" + item["taskId"]
         http("POST", task_url + "/claim", human, headers={**human_headers,
                        "If-Match":f'"{item["revision"]}"', "Idempotency-Key":str(uuid.uuid4())})
@@ -590,8 +628,10 @@ class Journey:
                         {"templateId":template,"templateVersion":"1"},
                         {**human_headers,"If-Match":f'"{current["revision"]}"',"Idempotency-Key":str(uuid.uuid4())})
         print("Casework source visibility and human task approval ready.", flush=True)
-        messaging_url, messaging_runtime = self.deferred_appointment(owner, resource, application, casework, agent, approve)
-        self.reviewed_notice(owner, resource, messaging_url, messaging_runtime)
+        messaging_url, messaging_runtime = self.deferred_appointment(bootstrap, resource, application, casework, agent, approve,
+            lambda: self.proposal_transition(owner, self.read_proposal(owner, submitted), "cancel"))
+        self.reviewed_proposal_followup(bootstrap, owner, resource, casework, messaging_url, messaging_runtime)
+        self.reviewed_notice(bootstrap, resource, messaging_url, messaging_runtime)
 
     def authorization(self, exported, resource, scopes, **extra):
         return {"tokenEndpoint":exported["tokenEndpoint"], "clientAssertionAudience":exported["clientAssertionAudience"],
@@ -676,9 +716,9 @@ class Journey:
                 "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
         }, free_ports(1)[0], "coordinator-before-wait")
 
-    def coordinator_service(self, flow, keys, connections, port, label, additional_projects=()):
+    def coordinator_service(self, flow, keys, connections, port, label, additional_projects=(), primary_project=None):
         """Package maintained example flows, apply them with a split role, and serve them."""
-        projects = [(flow, REPO / "products/coordinator/examples" / flow), *additional_projects]
+        projects = [(flow, primary_project or REPO / "products/coordinator/examples" / flow), *additional_projects]
         packages = []
         for flow_id, project in projects:
             if flow_id.startswith("reviewed-notice"):
@@ -737,7 +777,7 @@ class Journey:
         self.ready(child, url)
         return runtime, url, child
 
-    def deferred_appointment(self, owner, resource, application, casework, agent, approve):
+    def deferred_appointment(self, owner, resource, application, casework, agent, approve, revoke_source):
         day = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)).date().isoformat()
         messaging_url, messaging_runtime = self.messaging_service(owner)
         scheduling_url, _ = self.scheduling_service(owner, resource, day)
@@ -788,6 +828,7 @@ class Journey:
         self.ready(worker, url)
         result, reconciled = self.drive(owner, url, run)
         private(self.root / "native-outcome.json", result)
+        private(self.root / "native-commit-observations.json", {"booking": booking_proxy.commands, "messaging": message_proxy.commands})
         assert result["run"]["outcome"] == "appointment-and-message-accepted", "deferred native flow did not complete"
         assert booking_proxy.lost and message_proxy.lost, "both committed responses must be lost deliberately"
         assert set(reconciled) == {"book", "notify"}, "read-only original receipt recovery must settle both effects"
@@ -828,6 +869,18 @@ class Journey:
             "externalReferenceIdentifier": application}), token)
         assert len(appointments["items"]) == 1
         assert appointments["items"][0]["appointmentId"] == result["run"]["output"]["appointmentId"]
+        # The same still-unexpired approval loses authority when its exact
+        # source Proposal ceases to be reviewable. Recheck through real
+        # Casework status before any additional Scheduling command.
+        revoke_source()
+        mutations = (len(booking_proxy.commands), len(message_proxy.commands))
+        refused_run = self.start(owner, url, "native-current-source-no-longer-reviewable", {**data, "bookAfter": stamp(-1)})
+        refused, reconciled_again = self.drive(owner, url, refused_run)
+        assert refused["run"]["state"] == "failed" and refused["run"]["failureCode"] == "credential-refused"
+        assert not reconciled_again and (len(booking_proxy.commands), len(message_proxy.commands)) == mutations
+        approval_refusals.append({"control": "current-source-no-longer-reviewable", "state": "failed",
+            "failureCode": "credential-refused", "additionalProductMutations": 0})
+        private(self.root / "native-approval-refusals.json", approval_refusals)
         elapsed = int(time.monotonic() - approved_at)
         proof = {"proofBoundary": "native_postgres_and_services" if self.wait_seconds >= 901 else "short_smoke_only",
             "actualApprovalElapsedSeconds": elapsed, "configuredWaitSeconds": self.wait_seconds, "authorityPreflight": self.authority_preflight,
@@ -846,6 +899,160 @@ class Journey:
         private(self.root / "native-deferred-proof.json", proof)
         print("Deferred appointment and accepted notice recovered original receipts after response loss.", flush=True)
         return messaging_url, messaging_runtime
+
+    def advance_completion_fixture(self, runtime, runs):
+        """Advance only this disposable fixture's clocks, preserving relative budgets."""
+        schema = json.loads(runtime.read_text())["namespace"]
+        assert re.fullmatch(r"coordinator_[0-9a-f]{32}", schema)
+        identifiers = ",".join("'" + str(uuid.UUID(run)) + "'::uuid" for run in runs)
+        sql = f"""BEGIN;
+UPDATE {schema}.runs SET admitted_at=admitted_at-interval '900 seconds',deadline_at=deadline_at-interval '900 seconds' WHERE run_id IN ({identifiers});
+UPDATE {schema}.completion_waits SET started_at=started_at-interval '900 seconds',timeout_at=timeout_at-interval '900 seconds',not_before=not_before-interval '900 seconds',read_at=read_at-interval '900 seconds' WHERE run_id IN ({identifiers});
+UPDATE {schema}.jobs SET next_attempt_at=next_attempt_at-interval '900 seconds' WHERE run_id IN ({identifiers}) AND state='pending';
+COMMIT;
+"""
+        result = subprocess.run(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-q"], input=sql.encode(),
+            env=database_environment(os.environ["COORDINATOR_TEST_DATABASE_URL"], self.env), capture_output=True, timeout=15)
+        assert result.returncode == 0, "the owned completion fixture clock advance failed"
+
+    def reviewed_proposal_followup(self, issuer_owner, owner, resource, casework, messaging_url, messaging_runtime):
+        """Real owner review, separate exact application, restart, and ordinary notice authority."""
+        project = self.root / "reviewed-proposal-follow-up"
+        shutil.copytree(REPO / "products/coordinator/examples/proposal-follow-up", project)
+        workflow = project / "workflow.yaml"
+        source = workflow.read_text().replace("id: proposal-follow-up", "id: reviewed-proposal-follow-up")
+        source = source.replace("id: correct-address", "id: correct-email")
+        source = source.replace("deadlineSeconds: 2592000", "deadlineSeconds: 1100")
+        source = source.replace("timeoutSeconds: 1209600", "timeoutSeconds: 960")
+        private(workflow, source)
+        exported = self.root / "reviewed-proposal-actions"
+        self.ctl("bregctl", "generate", "actions", owner, "--output", exported)
+        shutil.copyfile(exported / "generated/action-contracts.json", project / "generated/facilities.contract.json")
+        action = next(item for item in json.loads((exported / "generated/action-contracts.json").read_text())["actions"] if item["id"] == "correct-email")
+        # The maintained scenario journeys remain the packaging gate. Adapt
+        # their authored fixture inputs and synthetic replies to this actual
+        # owner-exported Action; the subsequent proof uses genuine services.
+        scenarios = project / "scenarios.yaml"
+        cases = scenarios.read_text().replace("correct-address", "correct-email")
+        cases, changed = re.subn(r"facilityId: ([^\n]+)\n        addressLine: [^\n]+\n        city: [^\n]+\n        postalCode: [^\n]+",
+            r"applicationId: \1\n        proposedEmail: updated@example.invalid\n        reason: Synthetic reviewed correction", cases)
+        assert changed == 6, "adapt every maintained Proposal scenario to the native source Action"
+        cases = re.sub(r"actionRevision: sha256:[0-9a-f]{64}", "actionRevision: " + action["revision"], cases)
+        cases = cases.replace("recordType: facility", "recordType: application")
+        private(scenarios, cases)
+        keys = self.root / "reviewed-proposal-secrets"
+        writer = self.export(issuer_owner, "seed-client", keys)
+        sender = self.export(issuer_owner, "case-system", keys)
+        runtime, url, worker = self.coordinator_service("reviewed-proposal-follow-up", keys, {
+            "facilities": {"type": "breg", "baseUrl": self.urls["breg"], "profile": "seeder",
+                "authorization": self.authorization(writer, resource, ["records:get"])},
+            "notices": {"type": "messaging", "baseUrl": messaging_url,
+                "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
+        }, free_ports(1)[0], "coordinator-reviewed-proposal", primary_project=project)
+        before = {row["id"] for row in self.ctl("messagingctl", "messages", "list", "--runtime-config", messaging_runtime)["messages"]}
+        seed = self.token("bregctl", owner, "seed-client")
+        runs = {}
+        for label in ("approved", "rejected", "cancelled"):
+            application = http("POST", self.urls["breg"] + "/v1/records/applications?accessProfile=seeder", seed,
+                {"data": {"tenant": "tenant-a", "applicantName": label + " Applicant", "benefitProgram": "housing-support",
+                    "requestedAmount": 1200, "email": label + "@example.invalid", "noticeAllowed": True, "appointmentAllowed": True}},
+                {"Idempotency-Key": str(uuid.uuid4())}, (201,))["data"]["recordIdentifier"]
+            data = {"correction": {"input": {"applicationId": application, "proposedEmail": label + "-updated@example.invalid",
+                "reason": "Synthetic exact reviewed Proposal"}}, "notice": {"senderProfile": "transactional",
+                "to": {"email": label + "-updated@example.invalid"}, "template": {"id": "application-follow-up", "version": "1"},
+                "locale": "en", "data": {"applicationReference": application}}}
+            run = self.start(issuer_owner, url, "native-reviewed-proposal-" + label, data, "reviewed-proposal-follow-up")
+            runs[label] = {"run": run, "application": application}
+        deadline = time.monotonic() + 90
+        for value in runs.values():
+            while True:
+                inspection = self.inspect(issuer_owner, url, value["run"])
+                if inspection["waits"] and inspection["waits"][0]["observations"] == 1:
+                    assert inspection["run"]["step"] == "await-application"
+                    value["wait"] = inspection["waits"][0]
+                    assert value["wait"]["minimumIntervalSeconds"] == 900
+                    break
+                assert inspection["run"]["state"] == "running", "reviewed Proposal stopped before its durable wait: " + str(inspection["run"].get("failureCode"))
+                assert time.monotonic() < deadline, "reviewed Proposal did not persist its initial pending observation"
+                time.sleep(0.1)
+        self.stop(worker)
+        staff = self.token("caseworkctl", casework, "staff")
+        headers = {"Registry-Casework-Profile": "staff", "Registry-Source-Profile": "reviewer"}
+        found = set()
+        while len(found) < len(runs):
+            page = http("GET", self.urls["casework"] + "/v1/review-tasks?queue=review&limit=25", staff, headers=headers)
+            for task in page["items"]:
+                if task["state"] != "open" or task["taskId"] in found:
+                    continue
+                task_url = self.urls["casework"] + "/v1/review-tasks/" + task["taskId"]
+                context = http("GET", task_url + "/context", staff, headers=headers)
+                assert context["context"]["mode"] == "current-source"
+                display = context["context"]["projection"]["display"]
+                value = next((item for item in runs.values() if item["application"] == display["applicationId"]), None)
+                if value is None:
+                    continue
+                label = next(label for label, item in runs.items() if item is value)
+                proposal = http("GET", self.urls["breg"] + "/v1/proposals/" + task["subject"]["id"] + "?accessProfile=seeder", seed)
+                assert proposal["state"] == "submitted" and "application" not in proposal
+                assert task["subject"]["version"] == str(proposal["submissionVersion"]) and task["subject"]["digest"] == proposal["effectDigest"]
+                value["proposal"] = proposal
+                value["binding"] = {key: proposal[key] for key in ("id", "actionId", "actionRevision", "submissionVersion", "effectDigest")}
+                if label == "cancelled":
+                    self.proposal_transition(owner, proposal, "cancel")
+                else:
+                    http("POST", task_url + "/claim", staff, headers={**headers, "If-Match": f'"{task["revision"]}"', "Idempotency-Key": str(uuid.uuid4())})
+                    current = http("GET", task_url, staff, headers=headers)
+                    decision = {"type": "approve"} if label == "approved" else {"type": "reject", "outcome": "not-authorized"}
+                    http("POST", task_url + "/decisions", staff, {"decision": decision},
+                        {**headers, "If-Match": f'"{current["revision"]}"', "Idempotency-Key": str(uuid.uuid4())}, (204,))
+                found.add(task["taskId"])
+            assert time.monotonic() < deadline, "exact BReg reviews did not reach human Casework tasks"
+            time.sleep(0.1)
+        deadline = time.monotonic() + 90
+        for label, value in runs.items():
+            while True:
+                current = self.read_proposal(owner, value["proposal"])
+                assert {key: current[key] for key in value["binding"]} == value["binding"]
+                ready = (current["state"] == "applied" if label == "approved" else current["state"] == "cancelled" if label == "cancelled"
+                         else current.get("applicationStatus", {}).get("state") == "blocked")
+                if ready:
+                    if label == "approved":
+                        assert current["application"]["submissionVersion"] == value["binding"]["submissionVersion"]
+                        assert current["application"]["effectDigest"] == value["binding"]["effectDigest"]
+                    else:
+                        assert "application" not in current
+                    value["observed"] = current
+                    break
+                assert time.monotonic() < deadline, "BReg did not observe the exact Casework result"
+                time.sleep(0.2)
+        worker = self.spawn("coordinator", runtime, "coordinator-reviewed-proposal-restarted")
+        self.ready(worker, url)
+        for value in runs.values():
+            assert self.inspect(issuer_owner, url, value["run"])["waits"][0] == value["wait"], "restart must preserve the original notBefore and observation budget"
+        assert {row["id"] for row in self.ctl("messagingctl", "messages", "list", "--runtime-config", messaging_runtime)["messages"]} == before
+        self.stop(worker)
+        self.advance_completion_fixture(runtime, [value["run"] for value in runs.values()])
+        worker = self.spawn("coordinator", runtime, "coordinator-reviewed-proposal-due")
+        self.ready(worker, url)
+        for label, value in runs.items():
+            result, reconciled = self.drive(issuer_owner, url, value["run"])
+            assert not reconciled
+            value["result"] = result["run"]
+            if label == "approved":
+                assert result["run"]["outcome"] == "message-accepted"
+            elif label == "cancelled":
+                assert result["run"]["outcome"] == "proposal-closed"
+            else:
+                assert result["run"]["state"] == "attention" and result["run"]["failureCode"] == "proposal-application-refused"
+        sent = [row["id"] for row in self.ctl("messagingctl", "messages", "list", "--runtime-config", messaging_runtime)["messages"] if row["id"] not in before]
+        assert len(sent) == 1 and sent[0] == runs["approved"]["result"]["output"]["id"]
+        private(self.root / "native-reviewed-proposal-proof.json", {"proofBoundary": "native_breg_casework_exact_application_and_messaging",
+            "completionClock": "simulated 900-second advance in disposable fixture; original relative deadlines and read budgets retained",
+            "workerRestartWhileWaiting": True, "noPrematureObservationOrNotice": True, "acceptedNotices": len(sent),
+            "runs": {label: {"binding": value["binding"], "applicationStatus": value["observed"].get("applicationStatus"),
+                "application": value["observed"].get("application"), "result": value["result"]} for label, value in runs.items()},
+            "binarySha256": self.binary_digests})
+        print("Reviewed Proposal approval applied the exact frozen submission; rejection and cancellation sent no notice.", flush=True)
 
     def approval_refusals(self, owner, url, positive_input, grant, expired_grant,
                          booking_proxy, message_proxy):
@@ -1014,7 +1221,7 @@ class Journey:
                 "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
                 "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}}},
             "audit": {"path": str(self.root / "audit/review-casework.ndjson"), "hashKeyRef": "secret:file/audit-key"},
-            "sources": {},
+            "contextProviders": {},
             "reviewCompletionDestinations": {"coordinator": {
                 "url": completion_url, "bearerTokenRef": "secret:file/completion-token",
                 "attemptTimeoutMilliseconds": 5000, "maximumAttempts": 10, "retryDelaySeconds": 1}},

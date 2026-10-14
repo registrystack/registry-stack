@@ -111,15 +111,19 @@ enum Command {
     /// Export revision-pinned typed clients from the compiled workflow contract.
     Types {
         #[arg(long)]
+        /// Directory containing workflow.yaml and its declared code and contract assets.
         project: PathBuf,
         #[arg(long, value_enum)]
+        /// Language for the generated input/outcome types and revision-pinned client.
         language: SdkLanguage,
         #[arg(long)]
+        /// File to write with the generated typed client source.
         output: PathBuf,
     },
     /// Discover a permitted workflow's active revision and input/outcome contract.
     Workflow {
         #[arg(long)]
+        /// Allowed workflow identifier whose active contract should be returned.
         workflow: String,
         #[command(flatten)]
         service: Service,

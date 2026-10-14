@@ -27,7 +27,7 @@ const PRIVATE: &str = "submitted-notice-private-canary";
 fn input() -> Value {
     json!({"policy":{"id":"notice-review","version":"1","digest":format!("sha256:{}","b".repeat(64))},
         "subject":{"source":"notices","type":"notice","id":"notice-7","version":"3","digest":format!("sha256:{}","a".repeat(64))},
-        "requesterReference":"notice-request-7","context":{"strategy":"submitted","snapshot":{"summary":PRIVATE}}})
+        "requesterReference":"notice-request-7","context":{"mode":"submitted","snapshot":{"summary":PRIVATE}}})
 }
 fn accepted() -> Value {
     let input: ReviewCreateRequest = serde_json::from_value(input()).unwrap();

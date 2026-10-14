@@ -39,16 +39,97 @@ pub struct Violation {
 const UNEXPECTED_MEMBER: &str = "no member of this name";
 
 impl Violation {
-    /// The path as far as the contract names it. An unexpected member's name
-    /// comes from the checked value, so the path stops at the object that
-    /// holds it.
-    pub fn declared_path(&self) -> &str {
-        if self.expected == UNEXPECTED_MEMBER {
-            self.path.rsplit_once('/').map_or("", |(object, _)| object)
-        } else {
-            &self.path
+    /// The prefix consisting only of explicitly declared property names.
+    /// Dictionary and pattern members come from the checked value, even when
+    /// their values violate a type constraint rather than an extra-member rule.
+    /// Array positions and unsupported schema locations stop the projection.
+    pub fn declared_path(&self, schema: &Value, value: &Value) -> String {
+        let Some(path) = self.path.strip_prefix('/') else {
+            return String::new();
+        };
+        let mut schemas = vec![schema];
+        let mut current = value;
+        let mut safe = String::new();
+        let mut budget = 1024;
+        for token in path.split('/') {
+            if !current.is_object() {
+                break;
+            }
+            let mut name = String::new();
+            let mut chars = token.chars();
+            while let Some(ch) = chars.next() {
+                if ch == '~' {
+                    match chars.next() {
+                        Some('0') => name.push('~'),
+                        Some('1') => name.push('/'),
+                        _ => return safe,
+                    }
+                } else {
+                    name.push(ch);
+                }
+            }
+            let mut children = Vec::new();
+            for candidate in &schemas {
+                if !declared_property(schema, candidate, &name, &mut children, &mut budget, 0) {
+                    return safe;
+                }
+            }
+            if children.is_empty() {
+                break;
+            }
+            safe.push('/');
+            safe.push_str(token);
+            schemas = children;
+            let Some(child) = current.get(&name) else {
+                break;
+            };
+            current = child;
+        }
+        safe
+    }
+}
+
+/// Collect declarations at the same instance location. Every emitted name is
+/// authored in the owning schema, including declarations behind local refs or
+/// union branches. Exhaustion fails closed instead of using a partial search.
+fn declared_property<'a>(
+    root: &'a Value,
+    schema: &'a Value,
+    name: &str,
+    children: &mut Vec<&'a Value>,
+    budget: &mut usize,
+    depth: usize,
+) -> bool {
+    if *budget == 0 || depth >= 64 {
+        return false;
+    }
+    *budget -= 1;
+    if let Some(child) = schema
+        .get("properties")
+        .and_then(|properties| properties.get(name))
+    {
+        children.push(child);
+    }
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        if let Some(target) = reference
+            .strip_prefix('#')
+            .and_then(|pointer| root.pointer(pointer))
+        {
+            if !declared_property(root, target, name, children, budget, depth + 1) {
+                return false;
+            }
         }
     }
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        if let Some(branches) = schema.get(keyword).and_then(Value::as_array) {
+            for branch in branches {
+                if !declared_property(root, branch, name, children, budget, depth + 1) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 impl OperationContract {
@@ -1166,32 +1247,115 @@ mod tests {
     #[test]
     fn the_declared_path_leaves_out_an_unexpected_member_name() {
         let read = contract(Operation::ReadRecord);
-        let unexpected = read
-            .check_input(&json!({"collection": "c", "recordId": "r", "private-canary": 1}))
-            .unwrap_err();
+        let value = json!({"collection": "c", "recordId": "r", "private-canary": 1});
+        let unexpected = read.check_input(&value).unwrap_err();
         assert_eq!(unexpected.path, "/private-canary");
-        assert_eq!(unexpected.declared_path(), "");
+        assert_eq!(unexpected.declared_path(&read.input, &value), "");
         let appointment = contract(Operation::CreateAppointment);
-        let nested = appointment
-            .check_input(&json!({
-                "appointment": {"admission": {
-                    "offering": "intake",
-                    "start": "2026-10-11T09:00:00Z",
-                    "party": {"recipients": 1, "attendees": 1},
-                    "policyRevision": 1,
-                    "capabilities": [],
-                    "prerequisites": [],
-                }},
-                "grant": {"id": "00000000-0000-4000-8000-000000000000", "expiresAt": 1,
-                    "private-canary": 1},
-            }))
-            .unwrap_err();
+        let value = json!({
+            "appointment": {"admission": {
+                "offering": "intake",
+                "start": "2026-10-11T09:00:00Z",
+                "party": {"recipients": 1, "attendees": 1},
+                "policyRevision": 1,
+                "capabilities": [],
+                "prerequisites": [],
+            }},
+            "grant": {"id": "00000000-0000-4000-8000-000000000000", "expiresAt": 1,
+                "private-canary": 1},
+        });
+        let nested = appointment.check_input(&value).unwrap_err();
         assert_eq!(nested.path, "/grant/private-canary");
-        assert_eq!(nested.declared_path(), "/grant");
-        let typed = read
-            .check_input(&json!({"collection": 7, "recordId": "r"}))
-            .unwrap_err();
-        assert_eq!(typed.declared_path(), "/collection");
+        assert_eq!(nested.declared_path(&appointment.input, &value), "/grant");
+        let value = json!({"collection": 7, "recordId": "r"});
+        let typed = read.check_input(&value).unwrap_err();
+        assert_eq!(typed.declared_path(&read.input, &value), "/collection");
+    }
+
+    #[test]
+    fn declared_paths_hide_dictionary_and_pattern_keys_for_typed_violations() {
+        let external = contract(Operation::ExternalGet);
+        let value = json!({"path":"jobs/status", "query":{"private-person-id":7}});
+        let violation = external.check_input(&value).unwrap_err();
+        assert_eq!(violation.path, "/query/private-person-id");
+        assert_eq!(violation.declared_path(&external.input, &value), "/query");
+
+        let schema = json!({"properties":{"payload":{
+            "patternProperties":{"^private-":{"type":"string"}}
+        }}});
+        let value = json!({"payload":{"private-person-id":7}});
+        let violation = Violation {
+            path: "/payload/private-person-id".into(),
+            expected: "a string".into(),
+        };
+        assert_eq!(violation.declared_path(&schema, &value), "/payload");
+    }
+
+    #[test]
+    fn declared_paths_follow_local_refs_and_union_declarations_only() {
+        for keyword in ["allOf", "anyOf", "oneOf"] {
+            let schema = json!({
+                "$defs":{"payload":{"properties":{
+                    "known/name":{"properties":{"value":{"type":"string"}}},
+                    "dictionary":{"additionalProperties":{"type":"string"}}
+                }}},
+                (keyword):[{"properties":{"payload":{"$ref":"#/$defs/payload"}}}]
+            });
+            let value = json!({"payload":{
+                "known/name":{"value":7}, "dictionary":{"private-person-id":7}
+            }});
+            for (path, expected) in [
+                ("/payload/known~1name/value", "/payload/known~1name/value"),
+                (
+                    "/payload/dictionary/private-person-id",
+                    "/payload/dictionary",
+                ),
+            ] {
+                let violation = Violation {
+                    path: path.into(),
+                    expected: "a string".into(),
+                };
+                assert_eq!(
+                    violation.declared_path(&schema, &value),
+                    expected,
+                    "{keyword}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn declared_paths_fail_closed_at_dynamic_or_unsupported_positions() {
+        let value = json!({"items":[{"private-person-id":7}], "payload":{"private-person-id":7}});
+        for (schema, path, expected) in [
+            (
+                json!({"properties":{"items":{"items":{"properties":{"private-person-id":{}}}}}}),
+                "/items/0/private-person-id",
+                "/items",
+            ),
+            (
+                json!({"properties":{"payload":{"$ref":"https://example.invalid/schema"}}}),
+                "/payload/private-person-id",
+                "/payload",
+            ),
+            (
+                json!({"properties":{"payload":{"if":{},"then":{"properties":{"private-person-id":{}}}}}}),
+                "/payload/private-person-id",
+                "/payload",
+            ),
+            (json!({"$ref":"#"}), "/payload/private-person-id", ""),
+            (
+                json!({"properties":{"payload":{}}}),
+                "/payload/private~2person-id",
+                "/payload",
+            ),
+        ] {
+            let violation = Violation {
+                path: path.into(),
+                expected: "a string".into(),
+            };
+            assert_eq!(violation.declared_path(&schema, &value), expected);
+        }
     }
 
     #[cfg(feature = "schema")]

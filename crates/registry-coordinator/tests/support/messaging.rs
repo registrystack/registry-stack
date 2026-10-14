@@ -3,8 +3,7 @@
 //! contract, with disposable PostgreSQL and a synthetic template. No delivery
 //! claim is made; only authoritative acceptance and receipts are observed.
 
-#[path = "failed_fixture.rs"]
-mod failed_fixture;
+use super::failed_fixture;
 
 use std::{
     path::{Path, PathBuf},

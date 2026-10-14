@@ -405,7 +405,8 @@ impl Worker {
                     };
                     if let Err(violation) = contract.check_input(&value) {
                         let mut sent = failed("invalid-command", job.job.uncertain);
-                        sent.detail.failure_path = Some(violation.declared_path().to_owned());
+                        sent.detail.failure_path =
+                            Some(violation.declared_path(&contract.input, &value));
                         return Ok(sent);
                     }
                     let request = CallRequest {

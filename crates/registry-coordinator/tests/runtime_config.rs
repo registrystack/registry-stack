@@ -826,6 +826,62 @@ fn appointment_workflow_refuses_ordinary_authority_before_admission_or_activatio
 }
 
 #[test]
+fn proposal_lifecycle_refuses_task_grant_only_bindings_before_admission() {
+    use registry_coordinator::{definition::Step, protocol::Operation};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/coordinator/examples/proposal-follow-up");
+    let definition = Definition::load(&root).unwrap();
+    let mut config = load(include_str!(
+        "../../../products/coordinator/examples/proposal-follow-up/runtime.yaml"
+    ))
+    .unwrap();
+    let task_config = load(SCHEDULING_RUNTIME).unwrap();
+    let authority = task_config.connections["bookings"]
+        .authorization()
+        .unwrap()
+        .task_authority
+        .clone();
+    for operation in [
+        Operation::InvokeBregAction,
+        Operation::SubmitBregProposal,
+        Operation::ApplyBregProposal,
+        Operation::RetryBregProposal,
+        Operation::CancelBregProposal,
+    ] {
+        let mut workflow = definition.workflow.clone();
+        for step in workflow.steps.values_mut() {
+            if let Step::Call { call, .. } = step {
+                if call.connection == "facilities" {
+                    call.operation = operation;
+                }
+            }
+        }
+        config
+            .connections
+            .get_mut("facilities")
+            .unwrap()
+            .authorization_mut()
+            .unwrap()
+            .task_authority = None;
+        config.validate_workflow(&workflow).unwrap();
+        config
+            .connections
+            .get_mut("facilities")
+            .unwrap()
+            .authorization_mut()
+            .unwrap()
+            .task_authority = authority.clone();
+        let error = config.validate_workflow(&workflow).unwrap_err();
+        assert_eq!(error.code, "workflow-binding");
+        assert_eq!(
+            error.field.as_deref(),
+            Some("/workflow/steps/start-draft/operation")
+        );
+        assert!(config.binding_digest_for(&workflow).is_err());
+    }
+}
+
+#[test]
 fn caller_policy_flow_ids_use_the_workflow_name_grammar() {
     let original: Value = yaml_value(include_str!(
         "../../../products/coordinator/examples/single-flow-runtime.yaml"

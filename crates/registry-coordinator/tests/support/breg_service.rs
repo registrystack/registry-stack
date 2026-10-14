@@ -11,7 +11,7 @@ use std::{
 
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
 use registry_platform_testing::TestAuthorizationServer;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn binary(variable: &str) -> PathBuf {
     let path = PathBuf::from(std::env::var_os(variable).unwrap_or_else(|| {

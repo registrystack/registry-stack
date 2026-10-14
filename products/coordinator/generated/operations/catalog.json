@@ -127,7 +127,6 @@
         "BRegProposalApplicationReason": {
           "enum": [
             "contract-changed",
-            "review-unavailable",
             "dependency-outage",
             "lease-expired",
             "application-refused",
@@ -147,7 +146,7 @@
         },
         "BRegProposalApplicationStatus": {
           "additionalProperties": false,
-          "description": "Receiver-owned progress for this exact frozen submission, under current\ndisclosure. A blocked submission is not a terminal non-application result.",
+          "description": "Local application progress for the enclosing exact frozen submission.\nIt neither follows a successor nor reconciles an unknown mutation command.",
           "properties": {
             "automaticRetry": {
               "anyOf": [
@@ -263,12 +262,6 @@
               "type": "integer"
             },
             "uploadedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "uploadedBy": {
               "type": [
                 "string",
                 "null"
@@ -580,7 +573,6 @@
         "BRegProposalApplicationReason": {
           "enum": [
             "contract-changed",
-            "review-unavailable",
             "dependency-outage",
             "lease-expired",
             "application-refused",
@@ -600,7 +592,7 @@
         },
         "BRegProposalApplicationStatus": {
           "additionalProperties": false,
-          "description": "Receiver-owned progress for this exact frozen submission, under current\ndisclosure. A blocked submission is not a terminal non-application result.",
+          "description": "Local application progress for the enclosing exact frozen submission.\nIt neither follows a successor nor reconciles an unknown mutation command.",
           "properties": {
             "automaticRetry": {
               "anyOf": [
@@ -716,12 +708,6 @@
               "type": "integer"
             },
             "uploadedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "uploadedBy": {
               "type": [
                 "string",
                 "null"
@@ -1072,7 +1058,6 @@
         "BRegProposalApplicationReason": {
           "enum": [
             "contract-changed",
-            "review-unavailable",
             "dependency-outage",
             "lease-expired",
             "application-refused",
@@ -1092,7 +1077,7 @@
         },
         "BRegProposalApplicationStatus": {
           "additionalProperties": false,
-          "description": "Receiver-owned progress for this exact frozen submission, under current\ndisclosure. A blocked submission is not a terminal non-application result.",
+          "description": "Local application progress for the enclosing exact frozen submission.\nIt neither follows a successor nor reconciles an unknown mutation command.",
           "properties": {
             "automaticRetry": {
               "anyOf": [
@@ -1208,12 +1193,6 @@
               "type": "integer"
             },
             "uploadedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "uploadedBy": {
               "type": [
                 "string",
                 "null"
@@ -1525,7 +1504,6 @@
         "BRegProposalApplicationReason": {
           "enum": [
             "contract-changed",
-            "review-unavailable",
             "dependency-outage",
             "lease-expired",
             "application-refused",
@@ -1545,7 +1523,7 @@
         },
         "BRegProposalApplicationStatus": {
           "additionalProperties": false,
-          "description": "Receiver-owned progress for this exact frozen submission, under current\ndisclosure. A blocked submission is not a terminal non-application result.",
+          "description": "Local application progress for the enclosing exact frozen submission.\nIt neither follows a successor nor reconciles an unknown mutation command.",
           "properties": {
             "automaticRetry": {
               "anyOf": [
@@ -1661,12 +1639,6 @@
               "type": "integer"
             },
             "uploadedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "uploadedBy": {
               "type": [
                 "string",
                 "null"
@@ -2329,7 +2301,6 @@
         "BRegProposalApplicationReason": {
           "enum": [
             "contract-changed",
-            "review-unavailable",
             "dependency-outage",
             "lease-expired",
             "application-refused",
@@ -2349,7 +2320,7 @@
         },
         "BRegProposalApplicationStatus": {
           "additionalProperties": false,
-          "description": "Receiver-owned progress for this exact frozen submission, under current\ndisclosure. A blocked submission is not a terminal non-application result.",
+          "description": "Local application progress for the enclosing exact frozen submission.\nIt neither follows a successor nor reconciles an unknown mutation command.",
           "properties": {
             "automaticRetry": {
               "anyOf": [
@@ -2465,12 +2436,6 @@
               "type": "integer"
             },
             "uploadedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "uploadedBy": {
               "type": [
                 "string",
                 "null"
@@ -2782,7 +2747,6 @@
         "BRegProposalApplicationReason": {
           "enum": [
             "contract-changed",
-            "review-unavailable",
             "dependency-outage",
             "lease-expired",
             "application-refused",
@@ -2802,7 +2766,7 @@
         },
         "BRegProposalApplicationStatus": {
           "additionalProperties": false,
-          "description": "Receiver-owned progress for this exact frozen submission, under current\ndisclosure. A blocked submission is not a terminal non-application result.",
+          "description": "Local application progress for the enclosing exact frozen submission.\nIt neither follows a successor nor reconciles an unknown mutation command.",
           "properties": {
             "automaticRetry": {
               "anyOf": [
@@ -2918,12 +2882,6 @@
               "type": "integer"
             },
             "uploadedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "uploadedBy": {
               "type": [
                 "string",
                 "null"
@@ -3293,7 +3251,6 @@
         "BRegProposalApplicationReason": {
           "enum": [
             "contract-changed",
-            "review-unavailable",
             "dependency-outage",
             "lease-expired",
             "application-refused",
@@ -3313,7 +3270,7 @@
         },
         "BRegProposalApplicationStatus": {
           "additionalProperties": false,
-          "description": "Receiver-owned progress for this exact frozen submission, under current\ndisclosure. A blocked submission is not a terminal non-application result.",
+          "description": "Local application progress for the enclosing exact frozen submission.\nIt neither follows a successor nor reconciles an unknown mutation command.",
           "properties": {
             "automaticRetry": {
               "anyOf": [
@@ -3429,12 +3386,6 @@
               "type": "integer"
             },
             "uploadedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "uploadedBy": {
               "type": [
                 "string",
                 "null"
@@ -3746,7 +3697,6 @@
         "BRegProposalApplicationReason": {
           "enum": [
             "contract-changed",
-            "review-unavailable",
             "dependency-outage",
             "lease-expired",
             "application-refused",
@@ -3766,7 +3716,7 @@
         },
         "BRegProposalApplicationStatus": {
           "additionalProperties": false,
-          "description": "Receiver-owned progress for this exact frozen submission, under current\ndisclosure. A blocked submission is not a terminal non-application result.",
+          "description": "Local application progress for the enclosing exact frozen submission.\nIt neither follows a successor nor reconciles an unknown mutation command.",
           "properties": {
             "automaticRetry": {
               "anyOf": [
@@ -3882,12 +3832,6 @@
               "type": "integer"
             },
             "uploadedAt": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "uploadedBy": {
               "type": [
                 "string",
                 "null"
@@ -4151,6 +4095,8 @@
     "input": {
       "$defs": {
         "ContentDigest": {
+          "maxLength": 71,
+          "minLength": 71,
           "pattern": "^sha256:[0-9a-f]{64}$",
           "type": "string"
         },
@@ -4249,6 +4195,8 @@
     "output": {
       "$defs": {
         "ContentDigest": {
+          "maxLength": 71,
+          "minLength": 71,
           "pattern": "^sha256:[0-9a-f]{64}$",
           "type": "string"
         },
@@ -4296,7 +4244,11 @@
               "format": "uuid",
               "type": "string"
             },
-            "result": true,
+            "result": {
+              "additionalProperties": true,
+              "type": "object",
+              "x-maximum-canonical-bytes": 16384
+            },
             "resultId": {
               "format": "uuid",
               "type": "string"
@@ -4462,6 +4414,8 @@
     "input": {
       "$defs": {
         "ContentDigest": {
+          "maxLength": 71,
+          "minLength": 71,
           "pattern": "^sha256:[0-9a-f]{64}$",
           "type": "string"
         },
@@ -4506,14 +4460,20 @@
             {
               "additionalProperties": false,
               "properties": {
-                "snapshot": true,
-                "strategy": {
+                "mode": {
                   "const": "submitted",
                   "type": "string"
+                },
+                "snapshot": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "x-maximum-canonical-bytes": 65536,
+                  "x-maximum-json-depth": 32,
+                  "x-maximum-json-nodes": 4096
                 }
               },
               "required": [
-                "strategy",
+                "mode",
                 "snapshot"
               ],
               "type": "object"
@@ -4524,13 +4484,13 @@
                 "binding": {
                   "$ref": "#/$defs/SourceContextBinding"
                 },
-                "strategy": {
-                  "const": "source",
+                "mode": {
+                  "const": "current-source",
                   "type": "string"
                 }
               },
               "required": [
-                "strategy",
+                "mode",
                 "binding"
               ],
               "type": "object"
@@ -4600,7 +4560,11 @@
         "requesterReference": {
           "type": "string"
         },
-        "resultConstraints": true,
+        "resultConstraints": {
+          "additionalProperties": true,
+          "type": "object",
+          "x-maximum-canonical-bytes": 16384
+        },
         "subject": {
           "$ref": "#/$defs/SubjectBinding"
         }
@@ -4617,6 +4581,8 @@
     "output": {
       "$defs": {
         "ContentDigest": {
+          "maxLength": 71,
+          "minLength": 71,
           "pattern": "^sha256:[0-9a-f]{64}$",
           "type": "string"
         },

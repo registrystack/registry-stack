@@ -29,7 +29,7 @@ cases:
         proposal:
           id: 00000000-0000-4000-8000-000000000001
           actionId: correct-address
-          actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+          actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
           submissionVersion: 1
           revision: 1
           state: draft
@@ -39,7 +39,7 @@ cases:
       value:
         id: 00000000-0000-4000-8000-000000000001
         actionId: correct-address
-        actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+        actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
         submissionVersion: 1
         revision: 2
         state: submitted
@@ -61,7 +61,7 @@ cases:
         proposal:
           id: 00000000-0000-4000-8000-000000000001
           actionId: correct-address
-          actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+          actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
           submissionVersion: 1
           revision: 3
           state: applied
@@ -119,7 +119,7 @@ cases:
         proposal:
           id: 00000000-0000-4000-8000-000000000001
           actionId: correct-address
-          actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+          actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
           submissionVersion: 1
           revision: 1
           state: draft
@@ -129,7 +129,7 @@ cases:
       value:
         id: 00000000-0000-4000-8000-000000000001
         actionId: correct-address
-        actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+        actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
         submissionVersion: 1
         revision: 2
         state: submitted
@@ -143,7 +143,7 @@ cases:
         proposal:
           id: 00000000-0000-4000-8000-000000000001
           actionId: correct-address
-          actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+          actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
           submissionVersion: 1
           revision: 3
           state: cancelled
@@ -165,7 +165,7 @@ cases:
       proposal:
         id: 00000000-0000-4000-8000-000000000001
         actionId: correct-address
-        actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+        actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
         submissionVersion: 1
         revision: 3
         state: cancelled
@@ -197,7 +197,7 @@ cases:
         proposal:
           id: 00000000-0000-4000-8000-000000000001
           actionId: correct-address
-          actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+          actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
           submissionVersion: 1
           revision: 1
           state: draft
@@ -207,7 +207,7 @@ cases:
       value:
         id: 00000000-0000-4000-8000-000000000001
         actionId: correct-address
-        actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+        actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
         submissionVersion: 1
         revision: 2
         state: submitted
@@ -227,7 +227,7 @@ cases:
       type: named
       value: application-wait-expired
     output: null
-- id: declared-correction-refusal
+- id: submission-refusal-never-observes-or-notifies
   admittedAt: '2026-10-14T00:00:00Z'
   input:
     correction:
@@ -248,18 +248,26 @@ cases:
         facility: Synthetic clinic
   replies:
     start-draft:
-    - type: declared-refusal
-      refusalCode: invalid-postal-code
+    - type: success
+      value:
+        proposal:
+          id: 00000000-0000-4000-8000-000000000001
+          actionId: correct-address
+          actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
+          submissionVersion: 1
+          revision: 1
+          state: draft
+          links: {}
+    submit:
+    - type: refused
+      code: action-refused
   expect:
     path:
     - start-draft
-    - report-correction-refused
-    state: completed
+    - submit
+    state: refused
     outcome:
-      type: named
-      value: correction-refused
-    output:
-      refusalCode: invalid-postal-code
+      type: none
 - id: messaging-refused-after-application
   admittedAt: '2026-10-14T00:00:00Z'
   input:
@@ -286,7 +294,7 @@ cases:
         proposal:
           id: 00000000-0000-4000-8000-000000000001
           actionId: correct-address
-          actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+          actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
           submissionVersion: 1
           revision: 1
           state: draft
@@ -296,7 +304,7 @@ cases:
       value:
         id: 00000000-0000-4000-8000-000000000001
         actionId: correct-address
-        actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+        actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
         submissionVersion: 1
         revision: 2
         state: submitted
@@ -313,7 +321,7 @@ cases:
         proposal:
           id: 00000000-0000-4000-8000-000000000001
           actionId: correct-address
-          actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+          actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
           submissionVersion: 1
           revision: 3
           state: applied
@@ -363,7 +371,7 @@ cases:
         proposal:
           id: 00000000-0000-4000-8000-000000000001
           actionId: correct-address
-          actionRevision: sha256:fc78c546ca6e2fe03cb30771f635a5ede8df83be0ebc4bb7e0c6fef8d17b0ecb
+          actionRevision: sha256:1e2b7f1e425c009616e0ffd8123583f9a8c3f95ebb8a001679dd96c7521c6120
           submissionVersion: 1
           revision: 1
           state: draft

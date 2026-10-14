@@ -87,7 +87,7 @@ def _jwks_port(urls):
     return port
 
 
-def write_breg(root, urls, review_policy=None):
+def write_breg(root, urls, review_policy=None, *, borrower=False):
     """Write registry.yaml and issuer-owner dev-clients.yaml; return root."""
     root = Path(root)
     applications = {
@@ -162,7 +162,9 @@ def write_breg(root, urls, review_policy=None):
         _profile("follow-up-reader", "service", "application-reader", [
             _permission("application", ["get"], APPLICATION_FIELDS),
         ]),
-        _profile("reviewer", "human", "staff", []),
+        _profile("reviewer", "human", "staff", [
+            _permission("application", ["get"], ["tenant", "email"]),
+        ]),
         _profile("reader", "service", "source-reader", []),
         _profile("approved-reader", "agent", "task-agent", [
             _permission("application", ["get"], APPLICATION_FIELDS),
@@ -193,6 +195,8 @@ def write_breg(root, urls, review_policy=None):
                      "canonicalBaseIri": "https://synthetic.example.invalid/coordinator"},
         "package": {"sourceRevision": "coordinator-synthetic-1"},
         "datasets": [{"id": "synthetic-applications"}],
+        **({"reviewAuthorities": [{"id": "casework",
+            "protocol": "id.registrystack.org/protocols/review/v1"}]} if review_policy is not None else {}),
         "recordTypes": [applications], "actions": actions,
         "accessProfiles": profiles,
     })
@@ -229,7 +233,7 @@ def write_breg(root, urls, review_policy=None):
     next(client for client in clients if client["id"] == "task-agent")["grants"] = [
         {"audience": SCHEDULING_RESOURCE, "scopes": ["scheduling:read"]}
     ]
-    _write(root / "dev-clients.yaml", {
+    dev_clients = {
         "apiVersion": "id.registrystack.org/formats/breg/dev-clients/v1alpha1",
         "kind": "BRegDevClients",
         "clients": clients,
@@ -249,10 +253,18 @@ def write_breg(root, urls, review_policy=None):
                 "mapping": "institutional-grant", "clients": ["task-agent"],
             }],
         },
+        **({"reviewAuthorities": {"casework": {"endpoint": urls["casework"], "profile": "producer",
+            "producerId": "breg", "recoveryDays": 7, "client": "producer"}}} if review_policy is not None else {}),
         "taskGrantStatus": {"casework": {
             "sourceIssuer": AUTHORITY, "baseUrl": urls["casework"], "client": "status-client",
         }},
-    })
+    }
+    if borrower:
+        other_resources = set(dev_clients.pop("issuer")["clientResources"])
+        dev_clients["clients"] = [client for client in clients if client["id"] not in other_resources]
+        for client in dev_clients["clients"]:
+            client.pop("grants", None)
+    _write(root / "dev-clients.yaml", dev_clients)
     # Native dev startup runs the maintained adopter journey gate before it
     # serves the package. Claims match the explicitly registered seed client.
     # bregctl resolves this explicit native marker from its captured session
@@ -279,15 +291,17 @@ def write_breg(root, urls, review_policy=None):
     return root
 
 
-def write_casework(root, urls, resource, agent_subject):
-    """Write policy and explicit borrowed-issuer inputs; parent supplies source.json."""
+def write_casework(root, urls, resource, agent_subject, context_schema):
+    """Compile a policy over the exact BReg-exported context schema and native authority."""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    (root / "sources").mkdir(exist_ok=True)
+    (root / "schemas").mkdir(exist_ok=True)
+    with (root / "schemas/application-email.schema.json").open("xb") as output:
+        output.write(context_schema["bytes"])
     template = {
         "version": "1", "label": "Read approved synthetic application",
         "eligibleTeams": ["team"], "eligibleProfiles": ["staff"],
-        "source": SOURCE, "reviewKinds": ["external-review"],
+        "source": SOURCE, "reviewPolicies": ["external-review"],
         "agent": {"issuer": urls["issuer"], "subject": agent_subject},
         "client": "task-agent", "resource": resource, "scopes": ["records:get"],
         "purpose": "review", "bounds": {"type": "breg", "permissions": [{
@@ -298,6 +312,9 @@ def write_casework(root, urls, resource, agent_subject):
     booking_template = {
         **template, "id": "book-appointment", "label": "Deferred synthetic appointment",
         "authorizationMode": "deferred", "lifetimeSeconds": 3600, "resource": SCHEDULING_RESOURCE,
+        # Exact Scheduling bounds need no source field projection. The held
+        # review still rechecks BReg's purpose-specific service status.
+        "subjects": {},
         "scopes": ["scheduling:read", "scheduling:commit"],
         "bounds": {"type": "scheduling", "permissions": [{
             "service": "application-review", "location": "fixture-desk",
@@ -314,33 +331,31 @@ def write_casework(root, urls, resource, agent_subject):
             {"id": "producer", "principalClaim": "casework_principal", "requiredScopes": ["casework:reviews:request"], "role": "requester"},
         ],
         "queues": [{"id": "review", "label": "Synthetic application review"}],
-        "sources": [{"id": SOURCE, "adapter": "breg", "description": "sources/source.json",
-                     "requests": [{"entity": "application-change", "queue": "review", "projection": ["tenant"]}]}],
-        "reviewKinds": [{
+        "teams": [{"id": "team", "label": "Application reviewers", "serves": ["review"],
+                   "memberProfiles": ["staff"], "supervisorProfiles": ["supervisor"]}],
+        "contextProviders": [{"id": "applications", "deploymentRef": "applications", "sourceNamespace": SOURCE,
+            "capabilities": ["human-display", "service-status"], "serviceProfiles": {"service-status": "reader"}}],
+        "reviewPolicies": [{
             "id": "external-review", "version": "1", "purpose": "approval",
-            "contextStrategy": "source", "stages": [{
+            "context": {"mode": "current-source", "provider": "applications", "contract": context_schema["contract"]}, "stages": [{
                 "id": "review", "queue": "review", "decidingProfiles": ["staff"], "requiredApprovals": 1,
             }],
             "retention": {"terminalDays": 30, "accountabilityDays": 90},
-            "displaySchema": {"type": "object", "additionalProperties": False, "properties": {}},
+            "displaySchema": {"$ref": "schemas/application-email.schema.json"},
+            "outcomes": [{"id": "not-authorized", "label": "Correction not authorized",
+                          "settlement": "rejected", "reasonRequired": False}],
         }],
-        "reviewProducers": [{
+        "trustedProducers": [{
             "id": "breg", "profile": "producer", "issuer": urls["issuer"],
             "subject": CASEWORK_PRINCIPALS["producer"], "sourceNamespaces": [SOURCE],
-            "kinds": ["external-review"], "recoveryDays": 7,
+            "reviewPolicies": ["external-review"], "recoveryDays": 7,
         }],
         "taskTemplates": [
-            {**template, "id": "read-record", "lifetimeSeconds": 60},
-            {**template, "id": "read-record-short", "lifetimeSeconds": 5},
             booking_template,
             {**booking_template, "id": "book-appointment-expiry-control",
              "label": "Synthetic expired approval control", "lifetimeSeconds": 5},
         ],
     })
-    webhook = root.resolve() / "source-webhook"
-    with webhook.open("xb") as output:
-        output.write(b"synthetic-coordinator-source-webhook-32-bytes")
-    webhook.chmod(0o600)
     _write(root / "dev-clients.yaml", {
         "apiVersion": "id.registrystack.org/formats/casework/dev-clients/v1alpha1",
         "kind": "CaseworkDevClients",
@@ -360,16 +375,14 @@ def write_casework(root, urls, resource, agent_subject):
         "directory": [{"team": "team", "queue": "review", "staff": ["staff"], "supervisors": ["supervisor"]}],
         "integrations": {
             "resource": resource,
-            "sources": {SOURCE: {
-                "baseUrl": urls["breg"], "readerProfile": "reader",
+            "contextProviders": {"applications": {
+                "baseUrl": urls["breg"], "statusProfile": "reader",
                 "tokenEndpoint": urls["issuer"].rstrip("/") + "/oauth2/token",
                 "clientAssertionAudience": urls["issuer"], "resource": resource, "scopes": ["records:get"],
                 "clientIdRef": "secret:file/service-source-reader-id",
                 "clientAssertionKeyRef": "secret:file/service-source-reader-key",
-                "webhookSecretRef": "secret:file/source-webhook",
-                "eventSource": f"urn:registrystack:registry:{SOURCE}:instance:coordinator-source",
             }},
-            "secretFiles": {"source-webhook": str(webhook)},
+            "secretFiles": {},
             "serviceClients": [
                 {"id": "source-reader", "scopes": ["records:get"], "claims": TENANT_CLAIMS},
                 {"id": "task-agent", "scopes": ["casework:grants:assert"], "taskExchange": True},
@@ -448,7 +461,7 @@ def write_messaging(root):
 def write_review_casework(root, urls):
     """Write a Casework policy where the Coordinator is a review producer.
 
-    The review kind takes submitted context, so this Casework needs no source
+    The review policy takes submitted context, so this Casework needs no source
     adapter, and its producer names the completion destination the runtime
     configuration points at the Coordinator's receiver.
     """
@@ -463,9 +476,11 @@ def write_review_casework(root, urls):
             {"id": "coordinator-producer", "principalClaim": "casework_principal", "requiredScopes": ["casework:review"], "role": "requester"},
         ],
         "queues": [{"id": "applications", "label": "Synthetic applications awaiting review"}],
-        "reviewKinds": [{
+        "teams": [{"id": "reviewers", "label": "Application reviewers", "serves": ["applications"],
+                   "memberProfiles": ["staff"], "supervisorProfiles": ["supervisor"]}],
+        "reviewPolicies": [{
             "id": "application-review", "version": "1", "purpose": "approval",
-            "contextStrategy": "submitted", "stages": [{
+            "context": {"mode": "submitted"}, "stages": [{
                 "id": "review", "queue": "applications", "decidingProfiles": ["staff"], "requiredApprovals": 1,
             }],
             "outcomes": [{"id": "missing-evidence", "label": "Missing evidence",
@@ -479,10 +494,10 @@ def write_review_casework(root, urls):
                                   "requestedAmount": {"type": "integer", "minimum": 0, "maximum": 1000000},
                               }},
         }],
-        "reviewProducers": [{
+        "trustedProducers": [{
             "id": "coordinator", "profile": "coordinator-producer", "issuer": urls["issuer"],
             "subject": CASEWORK_PRINCIPALS["review-producer"], "sourceNamespaces": ["applications"],
-            "kinds": ["application-review"], "recoveryDays": 7,
+            "reviewPolicies": ["application-review"], "recoveryDays": 7,
             "completion": {"destinationId": "coordinator", "recipientBinding": "coordinator-v1"},
         }],
     })

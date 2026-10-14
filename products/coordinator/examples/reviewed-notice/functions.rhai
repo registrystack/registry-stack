@@ -28,7 +28,7 @@ fn review_request(args) {
         },
         requesterReference: input.applicationId,
         context: #{
-            strategy: "submitted",
+            mode: "submitted",
             snapshot: #{
                 applicantName: record.data.domainData.applicantName,
                 benefitProgram: record.data.domainData.benefitProgram,

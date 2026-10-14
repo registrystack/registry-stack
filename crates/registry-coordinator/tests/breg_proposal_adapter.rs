@@ -9,10 +9,10 @@ use registry_coordinator::{
     breg_proposal::{self, ApplicationObservation, Transition},
     protocol::{CallOutcome, CallRequest, Operation},
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use wiremock::{
-    Mock, MockServer, ResponseTemplate,
     matchers::{method, path, query_param},
+    Mock, MockServer, ResponseTemplate,
 };
 
 const PROPOSAL: &str = "00000000-0000-4000-8000-000000000001";
@@ -107,6 +107,41 @@ async fn authority(server: &MockServer, value: Value) -> Arc<Mutex<Value>> {
 
 fn refused(value: CallOutcome, expected: &str) {
     assert!(matches!(value,CallOutcome::Refused{code} if code == expected));
+}
+
+#[tokio::test]
+async fn submit_plan_refusal_is_known_without_inventing_a_typed_route() {
+    let server = MockServer::start().await;
+    authority(&server, proposal("draft", 1)).await;
+    Mock::given(method("POST"))
+        .and(path(format!("/tenant/base/v1/proposals/{PROPOSAL}/submit")))
+        .respond_with(
+            ResponseTemplate::new(422)
+                .insert_header("traceparent", TRACE)
+                .insert_header("cache-control", "no-store")
+                .set_body_raw(
+                    json!({
+                        "type":"https://id.registrystack.org/problems/registry-breg/action/refused",
+                        "title":"Unprocessable Entity", "status":422, "code":"action.refused",
+                        "traceId":"4bf92f3577b34da6a3ce929d0e0e4736",
+                        "detail":"private-plan-value", "refusalCode":"invalid-postal-code"
+                    })
+                    .to_string(),
+                    "application/problem+json",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = client(&server);
+    let command = request(proposal("draft", 1), Operation::SubmitBregProposal);
+    let prepared = breg_proposal::prepare(&client, "writer", &command, Transition::Submit)
+        .await
+        .unwrap_or_else(|_| panic!("prepare"));
+    refused(
+        breg_proposal::execute(&client, "writer", &command, &prepared, Transition::Submit).await,
+        "action-refused",
+    );
 }
 
 #[tokio::test]
@@ -208,14 +243,12 @@ async fn saved_transition_rejects_replaced_key_operation_input_and_submission() 
         breg_proposal::execute(&client, "writer", &command, &prepared, Transition::Submit).await,
         "submission-stale",
     );
-    assert!(
-        server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .all(|request| request.method == "GET")
-    );
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.method == "GET"));
 }
 
 #[tokio::test]
@@ -272,14 +305,12 @@ async fn only_exact_applied_evidence_completes_application_observation() {
     assert!(
         matches!(breg_proposal::observe_application(&client,"writer",&proposal("draft",1)).await,ApplicationObservation::Hold{code} if code=="submission-missing")
     );
-    assert!(
-        server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .all(|request| request.method == "GET")
-    );
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.method == "GET"));
 }
 
 #[tokio::test]
