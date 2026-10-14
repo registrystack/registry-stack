@@ -10,20 +10,19 @@ const targetId = '00000000-0000-4000-8000-000000000001';
 const applicationId = '00000000-0000-4000-8000-000000000002';
 const metadata = {
   id: 'fixture-registry', version: '1',
-  revision: `sha256:${'a'.repeat(64)}`, metadataVersion: '1', entities: [], operations: [],
+  revision: `sha256:${'a'.repeat(64)}`, metadataVersion: '1', recordTypes: [], operations: [],
   actions: [{
-    id: 'update-item', route: '/v1/actions/update-item',
+    id: 'update-item', apiName: 'updateItem', revision: `sha256:${'b'.repeat(64)}`, display: {}, execution: {mode: 'immediate'}, route: '/v1/actions/update-item',
     conditionRoute: '/v1/actions/update-item/target-conditions',
-    contractFingerprint: `sha256:${'b'.repeat(64)}`,
     inputMode: 'handler', maximumInputStringBytes: 16384,
     inputs: [
       { id: 'target', apiName: 'targetId', required: true, nullable: false, classification: 'internal', fieldType: { type: 'reference', target: 'item', onDelete: 'restrict' } },
       { id: 'label', apiName: 'label', required: false, nullable: true, classification: 'internal', fieldType: { type: 'string', minimumLength: 1, maximumLength: 16 } },
       { id: 'sequence', apiName: 'sequence', required: false, nullable: true, classification: 'internal', fieldType: { type: 'int64' } },
     ],
-    referenceInputs: [{ input: 'target', apiName: 'targetId', targetEntity: 'item' }],
+    referenceInputs: [{ input: 'target', apiName: 'targetId', targetRecordType: 'item' }],
     requiredConditionKeys: ['targetId'],
-    resultEffects: [{ effect: 'item', entity: 'item', operation: 'patch' }],
+    resultEffects: [{ effect: 'item', recordType: 'item', operation: 'patch' }],
     access: { selectedProfile: 'writer' },
     routes: {
       invoke: { method: 'POST', path: '/v1/actions/update-item', operationId: 'actions.update-item.invoke', requiresIdempotencyKey: true, inputSchema: 'action-update-item-invoke-input', responseSchema: 'action-update-item-invoke-response' },
@@ -44,17 +43,17 @@ test('metadata-selected immediate action conditions and invocations use exact ca
     response.setHeader('vary', 'authorization, accept');
     if (request.url.startsWith('/v1/registry')) return response.end(JSON.stringify(metadata));
     if (request.url.includes('/target-conditions')) return response.end(`{"preconditions":{"targetId":{"ifMatch":"\\"opaque-condition\\""}}}`);
-    return response.end(`{"action":"update-item","applicationId":"${applicationId}","results":{"item":{"entity":"item","recordId":"${targetId}","revision":9007199254740992}}}`);
+    return response.end(`{"action":"update-item","applicationId":"${applicationId}","results":{"item":{"recordType":"item","recordId":"${targetId}","revision":9007199254740992}}}`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const client = new BaseRegistryClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
     const contract = await client.registryContract('writer');
-    assert.equal(contract.immediateActions[0].inputMode, 'handler');
-    assert.equal(contract.immediateActions[0].maximumInputStringBytes, 16384);
-    assert.equal(contract.immediateActions[0].inputs[1].nullable, true);
+    assert.equal(contract.actions[0].inputMode, 'handler');
+    assert.equal(contract.actions[0].maximumInputStringBytes, 16384);
+    assert.equal(contract.actions[0].inputs[1].nullable, true);
     assert.match(contract.actionsJson, /"update-item"/);
-    const binding = contract.selectImmediateAction('update-item', 'writer');
+    const binding = contract.selectAction('update-item', 'writer');
     const conditions = await client.actionTargetConditions(binding, { targetId });
     assert.deepEqual(conditions.preconditionKeys, ['targetId']);
     assert.equal(conditions.valueJson, '{"preconditions":{"targetId":{"ifMatch":"\\"opaque-condition\\""}}}');
@@ -97,14 +96,14 @@ test('an immediate action recovers after a lost response from persisted bytes an
     response.setHeader('vary', 'authorization, accept');
     if (request.url.startsWith('/v1/registry')) return response.end(JSON.stringify(metadata));
     if (request.url.includes('/target-conditions')) return response.end(`{"preconditions":{"targetId":{"ifMatch":"\\"opaque-condition\\""}}}`);
-    return response.end(`{"action":"update-item","applicationId":"${applicationId}","results":{"item":{"entity":"item","recordId":"${targetId}","revision":9007199254740992}}}`);
+    return response.end(`{"action":"update-item","applicationId":"${applicationId}","results":{"item":{"recordType":"item","recordId":"${targetId}","revision":9007199254740992}}}`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
     // The process gives up after the lost answer instead of resending it.
     const client = new BaseRegistryClient({ baseUrl, maxMutationRetries: 0 });
-    const binding = (await client.registryContract('writer')).selectImmediateAction('update-item', 'writer');
+    const binding = (await client.registryContract('writer')).selectAction('update-item', 'writer');
     const conditions = await client.actionTargetConditions(binding, { targetId });
     const inputs = { targetId, label: 'new' };
     const prepared = client.prepareAction(binding, inputs, 'invoke-lost', conditions);
@@ -121,7 +120,7 @@ test('an immediate action recovers after a lost response from persisted bytes an
     assert.equal(lost.headers['idempotency-key'], 'invoke-lost');
 
     const restarted = new BaseRegistryClient({ baseUrl });
-    const restartedBinding = (await restarted.registryContract('writer')).selectImmediateAction('update-item', 'writer');
+    const restartedBinding = (await restarted.registryContract('writer')).selectAction('update-item', 'writer');
     const restored = BRegPreparedAction.fromBytes(persisted);
     assert.ok(restored instanceof BRegPreparedAction);
     assert.deepEqual(restored.toBytes(), persisted);

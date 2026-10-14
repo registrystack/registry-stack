@@ -12,26 +12,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, Response, StatusCode};
 use chrono::{Days, Utc};
-use pilot_acceptance_harness::{response_json, PilotHarness};
+use pilot_acceptance_harness::{PilotHarness, response_json};
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordReadService, PostgresStatisticsService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema,
 };
-use registry_breg::statistics::{current_period, PeriodGranularity};
+use registry_breg::statistics::{PeriodGranularity, current_period};
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::Service as _;
 use zeroize::Zeroizing;
 
@@ -301,14 +301,14 @@ async fn partial_vocabulary_population_matches_the_authorized_list_count() {
 }
 
 fn partial_text_registry() -> registry_breg::CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "facility"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{
             "id":"statistics-partial-text-registry","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://statistics-partial-text.example.test"
         },
-        "entities":[{
+        "recordTypes":[{
             "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
             "fields":[
                 {"id":"permit-type","type":"vocabulary-code","vocabulary":"permit-type","required":true,"classification":"internal"},
@@ -317,8 +317,8 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
             ]
         }],
         "accessProfiles":[{
-            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                "entity":"permit","operations":["list"],
+            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                "recordType":"permit","operations":["list"],
                 "readableFields":["permit-type","valid-from","administrative-boundary"],
                 "filterableFields":["permit-type","valid-from","administrative-boundary"],
                 "allowCount":true,

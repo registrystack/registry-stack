@@ -7,18 +7,18 @@
 mod postgres_harness;
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::CompiledRegistry;
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::package::{
-    prepare_package, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
-    PackageSourceFile, PreparedPackage,
+    PackageBuildRequest, PackageError, PackageMigrationPlanInput, PackageSourceFile,
+    PreparedPackage, prepare_package,
 };
-use registry_breg::runtime_config::{parse_runtime_config, RuntimeConfig};
+use registry_breg::runtime_config::{RuntimeConfig, parse_runtime_config};
 use registry_breg::startup::{
-    prepare_schema_test_database_with_connection_configs_for_test, rehearse_schema_fingerprint,
-    rehearse_schema_fingerprint_with_connection_config_for_test, StartupError,
+    StartupError, prepare_schema_test_database_with_connection_configs_for_test,
+    rehearse_schema_fingerprint, rehearse_schema_fingerprint_with_connection_config_for_test,
 };
-use registry_breg::CompiledRegistry;
 
 const ENVIRONMENT: &str = "production";
 const INSTANCE: &str = "rehearsal-instance";
@@ -359,7 +359,7 @@ fn compiled_registry(source_revision: &str) -> CompiledRegistry {
 
 fn project_bytes(source_revision: &str) -> Vec<u8> {
     let project = format!(
-        r#"{{
+        r#"{{"datasets":[{{"id": "test-dataset"}}],
   "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
   "kind": "BRegProject",
   "project": {{"id": "rehearsal-registry", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"}},
@@ -386,7 +386,7 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
     }}],
     "distributions": []
   }},
-  "entities": [{{
+  "recordTypes": [{{
     "id": "case",
     "primaryDataset": "test-dataset",
     "route": "cases",
@@ -402,8 +402,8 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
     "id": "reader",
     "principalClaim": "principal",
     "requiredScopes": "unrestricted",
-    "permissions": {{"entities": [{{
-      "rowBoundaries": "unrestricted", "entity": "case",
+    "permissions": {{"records": [{{
+      "rowBoundaries": "unrestricted", "recordType": "case",
       "operations": ["get", "list"],
       "readableFields": ["code"]
     }}]}}
@@ -448,7 +448,7 @@ async fn fresh_schema_test_installs_exactly_one_validated_native_pattern_constra
     let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
     let mut project: serde_json::Value =
         serde_json::from_slice(&project_bytes(SOURCE_REVISION)).unwrap();
-    project["entities"][0]["fields"][0]["pattern"] = serde_json::json!("^[A-Z]+$");
+    project["recordTypes"][0]["fields"][0]["pattern"] = serde_json::json!("^[A-Z]+$");
     let project = serde_json::to_vec(&project).unwrap();
     let registry = compile_project(
         &parse_project_json(&project).unwrap(),

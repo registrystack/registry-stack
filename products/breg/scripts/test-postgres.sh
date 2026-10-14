@@ -80,16 +80,15 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_ingestion_contract \
     --test postgres_ingestion_receipts \
     --test postgres_import_authority \
-    --test postgres_change_requests \
-    --test postgres_task_grants \
-    --test postgres_request_receipts \
-    --test postgres_request_upgrade_retention \
-    --test postgres_request_events \
-    --test postgres_request_queries \
-    --test postgres_request_read_retention \
-    --test postgres_review_executor \
+    --test postgres_refactor \
+    --test postgres_proposal \
+    --test postgres_native_retention \
+    --test postgres_proposal_security \
+    --test postgres_proposal_s3 \
+    --test postgres_facility_proposal \
+    --test postgres_action_task_grants \
+    --test postgres_generated_console \
     --test postgres_pilot_acceptance \
-    --test postgres_rhai_planner \
     --test postgres_tombstone_revision \
     --test postgres_startup \
     --test postgres_history_migration \
@@ -99,7 +98,6 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_citizen_address_correction \
     --test postgres_registry_extensibility \
     --test postgres_action_handlers \
-    --test postgres_request_activation \
     --test postgres_field_encryption \
     --test postgres_package \
     --test postgres_migration \
@@ -115,15 +113,6 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_statistics_history \
     --test postgres_logical_sql_names \
     --test schema_fingerprint_rehearsal
-  # The citizen review page against the real registry: the page crate links
-  # the runtime only under this test feature.
-  cargo test --locked -p registry-breg-review --features postgres-test \
-    --test postgres_breg
-  # The citizen gateway against the real registry, under the same feature
-  # rule as the review page.
-  cargo test --locked -p registry-breg-mcp --features postgres-test \
-    --test postgres_gateway
-
   # Use Cargo's reported executable so configured target directories work too.
   # This proof must start the real Evidence service, never silently skip it.
   evidence_binary=$(cargo build --locked -p registry-evidence --bin evidence --message-format=json | python3 -c '

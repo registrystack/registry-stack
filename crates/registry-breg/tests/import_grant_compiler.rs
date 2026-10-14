@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Proves the `import` operation compiles as a create-only, ingestion-run
-//! capability that change control does not count as a direct write, and that
+//! capability that mutation policy does not count as a direct write, and that
 //! every `breg.import.*` refusal names the grant it concerns.
 
-use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_project_json, parse_project_yaml, Operation};
-use registry_breg::diagnostics::CompileFailure;
 use registry_breg::CompiledRegistry;
-use serde_json::{json, Value};
+use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::contract::{Operation, parse_project_json, parse_project_yaml};
+use registry_breg::diagnostics::CompileFailure;
+use serde_json::{Value, json};
 
 fn compile(project: &Value) -> Result<CompiledRegistry, CompileFailure> {
     let source = serde_json::to_vec(project).expect("project serializes");
@@ -34,8 +34,7 @@ fn diagnostic<'a>(
         .unwrap_or_else(|| panic!("expected {code:?}, got {:?}", codes(failure)))
 }
 
-/// A governed `enrollment` entity loaded by an `import` profile, with a
-/// change-request entity whose effect patches enrollments.
+/// A RecordType loaded through Import even when ordinary writes require Proposals.
 fn governed_project(required_for: &[&str], loader_operations: &[&str]) -> Value {
     let mut enrollment = json!({
         "id":"enrollment","primaryDataset":"test-dataset","route":"enrollments","mutationMode":"mutable",
@@ -43,31 +42,22 @@ fn governed_project(required_for: &[&str], loader_operations: &[&str]) -> Value 
         "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
     });
     if !required_for.is_empty() {
-        enrollment["changeControl"] = json!({"requiredFor": required_for});
+        enrollment["mutationPolicy"] = Value::Object(
+            required_for
+                .iter()
+                .map(|operation| ((*operation).to_owned(), json!("proposal-required")))
+                .collect(),
+        );
     }
     json!({
-      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-      "kind":"BRegProject",
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"import-grants","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[enrollment,{
-        "id":"enrollment-change","primaryDataset":"test-dataset","route":"enrollment-changes","mutationMode":"mutable",
-        "fields":[
-          {"id":"enrollment","type":"reference","target":"enrollment","required":true,"classification":"internal"},
-          {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
-        ],
-        "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"enrollment"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-          "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
-      }],
+      "datasets":[{"id":"test-dataset"}], "recordTypes":[enrollment],
       "accessProfiles":[{
-        "id":"loader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-          "entity":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
-          "rowBoundaries": "unrestricted"
-        }]}
-      },{
-        "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-          "entity":"enrollment-change","operations":["get","submit-request","apply-request"],"readableFields":["enrollment","label"],
-          "applyTargets":[{"entity":"enrollment", "rowBoundaries": "unrestricted"}],
-          "rowBoundaries": "unrestricted"
+        "id":"loader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
+        "permissions":{"records":[{
+          "recordType":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
+          "rowBoundaries":"unrestricted"
         }]}
       }]
     })
@@ -85,7 +75,7 @@ fn route_ids(registry: &CompiledRegistry) -> Vec<String> {
 #[test]
 fn import_is_accepted_on_an_entity_controlled_for_create_and_patch() {
     let registry = compile(&governed_project(&["create", "patch"], &["import"]))
-        .expect("import is not a direct write, so change control accepts it");
+        .expect("import is not a direct write, so mutation policy accepts it");
     let route = registry
         .routes()
         .routes
@@ -104,30 +94,31 @@ fn import_is_accepted_on_an_entity_controlled_for_create_and_patch() {
 }
 
 #[test]
-fn batch_is_still_refused_on_a_controlled_entity_and_the_message_suggests_import() {
-    let failure = compile(&governed_project(
-        &["create", "patch"],
-        &["create", "batch"],
-    ))
-    .expect_err("batch remains a direct write");
-    let found = diagnostic(&failure, "breg.change-control.direct-write-grant");
+fn import_retains_the_native_proposal_required_mutation_policy() {
+    let registry = compile(&governed_project(&["create", "patch"], &["import"]))
+        .expect("an import grant keeps the native mutation policy");
+    let policy = registry.entities()["enrollment"]
+        .change_control
+        .as_ref()
+        .expect("the compiled RecordType retains the authored policy");
     assert_eq!(
-        found.path,
-        "entities[id=enrollment].accessProfiles[id=loader].operations"
+        policy.required_for,
+        std::collections::BTreeSet::from([Operation::Create, Operation::Patch])
     );
-    assert!(
-        found.message.contains("`import`"),
-        "the refusal names the governed bulk-load grant: {}",
-        found.message
+    assert_eq!(
+        enrollment_routes(&registry),
+        vec!["records.enrollment.import".to_owned()]
     );
+    // This proves the compiled policy and Import-only surface. Runtime tests
+    // establish that direct mutations cannot bypass the retained policy.
 }
 
 #[test]
-fn adding_change_control_to_an_imported_entity_removes_no_route() {
+fn adding_mutation_policy_to_an_imported_entity_removes_no_route() {
     let ungoverned = compile(&ungoverned_project())
-        .expect("import is allowed on an entity without change control");
+        .expect("import is allowed on an entity without mutation policy");
     let governed = compile(&governed_project(&["create", "patch"], &["import"]))
-        .expect("a successor that adds change control keeps the import grant");
+        .expect("a successor that adds mutation policy keeps the import grant");
     assert_eq!(enrollment_routes(&ungoverned), enrollment_routes(&governed));
     assert_eq!(
         enrollment_routes(&governed),
@@ -136,10 +127,10 @@ fn adding_change_control_to_an_imported_entity_removes_no_route() {
 }
 
 /// The first package of the adoption journey: enrollments are loaded through
-/// `import` before any change request governs them.
+/// `import` before ordinary mutations require Proposals.
 fn ungoverned_project() -> Value {
     let mut project = governed_project(&[], &["import"]);
-    project["entities"]
+    project["recordTypes"]
         .as_array_mut()
         .expect("entities")
         .truncate(1);
@@ -161,14 +152,14 @@ fn enrollment_routes(registry: &CompiledRegistry) -> Vec<String> {
 #[test]
 fn import_requires_entity_batch_bounds() {
     let mut project = governed_project(&["patch"], &["import"]);
-    project["entities"][0]
+    project["recordTypes"][0]
         .as_object_mut()
         .expect("entity object")
         .remove("batch");
     let failure = compile(&project).expect_err("an import run needs chunk bounds");
     assert_eq!(
         diagnostic(&failure, "breg.import.batch-bounds-required").path,
-        "entities[id=enrollment].accessProfiles[id=loader].operations"
+        "recordTypes[id=enrollment].accessProfiles[id=loader].operations"
     );
 }
 
@@ -209,8 +200,8 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
         .as_array_mut()
         .expect("profiles")
         .push(json!({
-            "id":"bulk-writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"enrollment","operations":["create","batch"],"readableFields":["label"],"writableFields":["label"],
+            "id":"bulk-writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"enrollment","operations":["create","batch"],"readableFields":["label"],"writableFields":["label"],
               "rowBoundaries": "unrestricted"
             }]}
         }));
@@ -218,11 +209,11 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
         compile(&project).expect_err("batch beside import leaves the authority bounding nothing");
     assert_eq!(
         diagnostic(&failure, "breg.import.batch-redundant").path,
-        "entities[id=enrollment].accessProfiles[id=loader].operations"
+        "recordTypes[id=enrollment].accessProfiles[id=loader].operations"
     );
 
     let mut same = ungoverned_project();
-    same["accessProfiles"][0]["permissions"]["entities"][0]["operations"] =
+    same["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
         json!(["create", "batch", "import"]);
     let same_profile =
         compile(&same).expect_err("one profile holding batch and import is refused too");
@@ -230,16 +221,22 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
 }
 
 #[test]
-fn import_is_unavailable_on_a_change_request_entity() {
-    let mut project = governed_project(&["patch"], &["import"]);
-    project["accessProfiles"][1]["permissions"]["entities"][0]["operations"] =
-        json!(["get", "submit-request", "apply-request", "import"]);
-    project["entities"][1]["batch"] = json!({"maximumItems":10,"maximumBytes":65536});
-    let failure = compile(&project).expect_err("request drafts are authored, never imported");
+fn import_is_unavailable_on_a_proposal_permission() {
+    let mut project = ungoverned_project();
+    project["accessProfiles"][0]["permissions"]["proposals"] =
+        json!([{"action":"correct-enrollment", "operations":["import"]}]);
+    let source = serde_json::to_vec(&project).unwrap();
+    let failure =
+        parse_project_yaml(&source).expect_err("Proposal authority never grants Record import");
     assert!(
-        codes(&failure).contains(&"breg.access-profile.operation-unavailable".to_owned()),
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.path
+                == "project.accessProfiles[0].permissions.proposals[0].operations[0]"
+                && diagnostic.code == "config.unknown-variant"),
         "{:?}",
-        codes(&failure)
+        failure.diagnostics()
     );
 }
 

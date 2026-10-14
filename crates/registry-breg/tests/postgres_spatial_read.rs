@@ -14,29 +14,29 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
-use axum::http::{header, HeaderValue, Method, Request, Response, StatusCode};
+use axum::body::{Body, to_bytes};
+use axum::http::{HeaderValue, Method, Request, Response, StatusCode, header};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
 use registry_breg::audit::RegistryAudit;
 use registry_breg::compiler::{
-    compile_project, compile_project_with_assets, module_digest_with_assets, CompileProfile,
+    CompileProfile, compile_project, compile_project_with_assets, module_digest_with_assets,
 };
-use registry_breg::contract::{parse_module_json, parse_project_json, ModuleAssetSource};
+use registry_breg::contract::{ModuleAssetSource, parse_module_json, parse_project_json};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
+    ClaimContext, ExpectedManagedCatalog, PostgresRecordReadService, ReadFaultPoint,
+    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
     begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
-    provision_postgis_prerequisites, spatial_bbox_role, ClaimContext, ExpectedManagedCatalog,
-    PostgresRecordReadService, ReadFaultPoint, RegistryLockKey, RegistryStateTestIdentity,
-    RowBoundaryContext, RuntimePool,
+    provision_postgis_prerequisites, spatial_bbox_role,
 };
 use registry_breg::runtime_config::PublicOrigin;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_postgres::Transaction;
 use tower::Service as _;
 use zeroize::Zeroizing;
@@ -74,9 +74,11 @@ async fn rust_geojson_example_reads_real_postgis() {
         .collect();
     assert!(!pages.is_empty());
     assert!(pages.iter().all(|page| page["type"] == "FeatureCollection"));
-    assert!(pages
-        .iter()
-        .any(|page| !page["features"].as_array().unwrap().is_empty()));
+    assert!(
+        pages
+            .iter()
+            .any(|page| !page["features"].as_array().unwrap().is_empty())
+    );
     drop(http);
     harness.cleanup().await;
 }
@@ -2330,7 +2332,7 @@ fn spatial_registry_project_source(module_digest: &str) -> String {
 fn spatial_registry_module_source() -> &'static str {
     r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core",
       "version":"1",
-      "entities":[{
+      "recordTypes":[{
         "id":"service-site",
         "primaryDataset":"test-dataset",
         "route":"service-sites",
@@ -2503,11 +2505,11 @@ fn spatial_region_label_sql() -> &'static str {
 }
 
 fn plain_geojson_registry_source() -> &'static str {
-    r#"{
+    r#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"plain-geojson-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"plain-site",
         "primaryDataset":"test-dataset",
         "route":"plain-sites",
@@ -2524,8 +2526,8 @@ fn plain_geojson_registry_source() -> &'static str {
         "default":true,
         "principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],
-        "permissions":{"entities":[{
-          "entity":"plain-site",
+        "permissions":{"records":[{
+          "recordType":"plain-site",
           "operations":["create","get","list"],
           "readableFields":["code","location"],
           "writableFields":["code","location"],

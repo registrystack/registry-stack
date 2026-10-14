@@ -16,20 +16,20 @@
 use std::fmt;
 
 use registry_platform_audit::AuditEntry;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 use crate::audit::RegistryAudit;
-use crate::history_commit::{lock_history_head, HistoryCommitError};
+use crate::history_commit::{HistoryCommitError, lock_history_head};
 use crate::history_maintenance::{
-    append_maintenance_entries, begin_maintenance_request, lock_registry, profile_is_keyed,
-    set_local_timeouts, verify_ready_identity, HistoryMaintenanceError,
+    HistoryMaintenanceError, append_maintenance_entries, begin_maintenance_request, lock_registry,
+    profile_is_keyed, set_local_timeouts, verify_ready_identity,
 };
-use crate::idempotency::{tombstone_erased_cached_responses, IdempotencyError};
+use crate::idempotency::{IdempotencyError, tombstone_erased_cached_responses};
 use crate::postgres::{
-    verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity, PostgresKernelError,
-    RegistryLockKey, SqlIdentifier,
+    ConnectionConfig, ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey,
+    SqlIdentifier, verify_migration_role,
 };
 
 pub use crate::history_maintenance::HistoryMaintenanceTimeouts as HistoryErasureTimeouts;
@@ -93,8 +93,8 @@ pub struct HistoryErasureOutcome {
     pub scrubbed_outbox_payload_count: u64,
     pub scrubbed_cached_response_count: u64,
     pub scrubbed_ingestion_receipt_count: u64,
-    pub scrubbed_request_target_count: u64,
-    pub scrubbed_request_proposal_count: u64,
+    pub scrubbed_proposal_target_count: u64,
+    pub scrubbed_proposal_submission_count: u64,
     pub removed_descriptor_count: u64,
 }
 
@@ -255,12 +255,12 @@ async fn erase_record_history_scoped(
     .map_err(|_| HistoryErasureError::Unavailable)?;
     let scrubbed_outbox_payload_count =
         scrub_outbox_payloads(&transaction, &request.target).await?;
-    // Change-request proposals and target snapshots are workflow records, not
+    // Proposals and target snapshots are workflow records, not
     // retained record history. Generic record-history erasure deliberately
     // preserves them; field-encryption erase-and-rebaseline has its own
     // narrowly scoped scrub for plaintext copies created before the flip.
-    let scrubbed_request_target_count = 0;
-    let scrubbed_request_proposal_count = 0;
+    let scrubbed_proposal_target_count = 0;
+    let scrubbed_proposal_submission_count = 0;
     let scrubbed_change_context_count =
         scrub_change_contexts(&transaction, &affected_positions).await?;
     let erased_commit_member_count = delete_commit_members(&transaction, &request.target).await?;
@@ -280,8 +280,8 @@ async fn erase_record_history_scoped(
         scrubbed_outbox_payload_count,
         scrubbed_cached_response_count,
         scrubbed_ingestion_receipt_count,
-        scrubbed_request_target_count,
-        scrubbed_request_proposal_count,
+        scrubbed_proposal_target_count,
+        scrubbed_proposal_submission_count,
         removed_descriptor_count,
     };
     let entry = history_erasure_entry(&request, &outcome, lifecycle_reference)?;
@@ -716,8 +716,8 @@ fn history_erasure_entry(
         "scrubbedOutboxPayloadCount": outcome.scrubbed_outbox_payload_count,
         "scrubbedCachedResponseCount": outcome.scrubbed_cached_response_count,
         "scrubbedIngestionReceiptCount": outcome.scrubbed_ingestion_receipt_count,
-        "scrubbedRequestTargetCount": outcome.scrubbed_request_target_count,
-        "scrubbedRequestProposalCount": outcome.scrubbed_request_proposal_count,
+        "scrubbedProposalTargetCount": outcome.scrubbed_proposal_target_count,
+        "scrubbedProposalSubmissionCount": outcome.scrubbed_proposal_submission_count,
         "removedDescriptorCount": outcome.removed_descriptor_count,
         "operatorResponsibility": "saved_exports_event_consumers_and_backups",
         "stubPolicy": "commit_position_and_minimized_origin_retained_context_removed",

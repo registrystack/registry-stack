@@ -316,6 +316,7 @@ registry-platform-httpsec = { workspace = true, features = ["server"], optional 
 registry-platform-httputil = { workspace = true, optional = true }
 registry-platform-oidc = { workspace = true, optional = true }
 registry-review-client = { workspace = true, optional = true }
+registry-review-protocol.workspace = true
 registry-platform-script.workspace = true
 registry-platform-yaml.workspace = true
 jsonschema.workspace = true
@@ -380,4 +381,44 @@ required-features = ["postgres-test", "tooling"]
 [[test]]
 name = "postgres_field_encryption"
 path = "tests/postgres_field_encryption.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_refactor"
+path = "tests/postgres_refactor.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_proposal"
+path = "tests/postgres_proposal.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_proposal_security"
+path = "tests/postgres_proposal_security.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_proposal_s3"
+path = "tests/postgres_proposal_s3.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_facility_proposal"
+path = "tests/postgres_facility_proposal.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_action_task_grants"
+path = "tests/postgres_action_task_grants.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_generated_console"
+path = "tests/postgres_generated_console.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_native_retention"
+path = "tests/postgres_native_retention.rs"
 required-features = ["postgres-test", "tooling"]

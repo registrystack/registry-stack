@@ -20,6 +20,7 @@ use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
 use crate::physical_names::PhysicalNameInventory;
 
+#[cfg(feature = "runtime")]
 pub(crate) const MAX_TARGET_CONTEXT_FIELDS: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -38,6 +39,8 @@ pub struct CompiledField {
     /// `physical_name` points at the envelope column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption: Option<CompiledFieldEncryption>,
+    pub display: crate::contract::DisplaySource,
+    pub relationship: Option<crate::contract::RelationshipSource>,
 }
 
 /// The compiled storage shape of an encrypted field.
@@ -233,148 +236,6 @@ pub struct CompiledChangeControl {
     pub required_for: BTreeSet<Operation>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequest {
-    pub request_entity_id: String,
-    pub contract_fingerprint: String,
-    pub retention_mode: CompiledChangeRequestRetentionMode,
-    pub review: CompiledChangeRequestReview,
-    pub on_approved: CompiledChangeRequestOnApproved,
-    #[serde(
-        default,
-        skip_serializing_if = "CompiledChangeRequestApplication::is_empty"
-    )]
-    pub application: CompiledChangeRequestApplication,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub planner: Option<CompiledChangeRequestPlanner>,
-    pub effects: Vec<CompiledChangeRequestEffect>,
-    pub actions: Vec<CompiledChangeRequestActionRoute>,
-    pub apply_permissions: Vec<CompiledChangeRequestApplyPermission>,
-    pub presence_permissions: Vec<CompiledChangeRequestPresencePermission>,
-    pub target_entities: BTreeSet<String>,
-    pub maximum_targets: u16,
-    pub maximum_field_mutations: u16,
-    pub maximum_snapshot_bytes: u32,
-}
-
-impl CompiledChangeRequest {
-    /// Records needed for applying effects or checking frozen guards. Request-self
-    /// attachment permissions do not create additional lifecycle target authority.
-    pub(crate) fn application_target_entities(&self) -> BTreeSet<String> {
-        self.target_entities
-            .iter()
-            .cloned()
-            .chain(
-                self.application
-                    .preconditions
-                    .targets
-                    .iter()
-                    .map(|target| target.entity_id.clone()),
-            )
-            .collect()
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "type")]
-pub enum CompiledChangeRequestReview {
-    Required(CompiledChangeRequestReviewRequirement),
-    None,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestReviewRequirement {
-    pub authority: String,
-    pub policy_id: String,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestOnApproved {
-    pub mode: CompiledChangeRequestOnApprovedMode,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub executor: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CompiledChangeRequestOnApprovedMode {
-    #[default]
-    Manual,
-    Automatic,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestApplication {
-    #[serde(
-        default,
-        skip_serializing_if = "CompiledChangeRequestPreconditions::is_empty"
-    )]
-    pub preconditions: CompiledChangeRequestPreconditions,
-}
-
-impl CompiledChangeRequestApplication {
-    pub fn is_empty(&self) -> bool {
-        self.preconditions.is_empty()
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestPreconditions {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub request: Vec<CompiledChangeRequestPredicate>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub targets: Vec<CompiledChangeRequestGuardTarget>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<CompiledChangeRequestEvidence>,
-}
-
-impl CompiledChangeRequestPreconditions {
-    pub fn is_empty(&self) -> bool {
-        self.request.is_empty() && self.targets.is_empty() && self.evidence.is_empty()
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestGuardTarget {
-    pub id: String,
-    pub entity_id: String,
-    pub from_field: String,
-    pub requires: Vec<CompiledChangeRequestPredicate>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestPredicate {
-    pub field: String,
-    pub expected: CompiledChangeRequestPredicateExpected,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
-pub enum CompiledChangeRequestPredicateExpected {
-    Literal {
-        value: serde_json::Value,
-    },
-    RequestField {
-        field: String,
-    },
-    CurrentDate {
-        relation: CompiledCurrentDateRelation,
-    },
-    AtLeast {
-        value: i64,
-    },
-    AtMost {
-        value: i64,
-    },
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CompiledCurrentDateRelation {
@@ -384,87 +245,64 @@ pub enum CompiledCurrentDateRelation {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestEvidence {
+pub struct CompiledCommitEvidence {
     pub capability: crate::action_evidence_contracts::CompiledEvidenceCapability,
-    pub subjects: BTreeMap<String, CompiledChangeRequestEvidenceSubject>,
-    pub requires: Vec<CompiledChangeRequestEvidenceRequirement>,
+    pub subjects: BTreeMap<String, CompiledCommitEvidenceSubject>,
+    pub requires: Vec<CompiledCommitEvidenceRequirement>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestEvidenceSubject {
+pub struct CompiledCommitEvidenceSubject {
     pub profile: String,
-    pub selectors: BTreeMap<String, CompiledChangeRequestSelector>,
+    pub selectors: BTreeMap<String, CompiledCommitEvidenceSelector>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "type")]
-pub enum CompiledChangeRequestSelector {
-    RequestField { field: String },
-    TargetField { target: String, field: String },
+pub enum CompiledCommitEvidenceSelector {
+    Input { input: String },
+    TargetField { input: String, field: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestEvidenceRequirement {
+pub struct CompiledCommitEvidenceRequirement {
     pub output: String,
-    pub expected: CompiledChangeRequestEvidenceExpected,
+    pub expected: CompiledCommitEvidenceExpected,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
-pub enum CompiledChangeRequestEvidenceExpected {
+pub enum CompiledCommitEvidenceExpected {
     Literal { value: serde_json::Value },
-    RequestField { field: String },
+    FromInput { input: String },
     AtLeast { value: i64 },
     AtMost { value: i64 },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestPlanner {
-    pub kind: CompiledChangeRequestPlannerKind,
-    pub source_module: Option<String>,
-    #[serde(skip)]
-    pub script_path: String,
-    pub abi: String,
-    pub rhai_version: String,
-    pub script_sha256: String,
-    #[serde(skip)]
-    pub script_bytes: Vec<u8>,
-    pub limits: CompiledChangeRequestPlannerLimits,
-    pub request_fields: Vec<String>,
-    pub writes: Vec<CompiledChangeRequestPlannerWrite>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CompiledChangeRequestPlannerKind {
-    Rhai,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestPlannerWrite {
+pub struct CompiledPlanWrite {
     pub target_entity_id: String,
-    pub target_from_field: Option<String>,
+    pub target_from_input: Option<String>,
     pub operation: Operation,
     pub fields: BTreeSet<String>,
     pub field_types: BTreeMap<String, FieldTypeSource>,
     pub required_fields: BTreeSet<String>,
-    pub reference_sources: BTreeMap<String, CompiledChangeRequestReferenceSources>,
+    pub reference_sources: BTreeMap<String, CompiledPlanReferenceSources>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestReferenceSources {
-    pub request_fields: BTreeSet<String>,
+pub struct CompiledPlanReferenceSources {
+    pub inputs: BTreeSet<String>,
     pub create_entities: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestPlannerLimits {
+pub struct CompiledPlanFunctionLimits {
     pub maximum_source_bytes: u32,
     pub maximum_operations: u64,
     pub maximum_call_depth: u16,
@@ -473,104 +311,7 @@ pub struct CompiledChangeRequestPlannerLimits {
     pub maximum_array_items: u16,
     pub maximum_map_entries: u16,
     pub maximum_modules: u16,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CompiledChangeRequestRetentionMode {
-    #[default]
-    Retain,
-    OperatorErase,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestEffect {
-    pub id: String,
-    pub target: CompiledChangeRequestTarget,
-    pub operation: Operation,
-    pub mutations: Vec<CompiledChangeRequestMutation>,
-    pub depends_on: BTreeSet<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestTarget {
-    pub entity_id: String,
-    pub binding: CompiledChangeRequestTargetBinding,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
-pub enum CompiledChangeRequestTargetBinding {
-    Existing { from_field: String },
-    ReservedCreate { effect: String },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
-pub enum CompiledChangeRequestMutation {
-    Set {
-        field: String,
-        value: CompiledChangeRequestValue,
-    },
-    Clear {
-        field: String,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
-pub enum CompiledChangeRequestValue {
-    FromField {
-        field: String,
-    },
-    FromEffect {
-        effect: String,
-        target_entity_id: String,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ChangeRequestOperation {
-    SubmitRequest,
-    ReviseRequest,
-    CancelRequest,
-    ApplyRequest,
-}
-
-impl ChangeRequestOperation {
-    pub fn access_operation(self) -> Operation {
-        match self {
-            Self::SubmitRequest => Operation::SubmitRequest,
-            Self::ReviseRequest => Operation::ReviseRequest,
-            Self::CancelRequest => Operation::CancelRequest,
-            Self::ApplyRequest => Operation::ApplyRequest,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestActionRoute {
-    pub operation: ChangeRequestOperation,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestApplyPermission {
-    pub profile_id: String,
-    pub target_entity_id: String,
-    pub row_boundaries: Vec<RowBoundarySource>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestPresencePermission {
-    pub profile_id: String,
-    pub target_entity_id: String,
-    pub request_row_boundaries: Vec<RowBoundarySource>,
+    pub maximum_output_bytes: u32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -579,11 +320,6 @@ pub struct CompiledActionInventory {
     pub actions: Vec<CompiledAction>,
     pub routes: Vec<CompiledActionRoute>,
     pub access: Vec<CompiledActionAccessEntry>,
-    /// Every code of each vocabulary an action input is bound to, including
-    /// codes no input accepts. A successor compares them to tell a code new to
-    /// its vocabulary from one an input only started accepting.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub input_vocabularies: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl CompiledActionInventory {
@@ -597,19 +333,19 @@ impl CompiledActionInventory {
 pub struct CompiledAction {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<crate::action_evidence_contracts::CompiledEvidenceCapability>,
+    pub commit_evidence: Vec<CompiledCommitEvidence>,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handler: Option<CompiledActionHandler>,
+    pub handler: Option<CompiledPlanFunction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_module: Option<String>,
     pub route: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub condition_route: Option<String>,
-    pub contract_fingerprint: String,
     pub inputs: Vec<CompiledActionInput>,
-    pub effects: Vec<CompiledActionEffect>,
+    pub effects: Vec<CompiledPlanEffect>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requires: Vec<CompiledActionRequirement>,
+    pub requires: Vec<CompiledCommitGuard>,
     pub target_uses: Vec<CompiledActionTargetUse>,
     pub permissions: Vec<CompiledActionPermission>,
     pub result_effects: BTreeSet<String>,
@@ -620,11 +356,139 @@ pub struct CompiledAction {
     /// creates none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consent_issuer: Option<crate::contract::ConsentIssuerSource>,
+    pub api_name: String,
+    pub display: crate::contract::DisplaySource,
+    pub execution: CompiledActionExecution,
+    pub definition_revision: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
+// This is a bounded, package-loaded policy, not a per-record allocation.
+#[allow(clippy::large_enum_variant)]
+pub enum CompiledActionExecution {
+    Immediate,
+    Proposal { proposal: CompiledProposalPolicy },
+}
+impl CompiledActionExecution {
+    pub fn is_proposal(&self) -> bool {
+        matches!(self, Self::Proposal { .. })
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledProposalPolicy {
+    pub review: CompiledProposalReview,
+    pub application: CompiledProposalApplication,
+    pub retention: CompiledProposalRetentionMode,
+    pub review_context: Option<crate::contract::ProposalReviewContextSource>,
+    pub attachments: BTreeMap<String, CompiledAttachmentSlot>,
+    pub permissions: Vec<CompiledProposalPermission>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_apply_grant: Option<CompiledSystemApplyGrant>,
+}
+
+/// Static package-approved scope for the built-in executor. This definition
+/// alone is inert; application intersects it with a frozen submission scope.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledSystemApplyGrant {
+    pub revision: String,
+    pub action_id: String,
+    pub action_revision: String,
+    pub targets: Vec<CompiledSystemApplyTarget>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledSystemApplyTarget {
+    pub entity_id: String,
+    pub operation: Operation,
+    pub fields: BTreeSet<String>,
+    pub read_fields: BTreeSet<String>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum CompiledProposalReview {
+    None,
+    Required {
+        authority: String,
+        source: String,
+        policy: registry_review_protocol::PolicyBinding,
+    },
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "mode",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum CompiledProposalApplication {
+    Manual,
+    Automatic { maximum_attempts: u16 },
+}
+impl Default for CompiledProposalApplication {
+    fn default() -> Self {
+        Self::Automatic {
+            maximum_attempts: 3,
+        }
+    }
+}
+
+impl CompiledProposalApplication {
+    pub fn is_automatic(&self) -> bool {
+        matches!(self, Self::Automatic { .. })
+    }
+    pub fn maximum_attempts(&self) -> u16 {
+        match self {
+            Self::Manual => 1,
+            Self::Automatic {
+                maximum_attempts, ..
+            } => *maximum_attempts,
+        }
+    }
+}
+pub use crate::contract::{ProposalOperation, ProposalOwnership};
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompiledProposalRetentionMode {
+    Retain,
+    OperatorErase,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledProposalPermission {
+    pub profile_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_authority: Option<String>,
+    pub default: bool,
+    pub actor_kind: Option<crate::contract::ActorKindSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_grant: Option<crate::contract::TaskGrantSource>,
+    pub requester_clients: BTreeSet<String>,
+    pub principal_claim: Option<String>,
+    pub required_scopes: BTreeSet<String>,
+    pub required_purposes: BTreeSet<String>,
+    pub operations: BTreeSet<ProposalOperation>,
+    pub ownership: Option<ProposalOwnership>,
+    pub targets: Vec<CompiledProposalTargetPermission>,
+    pub readable_context_fields: BTreeSet<String>,
+    #[serde(default)]
+    pub readable_inputs: BTreeSet<String>,
+    pub readable_attachments: BTreeSet<String>,
+    pub writable_attachments: BTreeSet<String>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledProposalTargetPermission {
+    pub entity_id: String,
+    pub row_boundaries: Vec<RowBoundarySource>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledActionRequirement {
+pub struct CompiledCommitGuard {
     pub input: String,
     pub entity_id: String,
     pub field: String,
@@ -636,6 +500,10 @@ pub struct CompiledActionRequirement {
     pub equals: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_input: Option<String>,
+    pub revision_unchanged: bool,
+    pub at_least: Option<i64>,
+    pub at_most: Option<i64>,
+    pub current_date: Option<CompiledCurrentDateRelation>,
 }
 
 /// The compiled action-handler backend tag, owned by the handler alone. A
@@ -643,15 +511,15 @@ pub struct CompiledActionRequirement {
 /// without it refuses them at compile time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum CompiledActionHandlerKind {
+pub enum CompiledPlanFunctionKind {
     Rhai,
     Wasm,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledActionHandler {
-    pub kind: CompiledActionHandlerKind,
+pub struct CompiledPlanFunction {
+    pub kind: CompiledPlanFunctionKind,
     pub source_module: Option<String>,
     #[serde(skip)]
     pub script_path: String,
@@ -670,17 +538,21 @@ pub struct CompiledActionHandler {
     #[serde(skip)]
     pub module_bytes: Vec<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limits: Option<CompiledChangeRequestPlannerLimits>,
-    pub writes: Vec<CompiledActionHandlerWrite>,
+    pub limits: Option<CompiledPlanFunctionLimits>,
+    pub writes: Vec<CompiledPlanFunctionWrite>,
     pub refusals: BTreeMap<String, String>,
+    pub id: String,
+    pub entrypoint: String,
+    pub capabilities: BTreeSet<String>,
+    pub bound_inputs: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledActionHandlerWrite {
+pub struct CompiledPlanFunctionWrite {
     pub id: String,
     #[serde(flatten)]
-    pub ceiling: CompiledChangeRequestPlannerWrite,
+    pub ceiling: CompiledPlanWrite,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -691,38 +563,40 @@ pub struct CompiledActionInput {
     pub field_type: FieldTypeSource,
     pub required: bool,
     pub classification: Classification,
+    #[serde(default)]
+    pub display: crate::contract::DisplaySource,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledActionEffect {
+pub struct CompiledPlanEffect {
     pub id: String,
-    pub target: CompiledActionTarget,
+    pub target: CompiledPlanTarget,
     pub operation: Operation,
-    pub mutations: Vec<CompiledActionMutation>,
+    pub mutations: Vec<CompiledPlanMutation>,
     pub depends_on: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledActionTarget {
+pub struct CompiledPlanTarget {
     pub entity_id: String,
-    pub binding: CompiledActionTargetBinding,
+    pub binding: CompiledPlanTargetBinding,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
-pub enum CompiledActionTargetBinding {
+pub enum CompiledPlanTargetBinding {
     Create,
     Existing { input: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
-pub enum CompiledActionMutation {
+pub enum CompiledPlanMutation {
     Set {
         field: String,
-        value: CompiledActionValue,
+        value: CompiledPlanValue,
     },
     Clear {
         field: String,
@@ -731,7 +605,7 @@ pub enum CompiledActionMutation {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "kind")]
-pub enum CompiledActionValue {
+pub enum CompiledPlanValue {
     Literal {
         value: serde_json::Value,
     },
@@ -782,6 +656,8 @@ pub struct CompiledActionPermission {
     pub default: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<crate::contract::ActorKindSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_grant: Option<crate::contract::TaskGrantSource>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub requester_clients: BTreeSet<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -976,19 +852,17 @@ pub(crate) fn leading_field_indexed_for_list_finding(
     field: &str,
     indexes: &BTreeMap<String, Vec<String>>,
     constraints: &BTreeMap<String, crate::contract::ConstraintSource>,
-    has_change_request: bool,
 ) -> bool {
     leading_field_indexed(field, indexes, constraints)
-        || (!has_change_request
-            && constraints.values().any(|constraint| {
-                matches!(
-                    constraint,
-                    crate::contract::ConstraintSource::Unique { fields, when: Some(when), .. }
-                        if fields.first().is_some_and(|first| first == field)
-                            && when.as_slice()
-                                == [crate::contract::UniqueWhenPredicate::ActiveLifecycle {}]
-                )
-            }))
+        || constraints.values().any(|constraint| {
+            matches!(
+                constraint,
+                crate::contract::ConstraintSource::Unique { fields, when: Some(when), .. }
+                    if fields.first().is_some_and(|first| first == field)
+                        && when.as_slice()
+                            == [crate::contract::UniqueWhenPredicate::ActiveLifecycle {}]
+            )
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1022,13 +896,11 @@ pub struct CompiledEntity {
     pub source_relation: CompiledSourceRelation,
     pub selector_profiles: BTreeMap<String, CompiledSelectorProfile>,
     pub read_paths: BTreeMap<String, CompiledReadPath>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub relationships: BTreeMap<String, CompiledRelationship>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change_control: Option<CompiledChangeControl>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub change_request: Option<CompiledChangeRequest>,
     pub fields: BTreeMap<String, CompiledField>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub attachments: BTreeMap<String, CompiledAttachmentSlot>,
     pub constraints: BTreeMap<String, ConstraintSource>,
     pub indexes: BTreeMap<String, Vec<String>>,
     pub access_profiles: BTreeMap<String, AccessProfileSource>,
@@ -1047,6 +919,30 @@ pub struct CompiledEntity {
     /// never a list.
     #[serde(default, skip_serializing_if = "CompiledEntityModuleOrigins::is_empty")]
     pub module_origins: CompiledEntityModuleOrigins,
+    pub api_name: String,
+    pub display: crate::contract::DisplaySource,
+    pub definition_revision: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledRelationship {
+    pub name: String,
+    pub source_entity_id: String,
+    pub target_entity_id: String,
+    pub field_id: String,
+    pub cardinality: RelationshipCardinality,
+    pub inverse: bool,
+    pub inverse_name: Option<String>,
+    pub read_path: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RelationshipCardinality {
+    One,
+    OptionalOne,
+    Many,
 }
 
 /// Per-collection module provenance for one [`CompiledEntity`]. See
@@ -1513,109 +1409,6 @@ pub struct CompiledBboxQueryCapability {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledQueryInventory {
     pub operations: Vec<CompiledQueryOperation>,
-}
-
-pub const REQUEST_BREG_STATE_QUERY_FIELD: &str = "__request_breg_state";
-pub const REQUEST_PROPOSAL_VERSION_QUERY_FIELD: &str = "__request_proposal_version";
-pub const REQUEST_EFFECT_DIGEST_QUERY_FIELD: &str = "__request_effect_digest";
-/// The settled review outcome of the current proposal. It is review state, so
-/// only a profile that may read review state may filter on it.
-pub const REQUEST_REVIEW_OUTCOME_QUERY_FIELD: &str = "__request_review_outcome";
-
-pub fn request_query_field_id_for_api(api_name: &str) -> Option<&'static str> {
-    match api_name {
-        "bregState" => Some(REQUEST_BREG_STATE_QUERY_FIELD),
-        "proposalVersion" => Some(REQUEST_PROPOSAL_VERSION_QUERY_FIELD),
-        "effectDigest" => Some(REQUEST_EFFECT_DIGEST_QUERY_FIELD),
-        "reviewOutcome" => Some(REQUEST_REVIEW_OUTCOME_QUERY_FIELD),
-        _ => None,
-    }
-}
-
-pub fn request_query_field_api_name(field_id: &str) -> Option<&'static str> {
-    match field_id {
-        REQUEST_BREG_STATE_QUERY_FIELD => Some("bregState"),
-        REQUEST_PROPOSAL_VERSION_QUERY_FIELD => Some("proposalVersion"),
-        REQUEST_EFFECT_DIGEST_QUERY_FIELD => Some("effectDigest"),
-        REQUEST_REVIEW_OUTCOME_QUERY_FIELD => Some("reviewOutcome"),
-        _ => None,
-    }
-}
-
-pub fn request_query_field_type(field_id: &str) -> Option<FieldTypeSource> {
-    match field_id {
-        REQUEST_BREG_STATE_QUERY_FIELD => Some(FieldTypeSource::String {
-            min_length: 4,
-            max_length: 16,
-        }),
-        REQUEST_PROPOSAL_VERSION_QUERY_FIELD => Some(FieldTypeSource::Int64),
-        REQUEST_EFFECT_DIGEST_QUERY_FIELD => Some(FieldTypeSource::String {
-            min_length: 71,
-            max_length: 71,
-        }),
-        REQUEST_REVIEW_OUTCOME_QUERY_FIELD => Some(FieldTypeSource::String {
-            min_length: 7,
-            max_length: 16,
-        }),
-        _ => None,
-    }
-}
-
-pub fn request_state_query_filter_fields() -> Vec<CompiledQueryFilterField> {
-    vec![
-        CompiledQueryFilterField {
-            field: REQUEST_BREG_STATE_QUERY_FIELD.to_owned(),
-            operators: vec![
-                CompiledQueryFilterOperator::Equals,
-                CompiledQueryFilterOperator::In,
-            ],
-        },
-        CompiledQueryFilterField {
-            field: REQUEST_PROPOSAL_VERSION_QUERY_FIELD.to_owned(),
-            operators: vec![
-                CompiledQueryFilterOperator::Equals,
-                CompiledQueryFilterOperator::In,
-                CompiledQueryFilterOperator::Range,
-            ],
-        },
-        CompiledQueryFilterField {
-            field: REQUEST_EFFECT_DIGEST_QUERY_FIELD.to_owned(),
-            operators: vec![
-                CompiledQueryFilterOperator::Equals,
-                CompiledQueryFilterOperator::In,
-                CompiledQueryFilterOperator::IsNull,
-                CompiledQueryFilterOperator::IsNotNull,
-            ],
-        },
-    ]
-}
-
-/// Filter-only: the outcome is a queue selector, not an ordering.
-pub fn request_review_query_filter_field() -> CompiledQueryFilterField {
-    CompiledQueryFilterField {
-        field: REQUEST_REVIEW_OUTCOME_QUERY_FIELD.to_owned(),
-        operators: vec![
-            CompiledQueryFilterOperator::Equals,
-            CompiledQueryFilterOperator::In,
-        ],
-    }
-}
-
-pub fn request_state_query_sort_fields() -> Vec<CompiledQuerySortField> {
-    vec![
-        CompiledQuerySortField {
-            field: REQUEST_BREG_STATE_QUERY_FIELD.to_owned(),
-            directions: vec![CompiledQuerySortDirection::Asc],
-        },
-        CompiledQuerySortField {
-            field: REQUEST_PROPOSAL_VERSION_QUERY_FIELD.to_owned(),
-            directions: vec![CompiledQuerySortDirection::Asc],
-        },
-        CompiledQuerySortField {
-            field: REQUEST_EFFECT_DIGEST_QUERY_FIELD.to_owned(),
-            directions: vec![CompiledQuerySortDirection::Asc],
-        },
-    ]
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

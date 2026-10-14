@@ -1,0 +1,9 @@
+type: object
+additionalProperties: false
+required:
+- category
+properties:
+  category:
+    type: string
+    minLength: 1
+    maxLength: 32

@@ -10,29 +10,29 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use uuid::Uuid;
@@ -4318,8 +4318,8 @@ impl IngestionHarness {
 
     async fn erase_widget_history(&self, record_id: &str) {
         use registry_breg::history_erasure::{
-            erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts,
-            RecordHistoryErasureTarget,
+            HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
+            erase_record_history,
         };
         let (mut migration, migration_task) = self.database.connect_migration().await;
         let target = RecordHistoryErasureTarget::new(
@@ -4542,7 +4542,7 @@ const FIXTURE_TAIL: &str = r#"
     "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
     "permissions":{"entities":[{
-      "entity":"widget","operations":["create","get","patch","batch"],
+      "recordType":"widget","operations":["create","get","patch","batch"],
       "readableFields":["jurisdiction","label","quantity"],
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -4551,7 +4551,7 @@ const FIXTURE_TAIL: &str = r#"
     "id":"operator-minimal","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management"],
     "permissions":{"entities":[{
-      "entity":"widget","operations":["create","patch","batch"],
+      "recordType":"widget","operations":["create","patch","batch"],
       "readableFields":["label"],
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -4560,7 +4560,7 @@ const FIXTURE_TAIL: &str = r#"
     "id":"reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["public-reading"],
     "permissions":{"entities":[{
-      "entity":"widget","operations":["get","list"],
+      "recordType":"widget","operations":["get","list"],
       "readableFields":["label"],
       "rowBoundaries":"unrestricted"
     }]}
@@ -4623,11 +4623,11 @@ fn encrypted_widget_registry() -> Arc<registry_breg::CompiledRegistry> {
 /// permissions on create-only entities, so the immutable entity grants
 /// create and batch and the announced patch is unexecutable either way.
 fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
-    let project = r#"{
+    let project = r#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
         "batch":{"maximumItems":3,"maximumBytes":8192},
         "fields":[
@@ -4647,15 +4647,15 @@ fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
         "id":"patcher","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
         "permissions":{
-          "entities":[
+          "records":[
             {
-              "entity":"widget","operations":["patch","batch"],
+              "recordType":"widget","operations":["patch","batch"],
               "readableFields":["jurisdiction","label","quantity"],
               "writableFields":["jurisdiction","label","quantity"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             },
             {
-              "entity":"asset","operations":["create","batch"],
+              "recordType":"asset","operations":["create","batch"],
               "readableFields":["jurisdiction","label"],
               "writableFields":["jurisdiction","label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]

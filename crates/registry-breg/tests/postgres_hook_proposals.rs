@@ -24,21 +24,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use postgres_harness::TestDatabase;
-use rcgen::{generate_simple_self_signed, CertifiedKey};
-use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_json, ModuleAssetSource};
+use rcgen::{CertifiedKey, generate_simple_self_signed};
+use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
+use registry_breg::contract::{ModuleAssetSource, parse_project_json};
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use registry_breg::hook_handler::HookHandlerRegistry;
 use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
-    test_package_digest, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
-    RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
+    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity,
+    RowBoundaryContext, RuntimePool, initialize_compiled_registry_state_for_test,
+    install_compiled_schema, test_activation_id, test_package_digest,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::webhook::{
@@ -46,13 +46,13 @@ use registry_breg::webhook::{
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{oneshot, Mutex};
-use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
-use tokio_rustls::rustls::ServerConfig;
+use tokio::sync::{Mutex, oneshot};
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use uuid::Uuid;
 
 const PACKAGE_REVISION: &str =
@@ -188,7 +188,7 @@ fn hook_project_json(
             "id":"case-hook","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{{"actions":[{{
               "action":"open-followup","operations":["invoke"],
-              "targets":[{{"entity":"followup","rowBoundaries":"unrestricted"}}],
+              "targets":[{{"recordType":"followup","rowBoundaries":"unrestricted"}}],
               {case_hook_results}
             }}]}}
           }}]
@@ -264,9 +264,9 @@ fn encrypted_proposal_registry() -> CompiledRegistry {
         "",
     ))
     .expect("hook proposal fixture is JSON");
-    project_json["entities"][1]["classification"] = json!("restricted");
-    project_json["entities"][1]["fields"][2]["classification"] = json!("restricted");
-    project_json["entities"][1]["fields"][2]["encrypted"] = json!(true);
+    project_json["recordTypes"][1]["classification"] = json!("restricted");
+    project_json["recordTypes"][1]["fields"][2]["classification"] = json!("restricted");
+    project_json["recordTypes"][1]["fields"][2]["encrypted"] = json!(true);
     let project = parse_project_json(
         &serde_json::to_vec(&project_json).expect("hook proposal fixture serializes"),
     )
@@ -387,7 +387,7 @@ fn hidden_result_registry() -> CompiledRegistry {
         "[]",
         r#""results":["note"]"#,
         r#",
-              {"id":"note","target":{"entity":"followup"},"operation":"create","fields":["jurisdiction","label","origin"]}"#,
+              {"id":"note","target":{"recordType":"followup"},"operation":"create","fields":["jurisdiction","label","origin"]}"#,
         &[rhai_asset("hooks/propose.rhai", PROPOSAL_HOOK_SCRIPT)],
     )
 }
@@ -420,7 +420,7 @@ fn tally_proposal_registry() -> CompiledRegistry {
         ),
     ))
     .expect("hook proposal fixture is JSON");
-    project["entities"].as_array_mut().unwrap().push(json!({
+    project["recordTypes"].as_array_mut().unwrap().push(json!({
         "id": "tally", "primaryDataset": "test-dataset", "route": "tallies",
         "mutationMode": "mutable", "classification": "internal",
         "fields": [
@@ -429,7 +429,7 @@ fn tally_proposal_registry() -> CompiledRegistry {
         ],
         "hooks": []
     }));
-    let case_fields = project["entities"][0]["fields"].as_array_mut().unwrap();
+    let case_fields = project["recordTypes"][0]["fields"].as_array_mut().unwrap();
     case_fields.push(json!({
         "id": "tally", "apiName": "tally", "type": "reference", "target": "tally",
         "classification": "internal"
@@ -445,7 +445,7 @@ fn tally_proposal_registry() -> CompiledRegistry {
             "id": "tally", "apiName": "tally", "type": "reference", "target": "tally",
             "required": true, "classification": "internal"
         }));
-    let operator = &mut project["accessProfiles"][0]["permissions"]["entities"];
+    let operator = &mut project["accessProfiles"][0]["permissions"]["records"];
     for field in ["tally", "tally-condition"] {
         operator[0]["readableFields"]
             .as_array_mut()
@@ -465,7 +465,7 @@ fn tally_proposal_registry() -> CompiledRegistry {
     project["accessProfiles"][1]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
-        .push(json!({"entity": "tally", "rowBoundaries": "unrestricted"}));
+        .push(json!({"recordType": "tally", "rowBoundaries": "unrestricted"}));
     let project = parse_project_json(
         &serde_json::to_vec(&project).expect("hook proposal fixture serializes"),
     )
@@ -2233,10 +2233,12 @@ async fn real_postgres_hook_delivery_rows_record_every_proposal_disposition() {
         Some("hook.proposal.no_principal"),
         "the row names the deployment defect a principal-less proposal is"
     );
-    assert!(dead_row
-        .summary
-        .as_deref()
-        .is_some_and(|summary| !summary.is_empty()));
+    assert!(
+        dead_row
+            .summary
+            .as_deref()
+            .is_some_and(|summary| !summary.is_empty())
+    );
 
     assert_eq!(record_count(&setup, "followup").await, 1);
     assert_eq!(record_count(&setup, "case").await, 1);
@@ -2512,10 +2514,11 @@ async fn real_postgres_a_proposal_failing_outcome_validation_is_refused_not_appl
         Some("hook.proposal.outcome_refused"),
         "the refusal names the validation that refused it"
     );
-    assert!(row
-        .summary
-        .as_deref()
-        .is_some_and(|summary| !summary.is_empty()));
+    assert!(
+        row.summary
+            .as_deref()
+            .is_some_and(|summary| !summary.is_empty())
+    );
     assert_eq!(
         record_count(&setup, "followup").await,
         0,

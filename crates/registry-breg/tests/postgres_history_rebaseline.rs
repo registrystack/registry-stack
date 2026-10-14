@@ -36,26 +36,26 @@ use serde_json::json;
 use uuid::Uuid;
 
 use history_commit::{
-    allocate_revision_commit, capture_latest_snapshot_reference, install_empty_history_baseline,
-    resolve_snapshot_reference, CommitAllocation, HistoryCommitError, RevisionCommitMember,
+    CommitAllocation, HistoryCommitError, RevisionCommitMember, allocate_revision_commit,
+    capture_latest_snapshot_reference, install_empty_history_baseline, resolve_snapshot_reference,
 };
 use history_context::CommitOrigin;
 use history_store::retain_descriptor;
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::history_erasure::{
-    erase_record_history, HistoryErasureError, HistoryErasureRequest, HistoryErasureTimeouts,
-    RecordHistoryErasureTarget, HISTORY_ERASURE_AUDIT_SCHEMA,
+    HISTORY_ERASURE_AUDIT_SCHEMA, HistoryErasureError, HistoryErasureRequest,
+    HistoryErasureTimeouts, RecordHistoryErasureTarget, erase_record_history,
 };
 use registry_breg::history_rebaseline::{
-    rebaseline_history_coverage, HistoryRebaselineError, HistoryRebaselineRequest,
-    HistoryRebaselineTimeouts, HISTORY_REBASELINE_AUDIT_SCHEMA,
+    HISTORY_REBASELINE_AUDIT_SCHEMA, HistoryRebaselineError, HistoryRebaselineRequest,
+    HistoryRebaselineTimeouts, rebaseline_history_coverage,
 };
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
-    install_compiled_schema, managed_schema_fingerprint, test_package_digest,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, install_compiled_schema,
+    managed_schema_fingerprint, test_package_digest,
 };
 
 const ENTITY: &str = "membership";
@@ -1318,11 +1318,11 @@ fn assert_rebaseline_audit_is_minimized(database: &TestDatabase) {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"history-rebaseline-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"membership",
             "primaryDataset":"test-dataset",
             "route":"memberships",
@@ -1343,8 +1343,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
             "requiredPurposes":["operations"],
-            "permissions":{"entities":[{
-              "entity":"membership",
+            "permissions":{"records":[{
+              "recordType":"membership",
               "operations":["create","get","list","patch","snapshot"],
               "readableFields":["person","household","valid-from","valid-to"],
               "writableFields":["person","household","valid-from","valid-to"],

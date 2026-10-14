@@ -10,21 +10,21 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_project_json, Operation};
+use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::contract::{Operation, parse_project_json};
 use registry_breg::idempotency::PermittedResponseHeader;
 use registry_breg::mutation::{
     MutationBody, MutationCoordinator, MutationError, MutationFaultPoint, MutationOutcome,
     MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
-    test_package_digest, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
-    RegistryStateTestIdentity, RowBoundaryContext,
+    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity,
+    RowBoundaryContext, initialize_compiled_registry_state_for_test, install_compiled_schema,
+    test_activation_id, test_package_digest,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 const PRINCIPAL_CANARY: &str = "tombstone-principal-canary";
 const IDEMPOTENCY_CANARY: &str = "tombstone-idempotency-canary";
@@ -589,7 +589,8 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"tombstone-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "entities":[{{
+          "datasets":[{{"id":"test-dataset"}}],
+          "recordTypes":[{{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable"{tombstone_fragment},"classification":"public",
             "fields":[
               {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},
@@ -606,13 +607,13 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
           "accessProfiles":[{{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{{"entities":[{{
-              "entity":"widget","operations":[{operations}],
+            "permissions":{{"records":[{{
+              "recordType":"widget","operations":[{operations}],
               "readableFields":["jurisdiction","label","quantity"],
               "writableFields":["jurisdiction","label","quantity"],
               "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
             }},{{
-              "entity":"log","operations":["create","get","list"],
+              "recordType":"log","operations":["create","get","list"],
               "readableFields":["jurisdiction","message"],
               "writableFields":["jurisdiction","message"],
               "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
@@ -1004,7 +1005,7 @@ async fn assert_tombstone_event_is_canonical(database: &TestDatabase, record_id:
     assert_eq!(
         envelope.get("data"),
         Some(&json!({
-            "entity": "widget",
+            "recordType": "widget",
             "recordId": record_id,
             "revision": 3,
             "trigger": "tombstoned",

@@ -102,35 +102,37 @@ pub fn phone_project() -> Value {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"wasm-template-proof","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "datasets":[{"id":"proof-dataset"}],
+          "recordTypes":[{
             "id":"person","primaryDataset":"proof-dataset","route":"people","mutationMode":"mutable",
             "fields":[
               {"id":"phone","apiName":"phone","type":"string","maximumLength":32,"required":true,"classification":"restricted"}
             ]
           }],
+          "functions":[{"id":"phone-plan","runtime":"wasm","source":"wasm/handler.wasm","entrypoint":"handle","abi":"registry.action-plan/v1"}],
           "actions":[{
-            "id":"normalize-phone",
+            "id":"normalize-phone","execution":{"mode":"immediate"},
             "inputs":[
               {"id":"raw-phone","apiName":"rawPhone","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"default-region","apiName":"defaultRegion","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
             ],
-            "handler":{
-              "type":"wasm","module":"wasm/handler.wasm","abi":"registry.action-handler/v1",
+            "plan":{
+              "type":"function","function":"phone-plan","inputs":["raw-phone","default-region"],
               "refusals":[
                 {"code":"invalid-phone","label":"The phone number is not a valid phone number."},
                 {"code":"invalid-region","label":"The region is not a usable phone region."}
               ],
               "writes":[{
-                "id":"phone","target":{"entity":"person"},"operation":"create",
+                "id":"phone","target":{"recordType":"person"},"operation":"create",
                 "fields":["phone"]
               }]
             }
           }],
           "accessProfiles":[{
-            "id":"registrar","default":true,"principalClaim":"registry_principal",
+            "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"actions":[{
               "action":"normalize-phone","operations":["invoke"],
-              "targets":[{"entity":"person","rowBoundaries":[]}],
+              "targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],
               "results":["phone"]
             }]}
           }]

@@ -203,28 +203,28 @@
           "$ref": "#/$defs/LocalId",
           "description": "The registry access profile every read and submit names."
         },
+        "action": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The proposal-mode Action identifier."
+        },
         "baseUrl": {
           "$ref": "#/$defs/Url",
           "description": "The registry deployment's base URL. An https URL with no query or\nfragment; plain http is accepted only on a loopback host under\n`development-loopback`."
-        },
-        "entity": {
-          "$ref": "#/$defs/LocalId",
-          "description": "The change-request entity identifier."
         },
         "resource": {
           "$ref": "#/$defs/ResourceUri",
           "description": "The RFC 8707 resource indicator the person's access token names."
         },
-        "targetField": {
+        "targetInput": {
           "$ref": "#/$defs/LocalId",
-          "description": "The reference field naming the record the request changes. The page\nreads that record under the person's own token before it offers the\nsubmit form, because the registry does not tie a request's target to\nits requester."
+          "description": "The reference input naming the record the Proposal changes. The page\nreads that record under the person's own token before it offers the\nsubmit form, because the registry does not tie a request's target to\nits requester."
         }
       },
       "required": [
         "baseUrl",
         "resource",
-        "entity",
-        "targetField",
+        "action",
+        "targetInput",
         "accessProfile"
       ],
       "type": "object"

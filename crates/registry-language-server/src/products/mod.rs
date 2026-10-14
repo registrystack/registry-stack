@@ -309,8 +309,29 @@ fn ancestor_field(found: &Match<'_>, skip: usize, field: &str) -> Option<String>
 }
 
 fn scope(found: &Match<'_>, rule: Scope, path: &Path) -> Option<Option<String>> {
+    fn action<'a>(found: &Match<'a>) -> Option<&'a YamlValue> {
+        found.parents.iter().copied().find(|parent| {
+            parent.get("id").is_some()
+                && (parent.get("plan").is_some() || parent.get("execution").is_some())
+        })
+    }
+    fn input_target(found: &Match<'_>, input: &str) -> Option<String> {
+        at_path(action(found)?, "inputs/*/target")
+            .into_iter()
+            .find(|target| ancestor_field(target, 0, "id").as_deref() == Some(input))
+            .map(|target| target.scalar.value.clone())
+    }
     match rule {
         Scope::Global => Some(None),
+        Scope::BregAction => Some(Some(action(found)?.get_scalar("id")?.value.clone())),
+        Scope::BregTarget => Some(Some(
+            ancestor_field(found, 0, "target.recordType")
+                .or_else(|| input_target(found, &ancestor_field(found, 0, "target.fromInput")?))?,
+        )),
+        Scope::BregInputTarget(field) => Some(Some(input_target(
+            found,
+            &ancestor_field(found, 0, field)?,
+        )?)),
         Scope::Document => Some(Some(path.to_string_lossy().into_owned())),
         Scope::Ancestor { skip, field } => Some(Some(ancestor_field(found, skip, field)?)),
         Scope::Composite(fields) => {
@@ -596,9 +617,9 @@ pub(crate) fn build_index(
             messaging_template_files(root, path, &document.value, &mut output);
         }
         if product == ProductKind::Breg {
-            for entity in at_path(&document.value, "entities/*/id") {
+            for entity in at_path(&document.value, "recordTypes/*/id") {
                 let kind = SymbolKind::Product(product, "BReg field");
-                if !at_path(&document.value, "entities/*/fields/*/id")
+                if !at_path(&document.value, "recordTypes/*/fields/*/id")
                     .iter()
                     .any(|field| {
                         field.scalar.value == "id"

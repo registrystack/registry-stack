@@ -10,26 +10,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, Response, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
-use registry_breg::history_schema::{serialize_descriptor, HistorySchemaDescriptor};
+use registry_breg::history_schema::{HistorySchemaDescriptor, serialize_descriptor};
 use registry_breg::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
-    PostgresRecordReadService, PostgresRevisionReadService, RegistryLockKey,
-    RegistryStateTestIdentity, RevisionReadFaultPoint,
+    ExpectedManagedCatalog, PostgresRecordReadService, PostgresRevisionReadService,
+    RegistryLockKey, RegistryStateTestIdentity, RevisionReadFaultPoint,
+    initialize_registry_state_for_catalog_test, install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use uuid::Uuid;
@@ -133,9 +133,11 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     assert_eq!(items[0]["requestReference"], REQUEST_REFERENCE);
     assert_eq!(items[0]["domainData"], json!({"label": "tombstoned"}));
     assert!(items.iter().all(|item| item.get("changeContext").is_none()));
-    assert!(!String::from_utf8(list_bytes)
-        .expect("response is UTF-8")
-        .contains(SECRET_CANARY));
+    assert!(
+        !String::from_utf8(list_bytes)
+            .expect("response is UTF-8")
+            .contains(SECRET_CANARY)
+    );
 
     let provenance = send(
         &app,
@@ -257,9 +259,11 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     let malformed = body_json(malformed).await;
     assert_eq!(malformed["code"], "source.unavailable");
     assert!(!malformed.to_string().contains("wrong-type"));
-    assert!(!malformed
-        .to_string()
-        .contains("valid-row-must-not-be-released"));
+    assert!(
+        !malformed
+            .to_string()
+            .contains("valid-row-must-not-be-released")
+    );
 
     let slow_statement = revision_router(
         pool.clone(),
@@ -841,11 +845,11 @@ fn json_from_bytes(bytes: &[u8]) -> Value {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"revision-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,
             "classification":"restricted",
             "fields":[
@@ -857,8 +861,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
-            "permissions":{"entities":[{
-              "entity":"widget",
+            "permissions":{"records":[{
+              "recordType":"widget",
               "operations":["revisions"],"revisionAccess":true,
               "readableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
@@ -866,8 +870,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"provenance","principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
-            "permissions":{"entities":[{
-              "entity":"widget",
+            "permissions":{"records":[{
+              "recordType":"widget",
               "operations":["revisions"],"revisionAccess":true,
               "readableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],

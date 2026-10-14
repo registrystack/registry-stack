@@ -2,44 +2,32 @@
 
 #![cfg(feature = "runtime")]
 
-//! Frozen package compatibility across compiler generations.
+//! Current package derivation, tamper refusal and successor invariants.
 //!
-//! `tests/fixtures/person-registration-rhai-package` is a complete package
-//! produced by the current package compiler. The fixture pins exact bytes,
-//! current integrity inspection, Rhai execution, and the predecessor read of
-//! a package this compiler built.
-//!
-//! The loading tests read a temporary copy, so a run never touches the frozen
-//! bytes.
-//!
-//! To deliberately re-freeze the fixture after an approved package-format
-//! change, delete the directory and run the ignored writer test:
-//!
-//! ```text
-//! cargo test --locked -p registry-breg --test frozen_rhai_package -- --ignored write_frozen_fixture
-//! ```
+//! Build a native named-plan package once per test process and inspect temporary
+//! copies. No historical package format or migration compatibility is retained.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use registry_breg::action_handler::{evaluate_action_detailed, ActionHandlerOutcome};
+use registry_breg::CompiledRegistry;
+use registry_breg::action_handler::{ActionHandlerOutcome, evaluate_action_detailed};
 use registry_breg::compiler::{
-    compile_project_with_assets, CompileProfile, AUTHORING_API_VERSION, AUTHORING_KIND,
+    AUTHORING_API_VERSION, AUTHORING_KIND, CompileProfile, compile_project_with_assets,
 };
-use registry_breg::contract::{parse_project_yaml, ModuleAssetSource};
+use registry_breg::contract::{ModuleAssetSource, parse_project_yaml};
 use registry_breg::migration::{successor_plan_is_empty, successor_plan_is_empty_for_predecessor};
 use registry_breg::package::{
-    inspect_package_integrity, load_package, load_predecessor_package,
-    prepare_package_with_project_assets, PackageBuildRequest, PackageEnvelope, PackageError,
-    PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile, VerifiedPredecessorPackage,
-    PACKAGE_API_VERSION, PACKAGE_KIND, RETIRED_PACKAGE_API_VERSION,
+    PACKAGE_API_VERSION, PACKAGE_KIND, PackageBuildRequest, PackageEnvelope, PackageError,
+    PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile, RETIRED_PACKAGE_API_VERSION,
+    VerifiedPredecessorPackage, inspect_package_integrity, load_package, load_predecessor_package,
+    prepare_package_with_project_assets,
 };
-use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
-use serde_json::{json, Map, Value};
+use registry_platform_config::package::{PackageLimits, SUM_FILE, write_sum_file};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 const ENVIRONMENT: &str = "local";
@@ -55,7 +43,18 @@ fn acceptance_root() -> PathBuf {
 }
 
 fn frozen_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/person-registration-rhai-package")
+    static BASE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let base = BASE.get_or_init(|| {
+        let base = tempfile::Builder::new()
+            .prefix("breg-native-package-")
+            .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+            .expect("temporary package root");
+        prepare_frozen_package()
+            .publish_to_directory(&base.path().join("package"))
+            .expect("the current native package publishes");
+        base
+    });
+    base.path().join("package")
 }
 
 /// A temporary copy of the frozen package, leaving the frozen bytes untouched.
@@ -239,7 +238,7 @@ fn handler_inputs(identifier: &str, given: &str, family: &str) -> Map<String, Va
 }
 
 #[test]
-fn frozen_package_bytes_match_the_current_compiler() {
+fn native_package_rebuilds_are_deterministic() {
     let package = prepare_frozen_package();
     let root = frozen_root();
     let mut committed = BTreeMap::new();
@@ -343,9 +342,9 @@ fn frozen_package_loads_and_runs_its_rhai_handler() {
         .expect("the action declares a handler");
     assert_eq!(
         handler.kind,
-        registry_breg::model::CompiledActionHandlerKind::Rhai
+        registry_breg::model::CompiledPlanFunctionKind::Rhai
     );
-    assert_eq!(handler.abi, registry_breg::contract::ACTION_HANDLER_ABI_V1);
+    assert_eq!(handler.abi, registry_breg::contract::ACTION_PLAN_ABI_V1);
     assert_eq!(handler.script_path, "scripts/register-person.rhai");
 
     let accepted = evaluate_action_detailed(
@@ -464,7 +463,7 @@ fn a_package_whose_access_profile_carries_an_anonymous_member_is_refused() {
         let package = frozen_copy();
         let model_path = package.path().join("effective-model.json");
         let mut model: Value = serde_json::from_slice(&fs::read(&model_path).unwrap()).unwrap();
-        set_anonymous(&mut model["entities"], "person-reader", anonymous);
+        set_anonymous(&mut model["recordTypes"], "person-reader", anonymous);
         rewrite_packaged_file(
             package.path(),
             "effective-model.json",
@@ -755,18 +754,4 @@ fn a_package_sealed_with_the_shorter_field_bound_names_is_refused() {
         );
         assert!(load_package(package.path(), &context).is_err(), "{path}");
     }
-}
-
-#[test]
-#[ignore = "re-freezes the committed fixture; run only after an approved package-format change"]
-fn write_frozen_fixture() {
-    let destination = frozen_root();
-    assert!(
-        !destination.exists(),
-        "remove the existing fixture first; the writer never overwrites a frozen package"
-    );
-    prepare_frozen_package()
-        .publish_to_directory(&destination)
-        .expect("the frozen fixture is written");
-    inspect_package_integrity(&destination).expect("the written fixture verifies");
 }

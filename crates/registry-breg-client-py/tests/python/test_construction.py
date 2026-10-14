@@ -61,22 +61,17 @@ class ConstructionTests(unittest.TestCase):
         for name in (
             "BRegCreateBinding",
             "BRegPatchBinding",
-            "BRegImmediateActionBinding",
+            "BRegActionBinding",
             "BRegTombstoneBinding",
             "BRegBatchBinding",
             "BRegActionTargetConditions",
-            "BRegLifecycleAuthority",
-            "BRegLifecycleAction",
             "BRegPreparedCreate",
-            "BRegPreparedLifecycle",
+            "BRegPreparedProposal",
+            "BRegProposal",
+            "BRegProposalGetBinding",
+            "BRegProposalCollection",
             "BRegRecoveredCreate",
-            "BRegRecoveredLifecycle",
-            "BRegAttachmentSlot",
-            "BRegAttachmentUpload",
             "BRegMetadata",
-            "BRegRequestResultReference",
-            "BRegRetainedRequestProposal",
-            "BRegRetainedRequestHistoryPage",
         ):
             with self.assertRaises(TypeError):
                 getattr(breg_client, name)()

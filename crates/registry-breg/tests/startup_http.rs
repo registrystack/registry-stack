@@ -10,33 +10,33 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{HeaderName, HeaderValue, Request, StatusCode};
-use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::Algorithm;
+use jsonwebtoken::jwk::JwkSet;
 use registry_breg::api::{
-    authenticated_router, router, HeldReadResponse, HttpService, ReadRuntimeIdentity,
-    ReadServiceError, ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture,
-    VerifiedRequestClaims,
+    HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError, ReadinessProbe,
+    RecordReadRequest, RecordReadService, ServiceFuture, VerifiedRequestClaims,
+    authenticated_router, router,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::metrics::{self, Metrics};
 use registry_breg::package::PackageError;
 use registry_breg::postgres::{
-    advise, AdvisorySeverity, BaselineAdvisory, BaselineSettings, RoleMode,
+    AdvisorySeverity, BaselineAdvisory, BaselineSettings, RoleMode, advise,
 };
-use registry_breg::runtime_config::{parse_runtime_config_with_env, RuntimeConfigError};
+use registry_breg::runtime_config::{RuntimeConfigError, parse_runtime_config_with_env};
 use registry_breg::startup::{
-    operational_log_level, with_request_timeout_and_metrics_for_test,
-    with_request_timeout_for_test, BackgroundTask, BackgroundTaskStop, OperationalEvent,
-    OperationalLogLevel, StartupError, WebhookStateTransitionCode,
+    BackgroundTask, BackgroundTaskStop, OperationalEvent, OperationalLogLevel, StartupError,
+    WebhookStateTransitionCode, operational_log_level, with_request_timeout_and_metrics_for_test,
+    with_request_timeout_for_test,
 };
-use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
+use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_yaml};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use registry_platform_testing::{fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
@@ -63,7 +63,7 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: public-record
     primaryDataset: test-dataset
     route: public-records
@@ -72,14 +72,17 @@ entities:
     classification: public
     fields:
       - {id: label, type: string, required: true, maximumLength: 80, classification: public}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: public-record
+      records:
+        - recordType: public-record
           rowBoundaries: unrestricted
           operations: [list]
           readableFields: [label]
@@ -1168,9 +1171,11 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
             BTreeSet::from(["fields", "level", "timestamp"])
         );
         let fields = record["fields"].as_object().expect("log fields are closed");
-        assert!(fields
-            .keys()
-            .all(|field| matches!(field.as_str(), "message" | "error")));
+        assert!(
+            fields
+                .keys()
+                .all(|field| matches!(field.as_str(), "message" | "error"))
+        );
         assert!(matches!(
             fields["message"].as_str(),
             Some("Base Registry Engine startup began" | "Base Registry Engine stopped")
@@ -1390,11 +1395,13 @@ async fn unauthenticated_requests_are_refused_before_any_profile_or_query_is_rea
         refusals.windows(2).all(|pair| pair[0] == pair[1]),
         "every unauthenticated refusal has one shape"
     );
-    assert!(records
-        .correlations
-        .lock()
-        .expect("correlation capture")
-        .is_empty());
+    assert!(
+        records
+            .correlations
+            .lock()
+            .expect("correlation capture")
+            .is_empty()
+    );
 
     let scrape = metrics::metrics_app(Arc::clone(&metrics))
         .oneshot(
@@ -1624,7 +1631,7 @@ operationalTimeouts:
 #[tokio::test]
 async fn serve_returns_after_graceful_shutdown_signal() {
     use axum::routing::get;
-    use registry_breg::startup::{serve_until_shutdown, PreparedServer};
+    use registry_breg::startup::{PreparedServer, serve_until_shutdown};
     use registry_breg::webhook::WebhookWorkerLifecycleProbe;
 
     let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
@@ -1652,7 +1659,7 @@ async fn serve_returns_after_graceful_shutdown_signal() {
 #[tokio::test]
 async fn shutdown_signal_failure_still_stops_and_joins_the_bound_server() {
     use axum::routing::get;
-    use registry_breg::startup::{serve_until_shutdown, PreparedServer, StartupError};
+    use registry_breg::startup::{PreparedServer, StartupError, serve_until_shutdown};
     use registry_breg::webhook::WebhookWorkerLifecycleProbe;
     use tokio::net::TcpListener;
 
@@ -1692,7 +1699,7 @@ async fn shutdown_signal_failure_still_stops_and_joins_the_bound_server() {
 #[tokio::test]
 async fn listener_bind_failure_never_starts_or_detaches_the_webhook_worker() {
     use axum::routing::get;
-    use registry_breg::startup::{serve_until_shutdown, PreparedServer, StartupError};
+    use registry_breg::startup::{PreparedServer, StartupError, serve_until_shutdown};
     use registry_breg::webhook::WebhookWorkerLifecycleProbe;
     use tokio::net::TcpListener;
 
@@ -1722,7 +1729,7 @@ async fn listener_bind_failure_never_starts_or_detaches_the_webhook_worker() {
 #[tokio::test]
 async fn shutdown_timeout_aborts_and_joins_the_webhook_worker_before_returning() {
     use axum::routing::get;
-    use registry_breg::startup::{serve_until_shutdown, PreparedServer, StartupError};
+    use registry_breg::startup::{PreparedServer, StartupError, serve_until_shutdown};
     use registry_breg::webhook::WebhookWorkerLifecycleProbe;
     use tokio::net::TcpListener;
 
@@ -1766,7 +1773,7 @@ async fn serve_with_self_stopping_worker(
     std::net::SocketAddr,
 ) {
     use axum::routing::get;
-    use registry_breg::startup::{serve_until_shutdown, PreparedServer};
+    use registry_breg::startup::{PreparedServer, serve_until_shutdown};
     use tokio::net::TcpListener;
 
     let reservation = TcpListener::bind("127.0.0.1:0")
@@ -1888,7 +1895,7 @@ async fn an_early_returning_background_task_stops_serve_with_a_distinct_error() 
 #[tokio::test(flavor = "current_thread")]
 async fn a_requested_shutdown_reports_no_background_task_stop() {
     use axum::routing::get;
-    use registry_breg::startup::{serve_until_shutdown, PreparedServer};
+    use registry_breg::startup::{PreparedServer, serve_until_shutdown};
     use registry_breg::webhook::WebhookWorkerLifecycleProbe;
 
     let _capture_guard = TRACING_CAPTURE.lock().await;

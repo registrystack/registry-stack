@@ -205,8 +205,8 @@ pub(crate) struct App {
     pub client_id: String,
     pub scopes: Vec<String>,
     pub resource: String,
-    pub entity: String,
-    pub target_field: String,
+    pub action: String,
+    pub target_input: String,
     pub access_profile: String,
     pub authorization_endpoint: Url,
     /// Whether the provider promises an `iss` parameter on every
@@ -701,8 +701,8 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         client_id: config.sign_in.client_id.as_str().to_owned(),
         scopes: scopes(&config),
         resource: config.registry.resource.as_str().to_owned(),
-        entity: config.registry.entity.as_str().to_owned(),
-        target_field: config.registry.target_field.as_str().to_owned(),
+        action: config.registry.action.as_str().to_owned(),
+        target_input: config.registry.target_input.as_str().to_owned(),
         access_profile: config.registry.access_profile.as_str().to_owned(),
         authorization_endpoint,
         requires_iss,
@@ -734,9 +734,9 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         .route("/signin", guarded(get(signin::start)))
         .route("/signin/callback", guarded(get(signin::callback)))
         .route("/signout", guarded(post(pages::sign_out)))
-        .route("/requests/{request_id}", guarded(get(pages::review)))
+        .route("/proposals/{request_id}", guarded(get(pages::review)))
         .route(
-            "/requests/{request_id}/submit",
+            "/proposals/{request_id}/submit",
             guarded(post(pages::submit)),
         )
         .fallback(not_found)

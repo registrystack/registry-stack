@@ -20,7 +20,7 @@ function problem(code, status, detail, extension = {}) {
 test('registry metadata retains statistical datasets without entity authority', async () => {
   const metadata = {
     id: 'fixture-registry', version: '1', metadataVersion: '1',
-    revision: `sha256:${'a'.repeat(64)}`, entities: [], operations: [],
+    revision: `sha256:${'a'.repeat(64)}`, recordTypes: [], operations: [],
   };
   const datasets = [{
     id: 'company-counts', unit: 'company', periodKind: 'flow',

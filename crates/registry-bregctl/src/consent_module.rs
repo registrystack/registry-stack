@@ -180,6 +180,7 @@ struct Plan {
     reused_vocabularies: Vec<&'static str>,
     vocabulary_items: String,
     profile_items: String,
+    native_dataset_items: String,
     /// The `manifestProjection.datasets` block-list item this run appends for
     /// the shared `consent` dataset, when the project has a Registry Manifest
     /// projection and does not declare that dataset yet.
@@ -288,6 +289,15 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
         reused_vocabularies,
         vocabulary_items,
         profile_items,
+        native_dataset_items: if project
+            .datasets
+            .iter()
+            .any(|dataset| dataset.id == CONSENT_DATASET_ID)
+        {
+            String::new()
+        } else {
+            format!("- id: {CONSENT_DATASET_ID}\n  display: {{label: Consent records}}\n")
+        },
         dataset_addition,
         dataset_conflict_index,
         requirements: requirements(source, subject),
@@ -441,6 +451,7 @@ fn render_registry(source: &CapturedProjectSource, plan: &Plan) -> Result<Vec<u8
         .map_err(|_| render_failure("registry.yaml is not UTF-8"))?;
     let mut edited = original.to_owned();
     for (key, items) in [
+        ("datasets", &plan.native_dataset_items),
         ("vocabularies", &plan.vocabulary_items),
         ("accessProfiles", &plan.profile_items),
     ] {
@@ -501,6 +512,7 @@ fn renders_exactly(
         return false;
     };
     for (key, items) in [
+        ("datasets", &plan.native_dataset_items),
         ("vocabularies", &plan.vocabulary_items),
         ("accessProfiles", &plan.profile_items),
     ] {
@@ -882,7 +894,7 @@ fn explanation(plan: &Plan, subject: &str, compiles: bool) -> Value {
 fn next_steps(project_path: &Path, plan: &Plan, subject: &str, compiles: bool) -> Vec<String> {
     let (_, own) = &plan.requirements[0];
     let require = format!(
-        "under a profile's '- entity: {subject}' permission, add 'requireConsent: [{own}]', and do the same on each permission that reads {subject} rows only with consent; a permission on an entity that references {subject} uses the field it references by, as listed under requireConsent in this report"
+        "under a profile's '- recordType: {subject}' permission, add 'requireConsent: [{own}]', and do the same on each permission that reads {subject} rows only with consent; a permission on a record type that references {subject} uses the field it references by, as listed under requireConsent in this report"
     );
     // Until a profile requires consent, the decision's scope field binds
     // registry-consent-scopes, which is empty, so this step comes first.

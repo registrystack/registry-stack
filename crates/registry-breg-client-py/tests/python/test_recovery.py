@@ -52,16 +52,15 @@ def metadata() -> dict:
         "method": "POST",
         "path": "/v1/records/companies",
         "operation": "create",
-        "sourceEntity": "company",
-        "responseEntity": "company",
+        "sourceRecordType": "company",
+        "responseRecordType": "company",
         "accessProfile": "company-writer",
         "requiredCapabilities": [],
-        "entityLabel": "Companies",
+        "recordTypeLabel": "Companies",
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": ["legal-name"],
         "fields": [field, sequence_field],
         "readableFields": ["legal-name", "sequence"],
-        "readableRequestFields": [],
         "createWritableFields": ["legal-name", "sequence"],
         "patchWritableFields": [],
         "selectors": [],
@@ -86,7 +85,7 @@ def metadata() -> dict:
         "version": "1.2.3",
         "revision": REVISION,
         "metadataVersion": "1",
-        "entities": [
+        "recordTypes": [
             {
                 "id": "company",
                 "datasetIdentifier": "legal-entities",

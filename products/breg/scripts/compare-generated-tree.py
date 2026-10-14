@@ -174,7 +174,53 @@ CONSENT_LAND_REGISTRY_PATHS = (
     "generated/schemas/tenure-right.schema.json",
 )
 
+REFACTOR_PATHS = (
+    'compiled/access.json',
+    'compiled/actions.json',
+    'compiled/effective-model.json',
+    'compiled/event-deliveries.json',
+    'compiled/metadata-inventory.json',
+    'compiled/modules.json',
+    'compiled/query-inventory.json',
+    'compiled/routes.json',
+    'generated/action-schemas/correct-address.invoke.input.schema.json',
+    'generated/action-schemas/correct-address.invoke.response.schema.json',
+    'generated/action-schemas/deactivate-facility.invoke.input.schema.json',
+    'generated/action-schemas/deactivate-facility.invoke.response.schema.json',
+    'generated/action-schemas/register-facility.invoke.input.schema.json',
+    'generated/action-schemas/register-facility.invoke.response.schema.json',
+    'generated/metadata/registry.json',
+    'generated/openapi.json',
+    'generated/postgres/schema.sql',
+    'generated/review-context-schemas/correct-address.schema.json',
+    'generated/review-context-schemas/index.json',
+    'generated/schemas/directory-entry.schema.json',
+    'generated/schemas/facility-assignment.schema.json',
+    'generated/schemas/facility.schema.json',
+    'generated/schemas/operator.schema.json',
+    'generated/sdk/project.py',
+    'generated/sdk/project.ts',
+)
+
+REFACTOR_MINIMAL_PATHS = (
+    "compiled/access.json",
+    "compiled/effective-model.json",
+    "compiled/event-deliveries.json",
+    "compiled/metadata-inventory.json",
+    "compiled/modules.json",
+    "compiled/query-inventory.json",
+    "compiled/routes.json",
+    "generated/metadata/registry.json",
+    "generated/openapi.json",
+    "generated/postgres/schema.sql",
+    "generated/schemas/contact.schema.json",
+    "generated/sdk/project.py",
+    "generated/sdk/project.ts",
+)
+
 EXPECTED_PATHS_BY_BASELINE = {
+    "refactor": REFACTOR_PATHS,
+    "refactor-minimal": REFACTOR_MINIMAL_PATHS,
     "asset-site-placement": ASSET_SITE_PLACEMENT_PATHS,
     "business-establishments": BUSINESS_ESTABLISHMENTS_PATHS,
     "facility": FACILITY_PATHS,

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha4.schema.json",
   "title": "ModelExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain model`. Nested compiled-model trees (entities, package, manifestProjection, physicalNames) are declared opaque because bregctl serializes them by passing a compiled-model value straight to serde, so their shape can change without any corresponding line changing in bregctl.",
+  "description": "Wire shape of the native compiled model inspector and module closure.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,10 +12,9 @@
     "version",
     "moduleOrder",
     "moduleClosure",
-    "entities",
-    "physicalNames",
-    "package",
-    "manifestProjection"
+    "revision",
+    "recordTypes",
+    "actions"
   ],
   "properties": {
     "apiVersion": {
@@ -41,36 +40,74 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "digest", "version"],
+        "required": [
+          "id",
+          "digest",
+          "version"
+        ],
         "properties": {
-          "id": { "$ref": "#/$defs/LocalId" },
-          "digest": { "$ref": "#/$defs/Digest" },
-          "version": { "type": "string" }
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "version": {
+            "type": "string"
+          }
         }
       }
     },
-    "entities": {
-      "type": "object",
-      "description": "Compiled entity table, keyed by entity id. Passthrough of the compiled model; shape follows CompiledEntity and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the compiled entity table as the engine holds it; its shape follows CompiledEntity and is outside this contract version."
+    "revision": {
+      "$ref": "#/$defs/Digest"
     },
-    "physicalNames": {
-      "type": "object",
-      "description": "Compiled physical-name mapping. Passthrough of the compiled model; shape follows the runtime's physical-name projection and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the runtime's physical-name projection as it stands; its shape and is outside this contract version."
+    "recordTypes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "apiName",
+          "revision",
+          "display",
+          "fields",
+          "relationships"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "revision": {
+            "$ref": "#/$defs/Digest"
+          }
+        },
+        "x-registry-passthrough": "Source-free normalized definition owned by the compiler; identity and revision are pinned here."
+      }
     },
-    "package": {
-      "type": ["object", "null"],
-      "description": "Compiled package identity, or null when the project declares no package. Passthrough of the compiled model; shape follows the runtime's package projection and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the runtime's package projection as it stands; its shape and is outside this contract version."
-    },
-    "manifestProjection": {
-      "type": ["object", "null"],
-      "description": "Registry Manifest projection of this registry, or null when the project declares none. Passthrough of the compiled model; shape follows the runtime's manifest projection and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the runtime's Registry Manifest projection as it stands; its shape and is outside this contract version."
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "execution",
+          "inputs",
+          "plan",
+          "bounds"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "revision": {
+            "$ref": "#/$defs/Digest"
+          }
+        },
+        "x-registry-passthrough": "Source-free normalized definition owned by the compiler; identity and revision are pinned here."
+      }
     }
-  }
-,
+  },
   "$defs": {
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",

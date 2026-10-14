@@ -70,15 +70,6 @@ impl PostgresRecordReadService {
             #[cfg(feature = "postgres-test")]
             self.outrun_request_deadline_for_test(transaction.transaction())
                 .await?;
-            crate::mutation::install_request_visibility_context(
-                transaction.transaction(),
-                &plan.entity,
-                &claims,
-                self.audit.profile(),
-                &self.expected.database_id,
-            )
-            .await
-            .map_err(|_| ReadServiceError::Unavailable)?;
             let subject_field = plan
                 .entity
                 .fields

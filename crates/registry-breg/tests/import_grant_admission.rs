@@ -8,45 +8,32 @@ use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::CompiledRegistry;
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::data::{
-    execute_import_chunk, DataError, DataHttpResponse, DataImportCheckpoint, DataImportOperation,
-    DataImportPlan,
+    DataError, DataHttpResponse, DataImportCheckpoint, DataImportOperation, DataImportPlan,
+    execute_import_chunk,
 };
 use registry_breg::generated_ddl::{PolicyCommand, TablePrivilege};
-use registry_breg::CompiledRegistry;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn project(loader_operations: &[&str]) -> Value {
     json!({
-      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-      "kind":"BRegProject",
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"import-admission","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "datasets":[{"id":"test-dataset"}],
+      "recordTypes":[{
         "id":"enrollment","primaryDataset":"test-dataset","route":"enrollments","mutationMode":"mutable",
         "batch":{"maximumItems":2,"maximumBytes":4096},
-        "changeControl":{"requiredFor":["patch"]},
+        "mutationPolicy":{"patch":"proposal-required"},
         "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
-      },{
-        "id":"enrollment-change","primaryDataset":"test-dataset","route":"enrollment-changes","mutationMode":"mutable",
-        "fields":[
-          {"id":"enrollment","type":"reference","target":"enrollment","required":true,"classification":"internal"},
-          {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
-        ],
-        "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"enrollment"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-          "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
       }],
       "accessProfiles":[{
-        "id":"loader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-          "entity":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
-          "rowBoundaries": "unrestricted"
-        }]}
-      },{
-        "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-          "entity":"enrollment-change","operations":["get","submit-request","apply-request"],"readableFields":["enrollment","label"],
-          "applyTargets":[{"entity":"enrollment", "rowBoundaries": "unrestricted"}],
-          "rowBoundaries": "unrestricted"
+        "id":"loader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
+        "permissions":{"records":[{
+          "recordType":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
+          "rowBoundaries":"unrestricted"
         }]}
       }]
     })
@@ -134,11 +121,11 @@ fn an_import_plan_is_refused_on_the_direct_batch_path() {
 #[test]
 fn a_batch_plan_is_not_an_import_plan() {
     let mut source = project(&["create", "batch"]);
-    source["entities"][0]
+    source["recordTypes"][0]
         .as_object_mut()
         .expect("entity")
-        .remove("changeControl");
-    source["entities"]
+        .remove("mutationPolicy");
+    source["recordTypes"]
         .as_array_mut()
         .expect("entities")
         .truncate(1);
@@ -187,11 +174,15 @@ fn an_import_grant_inserts_without_a_standing_read() {
         .filter(|policy| policy.command == PolicyCommand::Select)
         .collect::<Vec<_>>();
     assert_eq!(reads.len(), 1, "only the create-returning read: {reads:?}");
-    assert!(reads[0]
-        .using_expression
-        .as_deref()
-        .is_some_and(|expression| expression.contains("registry.created_record_id")));
-    assert!(loader
-        .iter()
-        .all(|policy| policy.command != PolicyCommand::Update));
+    assert!(
+        reads[0]
+            .using_expression
+            .as_deref()
+            .is_some_and(|expression| expression.contains("registry.created_record_id"))
+    );
+    assert!(
+        loader
+            .iter()
+            .all(|policy| policy.command != PolicyCommand::Update)
+    );
 }

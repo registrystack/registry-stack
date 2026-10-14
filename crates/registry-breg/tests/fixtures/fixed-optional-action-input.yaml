@@ -1,7 +1,8 @@
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: optional-action-input, version: "1", defaultLanguage: en, canonicalBaseIri: https://optional-action-input.example.test}
-entities:
+datasets: [{id: test-dataset}]
+recordTypes:
   - id: entry
     primaryDataset: test-dataset
     route: entries
@@ -10,13 +11,16 @@ entities:
       - {id: label, type: string, maximumLength: 40, required: false, classification: internal}
 actions:
   - id: create-entry
+    execution: {mode: immediate}
     inputs:
       - {id: label, apiName: displayLabel, type: string, maximumLength: 40, required: false, classification: internal}
-    effects:
-      - id: created
-        target: {entity: entry}
-        operation: create
-        set: {label: {fromField: label}}
+    plan:
+      type: fixed
+      effects:
+        - id: created
+          target: {recordType: entry}
+          operation: create
+          set: {label: {fromInput: label}}
 accessProfiles:
   - id: registrar
     default: true
@@ -26,5 +30,5 @@ accessProfiles:
       actions:
         - action: create-entry
           operations: [invoke]
-          targets: [{entity: entry, rowBoundaries: unrestricted}]
+          targets: [{recordType: entry, rowBoundaries: unrestricted}]
           results: [created]

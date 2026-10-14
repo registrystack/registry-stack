@@ -2,7 +2,7 @@
 //! Bounded, explicitly initiated examples against this project's owned dev instance.
 use super::{config, private, Clients, State, Status, MAX_BYTES};
 use anyhow::{bail, Context, Result};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
 use registry_breg_client::*;
 use registry_platform_yaml::{
@@ -53,26 +53,6 @@ struct RunArgs {
     /// Completed population attempt whose typed captures this scenario uses.
     #[arg(long)]
     from_attempt: Option<uuid::Uuid>,
-    /// Advance one explicit source-owned request step. External review is completed separately.
-    #[arg(long)]
-    step: Option<ReviewStep>,
-}
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum ReviewStep {
-    Submit,
-    Inspect,
-    Apply,
-    History,
-}
-impl ReviewStep {
-    fn id(self) -> &'static str {
-        match self {
-            Self::Submit => "submit",
-            Self::Inspect => "inspect",
-            Self::Apply => "apply",
-            Self::History => "history",
-        }
-    }
 }
 pub(super) const API_VERSION: &str = "id.registrystack.org/formats/breg/example-scenarios/v1alpha1";
 pub(super) const KIND: &str = "BRegExampleScenarios";
@@ -157,7 +137,7 @@ struct Step {
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     id: String,
     operation: Operation,
-    #[serde(deserialize_with = "local_id")]
+    #[serde(rename = "recordType", deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     entity: String,
     #[serde(deserialize_with = "local_id")]
@@ -202,8 +182,6 @@ enum Operation {
     Create,
     Invoke,
     Get,
-    Submit,
-    Apply,
     History,
 }
 impl Operation {
@@ -212,16 +190,7 @@ impl Operation {
             Self::Create => BRegOperationKind::Create,
             Self::Invoke => BRegOperationKind::Invoke,
             Self::Get => BRegOperationKind::Get,
-            Self::Submit => BRegOperationKind::SubmitRequest,
-            Self::Apply => BRegOperationKind::ApplyRequest,
             Self::History => BRegOperationKind::Revisions,
-        }
-    }
-    fn lifecycle(self) -> Option<BRegLifecycleOperation> {
-        match self {
-            Self::Submit => Some(BRegLifecycleOperation::SubmitRequest),
-            Self::Apply => Some(BRegLifecycleOperation::ApplyRequest),
-            _ => None,
         }
     }
 }
@@ -238,6 +207,7 @@ struct Binding {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Capture {
+    #[serde(rename = "recordType")]
     entity: String,
     id: uuid::Uuid,
 }
@@ -389,17 +359,15 @@ fn catalogue_problems(catalogue: &Catalogue, document: &Document) -> Vec<Diagnos
                     "Name the captured record with `record`, and delete `input` and `capture`.",
                 );
             }
-            if scenario.id != "reviewed-change"
-                && !matches!(
-                    step.operation,
-                    Operation::Create | Operation::Get | Operation::Invoke
-                )
-            {
+            if !matches!(
+                step.operation,
+                Operation::Create | Operation::Get | Operation::Invoke | Operation::History
+            ) {
                 refuse(
                     &format!("{at}/operation"),
                     "breg.examples.population-operation",
-                    "a population scenario may only create, invoke, and get",
-                    "Use create, invoke, or get; the reviewed-change scenario is the one that submits and applies a request.",
+                    "a record scenario may create, invoke, get, or read history",
+                    "Use the generated Proposal client for durable Action lifecycle journeys.",
                 );
             }
         }
@@ -413,30 +381,6 @@ fn catalogue_problems(catalogue: &Catalogue, document: &Document) -> Vec<Diagnos
                 "breg.examples.fixed-scenario",
                 "first-record must create one record and then get it",
                 "Declare exactly two steps: a create step, then a get step that reads its capture.",
-            );
-        }
-        if scenario.id == "reviewed-change"
-            && (scenario.steps.len() != 5
-                || [
-                    ("draft", Operation::Create),
-                    ("submit", Operation::Submit),
-                    ("inspect", Operation::Get),
-                    ("apply", Operation::Apply),
-                    ("history", Operation::History),
-                ]
-                .iter()
-                .any(|(id, operation)| {
-                    scenario
-                        .steps
-                        .get(id)
-                        .is_none_or(|step| step.operation != *operation)
-                }))
-        {
-            refuse(
-                &format!("{at}/steps"),
-                "breg.examples.fixed-scenario",
-                "reviewed-change must declare exactly the draft, submit, inspect, apply, and history steps",
-                "Declare the five steps draft (create), submit (submit), inspect (get), apply (apply), and history (history).",
             );
         }
     }
@@ -462,7 +406,7 @@ fn validate_reference_fields(
         .operations()
         .iter()
         .find(|o| {
-            o.source_entity() == step.entity
+            o.source_record_type() == step.entity
                 && o.access_profile() == step.access_profile
                 && *o.kind() == BRegOperationKind::Create
         })
@@ -479,7 +423,7 @@ fn validate_reference_fields(
                 .find(|f| f.api_name() == name)
                 .context("reference field is not advertised")?;
             let target = field
-                .reference_target_entity()
+                .reference_target_record_type()
                 .context("logical reference requires an advertised reference target entity")?;
             if captures.get(alias).is_none_or(|c| c.entity != target) {
                 bail!("reference alias is missing or belongs to the wrong target entity");
@@ -534,7 +478,7 @@ fn payload(
 
 fn action_inputs(
     step: &Step,
-    action: &BRegImmediateActionBinding,
+    action: &BRegActionBinding,
     input: &Value,
     captures: &BTreeMap<String, Capture>,
 ) -> Result<serde_json::Map<String, Value>> {
@@ -551,7 +495,7 @@ fn action_inputs(
                 .context("logical action reference requires an advertised reference input")?;
             if captures
                 .get(alias)
-                .is_none_or(|capture| capture.entity != reference.target_entity())
+                .is_none_or(|capture| capture.entity != reference.target_record_type())
             {
                 bail!("action reference alias is missing or belongs to another entity");
             }
@@ -569,8 +513,8 @@ fn action_inputs(
     Ok(inputs)
 }
 
-fn action_binding(contract: &BRegMetadata, step: &Step) -> Result<BRegImmediateActionBinding> {
-    let action = contract.select_immediate_action(
+fn action_binding(contract: &BRegMetadata, step: &Step) -> Result<BRegActionBinding> {
+    let action = contract.select_action(
         step.action
             .as_deref()
             .context("action identifier missing")?,
@@ -628,7 +572,6 @@ fn inherit_captures(attempt: &mut Attempt, parent: &Attempt, catalogue: &Catalog
         .find(|s| s.id == parent.scenario)
         .context("source attempt scenario is no longer declared")?;
     if parent.id == attempt.id
-        || parent.scenario == "reviewed-change"
         || parent.pending.is_some()
         || parent.binding.source != attempt.binding.source
         || parent.binding.package != attempt.binding.package
@@ -696,9 +639,6 @@ fn run_example(args: RunArgs) -> Result<Value> {
         .iter()
         .find(|s| s.id == args.scenario)
         .context("scenario is not declared in this project")?;
-    if args.scenario != "reviewed-change" && args.step.is_some() {
-        bail!("--step is only for reviewed-change");
-    }
     let input_path = args
         .input
         .clone()
@@ -778,30 +718,7 @@ fn run_example(args: RunArgs) -> Result<Value> {
             completed: BTreeMap::new(),
             pending: None,
         };
-        if scenario.id == "reviewed-change" {
-            let candidates: Vec<_> = retained
-                .iter()
-                .filter(|a| {
-                    a.scenario == "first-record"
-                        && a.binding.database == attempt.binding.database
-                        && a.binding.source == attempt.binding.source
-                        && a.binding.package == attempt.binding.package
-                        && a.binding.clients == attempt.binding.clients
-                        && a.binding.scenario == attempt.binding.scenario
-                        && a.pending.is_none()
-                        && a.completed.len() == 2
-                        && args.from_attempt.is_none_or(|id| a.id == id)
-                })
-                .collect();
-            if candidates.len() != 1 {
-                bail!(
-                    "review needs one completed first-record attempt; run bregctl examples run first-record {} or select --from-attempt ID",
-                    shell_path(&project)
-                );
-            }
-            attempt.from_attempt = Some(candidates[0].id);
-            attempt.captures = candidates[0].captures.clone();
-        } else if let Some(id) = args.from_attempt {
+        if let Some(id) = args.from_attempt {
             let parent = retained
                 .iter()
                 .find(|a| a.id == id)
@@ -830,17 +747,6 @@ fn run_example(args: RunArgs) -> Result<Value> {
                 shell_path(&project),
                 attempt.id
             );
-            if scenario.id == "reviewed-change" {
-                let step = attempt
-                    .pending
-                    .as_ref()
-                    .map(|p| p.step.as_str())
-                    .unwrap_or_else(|| args.step.unwrap_or(ReviewStep::Submit).id());
-                resume.push_str(&format!(
-                    " --step {}",
-                    if step == "draft" { "submit" } else { step }
-                ));
-            }
             if args.input.is_some() {
                 resume.push_str(&format!(" --input {}", shell_path(&input_path)));
             }
@@ -856,7 +762,7 @@ fn create_binding(metadata: &BRegMetadata, step: &Step) -> Result<BRegCreateBind
         .operations()
         .iter()
         .filter(|o| {
-            o.source_entity() == step.entity
+            o.source_record_type() == step.entity
                 && o.access_profile() == step.access_profile
                 && *o.kind() == BRegOperationKind::Create
         })
@@ -874,7 +780,7 @@ fn route(metadata: &BRegMetadata, step: &Step) -> Result<String> {
         .operations()
         .iter()
         .filter(|o| {
-            o.source_entity() == step.entity
+            o.source_record_type() == step.entity
                 && o.access_profile() == step.access_profile
                 && *o.kind() == BRegOperationKind::Get
         })
@@ -931,39 +837,6 @@ fn require_retained_invocation_capture(attempt: &Attempt, step: &Step) -> Result
     }
 }
 
-fn selected_steps<'a>(
-    scenario: &'a Scenario,
-    attempt: &Attempt,
-    requested: Option<ReviewStep>,
-) -> Result<Vec<&'a Step>> {
-    if scenario.id != "reviewed-change" {
-        return Ok(scenario.steps.iter().collect());
-    }
-    let id = requested.unwrap_or(ReviewStep::Submit).id();
-    let prerequisite = match id {
-        "submit" => None,
-        "inspect" => Some("submit"),
-        "apply" => Some("inspect"),
-        "history" => Some("submit"),
-        _ => unreachable!(),
-    };
-    if prerequisite.is_some_and(|p| !attempt.completed.contains_key(p)) {
-        bail!("request step requires its previous explicit source step; submit, inspect, then apply after external approval");
-    }
-    if id == "submit" {
-        Ok(scenario
-            .steps
-            .iter()
-            .filter(|s| s.id == "draft" || s.id == "submit")
-            .collect())
-    } else {
-        Ok(vec![scenario
-            .steps
-            .iter()
-            .find(|s| s.id == id)
-            .context("review step is not declared")?])
-    }
-}
 async fn execute(
     state: &State,
     clients: &Clients,
@@ -973,7 +846,7 @@ async fn execute(
     attempt: &mut Attempt,
     args: &RunArgs,
 ) -> Result<Value> {
-    let selected = selected_steps(scenario, attempt, args.step)?;
+    let selected = scenario.steps.iter().collect::<Vec<_>>();
     if attempt
         .pending
         .as_ref()
@@ -1050,7 +923,7 @@ async fn execute(
         }
         let kind = step.operation.metadata_kind();
         if !contract.operations().iter().any(|operation| {
-            operation.source_entity() == step.entity
+            operation.source_record_type() == step.entity
                 && operation.access_profile() == step.access_profile
                 && *operation.kind() == kind
         }) {
@@ -1111,9 +984,6 @@ async fn execute(
         } else {
             record(step, &declared)?;
             route(contract, step)?;
-            if step.operation.lifecycle().is_some() {
-                contract.select_lifecycle(&step.entity, &step.access_profile)?;
-            }
         }
     }
     if scenario.id == "first-record" {
@@ -1189,7 +1059,7 @@ async fn execute(
                 .results()
                 .get(step.result.as_deref().context("action result missing")?)
             {
-                Some(result) if result.entity_identifier() == step.entity => {
+                Some(result) if result.record_type_identifier() == step.entity => {
                     invocation_capture = Some(Capture {
                         entity: step.entity.clone(),
                         id: result.record_identifier(),
@@ -1251,60 +1121,6 @@ async fn execute(
                 capture,
             );
             serde_json::to_value(response.value)?
-        } else if let Some(operation) = step.operation.lifecycle() {
-            let authority = contract.select_lifecycle(&step.entity, &step.access_profile)?;
-            let prepared = if let Some(pending) = &attempt.pending {
-                if pending.step != step.id {
-                    bail!("resume the pending original step first");
-                }
-                BRegPreparedLifecycle::from_slice(&serde_json::to_vec(&pending.capsule)?)?
-            } else {
-                let capture = record(step, &attempt.captures)?;
-                let current = client
-                    .get_record(
-                        &route(contract, step)?,
-                        &capture.id.to_string(),
-                        &BRegRecordOptions::default().access_profile(&step.access_profile)?,
-                    )
-                    .await?;
-                let actions = client.lifecycle_actions(&authority, &current.value)?;
-                let matches: Vec<_> = actions
-                    .iter()
-                    .filter(|a| a.operation() == operation)
-                    .collect();
-                if matches.len() != 1 {
-                    bail!("the requested lifecycle action is not uniquely available to this teaching client; inspect the request and its review state");
-                }
-                let key =
-                    BRegIdempotencyKey::parse(format!("examples-{}-{}", attempt.id, step.id))?;
-                let prepared = client.prepare_lifecycle_action(
-                    &authority,
-                    &current.value,
-                    matches[0],
-                    &key,
-                )?;
-                attempt.pending = Some(Pending {
-                    step: step.id.clone(),
-                    capsule: serde_json::from_slice(prepared.as_bytes())?,
-                });
-                attempt.save(directory)?;
-                prepared
-            };
-            let (action, key) = client.recover_lifecycle_action(&authority, &prepared)?;
-            let expected_key = format!("examples-{}-{}", attempt.id, step.id);
-            if key.as_str() != expected_key || action.operation() != operation {
-                bail!("pending lifecycle operation does not match its original attempt step");
-            }
-            let expected_id = record(step, &attempt.captures)?.id.to_string();
-            let expected_path = format!(
-                "/v1/records/{}/{expected_id}/actions/",
-                route(contract, step)?
-            );
-            if !action.href().starts_with(&expected_path) {
-                bail!("pending lifecycle action does not match its captured request record");
-            }
-            let receipt = client.execute_lifecycle_action(&action, &key).await?;
-            json!({"recordId":receipt.value.record_identifier(),"snapshot":receipt.value.snapshot(),"operation":operation.identifier()})
         } else {
             let capture = record(step, &attempt.captures)?;
             if step.operation == Operation::History {
@@ -1348,35 +1164,12 @@ async fn execute(
         }
         results.insert(step.id.clone(), result);
     }
-    let next_step = if !attempt.completed.contains_key("submit") {
-        "submit"
-    } else if !attempt.completed.contains_key("inspect") {
-        "inspect"
-    } else if !attempt.completed.contains_key("apply") {
-        "apply"
-    } else {
-        "history"
-    };
-    let next = if scenario.id == "first-record" {
-        format!(
-            "bregctl examples run reviewed-change {} --from-attempt {} --step submit",
-            shell_path(&state.project),
-            attempt.id
-        )
-    } else if scenario.id == "reviewed-change" {
-        format!(
-            "bregctl examples run reviewed-change {} --attempt {} --step {next_step}",
-            shell_path(&state.project),
-            attempt.id
-        )
-    } else {
-        format!(
-            "bregctl examples run {} {} --attempt {}",
-            scenario.id,
-            shell_path(&state.project),
-            attempt.id
-        )
-    };
+    let next = format!(
+        "bregctl examples run {} {} --attempt {}",
+        scenario.id,
+        shell_path(&state.project),
+        attempt.id
+    );
     let next = if scenario.id != "first-record" {
         if let Some(input) = &args.input {
             format!("{next} --input {}", shell_path(&fs::canonicalize(input)?))
@@ -1412,7 +1205,7 @@ mod tests {
     }
     fn assets() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/starters/public-organizations/core")
+            .join("tests/fixtures/retained-native/example-catalog")
             .canonicalize()
             .unwrap()
     }
@@ -1474,7 +1267,7 @@ mod tests {
         Attempt {
             version: 1,
             id: uuid::Uuid::new_v4(),
-            scenario: "reviewed-change".into(),
+            scenario: "observe-created".into(),
             binding: Binding {
                 source: "source".into(),
                 package: "package".into(),
@@ -1488,33 +1281,6 @@ mod tests {
             completed: BTreeMap::new(),
             pending: None,
         }
-    }
-    #[test]
-    fn external_review_is_not_a_local_example_step() {
-        let (catalogue, _) = catalogue(&assets()).unwrap();
-        let scenario = catalogue
-            .scenarios
-            .iter()
-            .find(|s| s.id == "reviewed-change")
-            .unwrap();
-        let mut attempt = attempt();
-        assert_eq!(
-            selected_steps(scenario, &attempt, None)
-                .unwrap()
-                .iter()
-                .map(|s| s.id.as_str())
-                .collect::<Vec<_>>(),
-            ["draft", "submit"]
-        );
-        assert!(selected_steps(scenario, &attempt, Some(ReviewStep::Apply)).is_err());
-        attempt.completed.insert("submit".into(), json!({}));
-        attempt.completed.insert("inspect".into(), json!({}));
-        assert_eq!(
-            selected_steps(scenario, &attempt, Some(ReviewStep::Apply)).unwrap()[0].operation,
-            Operation::Apply
-        );
-        assert!(ReviewStep::from_str("approve", false).is_err());
-        assert!(ReviewStep::from_str("reject", false).is_err());
     }
     #[test]
     fn attempt_files_are_private_and_generation_and_pending_operation_survive_reload() {
@@ -1595,7 +1361,7 @@ mod tests {
     fn invoke_catalogue_requires_closed_named_disclosed_result() {
         let temp = tempfile::tempdir().unwrap();
         fs::create_dir(temp.path().join("examples")).unwrap();
-        let step = json!({"id":"register","operation":"invoke","entity":"entry",
+        let step = json!({"id":"register","operation":"invoke","recordType":"entry",
             "client":"writer","accessProfile":"writer","input":"register","capture":"entry",
             "action":"register-entry","result":"entry"});
         let valid = json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[{"id":"register-entries",
@@ -1603,7 +1369,7 @@ mod tests {
         let path = temp.path().join("examples/scenarios.json");
         fs::write(&path, serde_json::to_vec(&valid).unwrap()).unwrap();
         catalogue(&temp.path().canonicalize().unwrap()).unwrap();
-        for field in ["action", "result", "entity", "capture"] {
+        for field in ["action", "result", "recordType", "capture"] {
             let mut invalid = valid.clone();
             invalid["scenarios"][0]["steps"][0]
                 .as_object_mut()
@@ -1715,14 +1481,14 @@ mod tests {
 
     #[test]
     fn catalogue_checks_report_every_problem_at_its_member() {
-        let create = json!({"id":"make","operation":"create","entity":"entry","client":"writer",
+        let create = json!({"id":"make","operation":"create","recordType":"entry","client":"writer",
             "accessProfile":"writer","input":"make","capture":"made"});
         let mut invoke = create.clone();
         invoke["id"] = json!("register");
         invoke["operation"] = json!("invoke");
         let mut apply = create.clone();
         apply["id"] = json!("apply");
-        apply["operation"] = json!("apply");
+        apply["operation"] = json!("history");
         let report = catalogue_refusal(&json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[
             {"id":"population","description":"","input":"../outside.json",
              "steps":[create, invoke, apply]}]}));
@@ -1745,11 +1511,6 @@ mod tests {
                     "/scenarios/0/steps/2",
                     Some(28)
                 ),
-                (
-                    "breg.examples.population-operation",
-                    "/scenarios/0/steps/2/operation",
-                    Some(35)
-                ),
             ],
             "{}",
             report.render_human()
@@ -1757,7 +1518,7 @@ mod tests {
         assert!(!report.render_human().contains("outside.json"));
         // Repeated identifiers are refused by the reader's list type, at the
         // second item's id.
-        let step = json!({"id":"make","operation":"get","entity":"entry","client":"writer",
+        let step = json!({"id":"make","operation":"get","recordType":"entry","client":"writer",
             "accessProfile":"writer","record":"made"});
         let report = catalogue_refusal(&json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[
             {"id":"population","description":"Read","input":"examples/in.json","steps":[step.clone(), step]}]}));
@@ -1789,7 +1550,7 @@ mod tests {
         .unwrap();
         private::directory(temp.path()).unwrap();
         let step: Step = serde_json::from_value(json!({"id":"register","operation":"invoke",
-            "entity":"entry","client":"writer","accessProfile":"writer","input":"register",
+            "recordType":"entry","client":"writer","accessProfile":"writer","input":"register",
             "capture":"entry","action":"register-entry","result":"entry"}))
         .unwrap();
         let mut value = attempt();
@@ -1867,9 +1628,6 @@ mod tests {
             std::env::var_os("BREG_EXAMPLE_TEST_PROJECT").expect("parent supplies owned project"),
         );
         let scenario = std::env::var("BREG_EXAMPLE_TEST_SCENARIO").unwrap();
-        let step = std::env::var("BREG_EXAMPLE_TEST_STEP")
-            .ok()
-            .map(|v| ReviewStep::from_str(&v, false).unwrap());
         let result = run_example(RunArgs {
             scenario,
             project: project.clone(),
@@ -1879,7 +1637,6 @@ mod tests {
             from_attempt: std::env::var("BREG_EXAMPLE_TEST_FROM_ATTEMPT")
                 .ok()
                 .map(|id| id.parse().unwrap()),
-            step,
         })
         .unwrap();
         private::replace(
@@ -1997,156 +1754,157 @@ mod tests {
             attempt: None,
             new_attempt: false,
             from_attempt: None,
-            step: None,
         }
     }
-    fn observed_count_and_apply_action(project: &Path) -> (usize, bool) {
+    fn observed_count(project: &Path) -> usize {
         let canonical = project.canonicalize().unwrap();
-        let project = canonical.as_path();
-        let state =
-            super::super::read_state(&project.canonicalize().unwrap().join(".breg/dev")).unwrap();
-        let (catalogue, _) = catalogue(project).unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let state = super::super::read_state(&canonical.join(".breg/dev")).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        rt.block_on(async {
-            let mut result = (0, false);
-            for role in ["editor", "reviewer"] {
-                let bytes =
-                    private::read(&state.root().join(format!("secrets/{role}-token")), 65536)
-                        .unwrap();
-                let client = BaseRegistryClient::new(
-                    BaseRegistryClientConfig::new(state.breg_origin().parse().unwrap())
-                        .with_token_provider(Arc::new(
-                            StaticToken::new(String::from_utf8(bytes).unwrap()).unwrap(),
-                        )),
+        runtime.block_on(async {
+            let bytes = private::read(&state.root().join("secrets/editor-token"), 65536).unwrap();
+            let client = BaseRegistryClient::new(
+                BaseRegistryClientConfig::new(state.breg_origin().parse().unwrap())
+                    .with_token_provider(Arc::new(
+                        StaticToken::new(String::from_utf8(bytes).unwrap()).unwrap(),
+                    )),
+            )
+            .unwrap();
+            client
+                .list_records(
+                    "contacts",
+                    &BRegListRequest::default().options(
+                        BRegRecordOptions::default()
+                            .access_profile("directory-editor")
+                            .unwrap(),
+                    ),
                 )
-                .unwrap();
-                let contract = client.registry_contract(Some(role)).await.unwrap().value;
-                if role == "editor" {
-                    let step = &catalogue
-                        .scenarios
-                        .iter()
-                        .find(|s| s.id == "first-record")
-                        .unwrap()
-                        .steps[0];
-                    let records = client
-                        .list_records(
-                            &route(&contract, step).unwrap(),
-                            &BRegListRequest::default().options(
-                                BRegRecordOptions::default().access_profile(role).unwrap(),
-                            ),
-                        )
-                        .await
-                        .unwrap();
-                    result.0 = records.value.value.items.len();
-                } else {
-                    let retained = attempts(&state.root().join("examples")).unwrap();
-                    if let Some(review) = retained.iter().find(|a| a.scenario == "reviewed-change")
-                    {
-                        let step = catalogue
-                            .scenarios
-                            .iter()
-                            .find(|s| s.id == "reviewed-change")
-                            .unwrap()
-                            .steps
-                            .iter()
-                            .find(|s| s.id == "apply")
-                            .unwrap();
-                        let current = client
-                            .get_record(
-                                &route(&contract, step).unwrap(),
-                                &review.captures["request"].id.to_string(),
-                                &BRegRecordOptions::default().access_profile(role).unwrap(),
-                            )
-                            .await
-                            .unwrap();
-                        result.1 = BRegRequestMetadata::from_record(&current.value.data)
-                            .unwrap()
-                            .unwrap()
-                            .advertised_operations()
-                            .any(|op| op == BRegLifecycleOperation::ApplyRequest);
-                    }
-                }
-            }
-            result
+                .await
+                .unwrap()
+                .value
+                .value
+                .items
+                .len()
         })
     }
-    /// This permission exists only in the disposable test copy. The shipped
-    /// starter intentionally denies deletion, but the retained examples runner
-    /// must also preserve deletions made under a project's later chosen policy.
-    /// An optional structured field exercises untyped nested reference refusal.
+
+    /// Extend the canonical minimal project only inside this disposable test:
+    /// unique contacts and typed links exercise crash recovery and tombstones.
     fn prepare_native_fixture(project: &Path) {
-        let path = project.join("registry.yaml");
-        let mut source: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let entity = source["entities"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|entity| entity["id"] == "institutional-relationship")
-            .unwrap();
-        entity["tombstone"] = json!(true);
-        let editor = source["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|profile| profile["id"] == "editor")
-            .unwrap();
-        let grant = editor["permissions"]["entities"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|grant| grant["entity"] == "institutional-relationship")
-            .unwrap();
+        let mut source: Value = serde_norway::from_slice(include_bytes!(
+            "../../../../products/breg/examples/refactor/minimal/registry.yaml"
+        ))
+        .unwrap();
+        source["package"] = json!({"sourceRevision":"native-example-recovery"});
+        let contact = &mut source["recordTypes"][0];
+        contact["constraints"] =
+            json!([{"id":"contact-email-unique","type":"unique","fields":["email"]}]);
+        contact["fields"].as_array_mut().unwrap().push(json!({
+            "id":"notes","type":"structured","required":false,
+            "classification":"restricted","maximumBytes":2048,
+            "schema":{"type":"object","additionalProperties":false,"properties":{
+                "related":{"type":"string","maxLength":64},
+                "items":{"type":"array","maxItems":4,"items":{"type":"string","maxLength":64}}
+            }}
+        }));
+        source["recordTypes"].as_array_mut().unwrap().push(json!({
+            "id":"contact-link","route":"contact-links","primaryDataset":"directory",
+            "mutationMode":"mutable","tombstone":true,
+            "fields":[
+                {"id":"from","type":"reference","target":"contact","required":true,"classification":"internal"},
+                {"id":"to","type":"reference","target":"contact","required":true,"classification":"internal"},
+                {"id":"jurisdiction","type":"string","required":true,"maximumLength":40,"classification":"internal"}
+            ]
+        }));
+        let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
         grant["operations"]
             .as_array_mut()
             .unwrap()
-            .push(json!("tombstone"));
-        let entity = source["entities"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|entity| entity["id"] == "public-organization")
-            .unwrap();
-        entity["fields"].as_array_mut().unwrap().push(json!({
-            "id":"notes", "type":"structured", "required":false,
-            "classification":"restricted", "maximumBytes":2048,
-            "schema":{"type":"object", "additionalProperties":false, "properties":{
-                "related":{"type":"string", "maxLength":64},
-                "items":{"type":"array", "maxItems":4, "items":{"type":"string", "maxLength":64}}
-            }}
-        }));
-        let editor = source["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|profile| profile["id"] == "editor")
-            .unwrap();
-        let grant = editor["permissions"]["entities"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|grant| grant["entity"] == "public-organization")
-            .unwrap();
-        for fields in ["readableFields", "writableFields"] {
-            grant[fields].as_array_mut().unwrap().push(json!("notes"));
+            .push(json!("revisions"));
+        grant["revisionAccess"] = json!(true);
+        for key in ["readableFields", "writableFields"] {
+            grant[key].as_array_mut().unwrap().push(json!("notes"));
         }
-        fs::write(path, serde_json::to_vec_pretty(&source).unwrap()).unwrap();
-        // The starter's change requests name the `casework` review authority,
-        // which a start activates. No scenario here submits a request, so the
-        // binding needs only a declared client and an unused loopback endpoint.
-        let path = project.join("dev-clients.yaml");
-        let mut clients: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-        clients["clients"].as_array_mut().unwrap().push(json!({
-            "id":"casework-producer", "accessProfiles":[],
-            "scopes":["casework:reviews:request"], "claims":{}
+        let boundary = json!([{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]);
+        source["accessProfiles"][0]["permissions"]["records"].as_array_mut().unwrap().push(json!({
+            "recordType":"contact-link","operations":["create","get","list","tombstone","revisions"],
+            "readableFields":["from","to","jurisdiction"],"writableFields":["from","to","jurisdiction"],
+            "rowBoundaries":boundary,"revisionAccess":true
         }));
-        clients["reviewAuthorities"] = json!({"casework":{
-            "endpoint":"http://127.0.0.1:9/", "profile":"integration-requester",
-            "producerId":"registry-breg", "recoveryDays":7, "client":"casework-producer"
-        }});
-        fs::write(path, serde_norway::to_string(&clients).unwrap()).unwrap();
+        source["accessProfiles"].as_array_mut().unwrap().push(json!({
+            "id":"directory-reader","principalClaim":"registry_principal",
+            "requiredScopes":["registry:directory:read"],"requiredPurposes":["directory-administration"],
+            "permissions":{"records":[{
+                "recordType":"contact","operations":["get","list"],
+                "readableFields":["name","email","jurisdiction"],"rowBoundaries":boundary
+            }]}
+        }));
+        fs::write(
+            project.join("registry.yaml"),
+            serde_json::to_vec_pretty(&source).unwrap(),
+        )
+        .unwrap();
+        let clients = json!({
+            "apiVersion":"id.registrystack.org/formats/breg/dev-clients/v1alpha1","kind":"BRegDevClients",
+            "clients":[
+                {"id":"editor","accessProfiles":["directory-editor"],"scopes":["registry:directory:write"],
+                 "claims":{"registry_principal":"synthetic-editor","registry_purpose":"directory-administration","jurisdiction":"synthetic-district"}},
+                {"id":"reader","accessProfiles":["directory-reader"],"scopes":["registry:directory:read"],
+                 "claims":{"registry_principal":"synthetic-reader","registry_purpose":"directory-administration","jurisdiction":"synthetic-district"}}
+            ]
+        });
+        fs::write(
+            project.join("dev-clients.yaml"),
+            serde_json::to_vec_pretty(&clients).unwrap(),
+        )
+        .unwrap();
+        fs::create_dir_all(project.join("tests")).unwrap();
+        fs::write(
+            project.join("tests/journeys.yaml"),
+            br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: directory-empty
+    steps:
+      - id: list
+        recordType: contact
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-editor
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: synthetic-district}
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 0}
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn native_recovery_fixture_compiles_and_has_no_review_dependency() {
+        let temporary = tempfile::tempdir().unwrap();
+        prepare_native_fixture(temporary.path());
+        let project = registry_breg::contract::parse_project_yaml(
+            &fs::read(temporary.path().join("registry.yaml")).unwrap(),
+        )
+        .unwrap();
+        let registry = registry_breg::compiler::compile_project(
+            &project,
+            &[],
+            registry_breg::compiler::CompileProfile::Production,
+        )
+        .unwrap();
+        assert!(registry.actions().is_empty());
+        assert!(registry.entities()["contact-link"].tombstone);
+        assert!(registry.entities()["contact"].access_profiles["directory-editor"].revision_access);
+        registry_breg::fixtures::validate_fixture_journeys(
+            &fs::read(temporary.path().join("tests/journeys.yaml")).unwrap(),
+            &registry,
+        )
+        .unwrap();
     }
 
     fn preflight_refuses_before_writes(project: &Path, first: &Value) {
@@ -2166,20 +1924,17 @@ mod tests {
             .build()
             .unwrap();
         let mut cases = Vec::new();
-        let review = catalogue
+        let observation = catalogue
             .scenarios
             .iter()
-            .find(|s| s.id == "reviewed-change")
+            .find(|s| s.id == "observe-created")
             .unwrap();
-        for (id, profile, missing) in [
-            ("history", "reader", "revisions"),
-            ("apply", "editor", "apply-request"),
-        ] {
-            let mut scenario = review.clone();
+        {
+            let mut scenario = observation.clone();
             let mut steps = scenario.steps.into_vec();
-            let step = steps.iter_mut().find(|s| s.id == id).unwrap();
-            step.client = profile.into();
-            step.access_profile = profile.into();
+            let step = steps.iter_mut().find(|s| s.id == "history").unwrap();
+            step.client = "reader".into();
+            step.access_profile = "directory-reader".into();
             scenario.steps = UniqueIdList::new(steps).unwrap();
             let input =
                 serde_json::from_slice(&read_source(&project.join(&scenario.input)).unwrap())
@@ -2187,7 +1942,7 @@ mod tests {
             cases.push((
                 scenario,
                 input,
-                format!("requires advertised {missing} permission"),
+                "requires advertised revisions permission".into(),
             ));
         }
         let samples = catalogue
@@ -2208,7 +1963,7 @@ mod tests {
         for (scenario, input, message) in cases {
             let mut attempt = attempt();
             attempt.scenario = scenario.id.clone();
-            if scenario.id == "reviewed-change" {
+            if scenario.id == "observe-created" {
                 attempt.captures = serde_json::from_value(first["captures"].clone()).unwrap();
             }
             let original_captures = attempt.captures.clone();
@@ -2232,7 +1987,7 @@ mod tests {
             assert!(attempt.completed.is_empty());
             assert!(!directory.join(format!("{}.json", attempt.id)).exists());
             assert_eq!(fs::read_dir(&directory).unwrap().count(), retained_before);
-            assert_eq!(observed_count_and_apply_action(project).0, 1);
+            assert_eq!(observed_count(project), 1);
         }
     }
 
@@ -2254,11 +2009,11 @@ mod tests {
             )
             .unwrap();
             let options = BRegRecordOptions::default()
-                .access_profile("editor")
+                .access_profile("directory-editor")
                 .unwrap();
-            let route = "institutional-relationships";
+            let route = "contact-links";
             let url = format!(
-                "{}/v1/records/{route}/{id}?accessProfile=editor",
+                "{}/v1/records/{route}/{id}?accessProfile=directory-editor",
                 state.breg_origin()
             );
             let http = reqwest::Client::builder()
@@ -2306,7 +2061,7 @@ mod tests {
                 .iter()
                 .all(|record| record.record_identifier != id));
             let revisions = client
-                .record_revisions(route, id, Some("editor"))
+                .record_revisions(route, id, Some("directory-editor"))
                 .await
                 .unwrap();
             let history: Value = serde_json::from_slice(revisions.value.as_bytes()).unwrap();
@@ -2495,23 +2250,10 @@ mod tests {
             &ports[2],
         ]);
         assert_ne!(std::env::current_dir().unwrap(), owned.project);
-        let error = run_example(test_args(&owned.project, "reviewed-change"))
-            .unwrap_err()
-            .to_string();
-        let expected_project = format!(
-            "'{}/project with '\\'' spaces'",
-            temp.canonicalize().unwrap().display()
-        );
-        assert_eq!(
-            error,
-            format!(
-                "review needs one completed first-record attempt; run bregctl examples run first-record {expected_project} or select --from-attempt ID"
-            )
-        );
         assert!(attempts(&owned.project.join(".breg/dev/examples"))
             .unwrap()
             .is_empty());
-        assert_eq!(observed_count_and_apply_action(&owned.project).0, 0);
+        assert_eq!(observed_count(&owned.project), 0);
         child(&owned.project, "first-record", None, Some("create"));
         let interrupted = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
         assert_eq!(interrupted.len(), 1);
@@ -2524,7 +2266,7 @@ mod tests {
         let repeated = child(&owned.project, "first-record", None, None).unwrap();
         assert_eq!(first["captures"], repeated["captures"]);
         assert_eq!(
-            observed_count_and_apply_action(&owned.project).0,
+            observed_count(&owned.project),
             1,
             "uncertain create must not duplicate records"
         );
@@ -2560,7 +2302,7 @@ mod tests {
         fs::write(&sample_path, serde_json::to_vec(&sample_input).unwrap()).unwrap();
         let sample_bytes = fs::read(&sample_path).unwrap();
         let mut invalid: Value = serde_json::from_slice(&sample_bytes).unwrap();
-        invalid["hill-link"]["institutionFrom"] = json!({"recordCapture":"river-link"});
+        invalid["hill-link"]["from"] = json!({"recordCapture":"river-link"});
         fs::write(&sample_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
         assert!(format!(
             "{:#}",
@@ -2568,7 +2310,7 @@ mod tests {
         )
         .contains("wrong target entity"));
         assert_eq!(
-            observed_count_and_apply_action(&owned.project).0,
+            observed_count(&owned.project),
             1,
             "invalid later alias must be refused before earlier sample creates"
         );
@@ -2577,7 +2319,7 @@ mod tests {
         let repeated = child(&owned.project, "starter-data", None, None).unwrap();
         assert_eq!(samples["captures"], repeated["captures"]);
         assert_eq!(
-            observed_count_and_apply_action(&owned.project).0,
+            observed_count(&owned.project),
             4,
             "completed sample runs do not duplicate records"
         );
@@ -2608,12 +2350,12 @@ mod tests {
             run_example(duplicate).is_err(),
             "explicit new attempts retain ordinary uniqueness checks"
         );
-        assert_eq!(observed_count_and_apply_action(&owned.project).0, 4);
+        assert_eq!(observed_count(&owned.project), 4);
         let mut second: Value = serde_json::from_slice(
             &fs::read(owned.project.join("examples/inputs/first-record.json")).unwrap(),
         )
         .unwrap();
-        second["record"]["localIdentifier"] = json!("SYNTHETIC-SECOND-INDEPENDENT");
+        second["record"]["email"] = json!("second@example.test");
         let second_path = owned
             .project
             .canonicalize()
@@ -2624,17 +2366,11 @@ mod tests {
         distinct.input = Some(second_path);
         distinct.new_attempt = true;
         run_example(distinct).unwrap();
-        assert_eq!(observed_count_and_apply_action(&owned.project).0, 5);
+        assert_eq!(observed_count(&owned.project), 5);
         assert!(run_example(test_args(&owned.project, "first-record"))
             .unwrap_err()
             .to_string()
             .contains("multiple attempts"));
-        let mut ambiguous = test_args(&owned.project, "reviewed-change");
-        ambiguous.new_attempt = true;
-        assert!(run_example(ambiguous)
-            .unwrap_err()
-            .to_string()
-            .contains("one completed first-record attempt"));
         let old_id = uuid::Uuid::parse_str(first["attempt"].as_str().unwrap()).unwrap();
         owned.succeed(&["stop", "--remove"]);
         owned.succeed(&[]);

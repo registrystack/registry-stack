@@ -33,7 +33,9 @@ vocabularies:
   values: [food-assistance, health-referral]
 - id: consent-decision
   values: [given, refused, withdrawn, invalidated]
-entities:
+datasets:
+- id: consent-dataset
+recordTypes:
 - id: person
   primaryDataset: consent-dataset
   route: persons
@@ -112,6 +114,7 @@ entities:
   - {id: household, type: reference, target: household, required: true, classification: internal}
 actions:
 - id: record-consent
+  execution: {mode: immediate}
   consentIssuer: steward
   inputs:
   - {id: subject, type: reference, target: person, required: true, classification: restricted}
@@ -121,18 +124,20 @@ actions:
   - {id: decision, type: vocabulary-code, vocabulary: consent-decision, required: true, classification: internal}
   - {id: effective-at, type: timestamp, required: true, classification: internal}
   - {id: expires-at, type: timestamp, classification: internal}
-  effects:
-  - id: decision
-    target: {entity: consent-decision}
-    operation: create
-    set:
-      subject: {fromField: subject}
-      recipient: {fromField: recipient}
-      purpose: {fromField: purpose}
-      scope: {fromField: scope}
-      decision: {fromField: decision}
-      effective-at: {fromField: effective-at}
-      expires-at: {fromField: expires-at}
+  plan:
+    type: fixed
+    effects:
+    - id: decision
+      target: {recordType: consent-decision}
+      operation: create
+      set:
+        subject: {fromInput: subject}
+        recipient: {fromInput: recipient}
+        purpose: {fromInput: purpose}
+        scope: {fromInput: scope}
+        decision: {fromInput: decision}
+        effective-at: {fromInput: effective-at}
+        expires-at: {fromInput: expires-at}
 accessProfiles:
 - id: food-targeting
   default: true
@@ -142,8 +147,8 @@ accessProfiles:
   requiredScopes: [records:read]
   requiredPurposes: [food-assistance]
   permissions:
-    entities:
-    - entity: person
+    records:
+    - recordType: person
       rowBoundaries: unrestricted
       operations: [get, list, lookup, snapshot, revisions]
       readableFields: [given-name, district]
@@ -159,7 +164,7 @@ accessProfiles:
         readableFields: [label]
       requireConsent:
       - {record: consent-decision, on: id}
-    - entity: enrolment
+    - recordType: enrolment
       rowBoundaries: unrestricted
       operations: [get, list, lookup, snapshot, revisions]
       readableFields: [person, programme]
@@ -175,7 +180,7 @@ accessProfiles:
       - {record: consent-decision, on: person}
     # The read path's target needs its own permission in the profile; without
     # one the runtime answers the path with 503.
-    - entity: household
+    - recordType: household
       rowBoundaries: unrestricted
       operations: [get]
       readableFields: [label]
@@ -185,8 +190,8 @@ accessProfiles:
   requesterClients: [wfp-scope, ngo-alpha-portal]
   requiredScopes: [consent:read]
   permissions:
-    entities:
-    - entity: consent-decision
+    records:
+    - recordType: consent-decision
       operations: [get, list]
       readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
       rowBoundaries:
@@ -195,32 +200,32 @@ accessProfiles:
   principalClaim: principal
   requiredScopes: [records:manage]
   permissions:
-    entities:
-    - entity: person
+    records:
+    - recordType: person
       rowBoundaries: unrestricted
       operations: [create, get, patch]
       readableFields: [given-name, district]
       writableFields: [given-name, district]
-    - entity: household
+    - recordType: household
       rowBoundaries: unrestricted
       operations: [create, get]
       readableFields: [label]
       writableFields: [label]
-    - entity: household-member
+    - recordType: household-member
       rowBoundaries: unrestricted
       operations: [create, get]
       readableFields: [person, household]
       writableFields: [person, household]
-    - entity: enrolment
+    - recordType: enrolment
       rowBoundaries: unrestricted
       operations: [create, get]
       readableFields: [person, programme]
       writableFields: [person, programme]
-    - entity: consent-decision
+    - recordType: consent-decision
       rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
-    - entity: enrolment-household
+    - recordType: enrolment-household
       rowBoundaries: unrestricted
       operations: [create, get]
       readableFields: [enrolment, household]
@@ -229,6 +234,6 @@ accessProfiles:
     - action: record-consent
       operations: [invoke]
       targets:
-      - {entity: person, rowBoundaries: unrestricted}
-      - {entity: consent-decision, rowBoundaries: unrestricted}
+      - {recordType: person, rowBoundaries: unrestricted}
+      - {recordType: consent-decision, rowBoundaries: unrestricted}
       results: [decision]

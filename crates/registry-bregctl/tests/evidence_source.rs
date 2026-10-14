@@ -102,20 +102,17 @@ fn native_export_refuses_unreadable_facts_without_publishing_partial_files() {
 }
 
 #[test]
-fn an_initialized_project_exports_an_evidence_source_without_edits() {
+fn an_explicit_lookup_project_exports_an_evidence_source_without_edits() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let project = root.join("registry");
-    let initialized = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .args(["--format", "json", "init"])
-        .arg(&project)
-        .output()
-        .unwrap();
-    assert!(
-        initialized.status.success(),
-        "{}",
-        String::from_utf8_lossy(&initialized.stdout)
-    );
+    fs::create_dir(&project).unwrap();
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/evidence/registry/registry.yaml"),
+        project.join("registry.yaml"),
+    )
+    .unwrap();
 
     let destination = root.join("export");
     let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))

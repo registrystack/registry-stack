@@ -10,25 +10,25 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -265,11 +265,11 @@ async fn real_postgres_temporal_correction_batches_validate_only_completed_inter
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"temporal-corrections","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "fields":[
@@ -294,8 +294,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["history-maintenance"],"requiredScopes":["history-maintain"],
-            "permissions":{"entities":[{
-              "entity":"membership","operations":["create","get","patch","batch"],
+            "permissions":{"records":[{
+              "recordType":"membership","operations":["create","get","patch","batch"],
               "readableFields":["subject","group","valid-from","valid-to"],
               "writableFields":["subject","group","valid-from","valid-to","source-reference"],
               "rowBoundaries": "unrestricted"
@@ -787,8 +787,10 @@ fn assert_snapshot_reference(value: &Value) {
 }
 
 fn quote(identifier: &str) -> String {
-    assert!(identifier
-        .bytes()
-        .all(|byte| byte == b'_' || byte.is_ascii_lowercase() || byte.is_ascii_digit()));
+    assert!(
+        identifier
+            .bytes()
+            .all(|byte| byte == b'_' || byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    );
     format!("\"{identifier}\"")
 }

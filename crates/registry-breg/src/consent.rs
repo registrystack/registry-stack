@@ -12,15 +12,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
     AccessProfileSource, ActionSource, BoundaryOperator, ConsentIssuerSource, EntitySource,
-    FieldTypeSource, MutationMode, Operation, ProjectAccessProfileSource, RegistryProject,
-    RowBoundarySource, MAX_CONSENT_DURATION_DAYS,
+    FieldTypeSource, MAX_CONSENT_DURATION_DAYS, MutationMode, Operation,
+    ProjectAccessProfileSource, RegistryProject, RowBoundarySource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::{quote_identifier, quote_literal};
 use crate::membership::{RowProbe, RowProbeForm};
 use crate::model::{
-    CompiledAction, CompiledActionInput, CompiledActionMutation, CompiledActionValue,
-    CompiledConsentRecord, CompiledConsentRequirement, CompiledEntity, CompiledRecipients,
+    CompiledAction, CompiledActionInput, CompiledConsentRecord, CompiledConsentRequirement,
+    CompiledEntity, CompiledPlanMutation, CompiledPlanValue, CompiledRecipients,
 };
 use crate::physical_names::hex_prefix;
 use sha2::{Digest, Sha256};
@@ -153,7 +153,6 @@ pub(crate) fn validate(
         }
     }
     validate_read_paths(entities, errors);
-    validate_submitter_targets(entities, errors);
     validate_reserved_claims(project, entities, errors);
 }
 
@@ -278,11 +277,11 @@ fn validate_record(
     entities: &BTreeMap<String, EntitySource>,
     errors: &mut Vec<Diagnostic>,
 ) {
-    let location = format!("entities[id={}].consentRecord", entity.id);
+    let location = format!("recordTypes[id={}].consentRecord", entity.id);
     if entity.mutation_mode != MutationMode::CreateOnly {
         errors.push(Diagnostic::error(
             "breg.consent.record-mutation-mode",
-            format!("entities[id={}].mutationMode", entity.id),
+            format!("recordTypes[id={}].mutationMode", entity.id),
             "a consent-record entity is createOnly; a decision is changed only by a later decision",
         ));
     }
@@ -384,18 +383,17 @@ fn validate_record(
         .as_ref()
         .and_then(|target| entities.get(target))
         .is_some_and(|target| target.consent_record.is_some());
-    if entity.change_request.is_some()
-        || entity
-            .access_profiles
-            .iter()
-            .any(|profile| !profile.require_consent.is_empty())
+    if entity
+        .access_profiles
+        .iter()
+        .any(|profile| !profile.require_consent.is_empty())
         || incoming_read_path
         || subject_is_record
     {
         errors.push(Diagnostic::error(
             "breg.consent.record-leaf",
             &location,
-            "a consent-record entity is a leaf: no change request, no requireConsent on its own profiles, no incoming read paths, and its subject is not another consent record",
+            "a consent-record entity is a leaf: no requireConsent on its own profiles, no incoming read paths, and its subject is not another consent record",
         ));
     }
     for profile in &entity.access_profiles {
@@ -406,7 +404,7 @@ fn validate_record(
             errors.push(Diagnostic::error(
                 "breg.consent.record-direct-write",
                 format!(
-                    "entities[id={}].accessProfiles[id={}].operations",
+                    "recordTypes[id={}].accessProfiles[id={}].operations",
                     entity.id, profile.id
                 ),
                 "consent rows are created only by actions that declare consentIssuer; no profile grants create, batch, or import",
@@ -423,7 +421,7 @@ fn validate_requirements(
     errors: &mut Vec<Diagnostic>,
 ) {
     let location = format!(
-        "entities[id={}].accessProfiles[id={}].requireConsent",
+        "recordTypes[id={}].accessProfiles[id={}].requireConsent",
         entity.id, profile.id
     );
     if profile.operations.iter().any(|operation| {
@@ -436,9 +434,6 @@ fn validate_requirements(
                 | Operation::Snapshot
         )
     }) || !profile.writable_fields.is_empty()
-        || !profile.apply_targets.is_empty()
-        || !profile.request_presence.is_empty()
-        || profile.request_visibility.is_some()
     {
         errors.push(Diagnostic::error(
             "breg.consent.require-read-only",
@@ -568,7 +563,7 @@ fn validate_read_paths(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                     errors.push(Diagnostic::error(
                         "breg.consent.require-read-path-target",
                         format!(
-                            "entities[id={}].accessProfiles[id={}].readPaths",
+                            "recordTypes[id={}].accessProfiles[id={}].readPaths",
                             entity.id, profile.id
                         ),
                         "consent on a read path's intermediate or target entity is not inherited from the root; use the gated entity's direct read route",
@@ -577,41 +572,6 @@ fn validate_read_paths(entities: &BTreeMap<String, EntitySource>, errors: &mut V
             }
         }
     }
-}
-
-/// A gated permission never serves as another permission's same-profile get
-/// authority, so a write can never probe a subject the caller cannot read.
-fn validate_submitter_targets(
-    entities: &BTreeMap<String, EntitySource>,
-    errors: &mut Vec<Diagnostic>,
-) {
-    for entity in entities.values() {
-        for profile in &entity.access_profiles {
-            if profile.submitter_targets.iter().any(|target| {
-                gated_in(
-                    entities.get(target).map(|target| &target.access_profiles),
-                    &profile.id,
-                )
-            }) {
-                errors.push(Diagnostic::error(
-                    "breg.consent.require-read-only",
-                    format!(
-                        "entities[id={}].accessProfiles[id={}].submitterTargets",
-                        entity.id, profile.id
-                    ),
-                    "a consent-checked permission cannot authorize a referenced submitter target",
-                ));
-            }
-        }
-    }
-}
-
-fn gated_in(profiles: Option<&Vec<AccessProfileSource>>, profile: &str) -> bool {
-    profiles.is_some_and(|profiles| {
-        profiles
-            .iter()
-            .any(|candidate| candidate.id == profile && !candidate.require_consent.is_empty())
-    })
 }
 
 /// The recipient claim binds only a consent record's recipient field on a
@@ -624,7 +584,7 @@ fn validate_reserved_claims(
     for entity in entities.values() {
         for profile in &entity.access_profiles {
             let path = format!(
-                "entities[id={}].accessProfiles[id={}]",
+                "recordTypes[id={}].accessProfiles[id={}]",
                 entity.id, profile.id
             );
             if is_reserved_claim(&profile.principal_claim) {
@@ -662,36 +622,6 @@ fn validate_reserved_claims(
                     );
                 }
             }
-            for target in &profile.apply_targets {
-                if target
-                    .row_boundaries
-                    .iter()
-                    .any(|boundary| is_reserved_claim(&boundary.claim))
-                {
-                    refuse_claim(
-                        &format!(
-                            "{path}.applyTargets[entity={}].rowBoundaries",
-                            target.entity
-                        ),
-                        errors,
-                    );
-                }
-            }
-            for presence in &profile.request_presence {
-                if presence
-                    .row_boundaries
-                    .iter()
-                    .any(|boundary| is_reserved_claim(&boundary.claim))
-                {
-                    refuse_claim(
-                        &format!(
-                            "{path}.requestPresence[requestType={}].rowBoundaries",
-                            presence.request_type
-                        ),
-                        errors,
-                    );
-                }
-            }
         }
         if entity
             .access_requirements
@@ -705,7 +635,7 @@ fn validate_reserved_claims(
         {
             refuse_claim(
                 &format!(
-                    "entities[id={}].accessRequirements.rowBoundaries",
+                    "recordTypes[id={}].accessRequirements.rowBoundaries",
                     entity.id
                 ),
                 errors,
@@ -825,16 +755,17 @@ pub(crate) fn validate_action(
             .is_some_and(|entity| entity.consent_record.is_some())
     };
     let creates = action
-        .effects
+        .effects()
         .iter()
         .filter(|effect| effect.operation == Operation::Create)
         .filter(|effect| is_record(effect.target.entity.as_ref()))
         .collect::<Vec<_>>();
-    let handler_creates = action.handler.as_ref().is_some_and(|handler| {
-        handler.writes.iter().any(|write| {
+    let handler_creates = match &action.plan {
+        crate::contract::ActionPlanSource::Function { writes, .. } => writes.iter().any(|write| {
             write.operation == Operation::Create && is_record(write.target.entity.as_ref())
-        })
-    });
+        }),
+        crate::contract::ActionPlanSource::Fixed { .. } => false,
+    };
     let Some(issuer) = action.consent_issuer else {
         if !creates.is_empty() || handler_creates {
             errors.push(Diagnostic::error(
@@ -856,7 +787,7 @@ pub(crate) fn validate_action(
     if issuer == ConsentIssuerSource::Steward {
         return;
     }
-    let bound = action.handler.is_none()
+    let bound = matches!(action.plan, crate::contract::ActionPlanSource::Fixed { .. })
         && creates.iter().all(|effect| {
             let record = entities[effect.target.entity.as_ref().expect("record target")]
                 .consent_record
@@ -916,9 +847,9 @@ pub(crate) fn self_bound_targets(
             .find(|(_, field)| field.physical_name == record.subject_column)
             .map(|(id, _)| id.as_str());
         for mutation in &effect.mutations {
-            if let CompiledActionMutation::Set {
+            if let CompiledPlanMutation::Set {
                 field,
-                value: CompiledActionValue::FromInput { input },
+                value: CompiledPlanValue::FromInput { input },
             } = mutation
             {
                 if Some(field.as_str()) == subject_field {
@@ -956,68 +887,72 @@ fn subject_bound_through_link(
     entities: &BTreeMap<String, CompiledEntity>,
     profiles: &[ProjectAccessProfileSource],
 ) -> bool {
-    action.requires.iter().any(|subject_requirement| {
-        if subject_requirement.equals_input.as_deref() != Some(subject_input) {
-            return false;
-        }
-        let link_input = subject_requirement.input.as_str();
-        let Some(link) = action
-            .inputs
-            .iter()
-            .find(|input| input.id == link_input)
-            .and_then(|input| match &input.field_type {
-                FieldTypeSource::Reference { target, .. } => entities.get(target),
-                _ => None,
-            })
-        else {
-            return false;
-        };
-        let reference_field = link
-            .fields
-            .get(&subject_requirement.field)
-            .is_some_and(|field| {
-                matches!(field.field_type, FieldTypeSource::Reference { .. })
-                    && field.encryption.is_none()
+    action
+        .commit_guards
+        .targets
+        .iter()
+        .any(|subject_requirement| {
+            if subject_requirement.equals_input.as_deref() != Some(subject_input) {
+                return false;
+            }
+            let link_input = subject_requirement.input.as_str();
+            let Some(link) = action
+                .inputs
+                .iter()
+                .find(|input| input.id == link_input)
+                .and_then(|input| match &input.field_type {
+                    FieldTypeSource::Reference { target, .. } => entities.get(target),
+                    _ => None,
+                })
+            else {
+                return false;
+            };
+            let reference_field =
+                link.fields
+                    .get(&subject_requirement.field)
+                    .is_some_and(|field| {
+                        matches!(field.field_type, FieldTypeSource::Reference { .. })
+                            && field.encryption.is_none()
+                    });
+            let active = action.commit_guards.targets.iter().any(|requirement| {
+                requirement.input == link_input
+                    && requirement.equals == Some(serde_json::Value::Bool(true))
+                    && link
+                        .fields
+                        .get(&requirement.field)
+                        .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Boolean))
             });
-        let active = action.requires.iter().any(|requirement| {
-            requirement.input == link_input
-                && requirement.equals == Some(serde_json::Value::Bool(true))
-                && link
-                    .fields
-                    .get(&requirement.field)
-                    .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Boolean))
-        });
-        let permissions = profiles
-            .iter()
-            .flat_map(|profile| {
-                profile
-                    .permissions
-                    .actions
-                    .iter()
-                    .filter(|grant| grant.action == action.id)
-                    .map(move |grant| (profile, grant))
-            })
-            .collect::<Vec<_>>();
-        let principal_bound = !permissions.is_empty()
-            && permissions.iter().all(|(profile, grant)| {
-                let claim = profile.principal_claim.as_str();
-                grant
-                    .targets
-                    .iter()
-                    .filter(|target| target.entity == link.id)
-                    .any(|target| {
-                        target.row_boundaries.iter().any(|boundary| {
-                            boundary.claim == claim
-                                && boundary.operator == BoundaryOperator::Equals
-                                && link.fields.get(&boundary.field).is_some_and(|field| {
-                                    principal_field(field.field_type.clone())
-                                        && field.encryption.is_none()
-                                })
+            let permissions = profiles
+                .iter()
+                .flat_map(|profile| {
+                    profile
+                        .permissions
+                        .actions
+                        .iter()
+                        .filter(|grant| grant.action == action.id)
+                        .map(move |grant| (profile, grant))
+                })
+                .collect::<Vec<_>>();
+            let principal_bound = !permissions.is_empty()
+                && permissions.iter().all(|(profile, grant)| {
+                    let claim = profile.principal_claim.as_str();
+                    grant
+                        .targets
+                        .iter()
+                        .filter(|target| target.entity == link.id)
+                        .any(|target| {
+                            target.row_boundaries.iter().any(|boundary| {
+                                boundary.claim == claim
+                                    && boundary.operator == BoundaryOperator::Equals
+                                    && link.fields.get(&boundary.field).is_some_and(|field| {
+                                        principal_field(field.field_type.clone())
+                                            && field.encryption.is_none()
+                                    })
+                            })
                         })
-                    })
-            });
-        reference_field && active && principal_bound
-    })
+                });
+            reference_field && active && principal_bound
+        })
 }
 
 fn principal_field(field_type: FieldTypeSource) -> bool {
@@ -1054,6 +989,36 @@ pub(crate) fn validate_action_permission(
     }) {
         refuse_claim(
             "project.accessProfiles[].permissions.actions[].targets[].rowBoundaries",
+            errors,
+        );
+    }
+}
+
+pub(crate) fn validate_proposal_permission(
+    profile: &ProjectAccessProfileSource,
+    grant: &crate::contract::ProposalPermissionSource,
+    entities: &BTreeMap<String, CompiledEntity>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if grant.targets.iter().any(|target| {
+        entities
+            .get(&target.record_type)
+            .is_some_and(|entity| !requirements(entity, &profile.id).is_empty())
+    }) {
+        errors.push(Diagnostic::error(
+            "breg.consent.require-read-only",
+            "accessProfiles[].permissions.proposals",
+            "a consent-checked Record profile is read-only; use separate Proposal authority",
+        ));
+    }
+    if grant.targets.iter().any(|target| {
+        target
+            .row_boundaries
+            .iter()
+            .any(|boundary| is_reserved_claim(&boundary.claim))
+    }) {
+        refuse_claim(
+            "accessProfiles[].permissions.proposals[].targets[].rowBoundaries",
             errors,
         );
     }
@@ -1109,8 +1074,11 @@ pub(crate) fn row_probes(entity: &CompiledEntity, profile: &str) -> Vec<RowProbe
 /// The consent table's policy guard for one probe: only that probe, running
 /// under the gated profile, sees the decision rows.
 pub(crate) fn source_guard(entity: &str, profile: &str, index: usize) -> String {
-    format!("NULLIF(current_setting('registry.consent_probe', true), '') = {} AND NULLIF(current_setting('registry.access_profile', true), '') = {}",
-        quote_literal(&function_name(entity, profile, index)), quote_literal(profile))
+    format!(
+        "NULLIF(current_setting('registry.consent_probe', true), '') = {} AND NULLIF(current_setting('registry.access_profile', true), '') = {}",
+        quote_literal(&function_name(entity, profile, index)),
+        quote_literal(profile)
+    )
 }
 
 /// The consent table's rows under a probe guard: every active decision. The
@@ -1240,8 +1208,8 @@ pub(crate) fn index_statements(entity: &CompiledEntity) -> Vec<(String, String, 
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{probe_body, validate, RowProbeForm};
-    use crate::contract::{parse_project_yaml, EntitySource};
+    use super::{RowProbeForm, probe_body, validate};
+    use crate::contract::{EntitySource, parse_project_yaml};
 
     /// The grammar refuses `encrypted` on reference, vocabulary-code and
     /// timestamp fields, so these rules are reached only by a source that
@@ -1287,8 +1255,10 @@ mod tests {
                 "{field}"
             );
         }
-        assert!(codes_with_encrypted("enrolment", "person")
-            .contains(&"breg.consent.require-key".to_owned()));
+        assert!(
+            codes_with_encrypted("enrolment", "person")
+                .contains(&"breg.consent.require-key".to_owned())
+        );
         let unrelated = codes_with_encrypted("enrolment", "programme");
         assert!(!unrelated.contains(&"breg.consent.require-key".to_owned()));
         assert!(!unrelated.contains(&"breg.consent.record-plaintext".to_owned()));
@@ -1348,13 +1318,15 @@ mod tests {
             "record_id IN (SELECT consented.subject FROM registry_context.\"{name}\"() AS consented(subject))"
         );
         assert_eq!(predicate, probe);
-        assert!(crate::membership::predicate(
-            &registry.entities()["person"],
-            "food-targeting",
-            RowProbeForm::PerKey,
-            |_| "record_id".to_owned(),
-        )
-        .is_empty());
+        assert!(
+            crate::membership::predicate(
+                &registry.entities()["person"],
+                "food-targeting",
+                RowProbeForm::PerKey,
+                |_| "record_id".to_owned(),
+            )
+            .is_empty()
+        );
         // After the one scan, the probe is a hash lookup per row, cheaper
         // than parsing the row-boundary context, so it is tested first.
         let policy = registry

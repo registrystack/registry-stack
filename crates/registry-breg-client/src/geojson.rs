@@ -39,7 +39,6 @@ impl BRegGeoJsonOptions {
     }
 
     pub(crate) fn query_pairs(&self) -> Result<Vec<(String, String)>, BRegRequestError> {
-        self.options.ensure_collection_compatible()?;
         let mut pairs = Vec::new();
         self.options.append_query(&mut pairs);
         crate::query::ensure_query_bound(&pairs)?;

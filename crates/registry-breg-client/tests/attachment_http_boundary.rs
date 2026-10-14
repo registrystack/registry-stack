@@ -14,24 +14,19 @@ use axum::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
 use axum::routing::any;
 use axum::Router;
 use registry_breg_client::{
-    BRegAttachmentSlot, BRegAttachmentUpload, BRegEtag, BRegIdempotencyKey, BRegMetadata,
-    BRegProblemCode, BRegProtocolFailure, BRegRecordFormat, BaseRegistryClient,
-    BaseRegistryClientConfig, BaseRegistryClientError, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
+    BRegActionInvocationRequest, BRegIdempotencyKey, BRegProblemCode, BRegProposal,
+    BRegProtocolFailure, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
 };
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use url::Url;
-use uuid::Uuid;
 
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
 const SERVER_ETAG: &str = "\"breg-record-000000000001\"";
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const PROFILE_LINK: &str = "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </tenant/base/v1/schemas/company>; rel=\"describedby\"";
 const SLOT: &str = "supporting-file";
-const SLOT_PATH: &str = "/v1/records/companies/{record_id}/attachments/supporting-file";
-const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const PDF: &[u8] = b"%PDF-1.7 governed bytes";
 
 #[derive(Clone, Debug)]
@@ -191,168 +186,6 @@ async fn test_client(responses: Vec<MockResponse>) -> TestClient {
     }
 }
 
-fn attachment_capability() -> Value {
-    json!({
-        "requiredForSubmit": true,
-        "maximumBytes": 1024,
-        "contentTypes": ["application/pdf"],
-        "classification": "restricted",
-        "verification": {
-            "statusField": "verificationStatus",
-            "allowedStatuses": ["notRequired", "approved"],
-            "pendingOrRejectedBlocks": ["download", "submit"]
-        },
-        "download": {"method": "GET", "path": SLOT_PATH, "accessProfile": "company-writer",
-            "authorizationOperation": "get", "queryParameters": ["proposalVersion"],
-            "body": "none", "ifMatchRequired": false, "idempotencyKeyRequired": false,
-            "proposalVersionRequired": true},
-        "upload": {"method": "PATCH", "path": SLOT_PATH, "accessProfile": "company-writer",
-            "authorizationOperation": "patch", "queryParameters": [], "body": "binary",
-            "ifMatchRequired": true, "idempotencyKeyRequired": true, "requiredState": "draft"},
-        "remove": {"method": "DELETE", "path": SLOT_PATH, "accessProfile": "company-writer",
-            "authorizationOperation": "patch", "queryParameters": [], "body": "none",
-            "ifMatchRequired": true, "idempotencyKeyRequired": true, "requiredState": "draft"}
-    })
-}
-
-fn fields() -> Value {
-    json!([
-        {"id": "legal-name", "apiName": "legalName", "label": "Legal name",
-         "schema": {"type": "string"}, "required": true, "nullable": true,
-         "readOnly": false, "removable": true},
-        {"id": SLOT, "apiName": SLOT, "label": "Supporting file",
-         "schema": {"anyOf": [{"type": "null"}, {"type": "object"}], "readOnly": true,
-             "x-registry-fieldKind": "attachment", "x-registry-attachment": attachment_capability()},
-         "required": false, "nullable": true, "readOnly": true, "removable": false}
-    ])
-}
-
-fn operation(identifier: &str, method: &str, path: &str, kind: &str, request: Value) -> Value {
-    json!({
-        "id": identifier,
-        "method": method,
-        "path": path,
-        "operation": kind,
-        "sourceEntity": "company",
-        "responseEntity": "company",
-        "accessProfile": "company-writer",
-        "requiredCapabilities": [],
-        "entityLabel": "Companies",
-        "identifier": {"apiName": "id", "location": "envelope"},
-        "titleFields": ["legal-name"],
-        "fields": fields(),
-        "readableFields": ["legal-name", SLOT],
-        "readableRequestFields": [],
-        "createWritableFields": [],
-        "patchWritableFields": ["legal-name"],
-        "selectors": [],
-        "query": null,
-        "request": request
-    })
-}
-
-fn metadata_fixture() -> Value {
-    let patch = operation(
-        "records.company.patch",
-        "PATCH",
-        "/v1/records/companies/{record_id}",
-        "patch",
-        json!({
-            "fieldNames": "api",
-            "queryParameters": [],
-            "body": "json_patch",
-            "contentType": "application/json-patch+json",
-            "patchPathPrefix": "/data/",
-            "patchOperations": ["add", "replace", "remove", "test"],
-            "removeSemantics": "set_null",
-            "ifMatchRequired": true,
-            "idempotencyKeyRequired": true,
-            "mutationSemantics": "direct",
-            "schema": {"type": "array", "items": {"oneOf": [{"type": "object"}]}}
-        }),
-    );
-    let get = operation(
-        "records.company.get",
-        "GET",
-        "/v1/records/companies/{record_id}",
-        "get",
-        json!({"fieldNames": "api", "queryParameters": ["$select"]}),
-    );
-    json!({
-        "id": "business-registry",
-        "version": "1.2.3",
-        "revision": REVISION,
-        "metadataVersion": "1",
-        "entities": [{
-            "id": "company",
-            "datasetIdentifier": "legal-entities",
-            "route": "companies",
-            "operations": [
-                {"operation": "patch", "accessProfile": "company-writer"},
-                {"operation": "get", "accessProfile": "company-writer"}
-            ],
-            "readableFields": ["legal-name", SLOT],
-            "schema": "/v1/schemas/company"
-        }],
-        "operations": [patch, get]
-    })
-}
-
-fn metadata_response() -> MockResponse {
-    MockResponse::json(StatusCode::OK, metadata_fixture())
-}
-
-fn record_body(format: BRegRecordFormat, slot_value: Value) -> Value {
-    let mut value = json!({
-        "data": {
-            "recordIdentifier": RECORD_ID,
-            "revisionIdentifier": "2",
-            "domainData": {"legalName": "Example Ltd", SLOT: slot_value},
-            "snapshot": format!("breg1_{RECORD_ID}")
-        },
-        "meta": {
-            "registryIdentifier": "business-registry",
-            "datasetIdentifier": "legal-entities",
-            "entityTypeIdentifier": "company"
-        }
-    });
-    if format == BRegRecordFormat::JsonLd {
-        value["@context"] = Value::String(REGISTRY_RECORD_CONTEXT_IDENTIFIER.into());
-    }
-    value
-}
-
-fn filled_slot() -> Value {
-    json!({
-        "slotId": SLOT,
-        "proposalVersion": 2,
-        "filled": true,
-        "sha256": DIGEST,
-        "byteSize": PDF.len(),
-        "erased": false,
-        "contentType": "application/pdf",
-        "uploadedAt": "2026-01-02T03:04:05.000000Z",
-        "uploadedBy": "urn:registry:actor:filer",
-        "verificationStatus": "approved"
-    })
-}
-
-fn mutation_response(format: BRegRecordFormat, slot_value: Value) -> MockResponse {
-    let media_type = match format {
-        BRegRecordFormat::Json => "application/json",
-        BRegRecordFormat::JsonLd => "application/ld+json",
-    };
-    MockResponse::json(StatusCode::OK, record_body(format, slot_value))
-        .without_header("content-type")
-        .with_header("content-type", media_type)
-        .with_header("etag", SERVER_ETAG)
-        .with_header("link", PROFILE_LINK)
-        .with_header("cache-control", "no-store")
-        .with_header("vary", "authorization, accept")
-}
-
-/// The engine's own download response: the stored content type, no entity tag,
-/// and a narrower `vary` than any record route.
 fn download_response() -> MockResponse {
     MockResponse::bytes(StatusCode::OK, "application/pdf", PDF)
         .with_header("content-disposition", "attachment")
@@ -391,254 +224,131 @@ fn problem_title(status: u16) -> &'static str {
 }
 
 fn key(value: &str) -> BRegIdempotencyKey {
-    BRegIdempotencyKey::parse(value).expect("valid idempotency key")
+    BRegIdempotencyKey::parse(value).unwrap()
 }
-
-fn etag() -> BRegEtag {
-    BRegEtag::parse(SERVER_ETAG).expect("valid strong entity tag")
+fn proposal_document() -> Value {
+    let path = format!("/v1/proposals/{RECORD_ID}/attachments/{SLOT}");
+    json!({"id":RECORD_ID,"actionId":"correct","actionRevision":REVISION,"submissionVersion":2,"revision":3,"state":"draft","links":{},
+        "attachments":{SLOT:{"id":SLOT,"required":false,"maximumBytes":1024,"contentTypes":["application/pdf"],"classification":"restricted","links":{
+            "download":{"method":"GET","path":format!("{path}?submissionVersion=2"),"accessProfile":"writer","operation":"download"},
+            "upload":{"method":"PATCH","path":path,"accessProfile":"writer","operation":"upload","ifMatch":SERVER_ETAG},
+            "remove":{"method":"DELETE","path":path,"accessProfile":"writer","operation":"remove","ifMatch":SERVER_ETAG}}}}})
 }
-
-fn record_id() -> Uuid {
-    Uuid::parse_str(RECORD_ID).expect("canonical record identifier")
+fn proposal_response() -> MockResponse {
+    MockResponse::json(StatusCode::OK, proposal_document())
+        .with_header("cache-control", "no-store")
+        .with_header("vary", "authorization, accept")
 }
-
-fn slot(metadata: &BRegMetadata) -> BRegAttachmentSlot {
-    metadata
-        .select_attachments("company", "company-writer")
-        .expect("the served slot contract is complete")
-        .remove(0)
-}
-
-async fn selected(responses: Vec<MockResponse>) -> (TestClient, BRegAttachmentSlot) {
-    let mut queue = vec![metadata_response()];
+async fn selected(responses: Vec<MockResponse>) -> (TestClient, BRegProposal) {
+    let metadata = json!({"id":"attachment-test","version":"1","revision":REVISION,"metadataVersion":"1","recordTypes":[],"operations":[],"actions":[{
+        "id":"correct","apiName":"correct","revision":REVISION,"display":{},"execution":{"mode":"proposal"},"route":"/v1/actions/correct/proposals","inputMode":"fixed","inputs":[],"referenceInputs":[],"requiredConditionKeys":[],"resultEffects":[],"access":{"selectedProfile":"writer"},
+        "routes":{"start":{"method":"POST","path":"/v1/actions/correct/proposals","operationId":"actions.correct.start","requiresIdempotencyKey":true,"inputSchema":"action-correct-invoke-input","responseSchema":"action-correct-invoke-response"}},
+        "bounds":{"maximumTargets":16,"maximumFieldMutations":128,"maximumSnapshotBytes":2097152}}]});
+    let mut queue = vec![
+        MockResponse::json(StatusCode::OK, metadata)
+            .with_header("cache-control", "no-store")
+            .with_header("vary", "authorization, accept"),
+        proposal_response(),
+    ];
     queue.extend(responses);
     let fixture = test_client(queue).await;
     let metadata = fixture
         .client
-        .registry_contract(Some("company-writer"))
+        .registry_contract(Some("writer"))
         .await
-        .expect("runtime metadata")
+        .unwrap();
+    let action = metadata.value.select_action("correct", "writer").unwrap();
+    let input = BRegActionInvocationRequest::new(&action, serde_json::Map::new(), None).unwrap();
+    let proposal = fixture
+        .client
+        .start_proposal(&action, &input, &key("start"))
+        .await
+        .unwrap()
         .value;
-    let slot = slot(&metadata);
-    (fixture, slot)
+    (fixture, proposal)
 }
-
 #[tokio::test]
-async fn upload_download_and_delete_use_the_exact_slot_routes() {
-    let (fixture, slot) = selected(vec![
-        mutation_response(BRegRecordFormat::Json, filled_slot()),
+async fn upload_download_and_delete_use_exact_promoted_proposal_routes() {
+    let (fixture, proposal) = selected(vec![
+        proposal_response(),
         download_response(),
-        mutation_response(BRegRecordFormat::JsonLd, Value::Null),
+        proposal_response(),
     ])
     .await;
-
-    let upload = BRegAttachmentUpload::new(&slot, "application/pdf", PDF.to_vec())
-        .expect("the slot accepts these bytes");
-    let uploaded = fixture
+    fixture
         .client
-        .upload_attachment(
-            &slot,
-            record_id(),
-            &etag(),
-            &upload,
-            &key("upload-exchange-1"),
-            BRegRecordFormat::Json,
-        )
+        .upload_proposal_attachment(&proposal, SLOT, "application/pdf", PDF, &key("upload"))
         .await
-        .expect("upload succeeds");
-    assert_eq!(uploaded.value.data.record_identifier, RECORD_ID);
-    assert_eq!(uploaded.metadata.etag().unwrap().as_str(), SERVER_ETAG);
-    let state = slot
-        .value_in(&uploaded.value.data)
-        .expect("the response carries a conforming slot value");
-    assert_eq!(state.filled().unwrap().sha256(), DIGEST);
-
-    let downloaded = fixture
+        .unwrap();
+    let bytes = fixture
         .client
-        .download_attachment(&slot, record_id(), 2)
+        .download_proposal_attachment(&proposal, SLOT)
         .await
-        .expect("download succeeds");
-    assert_eq!(downloaded.value.media_type(), "application/pdf");
-    assert_eq!(downloaded.value.as_bytes(), PDF);
-    assert!(downloaded.metadata.etag().is_none());
-
-    let removed = fixture
+        .unwrap();
+    assert_eq!(bytes.value.as_bytes(), PDF);
+    assert!(bytes.metadata.etag().is_none());
+    fixture
         .client
-        .delete_attachment(
-            &slot,
-            record_id(),
-            &etag(),
-            &key("remove-exchange-1"),
-            BRegRecordFormat::JsonLd,
-        )
+        .delete_proposal_attachment(&proposal, SLOT, &key("remove"))
         .await
-        .expect("removal succeeds");
-    assert!(removed.value.json_ld_context.is_some());
-    assert_eq!(
-        slot.value_in(&removed.value.data).unwrap(),
-        registry_breg_client::BRegAttachmentSlotValue::Empty
-    );
-
-    assert_eq!(fixture.token.0.load(Ordering::SeqCst), 4);
-    let requests = fixture.requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 4, "one request per explicit exchange");
-
-    assert_eq!(requests[1].method, "PATCH");
-    assert_eq!(
-        requests[1].uri,
-        format!(
-            "/tenant/base/v1/records/companies/{RECORD_ID}/attachments/{SLOT}?accessProfile=company-writer"
-        )
-    );
-    assert_eq!(requests[1].accept.as_deref(), Some("application/json"));
-    assert_eq!(requests[1].content_type.as_deref(), Some("application/pdf"));
-    assert_eq!(
-        requests[1].idempotency_key.as_deref(),
-        Some("upload-exchange-1")
-    );
-    assert_eq!(requests[1].if_match.as_deref(), Some(SERVER_ETAG));
-    assert_eq!(requests[1].body, PDF);
-    assert_eq!(
-        requests[1].authorization.as_deref(),
-        Some("Bearer attachment-boundary-token")
-    );
-
-    assert_eq!(requests[2].method, "GET");
-    assert_eq!(
-        requests[2].uri,
-        format!(
-            "/tenant/base/v1/records/companies/{RECORD_ID}/attachments/{SLOT}?proposalVersion=2&accessProfile=company-writer"
-        )
-    );
-    assert_eq!(
-        requests[2].accept.as_deref(),
-        Some("*/*"),
-        "a binary read is not negotiated"
-    );
-    assert!(requests[2].if_match.is_none());
-    assert!(requests[2].idempotency_key.is_none());
-    assert!(requests[2].body.is_empty());
-
-    assert_eq!(requests[3].method, "DELETE");
+        .unwrap();
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), 5);
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(requests.len(), 5);
+    for (request, method) in requests[2..].iter().zip(["PATCH", "GET", "DELETE"]) {
+        assert_eq!(request.method, method);
+        assert_eq!(
+            request.authorization.as_deref(),
+            Some("Bearer attachment-boundary-token")
+        );
+    }
+    let path = format!("/tenant/base/v1/proposals/{RECORD_ID}/attachments/{SLOT}");
+    assert_eq!(requests[2].uri, format!("{path}?accessProfile=writer"));
+    assert_eq!(requests[2].body, PDF);
+    assert_eq!(requests[2].content_type.as_deref(), Some("application/pdf"));
+    assert_eq!(requests[2].accept.as_deref(), Some("application/json"));
+    assert_eq!(requests[2].if_match.as_deref(), Some(SERVER_ETAG));
+    assert_eq!(requests[2].idempotency_key.as_deref(), Some("upload"));
     assert_eq!(
         requests[3].uri,
-        format!(
-            "/tenant/base/v1/records/companies/{RECORD_ID}/attachments/{SLOT}?accessProfile=company-writer"
-        )
+        format!("{path}?accessProfile=writer&submissionVersion=2")
     );
-    assert_eq!(requests[3].accept.as_deref(), Some("application/ld+json"));
-    assert!(requests[3].content_type.is_none());
-    assert_eq!(
-        requests[3].idempotency_key.as_deref(),
-        Some("remove-exchange-1")
-    );
-    assert_eq!(requests[3].if_match.as_deref(), Some(SERVER_ETAG));
-    assert!(requests[3].body.is_empty());
+    assert_eq!(requests[3].accept.as_deref(), Some("*/*"));
+    assert!(requests[3].if_match.is_none());
+    assert!(requests[3].idempotency_key.is_none());
+    assert_eq!(requests[4].uri, format!("{path}?accessProfile=writer"));
+    assert_eq!(requests[4].if_match.as_deref(), Some(SERVER_ETAG));
+    assert_eq!(requests[4].idempotency_key.as_deref(), Some("remove"));
+    assert!(requests[4].body.is_empty());
 }
-
 #[tokio::test]
-async fn a_slot_from_another_client_source_is_refused_without_a_request() {
-    let (fixture, slot) = selected(Vec::new()).await;
-    let other = test_client(vec![metadata_response()]).await;
-    let other_metadata = other
-        .client
-        .registry_contract(Some("company-writer"))
-        .await
-        .expect("runtime metadata")
-        .value;
-    let other_slot = self::slot(&other_metadata);
-    let upload = BRegAttachmentUpload::new(&slot, "application/pdf", PDF.to_vec())
-        .expect("the slot accepts these bytes");
-
-    for refusal in [
-        fixture
-            .client
-            .upload_attachment(
-                &other_slot,
-                record_id(),
-                &etag(),
-                &upload,
-                &key("foreign-1"),
-                BRegRecordFormat::Json,
-            )
-            .await
-            .expect_err("a foreign slot is refused"),
-        fixture
-            .client
-            .download_attachment(&other_slot, record_id(), 1)
-            .await
-            .expect_err("a foreign slot is refused"),
-        fixture
-            .client
-            .delete_attachment(
-                &other_slot,
-                record_id(),
-                &etag(),
-                &key("foreign-2"),
-                BRegRecordFormat::Json,
-            )
-            .await
-            .expect_err("a foreign slot is refused"),
+async fn foreign_sources_missing_slots_and_disallowed_bytes_are_refused_before_io() {
+    let (fixture, proposal) = selected(vec![]).await;
+    for (mime, bytes) in [
+        ("text/plain", PDF),
+        ("application/pdf", b"".as_slice()),
+        ("application/pdf", &vec![1; 1025]),
     ] {
-        assert!(matches!(
-            refusal,
-            BaseRegistryClientError::InvalidRequest { .. }
-        ));
-    }
-    assert_eq!(
-        fixture.requests.lock().unwrap().len(),
-        1,
-        "only the metadata fetch reached the engine"
-    );
-}
-
-#[tokio::test]
-async fn an_upload_prepared_for_another_slot_never_reaches_the_engine() {
-    let (fixture, slot) = selected(Vec::new()).await;
-    let mut other = metadata_fixture();
-    for operation in other["operations"].as_array_mut().unwrap() {
-        operation["fields"][1]["id"] = json!("cover-letter");
-        operation["fields"][1]["apiName"] = json!("cover-letter");
-        operation["fields"][1]["schema"]["x-registry-attachment"]["download"]["path"] =
-            json!("/v1/records/companies/{record_id}/attachments/cover-letter");
-        operation["fields"][1]["schema"]["x-registry-attachment"]["upload"]["path"] =
-            json!("/v1/records/companies/{record_id}/attachments/cover-letter");
-        operation["fields"][1]["schema"]["x-registry-attachment"]["remove"]["path"] =
-            json!("/v1/records/companies/{record_id}/attachments/cover-letter");
-        operation["readableFields"] = json!(["legal-name", "cover-letter"]);
-    }
-    other["entities"][0]["readableFields"] = json!(["legal-name", "cover-letter"]);
-    let second = test_client(vec![MockResponse::json(StatusCode::OK, other)]).await;
-    let other_slot = self::slot(
-        &second
+        assert!(fixture
             .client
-            .registry_contract(Some("company-writer"))
+            .upload_proposal_attachment(&proposal, SLOT, mime, bytes, &key("bad"))
             .await
-            .expect("runtime metadata")
-            .value,
-    );
-    // Both slots come from the same source, so only the slot binding differs.
-    let upload = BRegAttachmentUpload::new(&other_slot, "application/pdf", PDF.to_vec())
-        .expect("the other slot accepts these bytes");
-    let refusal = fixture
+            .is_err());
+    }
+    assert!(fixture
         .client
-        .upload_attachment(
-            &slot,
-            record_id(),
-            &etag(),
-            &upload,
-            &key("mismatched-1"),
-            BRegRecordFormat::Json,
-        )
+        .delete_proposal_attachment(&proposal, "missing", &key("bad"))
         .await
-        .expect_err("bytes prepared for another slot are refused");
-    assert!(matches!(
-        refusal,
-        BaseRegistryClientError::InvalidRequest { .. }
-    ));
-    assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+        .is_err());
+    let other = test_client(vec![]).await;
+    assert!(other
+        .client
+        .download_proposal_attachment(&proposal, SLOT)
+        .await
+        .is_err());
+    assert_eq!(fixture.requests.lock().unwrap().len(), 2);
+    assert!(other.requests.lock().unwrap().is_empty());
 }
-
 #[tokio::test]
 async fn a_download_response_missing_its_governing_headers_is_refused() {
     for (label, response, expected) in [
@@ -671,7 +381,7 @@ async fn a_download_response_missing_its_governing_headers_is_refused() {
         ),
         (
             "a profile link on a binary read",
-            download_response().with_header("link", PROFILE_LINK),
+            download_response().with_header("link", "<https://example.test>; rel=\"profile\""),
             BRegProtocolFailure::ProfileLink,
         ),
         (
@@ -690,7 +400,7 @@ async fn a_download_response_missing_its_governing_headers_is_refused() {
         let (fixture, slot) = selected(vec![response]).await;
         let refusal = fixture
             .client
-            .download_attachment(&slot, record_id(), 2)
+            .download_proposal_attachment(&slot, SLOT)
             .await
             .expect_err("the client refuses the response");
         let BaseRegistryClientError::Protocol { failure, .. } = refusal else {
@@ -702,7 +412,7 @@ async fn a_download_response_missing_its_governing_headers_is_refused() {
 
 #[tokio::test]
 async fn attachment_problems_keep_the_closed_problem_vocabulary() {
-    for (expected, detail) in [
+    for (code, detail) in [
         (
             BRegProblemCode::PreconditionRequired,
             "The mutation precondition is required.",
@@ -715,72 +425,39 @@ async fn attachment_problems_keep_the_closed_problem_vocabulary() {
             BRegProblemCode::UnsupportedMediaType,
             "The request media type is not supported.",
         ),
-        (
-            BRegProblemCode::ResourceNotFound,
-            "The requested resource was not found.",
-        ),
-        (
-            BRegProblemCode::IdempotencyConflict,
-            "The idempotency key is bound to another request.",
-        ),
     ] {
-        let (fixture, slot) = selected(vec![problem_response(expected, detail)]).await;
-        let upload = BRegAttachmentUpload::new(&slot, "application/pdf", PDF.to_vec())
-            .expect("the slot accepts these bytes");
-        let refusal = fixture
+        let (fixture, proposal) = selected(vec![problem_response(code, detail)]).await;
+        let error = fixture
             .client
-            .upload_attachment(
-                &slot,
-                record_id(),
-                &etag(),
-                &upload,
-                &key("problem-1"),
-                BRegRecordFormat::Json,
-            )
+            .upload_proposal_attachment(&proposal, SLOT, "application/pdf", PDF, &key("upload"))
             .await
-            .expect_err("the engine refused");
-        let BaseRegistryClientError::Problem { code, .. } = refusal else {
-            panic!("{detail} must surface as a Base Registry Engine problem")
-        };
-        assert_eq!(code, expected);
+            .unwrap_err();
+        assert_eq!(error.problem_code(), Some(code));
     }
 }
-
-#[tokio::test]
-async fn a_download_refuses_a_proposal_version_the_engine_cannot_parse() {
-    let (fixture, slot) = selected(Vec::new()).await;
-    let refusal = fixture
-        .client
-        .download_attachment(&slot, record_id(), 0)
-        .await
-        .expect_err("a zero proposal version is not canonical");
-    assert!(matches!(
-        refusal,
-        BaseRegistryClientError::InvalidRequest { .. }
-    ));
-    assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+#[test]
+fn inert_attachment_descriptors_refuse_another_submission_or_proposal() {
+    for path in [
+        format!("/v1/proposals/{RECORD_ID}/attachments/{SLOT}?submissionVersion=1"),
+        format!("/v1/records/companies/{RECORD_ID}/attachments/{SLOT}?submissionVersion=2"),
+    ] {
+        let mut document = proposal_document();
+        document["attachments"][SLOT]["links"]["download"]["path"] = json!(path);
+        assert!(BRegProposal::from_slice(&serde_json::to_vec(&document).unwrap()).is_err());
+    }
 }
-
 #[tokio::test]
-async fn a_mutation_response_for_another_record_is_refused() {
-    let mut body = record_body(BRegRecordFormat::Json, filled_slot());
-    body["data"]["recordIdentifier"] = json!("00000000-0000-4000-8000-000000000002");
-    let response = MockResponse::json(StatusCode::OK, body)
-        .with_header("etag", SERVER_ETAG)
-        .with_header("link", PROFILE_LINK)
+async fn a_mutation_response_for_another_proposal_is_refused() {
+    let mut document = proposal_document();
+    document["id"] = json!("00000000-0000-4000-8000-000000000002");
+    document["attachments"] = json!({});
+    let response = MockResponse::json(StatusCode::OK, document)
         .with_header("cache-control", "no-store")
         .with_header("vary", "authorization, accept");
-    let (fixture, slot) = selected(vec![response]).await;
-    let refusal = fixture
+    let (fixture, proposal) = selected(vec![response]).await;
+    assert!(fixture
         .client
-        .delete_attachment(
-            &slot,
-            record_id(),
-            &etag(),
-            &key("other-record-1"),
-            BRegRecordFormat::Json,
-        )
+        .delete_proposal_attachment(&proposal, SLOT, &key("remove"))
         .await
-        .expect_err("another record's response is refused");
-    assert!(matches!(refusal, BaseRegistryClientError::Protocol { .. }));
+        .is_err());
 }

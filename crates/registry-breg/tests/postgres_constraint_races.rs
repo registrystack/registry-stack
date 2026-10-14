@@ -10,14 +10,14 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::mutation::{
     MutationBody, MutationCoordinator, MutationError, MutationPlan, MutationRequest,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
-    RegistryLockKey, RegistryStateTestIdentity,
+    ClaimContext, RegistryLockKey, RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::{Map, Value};
@@ -459,11 +459,11 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"constraint-race-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"parent","primaryDataset":"test-dataset","route":"parents","mutationMode":"create-only","classification":"public",
             "fields":[{"id":"name","type":"string","maximumLength":64,"required":true,"classification":"public"}]
           },{
@@ -495,17 +495,17 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
-            "permissions":{"entities":[{
-              "entity":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],
+            "permissions":{"records":[{
+              "recordType":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],
               "rowBoundaries": "unrestricted"
             },{
-              "entity":"child","operations":["create","get"],"readableFields":["parent","alternate-parent","name"],"writableFields":["parent","alternate-parent","name"],
+              "recordType":"child","operations":["create","get"],"readableFields":["parent","alternate-parent","name"],"writableFields":["parent","alternate-parent","name"],
               "rowBoundaries": "unrestricted"
             },{
-              "entity":"unique-entry","operations":["create","get"],"readableFields":["scope","code"],"writableFields":["scope","code"],
+              "recordType":"unique-entry","operations":["create","get"],"readableFields":["scope","code"],"writableFields":["scope","code"],
               "rowBoundaries": "unrestricted"
             },{
-              "entity":"period","operations":["create","get"],
+              "recordType":"period","operations":["create","get"],
               "readableFields":["scope","valid-from","valid-to"],
               "writableFields":["scope","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"

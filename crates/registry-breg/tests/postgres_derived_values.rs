@@ -10,19 +10,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims, router,
 };
-use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_json, ModuleAssetSource};
+use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
+use registry_breg::contract::{ModuleAssetSource, parse_project_json};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
     ClaimContext, ExpectedManagedCatalog, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    RegistryStateTestIdentity, begin_record_transaction,
+    initialize_registry_state_for_catalog_test, install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::Value;
@@ -326,11 +326,11 @@ fn read_context(registry: &registry_breg::CompiledRegistry) -> ClaimContext {
 }
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(br#"{
+    let project = parse_project_json(br#"{"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"derived-values","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "entities":[{
+        "recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[{"id":"scenario","type":"string","required":true,"minimumLength":1,"maximumLength":64,"classification":"internal"}],
             "derived":[{
@@ -346,8 +346,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         }],
         "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":{"entities":[{
-                "entity":"entry","operations":["create","get","list"],
+            "permissions":{"records":[{
+                "recordType":"entry","operations":["create","get","list"],
                 "readableFields":["scenario","short-code","description","amount","count","state"],
                 "writableFields":["scenario"],
                 "rowBoundaries":"unrestricted"

@@ -1,7 +1,8 @@
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: action-admission, version: "1", defaultLanguage: en, canonicalBaseIri: https://action-admission.example.test}
-entities:
+datasets: [{id: test-dataset}]
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -12,14 +13,17 @@ entities:
       - {id: region, type: string, maximumLength: 20, required: true, classification: internal}
 actions:
   - id: rename-case
+    execution: {mode: immediate}
     inputs:
       - {id: case-ref, apiName: caseId, type: reference, target: case, required: true, classification: restricted}
       - {id: case-label, apiName: newLabel, type: string, maximumLength: 40, required: true, classification: restricted}
-    effects:
-      - id: renamed
-        target: {fromField: case-ref}
-        operation: patch
-        set: {label: {fromField: case-label}}
+    plan:
+      type: fixed
+      effects:
+        - id: renamed
+          target: {fromInput: case-ref}
+          operation: patch
+          set: {label: {fromInput: case-label}}
 accessProfiles:
   - id: registrar
     default: true
@@ -31,7 +35,7 @@ accessProfiles:
         - action: rename-case
           operations: [invoke]
           targets:
-            - entity: case
+            - recordType: case
               rowBoundaries: [{field: region, claim: regions, operator: in}]
           results: [renamed]
   - id: supervisor
@@ -42,5 +46,5 @@ accessProfiles:
       actions:
         - action: rename-case
           operations: [invoke]
-          targets: [{entity: case, rowBoundaries: unrestricted}]
+          targets: [{recordType: case, rowBoundaries: unrestricted}]
           results: []

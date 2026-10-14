@@ -24,7 +24,6 @@ artifacts:
   - {path: contracts/explain/RoutesExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: contracts/explain/QueriesExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: contracts/explain/ActionsExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
-  - {path: contracts/explain/ChangeRequestsExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: contracts/explain/EventsExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: contracts/explain/LifecycleExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: acceptance/asset-site-placement/registry.yaml, kind: authored-fixture, state: authored}
@@ -43,8 +42,6 @@ artifacts:
   - {path: generated/runtime/runtime.schema.json, kind: generated-runtime-schema, state: authored}
   - {path: generated/asset-site-placement, kind: generated-baseline, state: authored}
   - {path: generated/business-establishments, kind: generated-baseline, state: authored}
-  - {path: generated/asset-site-placement-change-requests, kind: generated-baseline, state: authored}
-  - {path: generated/publicschema-household-change-requests, kind: generated-baseline, state: authored}
   - {path: scripts/check-generated.sh, kind: generated-artifact-gate, state: authored}
   - {path: scripts/compare-generated-tree.py, kind: generated-tree-comparator, state: authored}
   - {path: scripts/test-postgres.sh, kind: real-postgresql-entrypoint, state: authored}

@@ -1,4 +1,4 @@
-fn handle(ctx) {
+fn plan(ctx) {
     let prefix = ctx.inputs["farmer-prefix"];
     let number = ctx.inputs["farmer-number"];
     prefix.trim();

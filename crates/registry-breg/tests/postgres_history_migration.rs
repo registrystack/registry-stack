@@ -10,24 +10,25 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, Response, StatusCode};
 
 use postgres_harness::TestDatabase;
+use registry_breg::CompiledRegistry;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims, router,
 };
-use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
 use registry_breg::contract::{parse_module_json, parse_project_yaml};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::history_erasure::{
-    erase_record_history, HistoryErasureOutcome, HistoryErasureRequest, HistoryErasureTimeouts,
-    RecordHistoryErasureTarget,
+    HistoryErasureOutcome, HistoryErasureRequest, HistoryErasureTimeouts,
+    RecordHistoryErasureTarget, erase_record_history,
 };
 use registry_breg::history_schema::HistorySchemaDescriptor;
 use registry_breg::migration::{
-    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, MigrationError,
+    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, MigrationError, apply_verified_package,
 };
 use registry_breg::migration_plan::{
     AffectedRowBounds, ArtifactDigestBinding, MigrationRehearsalReceipt, RehearsalFixture,
@@ -37,21 +38,20 @@ use registry_breg::migration_plan::{
     ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
-    compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSourceFile, VerifiedPackage,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest,
+    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+    VerifiedPackage, compiled_registry_change_set, load_package, prepare_package,
 };
 use registry_breg::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema,
-    managed_schema_fingerprint, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
-    RegistryLockKey, RegistryStateTestIdentity,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
+    PostgresRecordReadService, PostgresRevisionReadService, RegistryLockKey,
+    RegistryStateTestIdentity, initialize_registry_state_for_catalog_test, install_compiled_schema,
+    managed_schema_fingerprint,
 };
-use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use uuid::Uuid;
@@ -932,7 +932,7 @@ fn compile_registry(variant: Variant) -> CompiledRegistry {
 
 fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://history-migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://history-migration.example.test","title":"History Migration Registry","publisher":{{"id":"history-migration-registry-authority","name":"History Migration Publisher"}}}},"publicService":{{"id":"history-migration-registry-service","title":"History Migration Registry"}},"datasets":[{{"id":"history-migration-registry","title":"History Migration Dataset","owner":"History Migration Publisher","status":"active"}}],"dataServices":[{{"id":"history-migration-registry-data-service","title":"History Migration Registry","endpointUrl":"https://history-migration.example.test","servesDatasets":["history-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"datasets":[{{"id": "history-migration-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://history-migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://history-migration.example.test","title":"History Migration Registry","publisher":{{"id":"history-migration-registry-authority","name":"History Migration Publisher"}}}},"publicService":{{"id":"history-migration-registry-service","title":"History Migration Registry"}},"datasets":[{{"id":"history-migration-registry","title":"History Migration Dataset","owner":"History Migration Publisher","status":"active"}}],"dataServices":[{{"id":"history-migration-registry-data-service","title":"History Migration Registry","endpointUrl":"https://history-migration.example.test","servesDatasets":["history-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -943,7 +943,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         Variant::StatusRestricted => "restricted",
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"history-migration-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","required":true,"maximumLength":8,"classification":"internal"}},{{"id":"status","type":"string","required":true,"maximumLength":16,"classification":"{status_classification}"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list","revisions"],"revisionAccess":true,"readableFields":["code"],"writableFields":["code","status"]}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"asset","primaryDataset":"history-migration-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","required":true,"maximumLength":8,"classification":"internal"}},{{"id":"status","type":"string","required":true,"maximumLength":16,"classification":"{status_classification}"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list","revisions"],"revisionAccess":true,"readableFields":["code"],"writableFields":["code","status"]}}]}}]}}"#
     )
     .into_bytes()
 }

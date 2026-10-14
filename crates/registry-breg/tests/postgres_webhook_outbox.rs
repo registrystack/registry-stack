@@ -13,24 +13,24 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::idempotency::PermittedResponseHeader;
 use registry_breg::model::CompiledEventDelivery;
 use registry_breg::mutation::{
-    install_mutation_schema, MutationBody, MutationCoordinator, MutationError, MutationFaultPoint,
-    MutationPlan, MutationRequest, PatchOperation,
+    MutationBody, MutationCoordinator, MutationError, MutationFaultPoint, MutationPlan,
+    MutationRequest, PatchOperation, install_mutation_schema,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
-    managed_schema_fingerprint, ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
+    RegistryStateTestIdentity, RowBoundaryContext, initialize_compiled_registry_state_for_test,
+    install_compiled_schema, managed_schema_fingerprint,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_platform_audit::AuditProfile;
 use registry_platform_hooks::{Causation, EnvelopeLimits, HookEnvelope};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use tokio_postgres::Row;
@@ -54,8 +54,8 @@ const EXPECTED_EVENT_SOURCE: &str =
     "urn:registrystack:registry:webhook-outbox-registry:instance:webhook-outbox-instance";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_deterministically_identified(
-) {
+async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_deterministically_identified()
+ {
     let database = TestDatabase::create(10).await;
     let (migration, migration_task) = database.connect_migration().await;
     let compiled = compiled_registry();
@@ -708,11 +708,11 @@ async fn real_postgres_delivery_schema_refuses_a_delivered_row_that_keeps_raw_an
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"webhook-outbox-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -742,8 +742,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"case","operations":["create","patch","get","list"],
+            "permissions":{"records":[{
+              "recordType":"case","operations":["create","patch","get","list"],
               "readableFields":["jurisdiction","label","payload","restricted_note"],
               "writableFields":["jurisdiction","label","payload","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]

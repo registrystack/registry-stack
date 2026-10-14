@@ -4,23 +4,18 @@
 mod access_log;
 mod actions;
 mod attachments;
-#[cfg(test)]
-#[path = "tests/change_request_action_tests.rs"]
-mod change_request_action_tests;
-#[cfg(test)]
-#[path = "tests/change_request_read_tests.rs"]
-mod change_request_read_tests;
 mod context;
 mod gis;
 mod ingestion;
 mod metadata;
+pub(crate) mod proposals;
 mod service;
 mod statistics;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::extract::{Path, RawQuery, State};
 use axum::http::header::{
     ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, LINK, VARY,
@@ -28,20 +23,16 @@ use axum::http::header::{
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
-use axum::{middleware, Extension, Json, Router};
+use axum::{Extension, Json, Router, middleware};
 use registry_platform_canonical_json::parse_json_strict;
-use registry_platform_httpsec::{security_headers, CspBuilder};
-use serde_json::{json, Map, Value};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use registry_platform_httpsec::{CspBuilder, security_headers};
+use serde_json::{Map, Value, json};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-pub(crate) use context::{Authenticated, VerifiedRequestActionAuthority};
+pub(crate) use context::Authenticated;
 pub use context::{
     AuthorizedActionContext, AuthorizedRequestContext, RowBoundaryOperator, VerifiedClaimValue,
-    VerifiedContextError, VerifiedRequestAction, VerifiedRequestClaims, VerifiedRequestPresence,
-    VerifiedRequestTargetAuthority, VerifiedRowBoundary,
-};
-pub(crate) use service::{
-    cursor_query_reference_value, valid_text_search_term, CursorQueryReferenceInput,
+    VerifiedContextError, VerifiedRequestClaims, VerifiedRowBoundary,
 };
 pub use service::{
     ActionTargetConditionsInput, BatchMutationInput, CompiledLookupSelector, CompiledReadQuery,
@@ -49,30 +40,32 @@ pub use service::{
     ImmediateActionInput, LookupSelectorValue, ReadBboxQuery, ReadFilterExpr, ReadFilterOperator,
     ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField, ReadRuntimeIdentity,
     ReadServiceError, ReadSpatialQuery, ReadinessProbe, RecordReadKind, RecordReadRefusal,
-    RecordReadRequest, RecordReadService, RequestActionBody, RequestActionInput,
-    RequestActionTargetAuthority, RevisionReadRefusal, RevisionReadRequest, RevisionReadService,
-    ServiceFuture, SnapshotReadRequest, SnapshotReadService,
+    RecordReadRequest, RecordReadService, RevisionReadRefusal, RevisionReadRequest,
+    RevisionReadService, ServiceFuture, SnapshotReadRequest, SnapshotReadService,
+};
+pub(crate) use service::{
+    CursorQueryReferenceInput, cursor_query_reference_value, valid_text_search_term,
 };
 
-use crate::auth::{authenticate_request, RegistryAuthenticator};
+use crate::auth::{RegistryAuthenticator, authenticate_request};
 use crate::contract::{
     AccessProfileSource, BoundaryOperator, FieldTypeSource, LookupValueOrigin, Operation,
     RowBoundarySource,
 };
 use crate::correlation::RequestCorrelation;
 use crate::cursor::{
-    now_unix_seconds, CursorAdapter, CursorBboxQuery, CursorBinding, CursorError, CursorFilterExpr,
+    CursorAdapter, CursorBboxQuery, CursorBinding, CursorError, CursorFilterExpr,
     CursorFilterOperator, CursorFilterPredicate, CursorLogicalOp, CursorOrderClause,
     CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
+    now_unix_seconds,
 };
 use crate::idempotency::{HeldResponse, PermittedResponseHeader};
 use crate::model::{
-    request_query_field_id_for_api, request_query_field_type, CompiledEntity,
-    CompiledMetadataEntity, CompiledMetadataEntry, CompiledQueryKind, CompiledQueryOperation,
-    CompiledQuerySortDirection, CompiledReadPath, CompiledRevisionKind, CompiledRoute,
-    MAX_REVISION_HISTORY_RECORDS,
+    CompiledEntity, CompiledMetadataEntity, CompiledMetadataEntry, CompiledQueryKind,
+    CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRevisionKind,
+    CompiledRoute, MAX_REVISION_HISTORY_RECORDS,
 };
-use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
+use crate::mutation::{BatchMutationItem, MutationError, parse_json_patch_document};
 use crate::problem::ProblemCode;
 use crate::problem_location::{BatchItemMember, RequestLocation};
 use crate::query as strict_query;
@@ -81,10 +74,9 @@ use crate::record_profile::{self, RecordRepresentation};
 use uuid::Uuid;
 
 use crate::artifacts::{
-    access_log_path, openapi_access_log_operation, openapi_access_log_response_schema,
-    openapi_components, openapi_entity_input_schema, openapi_input_schema_id, openapi_operation,
-    openapi_request_action_input_schema, OpenApiAccessProfiles, OpenApiOperationSpec,
-    ACCESS_LOG_RESPONSE_SCHEMA_ID,
+    ACCESS_LOG_RESPONSE_SCHEMA_ID, OpenApiAccessProfiles, OpenApiOperationSpec, access_log_path,
+    openapi_access_log_operation, openapi_access_log_response_schema, openapi_components,
+    openapi_entity_input_schema, openapi_input_schema_id, openapi_operation,
 };
 
 const MAX_MUTATION_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -185,33 +177,39 @@ fn route_set(service: Arc<HttpService>) -> Router {
                     delete(tombstone_dispatch).layer(Extension(route.clone())),
                 )
             }
-            Operation::SubmitRequest
-            | Operation::ReviseRequest
-            | Operation::CancelRequest
-            | Operation::ApplyRequest
-                if service.mutations.is_some()
-                    && service
-                        .registry
-                        .entities()
-                        .get(&route.entity_id)
-                        .is_some_and(|entity| entity.change_request.is_some()) =>
-            {
-                app.route(
-                    &route.path,
-                    post(request_action_dispatch).layer(Extension(route.clone())),
-                )
-            }
             _ => app,
         };
     }
 
     if service.mutations.is_some() {
         for route in &service.registry.actions().routes {
-            app = app.route(
-                &route.path,
-                post(actions::dispatch).layer(Extension(route.clone())),
-            );
+            app = if route.operation == Operation::Start {
+                app.route(
+                    &route.path,
+                    post(proposals::start).layer(Extension(route.clone())),
+                )
+            } else {
+                app.route(
+                    &route.path,
+                    post(actions::dispatch).layer(Extension(route.clone())),
+                )
+            };
         }
+        app = app
+            .route("/v1/proposals", get(proposals::list))
+            .route("/v1/proposals/{proposal_id}", get(proposals::get))
+            .route(
+                "/v1/proposals/{proposal_id}/review-context",
+                get(proposals::review_context),
+            )
+            .route(
+                "/v1/proposals/{proposal_id}/review-status",
+                get(proposals::review_status),
+            )
+            .route(
+                "/v1/proposals/{proposal_id}/{operation}",
+                post(proposals::transition),
+            );
     }
 
     app.merge(access_log::routes(&service))
@@ -398,10 +396,12 @@ async fn openapi(
     let visible_actions = actions::visible_actions(&service, &claims, &options);
     let imports = ingestion::import_surfaces(&service, &claims, &options);
     let visible_statistics = statistics::metadata(&service, &claims, &options);
+    let visible_proposals = visible_proposal_operations(&service, &claims, &options);
     if visible.is_empty()
         && visible_actions.is_empty()
         && imports.is_empty()
         && visible_statistics.is_empty()
+        && visible_proposals.is_empty()
     {
         return concealed();
     }
@@ -410,7 +410,6 @@ async fn openapi(
     let mut readable_by_entity: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut writable_by_input_schema: BTreeMap<String, (String, BTreeSet<String>)> =
         BTreeMap::new();
-    let mut action_input_schemas = Map::new();
     let mut has_access_log = false;
     for surface in &visible {
         let path = paths
@@ -472,25 +471,13 @@ async fn openapi(
                 .entry(request_schema_ref)
                 .or_insert_with(|| (surface.entity.id.clone(), BTreeSet::new()));
             entry.1.extend(profile.writable_fields.iter().cloned());
-        } else if is_request_operation(surface.route.operation) {
-            action_input_schemas.insert(
-                request_schema_ref,
-                openapi_request_action_input_schema(surface.route.operation),
-            );
         }
     }
 
-    metadata::append_attachment_openapi(&service, &visible, &mut paths);
     let mut schemas = readable_by_entity
         .iter()
         .filter_map(|(entity_id, readable)| {
-            filtered_schema(
-                &service,
-                entity_id,
-                readable,
-                &permitted_request_types(&visible),
-            )
-            .map(|schema| (entity_id.clone(), schema))
+            filtered_schema(&service, entity_id, readable).map(|schema| (entity_id.clone(), schema))
         })
         .collect::<Map<String, Value>>();
     schemas.extend(writable_by_input_schema.iter().filter_map(
@@ -503,8 +490,6 @@ async fn openapi(
             })
         },
     ));
-    let has_request_actions = !action_input_schemas.is_empty();
-    schemas.extend(action_input_schemas);
     if has_access_log {
         schemas.insert(
             ACCESS_LOG_RESPONSE_SCHEMA_ID.to_owned(),
@@ -512,6 +497,11 @@ async fn openapi(
         );
     }
     actions::append_openapi(&visible_actions, &mut paths, &mut schemas);
+    crate::artifacts::append_proposal_openapi(
+        &mut paths,
+        service.registry.actions(),
+        Some(&visible_proposals),
+    );
     statistics::append_openapi(&service, &claims, &options, &mut paths, &mut schemas);
     if service.review_completions.is_some() {
         crate::artifacts::append_review_completion_openapi(&mut paths, &mut schemas);
@@ -523,7 +513,7 @@ async fn openapi(
         "info": {"title": service.registry.registry_id(), "version": service.registry.version()},
         "servers": [{"url": public_deployment_base_path(&service)}],
         "paths": paths,
-        "components": openapi_components(schemas, has_request_actions, !visible_actions.is_empty())
+        "components": openapi_components(schemas, !visible_actions.is_empty() || !visible_proposals.is_empty())
     }))
     .into_response()
 }
@@ -541,13 +531,16 @@ async fn registry_metadata(
     let visible = visible_metadata_entries(&service, &claims, &options);
     let visible_actions = actions::visible_actions(&service, &claims, &options);
     let visible_statistics = statistics::metadata(&service, &claims, &options);
-    if visible.is_empty() && visible_actions.is_empty() && visible_statistics.is_empty() {
+    let visible_proposals = visible_proposal_operations(&service, &claims, &options);
+    if visible.is_empty()
+        && visible_actions.is_empty()
+        && visible_statistics.is_empty()
+        && visible_proposals.is_empty()
+    {
         return concealed();
     }
 
     let mut entities: BTreeMap<String, MetadataEntity> = BTreeMap::new();
-    let permitted_requests =
-        permitted_request_types(&visible_surfaces(&service, &claims, &options));
     let mut readable_by_entity: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (_, entry) in &visible {
         readable_by_entity
@@ -580,11 +573,19 @@ async fn registry_metadata(
                 operations: BTreeMap::from([(entry.operation, entry.access_profile.clone())]),
                 readable_fields: entry.readable_fields.clone(),
                 schema_path: format!("/v1/schemas/{}", response_entity.id),
-                change_control: response_entity.change_control.as_ref().map(|_| {
-                    metadata_change_control(&service, response_entity, &permitted_requests)
-                }),
-                change_request: response_entity.change_request.as_ref().map(|request| {
-                    crate::artifacts::request_capability_metadata(request, &readable_by_entity)
+                mutation_policy: response_entity.change_control.as_ref().map(|control| {
+                    Value::Object(
+                        control
+                            .required_for
+                            .iter()
+                            .map(|operation| {
+                                (
+                                    operation_name(*operation).to_owned(),
+                                    json!("proposal-required"),
+                                )
+                            })
+                            .collect(),
+                    )
                 }),
             });
     }
@@ -602,11 +603,18 @@ async fn registry_metadata(
                 "readableFields": entity.readable_fields,
                 "schema": entity.schema_path,
             });
-            if let Some(change_control) = entity.change_control {
-                metadata["changeControl"] = change_control;
+            if let Some(mutation_policy) = entity.mutation_policy {
+                metadata["mutationPolicy"] = mutation_policy;
             }
-            if let Some(change_request) = entity.change_request {
-                metadata["changeRequest"] = change_request;
+            if let Some(record_type) = service.registry.entities().get(&entity.id) {
+                metadata["apiName"] = json!(record_type.api_name);
+                metadata["revision"] = json!(record_type.definition_revision);
+                let mut display = json!(record_type.display);
+                if record_type.display.title_field.as_ref()
+                    .is_some_and(|field| !entity.readable_fields.contains(field)) {
+                    display.as_object_mut().expect("display is an object").remove("titleField");
+                }
+                metadata["display"] = display;
             }
             metadata
         })
@@ -615,16 +623,100 @@ async fn registry_metadata(
         "id": service.registry.registry_id(),
         "version": service.registry.version(),
         "revision": service.registry.revision(),
-        "entities": entities,
+        "recordTypes": entities,
         "metadataVersion": "1",
         "operations": operations,
     });
     if !visible_statistics.is_empty() {
         metadata["statisticalDatasets"] = json!(visible_statistics);
     }
-    // Preserve action-free discovery output while omitting unavailable actions.
-    if !visible_actions.is_empty() {
-        metadata["actions"] = actions::metadata(&visible_actions);
+    let mut action_metadata = actions::metadata(&visible_actions)
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    // A lifecycle reader can describe the inputs it may inspect without
+    // acquiring authority to start another Proposal.
+    for (action_id, profile_id, operation) in &visible_proposals {
+        if *operation != crate::model::ProposalOperation::Get
+            || action_metadata
+                .iter()
+                .any(|entry| entry["id"].as_str() == Some(action_id.as_str()))
+        {
+            continue;
+        }
+        let Some(action) = service
+            .registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| &action.id == action_id)
+        else {
+            continue;
+        };
+        let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution else {
+            continue;
+        };
+        let Some(grant) = proposal
+            .permissions
+            .iter()
+            .find(|grant| &grant.profile_id == profile_id)
+        else {
+            continue;
+        };
+        let mut description =
+            crate::artifacts::public_action_metadata_entry(action, Some(profile_id));
+        description["routes"] = json!({});
+        description
+            .as_object_mut()
+            .expect("Action description")
+            .remove("route");
+        description
+            .as_object_mut()
+            .expect("Action description")
+            .remove("conditionRoute");
+        description["requiredConditionKeys"] = json!([]);
+        description["resultEffects"] = json!([]);
+        if let Some(inputs) = description["inputs"].as_array_mut() {
+            inputs.retain(|input| {
+                input["id"]
+                    .as_str()
+                    .is_some_and(|id| grant.readable_inputs.contains(id))
+            });
+        }
+        if let Some(inputs) = description["referenceInputs"].as_array_mut() {
+            inputs.retain(|input| {
+                input["input"]
+                    .as_str()
+                    .is_some_and(|id| grant.readable_inputs.contains(id))
+            });
+        }
+        action_metadata.push(description);
+    }
+    if !action_metadata.is_empty() {
+        metadata["actions"] = Value::Array(action_metadata);
+    }
+    if !visible_proposals.is_empty() {
+        let list_profiles = visible_proposals
+            .iter()
+            .filter(|(_, _, operation)| *operation == crate::model::ProposalOperation::List)
+            .map(|(_, profile, _)| profile)
+            .collect::<BTreeSet<_>>();
+        let get_profiles = visible_proposals
+            .iter()
+            .filter(|(_, _, operation)| *operation == crate::model::ProposalOperation::Get)
+            .map(|(_, profile, _)| profile)
+            .collect::<BTreeSet<_>>();
+        let mut inventory = BTreeMap::<(&str, &str), Vec<&str>>::new();
+        for (action, profile, operation) in &visible_proposals {
+            inventory
+                .entry((action.as_str(), profile.as_str()))
+                .or_default()
+                .push(operation.as_str());
+        }
+        metadata["proposals"] = json!({"method":"GET","path":"/v1/proposals", "accessProfiles":list_profiles,
+            "get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":get_profiles},
+            "actions":inventory.into_iter().map(|((action,profile),operations)|json!({
+                "actionId":action,"accessProfile":profile,"operations":operations})).collect::<Vec<_>>()});
     }
     // A peer that runs in lock-step with this engine release, such as a
     // Casework source adapter, compares this header with its own release and
@@ -663,9 +755,7 @@ async fn entity_schema(
                 fields.extend(surface.readable_fields.iter().cloned());
                 fields
             });
-    let permitted_requests =
-        permitted_request_types(&visible_surfaces(&service, &claims, &options));
-    match filtered_schema(&service, &entity_id, &readable, &permitted_requests) {
+    match filtered_schema(&service, &entity_id, &readable) {
         Some(schema) => Json(schema).into_response(),
         None => concealed(),
     }
@@ -719,19 +809,6 @@ async fn read_dispatch(
     }
     let representation = negotiated_read_representation(&headers);
 
-    if options.request_history_after_proposal_version.is_some()
-        && (route.operation != Operation::Get || surface.entity.change_request.is_none())
-    {
-        return audited_read_refusal(
-            &service,
-            &route,
-            &surface,
-            path.get("record_id"),
-            invalid_query_at(REQUEST_HISTORY_PARAMETER),
-            &correlation,
-        )
-        .await;
-    }
     match route.operation {
         Operation::Get => {
             if surface.read_path.is_some() || options.has_non_history_query_members() {
@@ -813,8 +890,6 @@ async fn read_dispatch(
                     id: record_id.clone(),
                 },
                 maximum_records: 1,
-                request_history_after_proposal_version: options
-                    .request_history_after_proposal_version,
                 correlation: correlation.clone(),
             };
             match service.records.get(request).await {
@@ -936,7 +1011,6 @@ async fn read_dispatch(
                 geojson_next_link_prefix: None,
                 kind,
                 maximum_records,
-                request_history_after_proposal_version: None,
                 correlation: correlation.clone(),
             };
             match service.records.list(request).await {
@@ -1123,7 +1197,6 @@ async fn lookup_dispatch(
         geojson_next_link_prefix: None,
         kind: RecordReadKind::Lookup { selector },
         maximum_records: 2,
-        request_history_after_proposal_version: None,
         correlation: correlation.clone(),
     };
     match service.records.lookup(request).await {
@@ -2097,307 +2170,6 @@ async fn tombstone_dispatch(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // Axum extractors are the HTTP contract.
-async fn request_action_dispatch(
-    State(service): State<Arc<HttpService>>,
-    Extension(route): Extension<CompiledRoute>,
-    Extension(correlation): Extension<RequestCorrelation>,
-    Authenticated(claims): Authenticated,
-    RawQuery(raw_query): RawQuery,
-    Path(path): Path<HashMap<String, String>>,
-    headers: HeaderMap,
-    body: Body,
-) -> Response {
-    let Some(mutations) = &service.mutations else {
-        return concealed();
-    };
-    let Some(record_id) = path.get("record_id") else {
-        return invalid_request();
-    };
-    let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
-        return audited_mutation_concealment(
-            mutations,
-            &route,
-            &QueryOptions::default(),
-            &claims,
-            Some(record_id.as_str()),
-            &correlation,
-        )
-        .await;
-    };
-    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
-        return audited_mutation_concealment(
-            mutations,
-            &route,
-            &options,
-            &claims,
-            Some(record_id.as_str()),
-            &correlation,
-        )
-        .await;
-    };
-    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
-        return refusal;
-    }
-    let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
-        return audited_mutation_refusal(
-            mutations,
-            &route,
-            &surface.context,
-            Some(record_id.as_str()),
-            missing_idempotency_key(),
-            &correlation,
-        )
-        .await;
-    };
-    if !valid_idempotency_key(idempotency_key) {
-        return audited_mutation_refusal(
-            mutations,
-            &route,
-            &surface.context,
-            Some(record_id.as_str()),
-            invalid_idempotency_key(),
-            &correlation,
-        )
-        .await;
-    }
-    let Some(if_match) = single_header(&headers, IF_MATCH.as_str()) else {
-        return audited_mutation_refusal(
-            mutations,
-            &route,
-            &surface.context,
-            Some(record_id.as_str()),
-            precondition_required(),
-            &correlation,
-        )
-        .await;
-    };
-    if !valid_if_match(if_match) {
-        return audited_mutation_refusal(
-            mutations,
-            &route,
-            &surface.context,
-            Some(record_id.as_str()),
-            precondition_failed(),
-            &correlation,
-        )
-        .await;
-    }
-    if !single_content_type(&headers, "application/json") {
-        return audited_mutation_refusal(
-            mutations,
-            &route,
-            &surface.context,
-            Some(record_id.as_str()),
-            unsupported_media_type(),
-            &correlation,
-        )
-        .await;
-    }
-    let Ok(body) = bounded_body(body).await else {
-        return audited_mutation_refusal(
-            mutations,
-            &route,
-            &surface.context,
-            Some(record_id.as_str()),
-            invalid_request(),
-            &correlation,
-        )
-        .await;
-    };
-    let Ok(action) = parse_request_action_body(route.operation, &body) else {
-        return audited_mutation_refusal(
-            mutations,
-            &route,
-            &surface.context,
-            Some(record_id.as_str()),
-            invalid_request(),
-            &correlation,
-        )
-        .await;
-    };
-    let Some(target_authority) =
-        request_action_target_authority(surface.entity, &route, &surface.context, &claims)
-    else {
-        return audited_mutation_concealment(
-            mutations,
-            &route,
-            &options,
-            &claims,
-            Some(record_id.as_str()),
-            &correlation,
-        )
-        .await;
-    };
-    match mutations
-        .request_action(RequestActionInput {
-            route_id: &route.id,
-            idempotency_key,
-            if_match,
-            context: &surface.context,
-            entity_id: &route.entity_id,
-            record_id,
-            action,
-            response_fields: surface.readable_fields,
-            target_authority,
-            correlation: &correlation,
-        })
-        .await
-    {
-        Ok(outcome) => exact_mutation(
-            outcome.response(),
-            Some(surface.response_entity),
-            public_deployment_prefix(&service),
-            service.field_encryption.as_deref(),
-        ),
-        Err(error) => mutation_problem(error),
-    }
-}
-
-fn request_action_target_authority(
-    entity: &CompiledEntity,
-    route: &CompiledRoute,
-    context: &AuthorizedRequestContext,
-    claims: &VerifiedRequestClaims,
-) -> Option<Vec<RequestActionTargetAuthority>> {
-    if !is_request_operation(route.operation) {
-        return Some(Vec::new());
-    }
-    let plan = entity.change_request.as_ref()?;
-    if !plan
-        .actions
-        .iter()
-        .any(|action| action.operation.access_operation() == route.operation)
-    {
-        return None;
-    }
-    match route.operation {
-        Operation::ApplyRequest => plan
-            .application_target_entities()
-            .into_iter()
-            .map(|target_entity_id| {
-                let grant = plan.apply_permissions.iter().find(|grant| {
-                    grant.profile_id == context.selected_profile()
-                        && grant.target_entity_id == target_entity_id
-                })?;
-                Some(RequestActionTargetAuthority {
-                    target_entity_id,
-                    readable_fields: BTreeSet::new(),
-                    row_boundaries: verified_row_boundaries_from_sources(
-                        &grant.row_boundaries,
-                        claims,
-                    )?,
-                })
-            })
-            .collect(),
-        Operation::SubmitRequest | Operation::ReviseRequest | Operation::CancelRequest => {
-            Some(Vec::new())
-        }
-        _ => None,
-    }
-}
-
-fn request_visibility_authority(
-    service: &HttpService,
-    entity: &CompiledEntity,
-    selected_profile: &str,
-    claims: &VerifiedRequestClaims,
-    options: &QueryOptions,
-) -> (Vec<VerifiedRequestAction>, Vec<VerifiedRequestPresence>) {
-    let actions = if entity.change_request.is_some() {
-        service
-            .registry
-            .routes()
-            .routes
-            .iter()
-            .filter(|route| route.entity_id == entity.id && is_request_operation(route.operation))
-            .filter_map(|route| {
-                let surface = authorize_direct_route_base(service, route, claims, options, false)?;
-                if surface.context.selected_profile() != selected_profile {
-                    return None;
-                }
-                let target_authority =
-                    request_action_target_authority(entity, route, &surface.context, claims)?;
-                let target_authority = target_authority
-                    .into_iter()
-                    .map(|authority| {
-                        VerifiedRequestTargetAuthority::new(
-                            authority.target_entity_id,
-                            authority.readable_fields,
-                            authority.row_boundaries,
-                        )
-                    })
-                    .collect();
-                // Request-self attachment grants are read authority, not
-                // effect authority hashed into lifecycle action preconditions.
-                let plan = entity.change_request.as_ref().expect("request checked");
-                let attachment_request_authority = if entity.attachments.is_empty() {
-                    None
-                } else {
-                    let grant = if route.operation == Operation::ApplyRequest {
-                        plan.apply_permissions
-                            .iter()
-                            .find(|grant| {
-                                grant.profile_id == selected_profile
-                                    && grant.target_entity_id == entity.id
-                            })
-                            .map(|grant| (BTreeSet::new(), &grant.row_boundaries))
-                    } else {
-                        None
-                    };
-                    match grant {
-                        Some((fields, boundaries)) => Some(VerifiedRequestTargetAuthority::new(
-                            entity.id.clone(),
-                            fields,
-                            verified_row_boundaries_from_sources(boundaries, claims)?,
-                        )),
-                        None => None,
-                    }
-                };
-                Some(VerifiedRequestAction::new(
-                    route.id.clone(),
-                    route.method,
-                    route.path.clone(),
-                    route.operation,
-                    surface.readable_fields,
-                    VerifiedRequestActionAuthority::new(target_authority)
-                        .with_attachment_request_authority(attachment_request_authority),
-                ))
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let presence = entity
-        .access_profiles
-        .get(selected_profile)
-        .into_iter()
-        .flat_map(|profile| &profile.request_presence)
-        .filter_map(|grant| {
-            let plan = service
-                .registry
-                .entities()
-                .get(&grant.request_type)?
-                .change_request
-                .as_ref()?;
-            if !plan.presence_permissions.iter().any(|compiled| {
-                compiled.profile_id == selected_profile
-                    && compiled.target_entity_id == entity.id
-                    && compiled.request_row_boundaries == grant.row_boundaries
-            }) {
-                return None;
-            }
-            let row_boundaries =
-                verified_row_boundaries_from_sources(&grant.row_boundaries, claims)?;
-            Some(VerifiedRequestPresence::new(
-                grant.request_type.clone(),
-                row_boundaries,
-            ))
-        })
-        .collect();
-    (actions, presence)
-}
-
 async fn audited_mutation_refusal(
     mutations: &crate::postgres::PostgresRecordMutationService,
     route: &CompiledRoute,
@@ -2536,62 +2308,6 @@ fn metadata_entry_for_surface<'a>(
     Some((entity, entry))
 }
 
-fn permitted_request_types(surfaces: &[AuthorizedSurface<'_>]) -> BTreeSet<String> {
-    surfaces
-        .iter()
-        .flat_map(|surface| {
-            std::iter::once(surface.response_entity.id.clone()).chain(
-                surface
-                    .context
-                    .request_presence()
-                    .iter()
-                    .map(|grant| grant.request_entity_id().to_owned()),
-            )
-        })
-        .collect()
-}
-
-fn metadata_change_control(
-    service: &HttpService,
-    entity: &CompiledEntity,
-    permitted_requests: &BTreeSet<String>,
-) -> Value {
-    let controlled_operations = entity
-        .change_control
-        .as_ref()
-        .map(|control| {
-            control
-                .required_for
-                .iter()
-                .map(|operation| operation_name(*operation))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let eligible_request_types = service
-        .registry
-        .entities()
-        .values()
-        .filter(|request_entity| permitted_requests.contains(&request_entity.id))
-        .filter_map(|request_entity| {
-            request_entity
-                .change_request
-                .as_ref()
-                .filter(|plan| plan.target_entities.contains(&entity.id))
-                .map(|_| {
-                    json!({
-                        "id": request_entity.id,
-                        "primaryDataset": request_entity.primary_dataset,
-                        "route": request_entity.route,
-                    })
-                })
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "controlledOperations": controlled_operations,
-        "eligibleRequestTypes": eligible_request_types,
-    })
-}
-
 fn authorize_route<'a>(
     service: &'a HttpService,
     route: &'a CompiledRoute,
@@ -2611,22 +2327,65 @@ fn authorize_route<'a>(
     authorize_direct_route(service, route, claims, options)
 }
 
+fn visible_proposal_operations(
+    service: &HttpService,
+    claims: &VerifiedRequestClaims,
+    options: &QueryOptions,
+) -> BTreeSet<(String, String, crate::model::ProposalOperation)> {
+    let mut visible = BTreeSet::new();
+    if service.mutations.is_none() {
+        return visible;
+    }
+    for action in &service.registry.actions().actions {
+        let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution else {
+            continue;
+        };
+        for grant in &proposal.permissions {
+            if options
+                .access_profile()
+                .map_or(!grant.default, |selected| selected != &grant.profile_id)
+            {
+                continue;
+            }
+            for operation in &grant.operations {
+                if proposals::authorize(
+                    &service.registry,
+                    action,
+                    claims,
+                    Some(&grant.profile_id),
+                    crate::postgres::ProposalAuthorityOperation::Lifecycle(*operation),
+                    None,
+                )
+                .is_some()
+                {
+                    visible.insert((action.id.clone(), grant.profile_id.clone(), *operation));
+                }
+            }
+        }
+    }
+    visible
+}
+
 fn authorize_direct_route<'a>(
     service: &'a HttpService,
     route: &'a CompiledRoute,
     claims: &VerifiedRequestClaims,
     options: &QueryOptions,
 ) -> Option<AuthorizedSurface<'a>> {
-    authorize_direct_route_base(service, route, claims, options, true)
-}
-
-fn authorize_direct_route_base<'a>(
-    service: &'a HttpService,
-    route: &'a CompiledRoute,
-    claims: &VerifiedRequestClaims,
-    options: &QueryOptions,
-    include_request_visibility: bool,
-) -> Option<AuthorizedSurface<'a>> {
+    if claims.grant().is_none()
+        && (claims.actor_subject().is_some()
+            || claims.actor_kind() == Some(registry_platform_oidc::ActorKind::Agent))
+        && matches!(
+            route.operation,
+            Operation::Create
+                | Operation::Patch
+                | Operation::Tombstone
+                | Operation::Batch
+                | Operation::Import
+        )
+    {
+        return None;
+    }
     let access = access_entry_for_route(service, route)?;
     let selected_profile = options
         .access_profile()
@@ -2661,7 +2420,7 @@ fn authorize_direct_route_base<'a>(
         })
         .cloned()
         .collect();
-    let mut context = AuthorizedRequestContext::new(
+    let context = AuthorizedRequestContext::new(
         claims.principal().map(str::to_owned),
         claims.purpose().map(str::to_owned),
         selected_profile.to_owned(),
@@ -2670,32 +2429,6 @@ fn authorize_direct_route_base<'a>(
     .with_task_grant(task_grant_binding(profile, claims).ok()?)
     .with_grant_audit(claims)
     .with_recipients(claims);
-    let submitter_targets = profile
-        .submitter_targets
-        .iter()
-        .map(|id| {
-            let target = service
-                .registry
-                .entities()
-                .get(id)?
-                .access_profiles
-                .get(selected_profile)?;
-            Some((id.clone(), authorize_profile_claims(target, claims).ok()?))
-        })
-        .collect::<Option<BTreeMap<_, _>>>();
-    if matches!(
-        route.operation,
-        Operation::Create | Operation::Patch | Operation::SubmitRequest | Operation::ReviseRequest
-    ) && submitter_targets.is_none()
-    {
-        return None;
-    }
-    context = context.with_submitter_targets(submitter_targets.unwrap_or_default());
-    if include_request_visibility {
-        let (actions, presence) =
-            request_visibility_authority(service, entity, selected_profile, claims, options);
-        context = context.with_request_visibility(actions, presence);
-    }
     Some(AuthorizedSurface {
         route,
         entity,
@@ -2767,7 +2500,7 @@ fn access_entry_for_route<'a>(
         .iter()
         .find(|entry| entry.route_id == route.id && entry.operation == route.operation)
         .or_else(|| {
-            if route.id.contains(".path.") || is_request_operation(route.operation) {
+            if route.id.contains(".path.") {
                 return None;
             }
             service.registry.access().entries.iter().find(|entry| {
@@ -2789,21 +2522,11 @@ fn read_path_for_route<'a>(
     Some((path, response_entity))
 }
 
-fn is_request_operation(operation: Operation) -> bool {
-    matches!(
-        operation,
-        Operation::SubmitRequest
-            | Operation::ReviseRequest
-            | Operation::CancelRequest
-            | Operation::ApplyRequest
-    )
-}
-
 fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
     match route.operation {
         // The ingestion-run surface serves an import grant; the route itself
         // is never mounted and never listed as an operation.
-        Operation::Invoke | Operation::Import => false,
+        Operation::Invoke | Operation::Start | Operation::Import => false,
         Operation::Get | Operation::List => true,
         Operation::Lookup => true,
         Operation::Create => service.mutations.is_some(),
@@ -2837,22 +2560,6 @@ fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
                     })
         }
         Operation::Revisions => service.revisions.is_some(),
-        Operation::SubmitRequest
-        | Operation::ReviseRequest
-        | Operation::CancelRequest
-        | Operation::ApplyRequest => {
-            service.mutations.is_some()
-                && service
-                    .registry
-                    .entities()
-                    .get(&route.entity_id)
-                    .and_then(|entity| entity.change_request.as_ref())
-                    .is_some_and(|plan| {
-                        plan.actions
-                            .iter()
-                            .any(|action| action.operation.access_operation() == route.operation)
-                    })
-        }
         Operation::Snapshot => service.snapshots.is_some(),
     }
 }
@@ -2922,7 +2629,7 @@ pub(crate) fn authorize_profile_claims(
             if profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
                 && claims.actor_subject().is_none() =>
         {
-            return Err("trusted_actor_missing")
+            return Err("trusted_actor_missing");
         }
         _ => {}
     }
@@ -2977,7 +2684,13 @@ fn task_grant_binding(
         })
         .collect::<Option<BTreeMap<_, _>>>()
         .ok_or("task_grant_bounds_invalid")?;
-    if actual.len() != expected.permissions.len() || actual != expected_bounds {
+    // A verified token can compose independently scoped Proposal authority.
+    // Record routes still use only this static profile's fields and operations.
+    if !expected_bounds.iter().all(|(collection, operations)| {
+        actual
+            .get(collection)
+            .is_some_and(|actual| operations.is_subset(actual))
+    }) {
         return Err("task_grant_bounds_mismatched");
     }
     crate::task_grant::TaskGrantBinding::from_verified(grant, claims.grant_subjects().clone())
@@ -3207,31 +2920,15 @@ async fn read_query(
         query_options.select.as_ref(),
     ) {
         Ok(Some(fields)) => fields,
-        Ok(None) => operation
-            .projection_fields
-            .iter()
-            .cloned()
-            .chain(
-                surface
-                    .response_entity
-                    .attachments
-                    .keys()
-                    .filter(|id| {
-                        kind == CompiledQueryKind::List && surface.readable_fields.contains(*id)
-                    })
-                    .cloned(),
-            )
-            .collect(),
+        Ok(None) => operation.projection_fields.iter().cloned().collect(),
         // An unknown and a withheld field take this one branch.
         Err(()) => return Err(ReadQueryError::InvalidAt("$select")),
     };
     if fields.is_empty()
         || !fields.is_subset(&surface.readable_fields)
-        || !fields.iter().all(|field| {
-            operation.projection_fields.contains(field)
-                || (kind == CompiledQueryKind::List
-                    && surface.response_entity.attachments.contains_key(field))
-        })
+        || !fields
+            .iter()
+            .all(|field| operation.projection_fields.contains(field))
     {
         return Err(if query_options.select.is_some() {
             ReadQueryError::InvalidAt("$select")
@@ -3420,12 +3117,6 @@ fn resolve_data_field_id<'a>(entity: &'a CompiledEntity, api_name: &str) -> Opti
         .chain(entity.derived_fields.values().map(|field| &field.logical))
         .find(|field| field.api_name == api_name)
         .map(|field| field.id.as_str())
-        .or_else(|| {
-            entity
-                .attachments
-                .get(api_name)
-                .map(|slot| slot.id.as_str())
-        })
 }
 
 fn projection_plan(
@@ -3434,7 +3125,6 @@ fn projection_plan(
 ) -> Result<Vec<ReadProjectionField>, ReadQueryError> {
     selected_fields
         .iter()
-        .filter(|field_id| !entity.attachments.contains_key(*field_id))
         .map(|field_id| {
             let field_type = data_field_type(entity, field_id).ok_or(ReadQueryError::Invalid)?;
             Ok(ReadProjectionField {
@@ -3476,21 +3166,7 @@ fn resolve_query_field_id(
             return Some(field_id.to_owned());
         }
     }
-    let request_field = request_query_field_id_for_api(api_name)?;
-    if entity.change_request.is_some()
-        && (operation
-            .filter_fields
-            .iter()
-            .any(|field| field.field == request_field)
-            || operation
-                .sort_fields
-                .iter()
-                .any(|field| field.field == request_field))
-    {
-        Some(request_field.to_owned())
-    } else {
-        None
-    }
+    None
 }
 
 fn query_field_type(
@@ -3511,12 +3187,7 @@ fn query_field_type(
             .iter()
             .any(|field| field.field == field_id)
     {
-        data_field_type(entity, field_id).cloned().or_else(|| {
-            entity
-                .change_request
-                .as_ref()
-                .and_then(|_| request_query_field_type(field_id))
-        })
+        data_field_type(entity, field_id).cloned()
     } else {
         None
     }
@@ -4210,12 +3881,7 @@ fn read_projection_from_cursor(
     selected_fields: &BTreeSet<String>,
     projection: &[CursorProjectionField],
 ) -> Result<Vec<ReadProjectionField>, ReadQueryError> {
-    if projection.len()
-        != selected_fields
-            .iter()
-            .filter(|id| !entity.attachments.contains_key(*id))
-            .count()
-    {
+    if projection.len() != selected_fields.len() {
         return Err(ReadQueryError::CursorInvalid);
     }
     let expected = projection_plan(entity, selected_fields)?;
@@ -4544,7 +4210,6 @@ fn filtered_schema(
     service: &HttpService,
     entity_id: &str,
     readable_fields: &BTreeSet<String>,
-    permitted_requests: &BTreeSet<String>,
 ) -> Option<Value> {
     let entity = service.registry.entities().get(entity_id)?;
     let readable_api_names = entity
@@ -4554,13 +4219,6 @@ fn filtered_schema(
         .chain(entity.derived_fields.values().map(|field| &field.logical))
         .filter(|field| readable_fields.contains(&field.id))
         .map(|field| field.api_name.as_str())
-        .chain(
-            entity
-                .attachments
-                .keys()
-                .filter(|id| readable_fields.contains(*id))
-                .map(String::as_str),
-        )
         .collect::<BTreeSet<_>>();
     let path = format!("generated/schemas/{entity_id}.schema.json");
     let artifact = service.registry.artifacts().get(&path)?;
@@ -4575,28 +4233,6 @@ fn filtered_schema(
                 .is_some_and(|field| readable_api_names.contains(field))
         });
     }
-    // Generated authoring artifacts contain complete effects and permissions. The
-    // served schema is a caller projection, so it must not copy that authority
-    // inventory or identify request types hidden from the selected context.
-    if let Some(control) = object.get_mut("x-registry-changeControl") {
-        if let Some(types) = control
-            .get_mut("eligibleRequestTypes")
-            .and_then(Value::as_array_mut)
-        {
-            types.retain(|request_type| {
-                request_type
-                    .get("requestEntity")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| permitted_requests.contains(id))
-            });
-        }
-    }
-    if let Some(request) = object
-        .get_mut("x-registry-changeRequest")
-        .and_then(Value::as_object_mut)
-    {
-        request.retain(|key, _| matches!(key.as_str(), "requestEntity" | "stateEnvelope"));
-    }
     Some(schema)
 }
 
@@ -4607,13 +4243,11 @@ struct MetadataEntity {
     operations: BTreeMap<Operation, String>,
     readable_fields: BTreeSet<String>,
     schema_path: String,
-    change_control: Option<Value>,
-    change_request: Option<Value>,
+    mutation_policy: Option<Value>,
 }
 
 struct QueryOptions {
     parsed: strict_query::ParsedReadQuery,
-    request_history_after_proposal_version: Option<i64>,
     historical: Option<HistoricalQueryOptions>,
 }
 
@@ -4632,35 +4266,17 @@ impl QueryOptions {
             return Err(QueryParseError::Invalid);
         }
         let mut pairs = Vec::new();
-        let mut request_history_after_proposal_version = None;
         for pair in raw.split('&') {
             let (name, value) = pair.split_once('=').ok_or(QueryParseError::Invalid)?;
             let name = percent_decode(name)?;
             let value = percent_decode(value)?;
-            if name == REQUEST_HISTORY_PARAMETER {
-                let at_fault = QueryParseError::InvalidAt(REQUEST_HISTORY_PARAMETER);
-                let version = value.parse::<u32>().map_err(|_| at_fault)?;
-                if version == 0
-                    || version.to_string() != value
-                    || request_history_after_proposal_version
-                        .replace(i64::from(version))
-                        .is_some()
-                {
-                    return Err(at_fault);
-                }
-                continue;
-            }
             pairs.push((name, value));
         }
         let parsed = strict_query::parse_read_query_located(pairs).map_err(located_parse_error)?;
         let result = Self {
             parsed,
-            request_history_after_proposal_version,
             historical: None,
         };
-        if result.request_history_after_proposal_version.is_some() && result.skiptoken().is_some() {
-            return Err(QueryParseError::InvalidAt(REQUEST_HISTORY_PARAMETER));
-        }
         if !allow_read_query {
             if let Some(member) = result.first_query_member() {
                 return Err(QueryParseError::InvalidAt(member));
@@ -4688,7 +4304,6 @@ impl QueryOptions {
                 as_of: None,
                 mode: parsed.mode,
             },
-            request_history_after_proposal_version: None,
             historical: Some(HistoricalQueryOptions {
                 snapshot: parsed.snapshot,
                 valid_at: parsed.valid_at,
@@ -4722,8 +4337,7 @@ impl QueryOptions {
     }
 
     fn has_non_projection_query_members(&self) -> bool {
-        self.request_history_after_proposal_version.is_some()
-            || self.has_non_history_query_members()
+        self.has_non_history_query_members()
     }
 
     /// The first query member a route without a query plan refuses, in a
@@ -4756,9 +4370,6 @@ impl QueryOptions {
     }
 
     fn first_non_projection_member(&self) -> Option<&'static str> {
-        if self.request_history_after_proposal_version.is_some() {
-            return Some(REQUEST_HISTORY_PARAMETER);
-        }
         self.first_non_history_member()
     }
 
@@ -4787,7 +4398,6 @@ impl QueryOptions {
 impl Default for QueryOptions {
     fn default() -> Self {
         Self {
-            request_history_after_proposal_version: None,
             parsed: strict_query::ParsedReadQuery {
                 access_profile: None,
                 as_of: None,
@@ -4799,8 +4409,6 @@ impl Default for QueryOptions {
         }
     }
 }
-
-const REQUEST_HISTORY_PARAMETER: &str = "requestHistoryAfterProposalVersion";
 
 fn located_parse_error(
     (_, parameter): (strict_query::QueryParseError, Option<&'static str>),
@@ -4898,12 +4506,9 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
-        Operation::SubmitRequest => "submit-request",
-        Operation::ReviseRequest => "revise-request",
-        Operation::CancelRequest => "cancel-request",
-        Operation::ApplyRequest => "apply-request",
         Operation::Snapshot => "snapshot",
         Operation::Import => "import",
+        Operation::Start => "start",
     }
 }
 
@@ -4975,11 +4580,7 @@ fn public_deployment_prefix(service: &HttpService) -> &str {
 
 fn public_deployment_base_path(service: &HttpService) -> &str {
     let prefix = public_deployment_prefix(service);
-    if prefix.is_empty() {
-        "/"
-    } else {
-        prefix
-    }
+    if prefix.is_empty() { "/" } else { prefix }
 }
 
 fn exact_read(
@@ -5415,89 +5016,6 @@ fn body_refusal(location: Option<RequestLocation>) -> Response {
     location.map_or_else(invalid_request, |location| invalid_request_at(&location))
 }
 
-fn parse_request_action_body(operation: Operation, body: &[u8]) -> Result<RequestActionBody, ()> {
-    let value = parse_json_strict(body).map_err(|_| ())?;
-    let object = value.as_object().ok_or(())?;
-    match operation {
-        Operation::SubmitRequest => {
-            parse_empty_action_object(object)?;
-            Ok(RequestActionBody::Submit)
-        }
-        Operation::ReviseRequest => {
-            if object.len() != 1 {
-                return Err(());
-            }
-            let rebase = object.get("rebase").and_then(Value::as_bool).ok_or(())?;
-            Ok(RequestActionBody::Revise { rebase })
-        }
-        Operation::CancelRequest => {
-            parse_empty_action_object(object)?;
-            Ok(RequestActionBody::Cancel)
-        }
-        Operation::ApplyRequest => {
-            let (proposal_version, effect_digest, reason) = parse_reasoned_proposal_action(object)?;
-            Ok(RequestActionBody::Apply {
-                proposal_version,
-                effect_digest,
-                reason,
-            })
-        }
-        _ => Err(()),
-    }
-}
-
-fn parse_empty_action_object(object: &Map<String, Value>) -> Result<(), ()> {
-    if object.is_empty() {
-        Ok(())
-    } else {
-        Err(())
-    }
-}
-
-fn parse_bound_proposal_action(object: &Map<String, Value>) -> Result<(u32, String), ()> {
-    if object.len() != 2 {
-        return Err(());
-    }
-    let version = object
-        .get("proposalVersion")
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-        .filter(|value| *value > 0)
-        .ok_or(())?;
-    let digest = object
-        .get("effectDigest")
-        .and_then(Value::as_str)
-        .filter(|value| valid_sha256_digest(value))
-        .ok_or(())?;
-    Ok((version, digest.to_owned()))
-}
-
-fn parse_reasoned_proposal_action(
-    object: &Map<String, Value>,
-) -> Result<(u32, String, Option<String>), ()> {
-    let Some(reason) = object.get("reason") else {
-        let (version, digest) = parse_bound_proposal_action(object)?;
-        return Ok((version, digest, None));
-    };
-    let reason = reason
-        .as_str()
-        .filter(|reason| crate::request_workflow::valid_application_reason(reason))
-        .ok_or(())?;
-    let mut binding = object.clone();
-    binding.remove("reason");
-    let (version, digest) = parse_bound_proposal_action(&binding)?;
-    Ok((version, digest, Some(reason.to_owned())))
-}
-
-fn valid_sha256_digest(value: &str) -> bool {
-    value.strip_prefix("sha256:").is_some_and(|digest| {
-        digest.len() == 64
-            && digest
-                .bytes()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    })
-}
-
 fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let mut values = headers.get_all(name).iter();
     let value = values.next()?;
@@ -5645,9 +5163,9 @@ fn mutation_problem(error: MutationError) -> Response {
 /// service outage rather than a refusal, so it keeps the unavailable mapping
 /// every other timeout carries.
 const fn planner_failure_problem(
-    error: crate::rhai_planner::ChangeRequestPlannerError,
+    error: crate::rhai_planner::PlanError,
 ) -> (ProblemCode, &'static str) {
-    use crate::rhai_planner::ChangeRequestPlannerError as Kind;
+    use crate::rhai_planner::PlanError as Kind;
 
     match error {
         Kind::Deadline => (ProblemCode::ServiceUnavailable, error.problem_detail()),
@@ -5743,14 +5261,14 @@ mod held_body_encryption_tests {
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-    use registry_platform_crypto::field_encryption::envelope_member_json;
     use registry_platform_crypto::KeyProviderKind;
-    use serde_json::{json, Map, Value};
+    use registry_platform_crypto::field_encryption::envelope_member_json;
+    use serde_json::{Map, Value, json};
     use zeroize::Zeroizing;
 
     use super::exact_mutation;
-    use crate::compiler::{compile_project, CompileProfile, MAX_BATCH_ITEMS};
-    use crate::contract::{parse_project_json, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS};
+    use crate::compiler::{CompileProfile, MAX_BATCH_ITEMS, compile_project};
+    use crate::contract::{MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, parse_project_json};
     use crate::field_encryption::FieldEncryptionService;
     use crate::history_schema::ENVELOPE_MEMBER_TAG;
     use crate::idempotency::{HeldResponse, PermittedResponseHeader};
@@ -5773,15 +5291,15 @@ mod held_body_encryption_tests {
         let source = json!({
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
             "project":{"id":"held-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://held.example.test"},
-            "entities":[{
+            "datasets":[{"id":"test-dataset"}],"recordTypes":[{
                 "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
                 "fields":[
                     {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
                     secret
                 ]
             }],
-            "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                "entity":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
+            "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                "recordType":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
                 "readableFields":["label","secret"],"writableFields":["label","secret"]
             }]}}]
         });
@@ -6043,9 +5561,11 @@ mod held_body_encryption_tests {
             problem["code"],
             json!("runtime.field_encryption.unavailable")
         );
-        assert!(!bytes
-            .windows(FIRST_PLAINTEXT.len())
-            .any(|window| window == FIRST_PLAINTEXT.as_bytes()));
+        assert!(
+            !bytes
+                .windows(FIRST_PLAINTEXT.len())
+                .any(|window| window == FIRST_PLAINTEXT.as_bytes())
+        );
     }
 
     #[tokio::test]
@@ -6085,11 +5605,11 @@ mod held_body_encryption_tests {
 mod planner_failure_problem_tests {
     use super::planner_failure_problem;
     use crate::problem::ProblemCode;
-    use crate::rhai_planner::ChangeRequestPlannerError;
+    use crate::rhai_planner::PlanError;
 
     #[test]
     fn every_planner_refusal_names_its_kind_and_nothing_else() {
-        for error in ChangeRequestPlannerError::PLAN_REFUSALS {
+        for error in PlanError::PLAN_REFUSALS {
             let (code, detail) = planner_failure_problem(error);
             assert_eq!(code, ProblemCode::RequestPlanRefused);
             assert!(
@@ -6101,7 +5621,7 @@ mod planner_failure_problem_tests {
 
     #[test]
     fn a_planner_deadline_stays_the_unavailable_refusal() {
-        let (code, _) = planner_failure_problem(ChangeRequestPlannerError::Deadline);
+        let (code, _) = planner_failure_problem(PlanError::Deadline);
         assert_eq!(code, ProblemCode::ServiceUnavailable);
     }
 }

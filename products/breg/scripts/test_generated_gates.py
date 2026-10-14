@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -29,16 +30,6 @@ class GeneratedGateTests(unittest.TestCase):
             candidate = Path(temporary) / "candidate"
             shutil.copytree(baseline, candidate)
             (candidate / COMPARATOR.EXPECTED_PATHS[-1]).unlink()
-            errors = COMPARATOR.compare(baseline, candidate)
-        self.assertTrue(any("candidate is missing expected artifacts" in error for error in errors), errors)
-
-    def test_attachment_baseline_requires_request_metadata_schema(self) -> None:
-        baseline = SCRIPT_DIR.parent / "generated/request-attachments"
-        self.assertEqual([], COMPARATOR.compare(baseline, baseline))
-        with tempfile.TemporaryDirectory() as temporary:
-            candidate = Path(temporary) / "candidate"
-            shutil.copytree(baseline, candidate)
-            (candidate / "generated/schemas/correction-request.schema.json").unlink()
             errors = COMPARATOR.compare(baseline, candidate)
         self.assertTrue(any("candidate is missing expected artifacts" in error for error in errors), errors)
 
@@ -70,58 +61,56 @@ class GeneratedGateTests(unittest.TestCase):
         self.assertTrue(any("compiled/actions.json" in error for error in errors), errors)
         self.assertTrue(any("target-conditions.response.schema.json" in error for error in errors), errors)
 
-    def test_generated_gate_script_keeps_a_bounded_database_free_cli_journey(self) -> None:
-        generated_gate = (SCRIPT_DIR / "check-generated.sh").read_text(encoding="utf-8")
-        self.assertIn("mktemp -d", generated_gate)
-        self.assertIn("business-establishments", generated_gate)
-        self.assertIn("asset-site-placement-change-requests", generated_gate)
-        self.assertIn("publicschema-household-change-requests", generated_gate)
-        self.assertIn("acceptance/person-registration-rhai", generated_gate)
-        self.assertIn("acceptance/request-attachments", generated_gate)
-        self.assertIn('export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"', generated_gate)
-        self.assertIn("authoring_baseline", generated_gate)
-        self.assertIn("--features schema --example authoring-schema", generated_gate)
-        self.assertIn("products/breg/generated/authoring", generated_gate)
-        self.assertIn("runtime_baseline", generated_gate)
-        self.assertIn("--features runtime,schema --example runtime-schema", generated_gate)
-        self.assertIn("products/breg/generated/runtime", generated_gate)
-        for selector in ("openapi", "schemas", "manifest", "metadata", "sql"):
-            self.assertIn(selector, generated_gate)
-        self.assertNotIn(" apply ", generated_gate)
-        self.assertNotIn(" serve ", generated_gate)
-        self.assertNotIn("BREG_TEST_DATABASE_URL", generated_gate)
-        self.assertIn("compare-generated-tree.py", generated_gate)
+    def test_canonical_gate_compares_sdk_and_proposal_contracts(self) -> None:
+        baseline = SCRIPT_DIR.parent / "generated/refactor"
+        self.assertEqual([], COMPARATOR.compare(baseline, baseline))
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary) / "candidate"
+            shutil.copytree(baseline, candidate)
+            (candidate / "generated/sdk/project.ts").unlink()
+            self.assertTrue(any("project.ts" in error for error in COMPARATOR.compare(baseline, candidate)))
+        script = (SCRIPT_DIR / "check-generated.sh").read_text()
+        self.assertIn("--example refactor-artifacts", script)
+        self.assertIn("authoring_baseline", script)
+        self.assertIn("runtime_baseline", script)
+        self.assertNotIn("change-requests", script)
+        self.assertNotIn(" serve ", script)
+        self.assertNotIn(" apply ", script)
 
-    def test_change_request_examples_script_uses_protected_runtime_files(self) -> None:
-        script = (SCRIPT_DIR / "test-change-request-examples.sh").read_text(encoding="utf-8")
-        self.assertIn("mktemp -d", script)
-        self.assertIn("BREG_TEST_DATABASE_URL", script)
-        self.assertIn("BREG_TEST_TLS_CA_PEM_PATH", script)
-        self.assertIn("schema-test-credentials", script)
-        self.assertIn("--asset-project", script)
-        self.assertIn("--household-project", script)
-        self.assertIn("--rhai-project", script)
-        self.assertIn("normalize_project asset", script)
-        self.assertIn("normalize_project household", script)
-        self.assertIn("normalize_project rhai", script)
-        self.assertIn("secret:file/", script)
-        self.assertIn("write_jwt", script)
-        self.assertIn("import yaml", script)
-        self.assertIn("json.dumps", script)
-        self.assertIn("bregctl", script)
-        self.assertIn("--format json test", script)
-        self.assertIn("asset-site-placement-change-requests", script)
-        self.assertIn("publicschema-household-change-requests", script)
-        self.assertIn("person-name-change-rhai", script)
-        self.assertNotIn("test-postgres.sh", script)
-        self.assertNotIn("BREG_TEST_DATABASE_URL=", script)
-        self.assertNotIn("Authorization: Bearer", script)
+    def test_canonical_minimal_gate_requires_native_record_sdk(self) -> None:
+        baseline = SCRIPT_DIR.parent / "generated/refactor-minimal"
+        self.assertEqual([], COMPARATOR.compare(baseline, baseline))
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary) / "candidate"
+            shutil.copytree(baseline, candidate)
+            (candidate / "generated/sdk/project.py").unlink()
+            errors = COMPARATOR.compare(baseline, candidate)
+            self.assertTrue(any("project.py" in error for error in errors), errors)
+        script = (SCRIPT_DIR / "check-generated.sh").read_text()
+        self.assertIn("--project minimal", script)
+        self.assertIn('"$temporary_root/refactor-minimal"', script)
+
+    def test_editor_schemas_expose_native_breg_without_retired_aliases(self) -> None:
+        authoring = SCRIPT_DIR.parent / "generated/authoring"
+        for name in ("registry-project.schema.json", "registry-module.schema.json"):
+            schema = json.loads((authoring / name).read_text())
+            properties = schema["properties"]
+            self.assertTrue({"recordTypes", "valueTypes", "functions", "actions"} <= properties.keys(), name)
+            self.assertNotIn("entities", properties)
+            self.assertNotIn("extendEntities", properties)
+            action = schema["$defs"]["ActionSource"]["properties"]
+            self.assertTrue({"plan", "execution", "commitGuards"} <= action.keys())
+            self.assertNotIn("handler", action)
+            self.assertNotIn("effects", action)
+            if name == "registry-project.schema.json":
+                permissions = schema["$defs"]["ProposalPermissionSource"]["properties"]
+                self.assertTrue({"action", "reviewAuthority", "readableInputs", "readableContextFields", "readableAttachments", "writableAttachments"} <= permissions.keys())
+            self.assertNotIn("changeRequest", schema["$defs"]["EntitySource"]["properties"])
 
     def test_example_workflows_publish_unsigned_packages(self) -> None:
         product = SCRIPT_DIR.parent
         workflows = [
             SCRIPT_DIR / "test-historical-workflow.sh",
-            SCRIPT_DIR / "test-change-request-examples.sh",
             SCRIPT_DIR / "test-promotion.sh",
             product / "acceptance/person-registration-rhai/tests/live_registration.py",
             product / "acceptance/farmer-landholding-evidence/tests/live_registration.py",

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::compiler::{AUTHORING_API_VERSION, AUTHORING_KIND};
-use crate::contract::{RegistryModule, RegistryProject, MODULE_API_VERSION, MODULE_KIND};
+use crate::contract::{MODULE_API_VERSION, MODULE_KIND, RegistryModule, RegistryProject};
 #[cfg(feature = "runtime")]
 use crate::runtime_config::runtime_config_schema;
 
@@ -67,6 +67,7 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
 
 fn project_schema() -> Result<Value, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RegistryProject))?;
+    local_value_type_use_schemas(&mut derived);
     for (property, expected) in [
         ("apiVersion", AUTHORING_API_VERSION),
         ("kind", AUTHORING_KIND),
@@ -79,6 +80,56 @@ fn project_schema() -> Result<Value, serde_json::Error> {
         }
     }
     Ok(derived)
+}
+
+/// Local scalar constraints are resolved before typed decoding. Describe that
+/// authored alternative beside the inline field types the compiler normalizes.
+fn local_value_type_use_schemas(schema: &mut Value) {
+    let Some(definitions) = schema.get_mut("$defs").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (name, definition) in definitions.iter_mut() {
+        if name.ends_with("FieldSourceSchema") {
+            if let Some(properties) = definition
+                .get_mut("properties")
+                .and_then(Value::as_object_mut)
+            {
+                properties.insert(
+                    "display".to_owned(),
+                    serde_json::json!({"$ref":"#/$defs/DisplaySource"}),
+                );
+                if name == "ReferenceFieldSourceSchema" {
+                    properties.insert("relationship".to_owned(), serde_json::json!({
+                        "type":"object","additionalProperties":false,
+                        "properties":{"inverseName":{"type":"string","pattern":"^[a-z][A-Za-z0-9]*$"}}
+                    }));
+                }
+            }
+        }
+    }
+    let named_field = serde_json::json!({
+        "type":"object", "additionalProperties":false,
+        "required":["id","typeRef","classification"],
+        "properties":{
+            "id":{"$ref":"#/$defs/LocalId"},
+            "apiName":{"type":"string"},
+            "typeRef":{"$ref":"#/$defs/LocalId"},
+            "required":{"type":"boolean","default":false},
+            "classification":{"$ref":"#/$defs/Classification"},
+            "display":{"$ref":"#/$defs/DisplaySource"}
+        }
+    });
+    if let Some(branches) = definitions
+        .get_mut("FieldSource")
+        .and_then(|field| field.get_mut("anyOf"))
+        .and_then(Value::as_array_mut)
+    {
+        branches.push(named_field.clone());
+    }
+    if let Some(input) = definitions.get_mut("ActionInputSource") {
+        let inline = input.take();
+        *input = serde_json::json!({"anyOf":[inline,named_field]});
+    }
 }
 
 /// The module schema with the header every `module.yaml` opens with. The
@@ -186,14 +237,14 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        documents, MODULE_API_VERSION, MODULE_KIND, REGISTRY_MODULE_SCHEMA_FILE,
-        REGISTRY_MODULE_SCHEMA_ID, REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_PROJECT_SCHEMA_ID,
+        MODULE_API_VERSION, MODULE_KIND, REGISTRY_MODULE_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_ID,
+        REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_PROJECT_SCHEMA_ID, documents,
     };
     #[cfg(feature = "runtime")]
-    use super::{runtime_documents, RUNTIME_CONFIG_SCHEMA_FILE, RUNTIME_CONFIG_SCHEMA_ID};
+    use super::{RUNTIME_CONFIG_SCHEMA_FILE, RUNTIME_CONFIG_SCHEMA_ID, runtime_documents};
     #[cfg(feature = "runtime")]
     use crate::runtime_config::{
-        parse_runtime_config, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
+        RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND, parse_runtime_config,
     };
 
     const ACCEPTANCE_PROJECTS: &[&str] = &[
@@ -857,8 +908,8 @@ mod tests {
         });
         assert!(schema.is_valid(&instance));
 
-        instance["accessProfiles"][0]["permissions"]["entities"][0]["spatialQueries"]["bbox"]
-            ["geometryField"] = Value::String("location".to_owned());
+        instance["accessProfiles"][0]["permissions"]["entities"][0]["spatialQueries"]["bbox"]["geometryField"] =
+            Value::String("location".to_owned());
         assert!(!schema.is_valid(&instance));
     }
 
@@ -1145,9 +1196,11 @@ mod tests {
         let value: Value =
             serde_json::from_str(&runtime_schema_document()).expect("the schema is JSON");
         assert!(value.pointer("/$defs/RawEventDestinationConfig").is_some());
-        assert!(value
-            .pointer("/$defs/RawEventDestinationConfigSchema")
-            .is_none());
+        assert!(
+            value
+                .pointer("/$defs/RawEventDestinationConfigSchema")
+                .is_none()
+        );
     }
 
     #[cfg(feature = "runtime")]

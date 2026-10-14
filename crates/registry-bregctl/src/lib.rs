@@ -58,9 +58,9 @@ mod instance_claim_lifecycle;
 mod module_lock_patch;
 mod package_inspection;
 mod package_lifecycle;
+mod proposal_retention;
 mod reconcile_lifecycle;
 mod report;
-mod request_retention;
 mod review_recovery;
 mod reviewed_migrations;
 mod safe_path;
@@ -97,16 +97,16 @@ use package_inspection::{
     inspect_runtime_predecessor_rehearsal_baseline, RuntimePackageInspectionError,
 };
 use package_lifecycle::PackageLifecycleError;
+use proposal_retention::{
+    ProposalRetentionCliError, ProposalRetentionDryRunOutcome, ProposalRetentionEraseOutcome,
+    ProposalRetentionListOutcome,
+};
 use reconcile_lifecycle::{
     ReconcileLifecycleError, ReconcileLifecycleOutcome, ReconcileLifecycleRequest,
 };
 use registry_breg::data::DataError;
 use registry_breg::migration_reconcile::{ReconcileError, ReconcileOutcome};
 use registry_breg_client::{BRegIngestionBlockedReason, BRegReleaseStatus, BRegWithdrawalReason};
-use request_retention::{
-    RequestRetentionCliError, RequestRetentionDryRunOutcome, RequestRetentionEraseOutcome,
-    RequestRetentionListOutcome,
-};
 use review_recovery::{ReviewRecoveryCliError, ReviewRecoveryOperation, ReviewRecoveryOutcome};
 use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH};
 use statistics_lifecycle::{
@@ -238,8 +238,8 @@ enum Command {
     Statistics(StatisticsArgs),
     /// Inspect and operate configured webhook deliveries.
     Webhook(WebhookArgs),
-    /// Inspect and erase eligible change-request retention detail.
-    RequestRetention(RequestRetentionArgs),
+    /// Inspect and erase eligible Proposal retention detail.
+    ProposalRetention(ProposalRetentionArgs),
     /// Recover a lost review or an automatic application blocked by executor authorization.
     ReviewRecovery(ReviewRecoveryArgs),
     /// Erase expired protected action Evidence using configured migration authority.
@@ -479,8 +479,8 @@ struct ProjectArgs {
 enum ProjectCommand {
     /// Compute and write module source digests in registry.yaml.
     Lock(ProjectLockArgs),
-    /// Test a Rhai request planner or action handler with bounded synthetic JSON.
-    PlannerTest(ProjectPlannerTestArgs),
+    /// Test a named Action plan function with bounded synthetic JSON.
+    ActionTest(ProjectActionTestArgs),
 }
 
 #[derive(Debug, Args)]
@@ -495,35 +495,21 @@ struct ProjectLockArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(group(ArgGroup::new("script_target").required(true).args(["entity", "action"])))]
-struct ProjectPlannerTestArgs {
+struct ProjectActionTestArgs {
     /// Base Registry Engine project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
 
-    /// Compiled change-request entity whose Rhai planner will run; pair with --request.
-    #[arg(
-        long,
-        value_name = "ENTITY",
-        conflicts_with = "action",
-        requires = "request"
-    )]
-    entity: Option<String>,
-
-    /// Bounded strict JSON object containing synthetic request fields; requires --entity.
-    #[arg(long, value_name = "JSON_FILE", requires = "entity", conflicts_with_all = ["action", "input", "expect"])]
-    request: Option<PathBuf>,
-
-    /// Compiled immediate action whose Rhai handler will run; pair with --input.
-    #[arg(long, value_name = "ACTION", requires = "input")]
+    /// Compiled Action whose named plan function will run; pair with --input.
+    #[arg(long, value_name = "ACTION", requires = "input", required = true)]
     action: Option<String>,
 
     /// Bounded strict JSON object using authored action input IDs, without an HTTP envelope; requires --action.
-    #[arg(long, value_name = "JSON_FILE", requires = "action", conflicts_with_all = ["entity", "request"])]
+    #[arg(long, value_name = "JSON_FILE", requires = "action")]
     input: Option<PathBuf>,
 
     /// With --action and --input, assert exact effects or refusal and optional ordered evidenceCalls mocks without printing values.
-    #[arg(long, value_name = "JSON_FILE", requires = "action", conflicts_with_all = ["entity", "request"])]
+    #[arg(long, value_name = "JSON_FILE", requires = "action")]
     expect: Option<PathBuf>,
 }
 
@@ -758,9 +744,9 @@ struct WebhookArgs {
 }
 
 #[derive(Debug, Args)]
-struct RequestRetentionArgs {
+struct ProposalRetentionArgs {
     #[command(subcommand)]
-    command: RequestRetentionCommand,
+    command: ProposalRetentionCommand,
 }
 
 #[derive(Debug, Subcommand)]
@@ -776,13 +762,13 @@ enum WebhookCommand {
 }
 
 #[derive(Debug, Subcommand)]
-enum RequestRetentionCommand {
-    /// List bounded value-free change-request retention rows.
-    List(RequestRetentionListArgs),
-    /// Count exactly what one request retention erase would remove.
-    DryRun(RequestRetentionExactArgs),
-    /// Erase eligible payload detail for one exact request proposal version.
-    Erase(RequestRetentionExactArgs),
+enum ProposalRetentionCommand {
+    /// List bounded value-free Proposal retention rows.
+    List(ProposalRetentionListArgs),
+    /// Count exactly what one Proposal retention erase would remove.
+    DryRun(ProposalRetentionExactArgs),
+    /// Erase eligible payload detail for one exact submission version.
+    Erase(ProposalRetentionExactArgs),
     /// Retry deletion of unreferenced external attachments without erasing request detail.
     CleanupAttachments(AttachmentCleanupArgs),
 }
@@ -795,41 +781,41 @@ struct AttachmentCleanupArgs {
 }
 
 #[derive(Debug, Args)]
-struct RequestRetentionListArgs {
+struct ProposalRetentionListArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
-    /// Limit the value-free listing to one compiled change-request entity.
-    #[arg(long, value_name = "ENTITY")]
-    request_entity: Option<String>,
+    /// Limit the value-free listing to one compiled Action.
+    #[arg(long, value_name = "ACTION")]
+    action_id: Option<String>,
 
     /// Cursor returned by the previous bounded list response.
     #[arg(long, value_name = "CURSOR")]
     after_cursor: Option<String>,
 
-    /// Maximum number of request retention rows to return.
+    /// Maximum number of Proposal retention rows to return.
     #[arg(long, value_name = "COUNT", default_value_t = 50)]
     limit: u16,
 }
 
 #[derive(Debug, Args)]
-struct RequestRetentionExactArgs {
+struct ProposalRetentionExactArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
-    /// Compiled change-request entity identifier.
-    #[arg(long, value_name = "ENTITY")]
-    request_entity: String,
+    /// Compiled Action identifier.
+    #[arg(long, value_name = "ACTION")]
+    action_id: String,
 
-    /// Exact request record UUID.
+    /// Exact Proposal UUID.
     #[arg(long, value_name = "UUID")]
-    request_id: String,
+    proposal_id: String,
 
     /// Exact proposal version to inspect or erase.
     #[arg(long, value_name = "VERSION")]
-    proposal_version: i64,
+    submission_version: i64,
 }
 
 #[derive(Debug, Args)]
@@ -854,17 +840,17 @@ struct ReviewRecoveryExactArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
-    /// Compiled change-request entity identifier.
-    #[arg(long, value_name = "ENTITY")]
-    request_entity: String,
+    /// Compiled Action identifier.
+    #[arg(long, value_name = "ACTION")]
+    action_id: String,
 
-    /// Exact request record UUID.
+    /// Exact Proposal UUID.
     #[arg(long, value_name = "UUID")]
-    request_id: String,
+    proposal_id: String,
 
     /// Exact proposal version whose review or application to recover.
     #[arg(long, value_name = "VERSION")]
-    proposal_version: i64,
+    submission_version: i64,
 }
 
 #[derive(Debug, Args)]
@@ -1168,8 +1154,8 @@ struct DataValidateArgs {
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
     package: PathBuf,
 
-    /// Compiled entity identifier.
-    #[arg(long, value_name = "ID")]
+    /// Compiled Record type identifier.
+    #[arg(long = "record-type", value_name = "ID")]
     entity: String,
 
     /// Compiled access profile identifier.
@@ -1199,8 +1185,8 @@ struct DataImportArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     access_token_file: PathBuf,
 
-    /// Compiled entity identifier.
-    #[arg(long, value_name = "ID")]
+    /// Compiled Record type identifier.
+    #[arg(long = "record-type", value_name = "ID")]
     entity: String,
 
     /// Compiled access profile identifier.
@@ -1238,8 +1224,8 @@ struct DataExportArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     access_token_file: PathBuf,
 
-    /// Compiled entity identifier.
-    #[arg(long, value_name = "ID")]
+    /// Compiled Record type identifier.
+    #[arg(long = "record-type", value_name = "ID")]
     entity: String,
 
     /// Compiled export-enabled access profile identifier.
@@ -1412,6 +1398,7 @@ enum ArtifactSelector {
     Metadata,
     Sql,
     EvidenceSource,
+    Sdk,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -1422,7 +1409,7 @@ enum ExplainSubject {
     Routes,
     Queries,
     Actions,
-    ChangeRequests,
+    Proposals,
     Events,
     Lifecycle,
 }
@@ -1490,12 +1477,12 @@ struct SuccessReport {
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PlannerTestSuccessReport {
+struct ActionTestSuccessReport {
     ok: bool,
     command: &'static str,
     compiled_revision: String,
     #[serde(skip_serializing_if = "String::is_empty")]
-    request_entity: String,
+    action_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1503,16 +1490,16 @@ struct PlannerTestSuccessReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     assertions_passed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    planner: Option<PlannerTestIdentityReport>,
+    planner: Option<ActionTestIdentityReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    handler: Option<PlannerTestIdentityReport>,
-    effects: Vec<PlannerTestEffectReport>,
-    counts: PlannerTestCountReport,
+    handler: Option<ActionTestIdentityReport>,
+    effects: Vec<ActionTestEffectReport>,
+    counts: ActionTestCountReport,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PlannerTestIdentityReport {
+struct ActionTestIdentityReport {
     kind: &'static str,
     abi: String,
     script_sha256: String,
@@ -1520,7 +1507,7 @@ struct PlannerTestIdentityReport {
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PlannerTestEffectReport {
+struct ActionTestEffectReport {
     id: String,
     target_kind: &'static str,
     operation: &'static str,
@@ -1530,7 +1517,7 @@ struct PlannerTestEffectReport {
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PlannerTestCountReport {
+struct ActionTestCountReport {
     effects: usize,
     field_mutations: usize,
     dependencies: usize,
@@ -1686,7 +1673,7 @@ enum DiagnosticArtifact {
     StatisticsOperation,
     WebhookSample,
     WebhookOperations,
-    RequestRetentionOperation,
+    ProposalRetentionOperation,
     ReviewRecoveryOperation,
     EvidenceRetentionOperation,
     IdempotencyRetentionOperation,
@@ -1695,7 +1682,7 @@ enum DiagnosticArtifact {
     HistoryErasure,
     HistoryRebaseline,
     FieldEncryption,
-    PlannerTest,
+    ActionTest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -1729,7 +1716,7 @@ enum SuggestedAction {
     RetryAfterMigrationLockReleases,
     ReconcileFailedMigration,
     RestorePreActivationBackup,
-    ResolveActiveRequestProposals,
+    RestoreActiveProposalRecovery,
     VerifyStartupDependencies,
     CorrectDataBinding,
     CorrectDataInput,
@@ -1738,7 +1725,7 @@ enum SuggestedAction {
     VerifyStatisticsOperation,
     SelectWebhookEvent,
     VerifyWebhookOperation,
-    VerifyRequestRetentionOperation,
+    VerifyProposalRetentionOperation,
     VerifyReviewRecoveryOperation,
     VerifyEvidenceRetentionOperation,
     VerifyIdempotencyRetentionOperation,
@@ -1750,7 +1737,7 @@ enum SuggestedAction {
     ReviewRetainedHistory,
     ReviewFieldEncryptionBackfill,
     PrepareFieldEncryptionEraseRequest,
-    CorrectPlannerTestInput,
+    CorrectActionTestInput,
     CorrectActionHandler,
 }
 
@@ -1979,6 +1966,7 @@ struct DataValidateSuccessReport {
     command: &'static str,
     package_revision: String,
     schema_fingerprint: String,
+    #[serde(rename = "recordType")]
     entity_id: String,
     profile_id: String,
     operation: DataOperationArg,
@@ -1997,6 +1985,7 @@ struct DataImportSuccessReport {
     command: &'static str,
     package_revision: String,
     schema_fingerprint: String,
+    #[serde(rename = "recordType")]
     entity_id: String,
     profile_id: String,
     operation: DataOperationArg,
@@ -2015,6 +2004,7 @@ struct DataExportSuccessReport {
     command: &'static str,
     package_revision: String,
     schema_fingerprint: String,
+    #[serde(rename = "recordType")]
     entity_id: String,
     profile_id: String,
     requested_fields: Vec<String>,
@@ -2071,29 +2061,29 @@ struct WebhookDiscardSuccessReport {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RequestRetentionListSuccessReport {
+struct ProposalRetentionListSuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    outcome: RequestRetentionListOutcome,
+    outcome: ProposalRetentionListOutcome,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RequestRetentionDryRunSuccessReport {
+struct ProposalRetentionDryRunSuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    outcome: RequestRetentionDryRunOutcome,
+    outcome: ProposalRetentionDryRunOutcome,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RequestRetentionEraseSuccessReport {
+struct ProposalRetentionEraseSuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    outcome: RequestRetentionEraseOutcome,
+    outcome: ProposalRetentionEraseOutcome,
 }
 
 #[derive(Serialize)]
@@ -2111,7 +2101,7 @@ struct AttachmentCleanupSuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    outcome: registry_breg::request_retention::AttachmentCleanup,
+    outcome: registry_breg::proposal_retention::AttachmentCleanup,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -2444,9 +2434,9 @@ where
         },
         Command::Project(args) => match args.command {
             ProjectCommand::Lock(args) => project_lock(&args.project, args.check),
-            ProjectCommand::PlannerTest(args) => {
-                return match planner_test(&args) {
-                    Ok(report) => write_planner_test_success(&report, format, stdout, stderr),
+            ProjectCommand::ActionTest(args) => {
+                return match action_test(&args) {
+                    Ok(report) => write_action_test_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 };
             }
@@ -2714,9 +2704,9 @@ where
             return match review_recovery::recover(
                 operation,
                 &args.runtime_config,
-                &args.request_entity,
-                &args.request_id,
-                args.proposal_version,
+                &args.action_id,
+                &args.proposal_id,
+                args.submission_version,
             ) {
                 Ok(outcome) => write_review_recovery_success(
                     &ReviewRecoverySuccessReport {
@@ -2736,32 +2726,32 @@ where
                 ),
             };
         }
-        Command::RequestRetention(args) => {
+        Command::ProposalRetention(args) => {
             return match args.command {
-                RequestRetentionCommand::List(args) => match request_retention_list(&args) {
+                ProposalRetentionCommand::List(args) => match proposal_retention_list(&args) {
                     Ok(report) => {
-                        write_request_retention_list_success(&report, format, stdout, stderr)
+                        write_proposal_retention_list_success(&report, format, stdout, stderr)
                     }
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                RequestRetentionCommand::DryRun(args) => match request_retention_dry_run(&args) {
+                ProposalRetentionCommand::DryRun(args) => match proposal_retention_dry_run(&args) {
                     Ok(report) => {
-                        write_request_retention_dry_run_success(&report, format, stdout, stderr)
+                        write_proposal_retention_dry_run_success(&report, format, stdout, stderr)
                     }
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                RequestRetentionCommand::Erase(args) => match request_retention_erase(&args) {
+                ProposalRetentionCommand::Erase(args) => match proposal_retention_erase(&args) {
                     Ok(report) => {
-                        write_request_retention_erase_success(&report, format, stdout, stderr)
+                        write_proposal_retention_erase_success(&report, format, stdout, stderr)
                     }
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                RequestRetentionCommand::CleanupAttachments(args) => {
-                    match request_retention::cleanup_attachments(&args.runtime_config) {
+                ProposalRetentionCommand::CleanupAttachments(args) => {
+                    match proposal_retention::cleanup_attachments(&args.runtime_config) {
                         Ok(outcome) => write_attachment_cleanup_success(
                             &AttachmentCleanupSuccessReport {
                                 ok: true,
-                                command: "request-retention cleanup-attachments",
+                                command: "proposal-retention cleanup-attachments",
                                 outcome,
                             },
                             format,
@@ -2769,8 +2759,8 @@ where
                             stderr,
                         ),
                         Err(error) => write_failure(
-                            &request_retention_failure(
-                                "request-retention cleanup-attachments",
+                            &proposal_retention_failure(
+                                "proposal-retention cleanup-attachments",
                                 error,
                             ),
                             format,
@@ -2907,53 +2897,53 @@ where
     }
 }
 
-fn request_retention_list(
-    args: &RequestRetentionListArgs,
-) -> Result<RequestRetentionListSuccessReport, FailureReport> {
-    let outcome = request_retention::list(
+fn proposal_retention_list(
+    args: &ProposalRetentionListArgs,
+) -> Result<ProposalRetentionListSuccessReport, FailureReport> {
+    let outcome = proposal_retention::list(
         &args.runtime_config,
-        args.request_entity.as_deref(),
+        args.action_id.as_deref(),
         args.after_cursor.as_deref(),
         args.limit,
     )
-    .map_err(|error| request_retention_failure("request-retention list", error))?;
-    Ok(RequestRetentionListSuccessReport {
+    .map_err(|error| proposal_retention_failure("proposal-retention list", error))?;
+    Ok(ProposalRetentionListSuccessReport {
         ok: true,
-        command: "request-retention list",
+        command: "proposal-retention list",
         outcome,
     })
 }
 
-fn request_retention_dry_run(
-    args: &RequestRetentionExactArgs,
-) -> Result<RequestRetentionDryRunSuccessReport, FailureReport> {
-    let outcome = request_retention::dry_run(
+fn proposal_retention_dry_run(
+    args: &ProposalRetentionExactArgs,
+) -> Result<ProposalRetentionDryRunSuccessReport, FailureReport> {
+    let outcome = proposal_retention::dry_run(
         &args.runtime_config,
-        &args.request_entity,
-        &args.request_id,
-        args.proposal_version,
+        &args.action_id,
+        &args.proposal_id,
+        args.submission_version,
     )
-    .map_err(|error| request_retention_failure("request-retention dry-run", error))?;
-    Ok(RequestRetentionDryRunSuccessReport {
+    .map_err(|error| proposal_retention_failure("proposal-retention dry-run", error))?;
+    Ok(ProposalRetentionDryRunSuccessReport {
         ok: true,
-        command: "request-retention dry-run",
+        command: "proposal-retention dry-run",
         outcome,
     })
 }
 
-fn request_retention_erase(
-    args: &RequestRetentionExactArgs,
-) -> Result<RequestRetentionEraseSuccessReport, FailureReport> {
-    let outcome = request_retention::erase(
+fn proposal_retention_erase(
+    args: &ProposalRetentionExactArgs,
+) -> Result<ProposalRetentionEraseSuccessReport, FailureReport> {
+    let outcome = proposal_retention::erase(
         &args.runtime_config,
-        &args.request_entity,
-        &args.request_id,
-        args.proposal_version,
+        &args.action_id,
+        &args.proposal_id,
+        args.submission_version,
     )
-    .map_err(|error| request_retention_failure("request-retention erase", error))?;
-    Ok(RequestRetentionEraseSuccessReport {
+    .map_err(|error| proposal_retention_failure("proposal-retention erase", error))?;
+    Ok(ProposalRetentionEraseSuccessReport {
         ok: true,
-        command: "request-retention erase",
+        command: "proposal-retention erase",
         outcome,
     })
 }
@@ -3022,60 +3012,60 @@ fn idempotency_retention_failure(error: registry_breg::mutation::MutationError) 
     }
 }
 
-fn request_retention_failure(
+fn proposal_retention_failure(
     command: &'static str,
-    error: RequestRetentionCliError,
+    error: ProposalRetentionCliError,
 ) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
-        RequestRetentionCliError::PackagePinMismatch(mismatch) => {
+        ProposalRetentionCliError::PackagePinMismatch(mismatch) => {
             return package_pin_failure(
                 command,
-                "request-retention.package.refused",
+                "proposal-retention.package.refused",
                 "package",
                 &mismatch,
             )
         }
-        RequestRetentionCliError::MigrationLockHeld => (
-            "request-retention.in-progress",
+        ProposalRetentionCliError::MigrationLockHeld => (
+            "proposal-retention.in-progress",
             "database",
-            "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. A detail erasure that committed before the wait stays erased, which `request-retention dry-run` shows. Retry the same operation once it releases",
+            "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. A detail erasure that committed before the wait stays erased, which `proposal-retention dry-run` shows. Retry the same operation once it releases",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::RetryAfterMigrationLockReleases,
         ),
-        RequestRetentionCliError::Operator => (
-            "request-retention.operation.refused",
-            "requestRetention",
-            "the request retention operation was refused",
-            DiagnosticArtifact::RequestRetentionOperation,
-            SuggestedAction::VerifyRequestRetentionOperation,
+        ProposalRetentionCliError::Operator => (
+            "proposal-retention.operation.refused",
+            "proposalRetention",
+            "the Proposal retention operation was refused",
+            DiagnosticArtifact::ProposalRetentionOperation,
+            SuggestedAction::VerifyProposalRetentionOperation,
         ),
-        RequestRetentionCliError::ActiveDetailPinned => (
-            "request-retention.detail.pinned",
-            "requestRetention",
-            "active request detail is still pinned",
-            DiagnosticArtifact::RequestRetentionOperation,
-            SuggestedAction::VerifyRequestRetentionOperation,
+        ProposalRetentionCliError::ActiveDetailPinned => (
+            "proposal-retention.detail.pinned",
+            "proposalRetention",
+            "active Proposal detail is still pinned",
+            DiagnosticArtifact::ProposalRetentionOperation,
+            SuggestedAction::VerifyProposalRetentionOperation,
         ),
-        RequestRetentionCliError::RetainMode => (
-            "request-retention.mode.retain",
-            "requestRetention",
-            "the request retention policy does not permit operator erasure",
-            DiagnosticArtifact::RequestRetentionOperation,
-            SuggestedAction::VerifyRequestRetentionOperation,
+        ProposalRetentionCliError::RetainMode => (
+            "proposal-retention.mode.retain",
+            "proposalRetention",
+            "the Proposal retention policy does not permit operator erasure",
+            DiagnosticArtifact::ProposalRetentionOperation,
+            SuggestedAction::VerifyProposalRetentionOperation,
         ),
-        RequestRetentionCliError::ErasureUnaudited => (
-            "request-retention.erasure.unaudited",
-            "requestRetention",
+        ProposalRetentionCliError::ErasureUnaudited => (
+            "proposal-retention.erasure.unaudited",
+            "proposalRetention",
             "the erasure committed but its audit entry was not recorded; restore the audit destination, then reconcile the erased request against the database",
-            DiagnosticArtifact::RequestRetentionOperation,
-            SuggestedAction::VerifyRequestRetentionOperation,
+            DiagnosticArtifact::ProposalRetentionOperation,
+            SuggestedAction::VerifyProposalRetentionOperation,
         ),
-        RequestRetentionCliError::AttachmentStorageBindingMismatch => (
-            "request-retention.attachment-storage.binding-mismatch",
-            "requestRetention",
+        ProposalRetentionCliError::AttachmentStorageBindingMismatch => (
+            "proposal-retention.attachment-storage.binding-mismatch",
+            "proposalRetention",
             "restore the original attachment storage binding and verification policy before retrying; the registry pin, retained content, or deletion tombstones still require them",
-            DiagnosticArtifact::RequestRetentionOperation,
-            SuggestedAction::VerifyRequestRetentionOperation,
+            DiagnosticArtifact::ProposalRetentionOperation,
+            SuggestedAction::VerifyProposalRetentionOperation,
         ),
     };
     FailureReport {
@@ -5606,7 +5596,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                 ok: false,
                 command: "test",
                 diagnostics: vec![tool_diagnostic(
-                    diagnostic("breg.field.pattern-syntax-invalid", &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                    diagnostic("breg.field.pattern-syntax-invalid", &format!("recordTypes[{entity_id}].fields[{field_id}].pattern"),
                         "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test"),
                     DiagnosticArtifact::SchemaTestCandidate,
                     SuggestedAction::CorrectSchemaTestCandidate,
@@ -5944,6 +5934,13 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
+        ApplyLifecycleError::ProposalCompatibility => (
+            "apply.proposal-compatibility.refused",
+            "reviewAuthorities",
+            "the retained Proposal review binding could not be proven; inspect the retained work and its exact configured Review authority before retrying",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
         ApplyLifecycleError::FieldEncryptionConfiguration => (
             "apply.field-encryption.configuration-refused",
             "fieldEncryption.provider",
@@ -5995,7 +5992,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     command,
                     diagnostic(
                         "breg.field.pattern-syntax-invalid",
-                        &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                        &format!("recordTypes[{entity_id}].fields[{field_id}].pattern"),
                         "PostgreSQL rejected the native pattern syntax. The exact target remains pinned in maintenance; restore the pre-activation backup before correcting the PostgreSQL ARE syntax, schema-testing, and packaging the correction. Do not retry changed package bytes as the pinned target.",
                     ),
                     DiagnosticArtifact::DatabaseMigration,
@@ -6010,7 +6007,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     command,
                     diagnostic(
                         "breg.field.pattern-existing-rows-invalid",
-                        &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                        &format!("recordTypes[{entity_id}].fields[{field_id}].pattern"),
                         "Existing stored values do not satisfy the native pattern. The exact target remains pinned in maintenance; repair the violating values through operator recovery and retry the exact pinned target.",
                     ),
                     DiagnosticArtifact::DatabaseMigration,
@@ -6040,16 +6037,16 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     SuggestedAction::ReviewFieldEncryptionBackfill,
                 );
             }
-            registry_breg::migration::MigrationError::FieldEncryptionRetainedRequestSnapshots {
+            registry_breg::migration::MigrationError::FieldEncryptionRetainedProposalSnapshots {
                 entity_id,
                 field_id,
             } => {
                 return source_failure(
                     command,
                     diagnostic(
-                        "field-encryption.history.retained-request-snapshot",
-                        &format!("entities[{entity_id}].fields[{field_id}].encryption"),
-                        "Retained change-request snapshots still contain plaintext for this field. Choose erase-and-rebaseline history handling, or remove the retained snapshots through the documented operator workflow before retrying the exact pinned target.",
+                        "field-encryption.history.retained-proposal-snapshot",
+                        &format!("recordTypes[{entity_id}].fields[{field_id}].encryption"),
+                        "Retained Proposal snapshots still contain plaintext for this field. Choose erase-and-rebaseline history handling, or remove the retained snapshots through the documented operator workflow before retrying the exact pinned target.",
                     ),
                     DiagnosticArtifact::DatabaseMigration,
                     SuggestedAction::ReviewFieldEncryptionBackfill,
@@ -6169,12 +6166,12 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::ReconcileFailedMigration,
             ),
-            registry_breg::migration::MigrationError::ActiveRequestProposals => (
-                "apply.request-proposals.active",
-                "changeRequest",
-                "active request proposals require explicit rebase or cancellation before activating changed request contracts",
+            registry_breg::migration::MigrationError::ActiveProposalRecoveryUnavailable => (
+                "apply.proposals.recovery-required",
+                "proposal",
+                "active Proposals must retain inspection and cancellation in the candidate package; restore those permissions before activating the candidate",
                 DiagnosticArtifact::PackageActivation,
-                SuggestedAction::ResolveActiveRequestProposals,
+                SuggestedAction::RestoreActiveProposalRecovery,
             ),
             registry_breg::migration::MigrationError::UnrecognizedDatabase => (
                 "apply.database.unrecognized",
@@ -7136,21 +7133,13 @@ fn init(destination: &Path) -> Result<SuccessReport, FailureReport> {
 /// the two it left standing for teaching and which one has to go before a
 /// production package.
 fn init_next_steps(destination: &Path) -> Vec<String> {
-    let readme = destination.join("README.md");
     vec![
+        format!("run 'bregctl check {}'", destination.display()),
         format!(
-            "read {}, then run 'bregctl check {}'",
-            readme.display(),
+            "inspect the compiled contract with 'bregctl explain model {}'",
             destination.display()
         ),
-        format!(
-            "leave the findings above as they are; the example operator profile lists a whole collection and the example evidence-source profile looks up any record, both on purpose, and {} says where to narrow them",
-            readme.display()
-        ),
-        format!(
-            "replace canonicalBaseIri in {} before you build a production package; the example value is a reserved .invalid name that never resolves",
-            destination.join("registry.yaml").display()
-        ),
+        "replace the example registry identity before preparing a production package".to_owned(),
     ]
 }
 
@@ -7392,208 +7381,12 @@ fn generate(
     })
 }
 
-fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessReport, FailureReport> {
-    const COMMAND: &str = "project planner-test";
-    let compiled = compile(&args.project, ProfileArg::Authoring, COMMAND)?;
-    if args.action.is_some() {
-        return action_handler_test::run(args, &compiled);
-    }
-    let entity_id = args.entity.as_deref().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.entity.required",
-            "entity",
-            "select a request entity or action",
-        )
-    })?;
-    let request_path = args.request.as_ref().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.request.required",
-            "request",
-            "provide a synthetic request file",
-        )
-    })?;
-    let entity = compiled.entities().get(entity_id).ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.entity.not-found",
-            "entity",
-            "select one compiled entity",
-        )
-    })?;
-    let request = entity.change_request.as_ref().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.entity.not-request",
-            "entity",
-            "select a compiled change-request entity",
-        )
-    })?;
-    let planner = request.planner.as_ref().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.planner.declarative",
-            "entity",
-            "the local planner test accepts only Rhai-backed request entities",
-        )
-    })?;
-
-    let input_bytes = read_bounded_regular_file(
-        request_path,
-        "planner-test.request.unavailable",
-        MAX_PLANNER_TEST_REQUEST_BYTES,
-    )
-    .map_err(|diagnostic| {
-        let (code, message) = if diagnostic.code == "breg.source.file-bounds" {
-            (
-                "planner-test.request.bounds",
-                "the synthetic request exceeds its fixed size bound",
-            )
-        } else {
-            (
-                "planner-test.request.unavailable",
-                "the synthetic request must be a readable regular file without symbolic links",
-            )
-        };
-        planner_test_failure(code, "request", message)
-    })?;
-    let input = parse_json_strict(&input_bytes).map_err(|_| {
-        planner_test_failure(
-            "planner-test.request.invalid",
-            "request",
-            "the synthetic request must be strict JSON",
-        )
-    })?;
-    let input = input.as_object().ok_or_else(|| {
-        planner_test_failure(
-            "planner-test.request.invalid",
-            "request",
-            "the synthetic request must be one JSON object",
-        )
-    })?;
-    if !bounded_planner_test_value(&Value::Object(input.clone()), 0) {
-        return Err(planner_test_failure(
-            "planner-test.request.bounds",
-            "request",
-            "the synthetic request exceeds the closed planner value bounds",
-        ));
-    }
-    let declared_fields = planner.request_fields.iter().collect::<BTreeSet<_>>();
-    if input.keys().any(|field| !declared_fields.contains(field)) {
-        return Err(planner_test_failure(
-            "planner-test.request.fields",
-            "request",
-            "the synthetic request may contain only planner-declared request fields",
-        ));
-    }
-
-    let candidate = registry_breg::rhai_planner::plan_change_request_effects(
-        request,
-        input,
-        Instant::now() + PLANNER_TEST_DEADLINE,
-    )
-    .map_err(|error| {
-        planner_test_failure(
-            error.code(),
-            "planner",
-            "the closed Rhai planner refused the synthetic request",
-        )
-    })?;
-    if candidate.planner_binding.kind != "rhai"
-        || candidate.planner_binding.abi_identifier != planner.abi
-        || candidate.planner_binding.script_sha256.as_deref()
-            != Some(planner.script_sha256.as_str())
-    {
-        return Err(planner_test_failure(
-            "planner-test.planner.binding",
-            "planner",
-            "the planner result did not preserve its compiled identity",
-        ));
-    }
-
-    let mut field_mutations = 0usize;
-    let mut dependency_count = 0usize;
-    let effect_aliases = candidate
-        .effects
-        .iter()
-        .enumerate()
-        .map(|(index, effect)| (effect.id.as_str(), format!("effect-{}", index + 1)))
-        .collect::<BTreeMap<_, _>>();
-    let effects = candidate
-        .effects
-        .iter()
-        .enumerate()
-        .map(|(index, effect)| {
-            let mut fields = effect
-                .mutations
-                .iter()
-                .map(|mutation| match mutation {
-                    registry_breg::rhai_planner::CandidateChangeRequestMutation::Set {
-                        field,
-                        ..
-                    }
-                    | registry_breg::rhai_planner::CandidateChangeRequestMutation::Clear {
-                        field,
-                    } => field.clone(),
-                })
-                .collect::<Vec<_>>();
-            fields.sort();
-            fields.dedup();
-            field_mutations += effect.mutations.len();
-            dependency_count += effect.depends_on.len();
-            let mut depends_on = effect
-                .depends_on
-                .iter()
-                .map(|dependency| {
-                    effect_aliases
-                        .get(dependency.as_str())
-                        .cloned()
-                        .ok_or_else(|| {
-                            planner_test_failure(
-                                "planner-test.planner.binding",
-                                "planner",
-                                "the planner result contains an unresolved effect dependency",
-                            )
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            depends_on.sort();
-            Ok(PlannerTestEffectReport {
-                id: format!("effect-{}", index + 1),
-                target_kind: match effect.target.binding {
-                    registry_breg::rhai_planner::CandidateChangeRequestTargetBinding::Existing {
-                        ..
-                    } => "existing",
-                    registry_breg::rhai_planner::CandidateChangeRequestTargetBinding::ReservedCreate {
-                        ..
-                    } => "reserved-create",
-                },
-                operation: operation_wire_name(effect.operation),
-                fields,
-                depends_on,
-            })
-        })
-        .collect::<Result<Vec<_>, FailureReport>>()?;
-    Ok(PlannerTestSuccessReport {
-        ok: true,
-        command: COMMAND,
-        compiled_revision: compiled.revision().to_owned(),
-        request_entity: entity.id.clone(),
-        action: None,
-        refusal: None,
-        assertions_passed: None,
-        planner: Some(PlannerTestIdentityReport {
-            kind: "rhai",
-            abi: planner.abi.clone(),
-            script_sha256: planner.script_sha256.clone(),
-        }),
-        handler: None,
-        counts: PlannerTestCountReport {
-            effects: effects.len(),
-            field_mutations,
-            dependencies: dependency_count,
-        },
-        effects,
-    })
+fn action_test(args: &ProjectActionTestArgs) -> Result<ActionTestSuccessReport, FailureReport> {
+    let compiled = compile(&args.project, ProfileArg::Authoring, "project action-test")?;
+    action_handler_test::run(args, &compiled)
 }
 
-fn bounded_planner_test_value(value: &Value, depth: usize) -> bool {
+fn bounded_action_test_value(value: &Value, depth: usize) -> bool {
     use registry_breg::rhai_planner::{
         MAXIMUM_ARRAY_ITEMS, MAXIMUM_MAP_ENTRIES, MAXIMUM_STRING_BYTES, MAXIMUM_VALUE_DEPTH,
     };
@@ -7609,24 +7402,23 @@ fn bounded_planner_test_value(value: &Value, depth: usize) -> bool {
             values.len() <= MAXIMUM_ARRAY_ITEMS
                 && values
                     .iter()
-                    .all(|value| bounded_planner_test_value(value, depth + 1))
+                    .all(|value| bounded_action_test_value(value, depth + 1))
         }
         Value::Object(values) => {
             values.len() <= MAXIMUM_MAP_ENTRIES
                 && values.iter().all(|(key, value)| {
-                    key.len() <= MAXIMUM_STRING_BYTES
-                        && bounded_planner_test_value(value, depth + 1)
+                    key.len() <= MAXIMUM_STRING_BYTES && bounded_action_test_value(value, depth + 1)
                 })
         }
     }
 }
 
-fn planner_test_failure(code: &str, path: &str, message: &str) -> FailureReport {
+fn action_test_failure(code: &str, path: &str, message: &str) -> FailureReport {
     source_failure(
-        "project planner-test",
+        "project action-test",
         diagnostic(code, path, message),
-        DiagnosticArtifact::PlannerTest,
-        SuggestedAction::CorrectPlannerTestInput,
+        DiagnosticArtifact::ActionTest,
+        SuggestedAction::CorrectActionTestInput,
     )
 }
 
@@ -7662,9 +7454,9 @@ const ACTIONS_EXPLANATION: ExplainFormat = ExplainFormat {
     api_version: "id.registrystack.org/formats/breg/actions-explanation/v1alpha4",
     kind: "BRegActionsExplanation",
 };
-const CHANGE_REQUESTS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4",
-    kind: "BRegChangeRequestsExplanation",
+const PROPOSALS_EXPLANATION: ExplainFormat = ExplainFormat {
+    api_version: "id.registrystack.org/formats/breg/proposals-explanation/v1alpha1",
+    kind: "BRegProposalsExplanation",
 };
 const EVENTS_EXPLANATION: ExplainFormat = ExplainFormat {
     api_version: "id.registrystack.org/formats/breg/events-explanation/v1alpha4",
@@ -7685,7 +7477,7 @@ fn explain_format(subject: ExplainSubject, scenario_present: bool) -> &'static E
         ExplainSubject::Routes => &ROUTES_EXPLANATION,
         ExplainSubject::Queries => &QUERIES_EXPLANATION,
         ExplainSubject::Actions => &ACTIONS_EXPLANATION,
-        ExplainSubject::ChangeRequests => &CHANGE_REQUESTS_EXPLANATION,
+        ExplainSubject::Proposals => &PROPOSALS_EXPLANATION,
         ExplainSubject::Events => &EVENTS_EXPLANATION,
         ExplainSubject::Lifecycle => &LIFECYCLE_EXPLANATION,
     }
@@ -7742,7 +7534,7 @@ fn explain_render_error() -> FailureReport {
     }
 }
 
-/// `explain lifecycle`: the request lifecycle the engine enforces, reported
+/// `explain lifecycle`: the Proposal lifecycle the engine enforces, reported
 /// without compiling anything.
 ///
 /// PROJECT is refused rather than ignored here. The lifecycle is engine
@@ -7763,7 +7555,7 @@ fn explain_lifecycle(
         return Err(explain_usage_error(diagnostic(
             "lifecycle.project.unused",
             "project",
-            "explain lifecycle reports the engine's request lifecycle, which no registry project changes; run it with no PROJECT",
+            "explain lifecycle reports the engine's Proposal lifecycle, which no registry project changes; run it with no PROJECT",
         )));
     }
     if matches!(profile, ProfileArg::Production) {
@@ -7780,7 +7572,7 @@ fn explain_lifecycle(
             "--scenario is available only for explain access",
         )));
     }
-    let lifecycle = serde_json::to_value(registry_breg::lifecycle::request_lifecycle())
+    let lifecycle = serde_json::to_value(registry_breg::lifecycle::proposal_lifecycle())
         .map_err(|_| explain_render_error())?;
     let explanation = Value::Object(serde_json::Map::from_iter([(
         "lifecycles".to_owned(),
@@ -7856,7 +7648,7 @@ fn explain(
         ExplainSubject::Routes => explain_routes(&compiled),
         ExplainSubject::Queries => explain_queries(&compiled),
         ExplainSubject::Actions => explain_actions(&compiled),
-        ExplainSubject::ChangeRequests => explain_change_requests(&compiled),
+        ExplainSubject::Proposals => explain_proposals(&compiled),
         ExplainSubject::Events => serde_json::to_value(compiled.event_deliveries()),
         ExplainSubject::Lifecycle => unreachable!("lifecycle returns before the project compiles"),
     }
@@ -8243,30 +8035,18 @@ fn load_project_planner_asset_files(
     project_directory: &SafeDir,
     project: &RegistryProject,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
-    let mut paths = project
-        .entities
-        .iter()
-        .filter_map(|entity| {
-            entity
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| {
-                    (
-                        planner.script.clone(),
-                        format!("entities[{}].changeRequest.planner.script", entity.id),
-                    )
-                })
-        })
-        .collect::<BTreeMap<_, _>>();
+    let mut paths = BTreeMap::new();
     let mut wasm_module_paths = BTreeMap::new();
-    for action in &project.actions {
-        partition_handler_source(
-            action.handler.as_ref().map(|handler| &handler.handler),
-            &format!("actions[{}]", action.id),
-            &mut paths,
-            &mut wasm_module_paths,
-        );
+    for function in &project.functions {
+        let location = format!("functions[{}].source", function.id);
+        match function.runtime {
+            registry_breg::contract::ActionHandlerKindSource::Rhai => {
+                paths.insert(function.source.clone(), location);
+            }
+            registry_breg::contract::ActionHandlerKindSource::Wasm => {
+                wasm_module_paths.insert(function.source.clone(), location);
+            }
+        }
     }
     for entity in &project.entities {
         for hook in &entity.hooks {
@@ -8397,48 +8177,18 @@ fn load_module_asset_files(
             Ok(CapturedModuleAssetSource { path, bytes })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut planner_paths = module
-        .entities
-        .iter()
-        .filter_map(|entity| {
-            entity
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| {
-                    (
-                        planner.script.clone(),
-                        format!(
-                            "modules[{module_id}].entities[{}].changeRequest.planner.script",
-                            entity.id
-                        ),
-                    )
-                })
-        })
-        .chain(module.extend_entities.iter().filter_map(|extension| {
-            extension
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| {
-                    (
-                        planner.script.clone(),
-                        format!(
-                            "modules[{module_id}].extendEntities[{}].changeRequest.planner.script",
-                            extension.entity
-                        ),
-                    )
-                })
-        }))
-        .collect::<BTreeMap<_, _>>();
+    let mut planner_paths = BTreeMap::new();
     let mut wasm_module_paths = BTreeMap::new();
-    for action in &module.actions {
-        partition_handler_source(
-            action.handler.as_ref().map(|handler| &handler.handler),
-            &format!("modules[{module_id}].actions[{}]", action.id),
-            &mut planner_paths,
-            &mut wasm_module_paths,
-        );
+    for function in &module.functions {
+        let location = format!("modules[{module_id}].functions[{}].source", function.id);
+        match function.runtime {
+            registry_breg::contract::ActionHandlerKindSource::Rhai => {
+                planner_paths.insert(function.source.clone(), location);
+            }
+            registry_breg::contract::ActionHandlerKindSource::Wasm => {
+                wasm_module_paths.insert(function.source.clone(), location);
+            }
+        }
     }
     for entity in &module.entities {
         for hook in &entity.hooks {
@@ -8765,343 +8515,17 @@ fn module_asset_path_diagnostic(module_id: &str) -> Diagnostic {
 
 /// The module digest placeholder the initialized project carries until this
 /// command computes it from the module it writes beside the project.
-const INIT_MODULE_DIGEST_PLACEHOLDER: &str = "<module-digest>";
+const INIT_README: &[u8] = br#"# Local directory registry
 
-/// The module the initialized project locks; `modules/record-notes/module.yaml`.
-const INIT_MODULE_PATH: &str = "modules/record-notes/module.yaml";
+This project uses the native Record type model and generated CRUD. Its directory
+editor profile is bounded to the caller's jurisdiction.
 
-const INIT_README: &[u8] = br#"# Registry project
-
-`bregctl init` wrote this project. It is a working example, not a
-blank page: every identifier is a placeholder chosen to be obviously synthetic,
-and every file carries comments saying what a block does and what you change.
-
-## Files
-
-| File | What it holds |
-| --- | --- |
-| `registry.yaml` | The registry: its identity and package identity, the catalogue projection, one closed vocabulary, two entities, and three access profiles. Every command reads this file. |
-| `modules/record-notes/module.yaml` | A module: a reusable part of the model, versioned on its own and pinned by content digest in the project's `modules` list. |
-| `tests/journeys.yaml` | The requests `bregctl test` replays over HTTP against a throwaway database before a package is built. |
-| `dev-clients.yaml` | The local callers `bregctl dev` registers with its token issuer: one client per access profile the journeys use. |
-| `runtime.example.yaml` | An example of the operator's runtime configuration. No command reads it; copy it out of the project and replace every value. |
-
-## What the example models
-
-Two entities: `record-group` is public reference data, and `record` is the
-internal record that points at a group through a `reference` field and carries a
-`status` drawn from a closed vocabulary. Three access profiles read them: an
-`operator` that runs the whole registry, a `record-reader` whose rows are
-restricted by a claim on its own credentials, and an `evidence-source` that may
-only look a record up by its `code`.
-
-Replace this model with your own. The names are deliberately generic so that
-nothing here reads as advice about what your registry should contain.
-
-## Next commands
-
-```sh
-bregctl check .
-bregctl explain queries .
-bregctl explain events .
-```
-
-`check` compiles the project and reports problems and findings. It reports two
-findings for this project on purpose: `breg.access.profile-unrestricted-collection`,
-because the `operator` profile can list every record, and
-`breg.access.profile-unrestricted-rows`, because the `evidence-source` profile can
-look up any record by its code. The comment above each profile says how to
-close it.
-
-`explain` prints what the compiled project exposes, such as the query surface
-each profile gets and the events the package would emit.
-
-The `evidence-source` profile's lookup is what `generate evidence-source`
-exports, so this project already produces an Evidence source definition:
-
-```sh
-mkdir exports
-bregctl generate evidence-source . --access-profile evidence-source \
-  --entity record --selector by-code --fields status \
-  --source-id registry-status --connection registry \
-  --output ./exports/registry-status
-```
-
-The dedicated `source` client in `dev-clients.yaml` binds only this lookup
-profile and gets its own key on first start. This teaching profile can look up
-any record by code: a supplied code is not a row authorization rule. Set your
-intended readable fields and row boundaries before retaining records.
-
-After stopping with `bregctl dev stop .`, use `bregctl dev export-client .
---client source --client-id-file PATH --assertion-key-file PATH` to copy its
-existing pair into prepared owner-only directories. The command preserves
-existing identical files and refuses conflicts; choose fresh paths and update
-the consuming target if you explicitly replaced the development session.
-
-The export refuses a destination that already exists and a parent directory that
-does not, so the output path names a directory the command creates inside one
-you made.
-
-Edit `modules/record-notes/module.yaml`, then re-pin it:
-
-```sh
-bregctl project lock .
-```
-
-## Run it on your machine
-
-`bregctl dev` starts this project as a working registry on loopback: PostgreSQL
-and the pinned ThunderID issuer in Docker, and Base Registry Engine serving the
-package it builds and tests from these files. It needs Docker and the installed
-`breg` binary; client registrations come from `dev-clients.yaml`.
-
-```sh
-bregctl dev
-bregctl dev stop
-```
-
-`bregctl test` alone replays `tests/journeys.yaml` over HTTP. It needs more
-than the project: an empty PostgreSQL database, a runtime configuration built
-from `runtime.example.yaml`, and one credential per journey step bound in a
-credentials file. `dev` prepares all of that for a local run; the operate
-documentation below walks through preparing them for a deployment.
-
-## Documentation
-
-- Configure a registry: <https://docs.registrystack.org/configure/breg/>
-- Operate a registry: <https://docs.registrystack.org/operate/breg/>
-- Every configuration key: <https://docs.registrystack.org/reference/breg-configuration/>
-- `bregctl` commands: run `bregctl --help`.
+Run `bregctl check .`, `bregctl explain model .`, and
+`bregctl generate sdk . --output sdk` to inspect and generate its contracts.
+Replace the example registry identity before preparing a production package.
 "#;
-
 const INIT_REGISTRY_PROJECT: &[u8] =
-    br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json
-# The registry project: one document that decides the model, the access rules,
-# and the catalogue description of a single registry. Every bregctl
-# command reads it. Replace the identifiers, titles, and URLs below with your
-# own; every value here is a placeholder chosen to be obviously synthetic.
-apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
-kind: BRegProject
-
-# Registry identity. `canonicalBaseIri` is the stable base of the IRIs this
-# registry publishes, so point it at a hostname you control before a production
-# package. Names under `.example.invalid` never resolve.
-project:
-  id: generic-registry
-  version: 0.1.0
-  defaultLanguage: en
-  canonicalBaseIri: https://generic-registry.example.invalid
-
-# Package identity names the reviewed source revision a package is built
-# from. A package carries no environment: the same package directory is
-# applied unchanged to every environment, and each runtime file names its own
-# `identity.environment` and `identity.instanceId`.
-package:
-  sourceRevision: generic-registry-0.1.0
-
-# The Registry Manifest projection is the catalogue description this registry
-# publishes about itself. `accessProfile` and `classificationCeiling` bound what
-# the projection may describe; they never grant access to a caller.
-manifestProjection:
-  accessProfile: operator
-  classificationCeiling: internal
-  catalog:
-    baseUrl: https://generic-registry.example.invalid
-    title: Generic Registry Catalogue
-    description: Placeholder catalogue description; replace it with your own.
-    publisher:
-      id: generic-registry-authority
-      name: Generic Registry Authority
-      iri: https://generic-registry.example.invalid/authority
-  datasets:
-    - id: generic-registry
-      title: Generic Registry
-      description: Placeholder dataset description; replace it with your own.
-      owner: Generic Registry Authority
-      status: under-development
-  dataServices:
-    - id: generic-registry-api
-      title: Generic Registry API
-      endpointUrl: https://generic-registry.example.invalid
-      servesDatasets: [generic-registry]
-  publicService:
-    id: generic-registry-service
-    title: Generic Registry Service
-
-# A vocabulary is a closed code list. A `vocabulary-code` field accepts only
-# these values, and the compiler refuses any other value at authoring time.
-vocabularies:
-  - id: record-status
-    values: [draft, active, retired]
-
-entities:
-  # Reference data the records point at. It is classified `public` because a
-  # list of group codes discloses nothing on its own; the records themselves
-  # stay `internal`.
-  - id: record-group
-    primaryDataset: generic-registry
-    route: record-groups
-    mutationMode: mutable
-    classification: public
-    fields:
-      - {id: code, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: public}
-      - {id: label, type: string, required: true, maximumLength: 200, classification: public}
-    constraints:
-      - {id: record-group-code-unique, type: unique, fields: [code]}
-
-  # The registry's records. `group` is a reference: the server stores the target
-  # record's identifier and refuses a value that names no `record-group`.
-  # `status` is a vocabulary code drawn from the `record-status` list above.
-  # Neither is `required`, so a create may omit it.
-  #
-  # An entity may also declare `hooks`, which project chosen fields of a
-  # committed change to a URL destination the deployment binds by name. Each
-  # hook declares `phase: after` and a handler such as
-  # `{type: url, destinationId: registry-events}`. This project declares none:
-  # a package refuses to activate until the runtime configuration binds every
-  # destination its URL handlers name. `bregctl dev` supplies local receiver
-  # bindings; operated deployments bind their own.
-  - id: record
-    primaryDataset: generic-registry
-    route: records
-    mutationMode: mutable
-    classification: internal
-    fields:
-      - {id: code, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maximumLength: 200, classification: internal}
-      - {id: group, type: reference, target: record-group, classification: internal}
-      - {id: status, type: vocabulary-code, vocabulary: record-status, classification: internal}
-    constraints:
-      - {id: record-code-unique, type: unique, fields: [code]}
-    # An index lets a list filtered or sorted by its leading field skip the
-    # rows that do not match. `check` reports a finding for a filterable or
-    # sortable field no index leads with. The unique constraint above already
-    # indexes `code`, and the compiler indexes every reference such as `group`.
-    indexes:
-      - {id: record-status, fields: [status]}
-    # A selector profile names an exact-match question a caller may ask by
-    # value, rather than a filter over a listing. Every field it names must
-    # refuse the empty value, which is why `code` declares `minimumLength: 1` above.
-    # `bregctl generate evidence-source` exports one Evidence source per
-    # selector an access profile grants a lookup on.
-    selectorProfiles:
-      - {id: by-code, fields: [code]}
-
-# A token selects one profile per request, and that profile decides everything
-# the request may touch. Profiles are never merged, and naming one in a request
-# grants nothing the profile does not already allow.
-accessProfiles:
-  # The registry-wide operator. `readableFields` decide what a response may
-  # carry, `writableFields` what a create or patch may set, and
-  # `filterableFields` which fields a caller may filter and sort a list by.
-  #
-  # `check` reports `breg.access.profile-unrestricted-collection` for this profile:
-  # it can list every record, and a caller-supplied filter is not authorization.
-  # That is intended for a single operations team running the whole registry.
-  # Close it by giving the grant a `rowBoundaries` entry, the way `record-reader`
-  # below does, or by removing `list` from its operations. Once the grant is
-  # row-bound, `breg.access.profile-writable-row-boundary` follows for a bound
-  # field the grant can write; it asks you to confirm that moving records
-  # between callers' rows is intended, or to drop the field from `writableFields`.
-  - id: operator
-    default: true
-    principalClaim: registry_principal
-    requiredScopes: [registry:generic:operate]
-    requiredPurposes: [registry-operations]
-    permissions:
-      entities:
-        - entity: record-group
-          rowBoundaries: unrestricted
-          operations: [create, get, list]
-          readableFields: [code, label]
-          writableFields: [code, label]
-          filterableFields: [code]
-        - entity: record
-          rowBoundaries: unrestricted
-          operations: [create, get, list, patch]
-          readableFields: [code, label, group, status]
-          writableFields: [code, label, group, status]
-          filterableFields: [code, status]
-
-  # A row-restricted reader. A row boundary compares a declared field against a
-  # verified claim on the caller's credentials, so this profile reads only the
-  # records whose `status` matches its own claim. `equals` compares against one
-  # claim value; `in` compares against a claim carrying a list of them, which
-  # the authorization server must then issue as a JSON array. Bind the boundary
-  # to whatever field carries your registry's tenancy: an owning office, a
-  # jurisdiction code, a programme. Decide deliberately which profiles may write
-  # that field, because a profile that can patch it moves records in and out of
-  # another caller's rows. Here the operator may, and `tests/journeys.yaml`
-  # shows a record leaving this reader's rows when its status changes.
-  - id: record-reader
-    principalClaim: registry_principal
-    requiredScopes: [registry:generic:read]
-    requiredPurposes: [registry-reporting]
-    permissions:
-      entities:
-        - entity: record
-          operations: [get, list]
-          readableFields: [code, label, group, status]
-          filterableFields: [code]
-          rowBoundaries:
-            - {field: status, claim: registry_record_status, operator: equals}
-
-  # A lookup-only source. It answers one exact-match question, by `code`, and
-  # reads only the fields that answer it. `valueOrigin: request` says the caller
-  # supplies the selector value. The profile grants no `list`, so it can confirm
-  # a record whose code it is given and cannot enumerate the registry.
-  # `bregctl generate evidence-source .` exports this grant as an Evidence
-  # source definition, so a project written by `init` exports unmodified.
-  #
-  # `check` reports `breg.access.profile-unrestricted-rows` for this profile: any
-  # record's code answers it, and the value a caller supplies is not
-  # authorization. That is intended for a source that vouches for the whole
-  # registry. Close it by giving the grant a `rowBoundaries` entry, the way
-  # `record-reader` above does.
-  - id: evidence-source
-    principalClaim: registry_principal
-    requiredScopes: [registry:evidence:lookup]
-    requiredPurposes: [evidence-source-read]
-    permissions:
-      entities:
-        - entity: record
-          rowBoundaries: unrestricted
-          operations: [lookup]
-          readableFields: [code, status]
-          lookups:
-            - {selector: by-code, valueOrigin: request}
-
-# Modules contribute to the model from their own files under `modules/`.
-# `bregctl project lock` writes the version and content digest below;
-# a stale digest is a compile error, which keeps a reviewed project pinned to the
-# module content it was reviewed with. Re-run `project lock` after every module edit.
-modules:
-  - id: "record-notes"
-    version: "0.1.0"
-    digest: "<module-digest>"
-"#;
-
-const INIT_MODULE: &[u8] =
-    br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json
-# A module contributes to the model from its own file, so a reusable part of a
-# registry can be reviewed and versioned separately from the project that adopts
-# it. `extendEntities` adds to an entity the module does not own.
-#
-# Raise `version` and re-run `bregctl project lock` after every edit
-# here; the project's `modules` entry pins this file by content digest.
-apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
-kind: BRegModule
-id: record-notes
-version: 0.1.0
-extendEntities:
-  # An optional field: without `required: true`, existing records stay valid and
-  # a create may omit it. Adding a field to the model grants nobody access to
-  # it; list it in an access profile's `readableFields` and `writableFields`
-  # before a caller can see or set it.
-  - entity: record
-    fields:
-      - {id: internal-note, type: string, maximumLength: 500, classification: internal}
-"#;
+    include_bytes!("../../../products/breg/examples/refactor/minimal/registry.yaml");
 
 const INIT_RUNTIME_EXAMPLE: &[u8] =
     br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json
@@ -9192,177 +8616,46 @@ cursor:
 eventDestinations: {}
 "#;
 
-const INIT_DEV_CLIENTS: &[u8] =
-    br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
-# Local callers for `bregctl dev`. The owned ThunderID issuer that
-# `dev` starts beside the registry, registers each client below and issues it
-# short-lived tokens carrying these claims. One client binds each access profile
-# that `tests/journeys.yaml` uses, with the claims those journeys expect, so a
-# first start runs the journeys and serves the package without another file.
-# A maintained refusal step can name the exact client for its profile with
-# `testBindings`; the 'Explicit teaching clients' section of
-# products/breg/DEV.md documents the closed binding format.
-# `dev` generates a fresh private key per client under `.breg/dev/credentials/`;
-# nothing here is a credential, and none of it belongs in a deployment.
-apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
-kind: BRegDevClients
-clients:
-  - id: operator
-    accessProfiles: [operator]
-    scopes: [registry:generic:operate]
-    claims:
-      registry_principal: generic-registry-operator
-      registry_purpose: registry-operations
-  - id: reader
-    accessProfiles: [record-reader]
-    scopes: [registry:generic:read]
-    claims:
-      registry_principal: generic-registry-reader
-      registry_purpose: registry-reporting
-      registry_record_status: active
-  - id: source
-    accessProfiles: [evidence-source]
-    scopes: [registry:evidence:lookup]
-    claims:
-      registry_principal: generic-registry-source
-      registry_purpose: evidence-source-read
-"#;
-
-const INIT_JOURNEYS: &[u8] = br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
-# Project journeys: the requests `bregctl test` replays over real
-# HTTP, with real credentials, against a throwaway database before a package is
-# built. Every entity, profile, field, and claim below is resolved against the
-# compiled project first, so a journey can never reach past what a profile
-# already allows. The claims below are synthetic; credentials never belong here,
-# `bregctl test` binds one per step from its own credentials file.
-apiVersion: id.registrystack.org/formats/breg/journeys/v1
-kind: BRegJourneys
-journeys:
-  - id: record-lifecycle
-    steps:
-      # `capture` names the created record so later steps can refer to it, by
-      # `recordCapture` for a target and by `{recordCapture: ...}` for a reference value.
-      - id: create-record-group
-        entity: record-group
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: create
-          data: {code: group-a, label: Example group}
-        expect:
-          outcome: success
-          status: 201
-          fields: {code: group-a, label: Example group}
-        capture: example-group
-      - id: create-record
-        entity: record
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: create
-          data:
-            code: example
-            label: Example record
-            group: {recordCapture: example-group}
-            status: active
-        expect:
-          outcome: success
-          status: 201
-          fields: {code: example, label: Example record, status: active}
-        capture: example-record
-      - id: get-record
-        entity: record
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request: {type: get, recordCapture: example-record}
-        expect:
-          outcome: success
-          status: 200
-          fields: {code: example, label: Example record, status: active}
-      # The row boundary on `record-reader` is authorization, not a filter: the
-      # caller's own claim names the status it may read, and this record carries
-      # it.
-      - id: read-record-within-the-claim
-        entity: record
-        accessProfile: record-reader
-        claims:
-          principal: generic-registry-reader
-          scopes: [registry:generic:read]
-          purpose: registry-reporting
-          directClaims:
-            registry_record_status: active
-        request: {type: list}
-        expect: {outcome: success, status: 200, count: 1}
-      # `etagCapture` sends the captured record's ETag as `If-Match`, so a patch
-      # fails rather than overwriting a concurrent change.
-      - id: retire-record
-        entity: record
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request:
-          type: patch
-          recordCapture: example-record
-          etagCapture: example-record
-          changes:
-            - {field: status, value: retired}
-        expect:
-          outcome: success
-          status: 200
-          fields: {code: example, label: Example record, status: retired}
-      # The same request from the same reader now returns nothing: the record
-      # moved outside the rows its claim allows.
-      - id: read-record-outside-the-claim
-        entity: record
-        accessProfile: record-reader
-        claims:
-          principal: generic-registry-reader
-          scopes: [registry:generic:read]
-          purpose: registry-reporting
-          directClaims:
-            registry_record_status: active
-        request: {type: list}
-        expect: {outcome: success, status: 200, count: 0}
-      - id: list-records
-        entity: record
-        accessProfile: operator
-        claims:
-          principal: generic-registry-operator
-          scopes: [registry:generic:operate]
-          purpose: registry-operations
-        request: {type: list}
-        expect: {outcome: success, status: 200, count: 1}
-"#;
-
 fn init_files() -> BTreeMap<String, Vec<u8>> {
-    let module = parse_module_yaml(INIT_MODULE).expect("the initialized module parses");
-    let registry = String::from_utf8(INIT_REGISTRY_PROJECT.to_vec())
-        .expect("the initialized project is UTF-8")
-        .replace(
-            INIT_MODULE_DIGEST_PLACEHOLDER,
-            &module_digest_with_assets(&module, &[]),
-        );
     BTreeMap::from([
         ("README.md".to_owned(), INIT_README.to_vec()),
-        (INIT_MODULE_PATH.to_owned(), INIT_MODULE.to_vec()),
-        ("registry.yaml".to_owned(), registry.into_bytes()),
+        ("registry.yaml".to_owned(), INIT_REGISTRY_PROJECT.to_vec()),
+    ])
+}
+
+/// Retained generic rehearsal coverage uses native governed files independently
+/// of the small public initializer. Only its ordinary module lock is filled in.
+#[cfg(test)]
+pub(crate) fn retained_native_fixture_files() -> BTreeMap<String, Vec<u8>> {
+    let module = include_bytes!(
+        "../tests/fixtures/retained-native/generic/modules/record-notes/module.yaml"
+    );
+    let parsed = parse_module_yaml(module).expect("retained native module parses");
+    let project = include_str!("../tests/fixtures/retained-native/generic/registry.yaml")
+        .replace("<module-digest>", &module_digest_with_assets(&parsed, &[]));
+    BTreeMap::from([
+        ("registry.yaml".to_owned(), project.into_bytes()),
+        (
+            "modules/record-notes/module.yaml".to_owned(),
+            module.to_vec(),
+        ),
+        (
+            "README.md".to_owned(),
+            include_bytes!("../tests/fixtures/retained-native/generic/README.md").to_vec(),
+        ),
+        (
+            "dev-clients.yaml".to_owned(),
+            include_bytes!("../tests/fixtures/retained-native/generic/dev-clients.yaml").to_vec(),
+        ),
+        (
+            FIXTURE_JOURNEYS_PATH.to_owned(),
+            include_bytes!("../tests/fixtures/retained-native/generic/tests/journeys.yaml")
+                .to_vec(),
+        ),
         (
             "runtime.example.yaml".to_owned(),
             INIT_RUNTIME_EXAMPLE.to_vec(),
         ),
-        (FIXTURE_JOURNEYS_PATH.to_owned(), INIT_JOURNEYS.to_vec()),
-        ("dev-clients.yaml".to_owned(), INIT_DEV_CLIENTS.to_vec()),
     ])
 }
 
@@ -9565,6 +8858,7 @@ impl ArtifactSelector {
             ArtifactSelector::Schemas => {
                 path.starts_with("generated/schemas/")
                     || path.starts_with("generated/action-schemas/")
+                    || path.starts_with("generated/review-context-schemas/")
             }
             ArtifactSelector::Actions => {
                 path == "compiled/actions.json" || path.starts_with("generated/action-schemas/")
@@ -9573,6 +8867,10 @@ impl ArtifactSelector {
             ArtifactSelector::Metadata => path == "generated/metadata/registry.json",
             ArtifactSelector::Sql => path == "generated/postgres/schema.sql",
             ArtifactSelector::EvidenceSource => false,
+            ArtifactSelector::Sdk => {
+                path.starts_with("generated/sdk/")
+                    || path.starts_with("generated/review-context-schemas/")
+            }
         }
     }
 
@@ -9645,201 +8943,17 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 fn explain_model(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
-    serde_json::to_value(json!({
-        "registryId": compiled.registry_id(),
-        "version": compiled.version(),
-        "moduleOrder": compiled.module_order(),
-        "moduleClosure": compiled.module_closure(),
-        "entities": compiled.entities(),
-        "physicalNames": compiled.physical_names(),
-        "package": compiled.package(),
-        "manifestProjection": compiled.manifest_projection(),
-    }))
+    let mut inspection = registry_breg::artifacts::inspect_registry(compiled);
+    inspection["version"] = json!(compiled.version());
+    inspection["moduleOrder"] = json!(compiled.module_order());
+    inspection["moduleClosure"] = json!(compiled.module_closure());
+    Ok(inspection)
 }
 
-fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
-    let requests = compiled
-        .entities()
-        .values()
-        .filter(|entity| entity.change_request.is_some())
-        .map(|entity| {
-            let request = entity.change_request.as_ref().expect("filtered request entity");
-            let artifact = compiled.artifacts()
-                .get(&format!("generated/schemas/{}.schema.json", entity.id))
-                .expect("compiled entities have generated schemas");
-            let schema: Value = serde_json::from_slice(&artifact.bytes)?;
-            Ok(json!({
-                "requestEntity": entity.id,
-                "requestRoute": entity.route,
-                "fields": entity.stored_fields.iter().map(|field| json!({
-                    "field": field.logical.id,
-                    "apiName": field.logical.api_name,
-                    "schema": schema["properties"][&field.logical.api_name],
-                })).collect::<Vec<_>>(),
-                "contractFingerprint": request.contract_fingerprint,
-                "bounds": {
-                    "maximumTargets": request.maximum_targets,
-                    "maximumFieldMutations": request.maximum_field_mutations,
-                    "maximumSnapshotBytes": request.maximum_snapshot_bytes,
-                },
-                "planner": explain_change_request_planner(compiled, entity, request),
-                "review": request.review,
-                "onApproved": request.on_approved,
-                "application": request.application,
-                "effects": request.effects.iter().map(|effect| {
-                    let target = compiled.entities().get(&effect.target.entity_id);
-                    json!({
-                        "id": effect.id,
-                        "operation": operation_wire_name(effect.operation),
-                        "target": {
-                            "entity": effect.target.entity_id,
-                            "binding": match &effect.target.binding {
-                                registry_breg::model::CompiledChangeRequestTargetBinding::Existing { from_field } => {
-                                    json!({"type": "existing", "fromField": field_summary(entity, from_field)})
-                                }
-                                registry_breg::model::CompiledChangeRequestTargetBinding::ReservedCreate { effect } => {
-                                    json!({"type": "reserved-create", "effect": effect})
-                                }
-                            },
-                        },
-                        "fields": effect.mutations.iter().map(|mutation| match mutation {
-                            registry_breg::model::CompiledChangeRequestMutation::Set { field, value } => json!({
-                                "type": "set",
-                                "target": field_summary_optional(target, field),
-                                "value": match value {
-                                    registry_breg::model::CompiledChangeRequestValue::FromField { field } => {
-                                        json!({"type": "from-field", "field": field_summary(entity, field)})
-                                    }
-                                    registry_breg::model::CompiledChangeRequestValue::FromEffect { effect, target_entity_id } => {
-                                        json!({"type": "from-effect", "effect": effect, "targetEntity": target_entity_id})
-                                    }
-                                },
-                            }),
-                            registry_breg::model::CompiledChangeRequestMutation::Clear { field } => json!({
-                                "type": "clear",
-                                "target": field_summary_optional(target, field),
-                            }),
-                        }).collect::<Vec<_>>(),
-                        "dependsOn": effect.depends_on.iter().collect::<Vec<_>>(),
-                    })
-                }).collect::<Vec<_>>(),
-                "actions": request.actions.iter().map(|action| json!({
-                    "operation": operation_wire_name(action.operation.access_operation()),
-                    "routeId": compiled.routes().routes.iter()
-                        .find(|route| route.entity_id == entity.id
-                            && route.operation == action.operation.access_operation())
-                        .map(|route| route.id.as_str()),
-                    "method": "POST",
-                    "preconditions": request_action_preconditions(action.operation.access_operation()),
-                })).collect::<Vec<_>>(),
-                "applyPermissions": request.apply_permissions.iter().map(|grant| json!({
-                    "profile": grant.profile_id,
-                    "targetEntity": grant.target_entity_id,
-                    "rowBoundaries": grant.row_boundaries,
-                })).collect::<Vec<_>>(),
-                "presencePermissions": request.presence_permissions.iter().map(|grant| json!({
-                    "profile": grant.profile_id,
-                    "targetEntity": grant.target_entity_id,
-                    "requestRowBoundaries": grant.request_row_boundaries,
-                })).collect::<Vec<_>>(),
-            }))
-        })
-        .collect::<serde_json::Result<Vec<_>>>()?;
-    let controlled_writes = compiled
-        .entities()
-        .values()
-        .filter_map(|entity| {
-            let control = entity.change_control.as_ref()?;
-            let eligible = compiled
-                .entities()
-                .iter()
-                .filter_map(|(request_entity_id, request_entity)| {
-                    let request = request_entity.change_request.as_ref()?;
-                    let declarative = request
-                        .effects
-                        .iter()
-                        .any(|effect| effect.target.entity_id == entity.id);
-                    let planned = request.planner.as_ref().is_some_and(|planner| {
-                        planner
-                            .writes
-                            .iter()
-                            .any(|write| write.target_entity_id == entity.id)
-                    });
-                    (declarative || planned).then_some(request_entity_id.clone())
-                })
-                .collect::<Vec<_>>();
-            Some(json!({
-                "entity": entity.id,
-                "route": entity.route,
-                "requiredFor": control.required_for.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
-                "eligibleRequestTypes": eligible,
-                "directWriteRestriction": "controlled operations are absent from ordinary permissions and require compiled apply-request context",
-            }))
-        })
-        .collect::<Vec<_>>();
-    serde_json::to_value(json!({
-        "requests": requests,
-        "controlledWrites": controlled_writes,
-    }))
-}
-
-fn explain_change_request_planner(
-    compiled: &CompiledRegistry,
-    request_entity: &registry_breg::model::CompiledEntity,
-    request: &registry_breg::model::CompiledChangeRequest,
-) -> Value {
-    let Some(planner) = request.planner.as_ref() else {
-        return json!({
-            "type": "declarative",
-            "abi": registry_breg::contract::CHANGE_REQUEST_PLAN_ABI_V1,
-        });
-    };
-    json!({
-        "type": "rhai",
-        "abi": planner.abi,
-        "rhaiVersion": planner.rhai_version,
-        "scriptSha256": planner.script_sha256,
-        "declaringOrigin": match &planner.source_module {
-            Some(module) => json!({"type": "module", "id": module}),
-            None => json!({"type": "project"}),
-        },
-        "requestFields": planner.request_fields.iter()
-            .map(|field| field_summary(request_entity, field))
-            .collect::<Vec<_>>(),
-        "limits": {
-            "maximumTargets": request.maximum_targets,
-            "maximumFieldMutations": request.maximum_field_mutations,
-            "maximumSnapshotBytes": request.maximum_snapshot_bytes,
-            "maximumSourceBytes": planner.limits.maximum_source_bytes,
-            "maximumOperations": planner.limits.maximum_operations,
-            "maximumCallDepth": planner.limits.maximum_call_depth,
-            "maximumExpressionDepth": planner.limits.maximum_expression_depth,
-            "maximumStringBytes": planner.limits.maximum_string_bytes,
-            "maximumArrayItems": planner.limits.maximum_array_items,
-            "maximumMapEntries": planner.limits.maximum_map_entries,
-            "maximumModules": planner.limits.maximum_modules,
-        },
-        "possibleWrites": planner.writes.iter().map(|write| {
-            let target = compiled.entities().get(&write.target_entity_id);
-            json!({
-                "target": match &write.target_from_field {
-                    Some(field) => json!({
-                        "type": "existing",
-                        "entity": write.target_entity_id,
-                        "fromField": field_summary(request_entity, field),
-                    }),
-                    None => json!({
-                        "type": "reserved-create",
-                        "entity": write.target_entity_id,
-                    }),
-                },
-                "operation": operation_wire_name(write.operation),
-                "fields": write.fields.iter()
-                    .map(|field| field_summary_optional(target, field))
-                    .collect::<Vec<_>>(),
-            })
-        }).collect::<Vec<_>>(),
-    })
+fn explain_proposals(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
+    Ok(json!({"actions": compiled.actions().actions.iter()
+        .filter(|action| action.execution.is_proposal())
+        .map(registry_breg::artifacts::inspect_action).collect::<Vec<_>>()}))
 }
 
 fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
@@ -9879,195 +8993,7 @@ fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
 }
 
 fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
-    let actions = compiled
-        .actions()
-        .actions
-        .iter()
-        .map(|action| {
-            let routes = compiled
-                .actions()
-                .routes
-                .iter()
-                .filter(|route| route.action_id == action.id)
-                .map(|route| {
-                    json!({
-                        "id": route.id,
-                        "kind": action_route_kind_wire_name(route.kind),
-                        "method": "POST",
-                        "path": route.path,
-                        "operation": operation_wire_name(route.operation),
-                        "accessProfiles": route.access_profiles,
-                        "defaultAccessProfile": route.default_access_profile,
-                        "requiresIdempotencyKey": route.kind == registry_breg::model::ActionRouteKind::Invoke,
-                    })
-                })
-                .collect::<Vec<_>>();
-            let mut summary = json!({
-                "id": action.id,
-                "sourceModule": action.source_module,
-                "contractFingerprint": action.contract_fingerprint,
-                "routes": routes,
-                "inputs": action.inputs.iter().map(action_input_summary).collect::<Vec<_>>(),
-                "effects": action.effects.iter().map(|effect| {
-                    let target_entity = compiled.entities().get(&effect.target.entity_id);
-                    json!({
-                        "id": effect.id,
-                        "operation": operation_wire_name(effect.operation),
-                        "target": action_target_summary(effect),
-                        "fields": effect.mutations.iter().map(|mutation| match mutation {
-                            registry_breg::model::CompiledActionMutation::Set { field, value } => json!({
-                                "type": "set",
-                                "target": field_summary_optional(target_entity, field),
-                                "value": match value {
-                                    registry_breg::model::CompiledActionValue::Literal { .. } => json!({"type": "computed"}),
-                                    registry_breg::model::CompiledActionValue::FromInput { input } => {
-                                        json!({"type": "from-input", "input": action_input_identity(action, input)})
-                                    }
-                                    registry_breg::model::CompiledActionValue::FromEffect { effect, target_entity_id } => {
-                                        json!({"type": "from-effect", "effect": effect, "targetEntity": target_entity_id})
-                                    }
-                                },
-                            }),
-                            registry_breg::model::CompiledActionMutation::Clear { field } => json!({
-                                "type": "clear",
-                                "target": field_summary_optional(target_entity, field),
-                            }),
-                        }).collect::<Vec<_>>(),
-                        "dependsOn": effect.depends_on.iter().collect::<Vec<_>>(),
-                    })
-                }).collect::<Vec<_>>(),
-                "targets": action.target_uses.iter().map(|target| json!({
-                    "entity": target.entity_id,
-                    "operation": operation_wire_name(target.operation),
-                    "fields": target.fields.iter()
-                        .map(|field| field_summary_optional(compiled.entities().get(&target.entity_id), field))
-                        .collect::<Vec<_>>(),
-                    "source": action_target_use_source(action, &target.source),
-                    "conditionRequired": target.condition_required,
-                })).collect::<Vec<_>>(),
-                "requiredConditionKeys": action.target_uses.iter()
-                    .filter(|target| target.condition_required)
-                    .filter_map(|target| match &target.source {
-                        registry_breg::model::CompiledActionTargetUseSource::Input { input } => {
-                            action.inputs.iter().find(|candidate| candidate.id == *input)
-                        }
-                        registry_breg::model::CompiledActionTargetUseSource::Effect { .. } => None,
-                    })
-                    .map(|input| input.api_name.as_str())
-                    .collect::<BTreeSet<_>>(),
-                "permissions": action.permissions.iter().map(|grant| json!({
-                    "profile": grant.profile_id,
-                    "default": grant.default,
-                    "requiredScopes": grant.required_scopes,
-                    "requiredPurposes": grant.required_purposes,
-                    "operations": grant.operations.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
-                    "targets": grant.targets.iter().map(|target| json!({
-                        "entity": target.entity_id,
-                        "operation": operation_wire_name(target.operation),
-                        "source": action_target_use_source(action, &target.source),
-                        "rowBoundaries": target.row_boundaries,
-                    })).collect::<Vec<_>>(),
-                    "results": grant.results,
-                })).collect::<Vec<_>>(),
-                "results": action.effects.iter()
-                    .filter(|effect| action.result_effects.contains(&effect.id))
-                    .map(|effect| json!({
-                        "effect": effect.id,
-                        "entity": effect.target.entity_id,
-                        "operation": operation_wire_name(effect.operation),
-                    }))
-                    .collect::<Vec<_>>(),
-                "bounds": {
-                    "maximumTargets": action.maximum_targets,
-                    "maximumFieldMutations": action.maximum_field_mutations,
-                    "maximumSnapshotBytes": action.maximum_snapshot_bytes,
-                }
-            });
-            if let Some(handler) = &action.handler {
-                use registry_breg::model::CompiledActionHandlerKind;
-                // The summary names the compiled backend and its source
-                // fingerprint; the Rhai-only members stay Rhai-only.
-                let (kind, backend_source) = match handler.kind {
-                    CompiledActionHandlerKind::Rhai => (
-                        json!("rhai"),
-                        json!({
-                            "scriptSha256": handler.script_sha256,
-                            "rhaiVersion": handler.rhai_version,
-                            "limits": handler.limits,
-                        }),
-                    ),
-                    CompiledActionHandlerKind::Wasm => (
-                        json!("wasm"),
-                        json!({
-                            "moduleSha256": handler.module_sha256,
-                            // The preflight compatibility contract for a WASM
-                            // handler: which servers run it and where package
-                            // loading is refused before activation.
-                            "compatibility": {
-                                "minimumServer": "registry-breg built with the wasm feature",
-                                "serversBeforeWasmSupport":
-                                    "refuse the package at load with a typed handler error and no state change",
-                                "serversBuiltWithoutTheFeature":
-                                    "refuse the package during load because handler rederivation requires WASM support",
-                                "moduleSha256": handler.module_sha256,
-                            },
-                        }),
-                    ),
-                };
-                let mut handler_summary = json!({
-                    "kind": kind, "abi": handler.abi,
-                    "entrypoint": "handle", "context": "ctx.inputs", "inputKeys": "authored-ids",
-                    "possibleWrites": handler.writes,
-                    "refusals": handler.refusals.iter().map(|(code,label)| json!({"code":code,"label":label})).collect::<Vec<_>>(),
-                    "outcomes": ["effects", "refusal"],
-                    "omittedSlots": "no-write-or-result; all-declared-existing-targets-still-require-admission-and-conditions",
-                    "evaluation": "after-locked-receipt-recovery-before-target-locks",
-                    "reads": "supplied-inputs-only",
-                    "replay": "recover-committed-result-without-handler-evaluation",
-                });
-                if let Some(object) = handler_summary.as_object_mut() {
-                    object.extend(backend_source.as_object().cloned().unwrap_or_default());
-                }
-                summary["handler"] = handler_summary;
-            }
-            if !action.evidence.is_empty() {
-                summary["evidence"] = json!({
-                    "capabilities": action.evidence,
-                    "maximumCalls": action.evidence.len(),
-                    "maximumCallsPerCapability": 1,
-                    "maximumConcurrentEvaluations": 8,
-                    "maximumRetainedBytes": 1_048_576,
-                    "maximumResponseBytes": 262_144,
-                    "retentionDays": 1,
-                    "maximumAssertionLifetimeSeconds": 300,
-                    "clockSkewSeconds": 0,
-                    "maximumObservationAgeSeconds": 300,
-                    "defaultActionDeadlineMilliseconds": 10_000,
-                    "deadline": "bounded-by-operator-http-request-timeout-and-action-timeout",
-                    "invocation": "optional-explicit-helper-calls; omission-makes-no-remote-request",
-                    "disclosure": "remote-requirement-disclosure-is-not-reduced-by-output-selection",
-                    "lifecycle": "outside-postgres; frozen-transcript-reused-for-sql-retries; receipt-replay-has-zero-calls"
-                });
-                summary["handler"]["evaluation"] = json!("outside-postgres-after-admission-and-receipt-preflight");
-            }
-            if !action.requires.is_empty() {
-                summary["requires"] = json!(action.requires.iter().map(|requirement| {
-                    json!({
-                        "input": action_input_identity(action, &requirement.input),
-                        "entity": requirement.entity_id,
-                        "field": field_summary_optional(
-                            compiled.entities().get(&requirement.entity_id),
-                            &requirement.field,
-                        ),
-                        "equals": requirement.equals,
-                        "evaluated": "before-effects-under-target-lock",
-                    })
-                }).collect::<Vec<_>>());
-            }
-            summary
-        })
-        .collect::<Vec<_>>();
-    serde_json::to_value(json!({ "actions": actions }))
+    Ok(registry_breg::artifacts::inspect_registry(compiled))
 }
 
 fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
@@ -10236,108 +9162,11 @@ fn query_field_identity<'a>(
         })
 }
 
-fn field_summary(entity: &registry_breg::model::CompiledEntity, field_id: &str) -> Value {
-    field_summary_optional(Some(entity), field_id)
-}
-
-fn field_summary_optional(
-    entity: Option<&registry_breg::model::CompiledEntity>,
-    field_id: &str,
-) -> Value {
-    let api_name = entity
-        .and_then(|entity| field_api_name(entity, field_id))
-        .unwrap_or(field_id);
-    json!({
-        "field": field_id,
-        "apiName": api_name,
-    })
-}
-
-fn field_api_name<'a>(
-    entity: &'a registry_breg::model::CompiledEntity,
-    field_id: &str,
-) -> Option<&'a str> {
-    entity
-        .stored_fields
-        .iter()
-        .find(|field| field.logical.id == field_id)
-        .map(|field| field.logical.api_name.as_str())
-        .or_else(|| {
-            entity
-                .derived_fields
-                .get(field_id)
-                .map(|field| field.logical.api_name.as_str())
-        })
-        .or_else(|| {
-            (entity.canonical_id.id == field_id).then_some(entity.canonical_id.api_name.as_str())
-        })
-}
-
-fn action_input_summary(input: &registry_breg::model::CompiledActionInput) -> Value {
-    json!({
-        "input": input.id,
-        "apiName": input.api_name,
-        "fieldType": input.field_type,
-        "required": input.required,
-        "classification": input.classification,
-    })
-}
-
-fn action_input_identity(action: &registry_breg::model::CompiledAction, input_id: &str) -> Value {
-    action
-        .inputs
-        .iter()
-        .find(|input| input.id == input_id)
-        .map(action_input_summary)
-        .unwrap_or_else(|| json!({"input": input_id}))
-}
-
-fn action_target_use_source(
-    action: &registry_breg::model::CompiledAction,
-    source: &registry_breg::model::CompiledActionTargetUseSource,
-) -> Value {
-    match source {
-        registry_breg::model::CompiledActionTargetUseSource::Effect { effect } => {
-            json!({"type": "effect", "effect": effect})
-        }
-        registry_breg::model::CompiledActionTargetUseSource::Input { input } => {
-            json!({"type": "input", "input": action_input_identity(action, input)})
-        }
-    }
-}
-
-fn action_target_summary(effect: &registry_breg::model::CompiledActionEffect) -> Value {
-    match &effect.target.binding {
-        registry_breg::model::CompiledActionTargetBinding::Create => json!({
-            "entity": effect.target.entity_id,
-            "binding": {"type": "create"},
-        }),
-        registry_breg::model::CompiledActionTargetBinding::Existing { input } => json!({
-            "entity": effect.target.entity_id,
-            "binding": {
-                "type": "existing",
-                "input": input,
-            },
-        }),
-    }
-}
-
 fn action_route_kind_wire_name(kind: registry_breg::model::ActionRouteKind) -> &'static str {
     match kind {
         registry_breg::model::ActionRouteKind::Invoke => "invoke",
         registry_breg::model::ActionRouteKind::TargetConditions => "target-conditions",
     }
-}
-
-fn request_action_preconditions(
-    operation: registry_breg::contract::Operation,
-) -> Vec<&'static str> {
-    let mut preconditions = vec!["Idempotency-Key", "If-Match"];
-    if matches!(operation, registry_breg::contract::Operation::ApplyRequest) {
-        preconditions.push("proposalVersion");
-        preconditions.push("effectDigest");
-    }
-    preconditions
 }
 
 fn operation_wire_name(operation: registry_breg::contract::Operation) -> &'static str {
@@ -10350,11 +9179,8 @@ fn operation_wire_name(operation: registry_breg::contract::Operation) -> &'stati
         registry_breg::contract::Operation::Tombstone => "tombstone",
         registry_breg::contract::Operation::Batch => "batch",
         registry_breg::contract::Operation::Revisions => "revisions",
-        registry_breg::contract::Operation::SubmitRequest => "submit-request",
-        registry_breg::contract::Operation::ReviseRequest => "revise-request",
-        registry_breg::contract::Operation::CancelRequest => "cancel-request",
-        registry_breg::contract::Operation::ApplyRequest => "apply-request",
         registry_breg::contract::Operation::Invoke => "invoke",
+        registry_breg::contract::Operation::Start => "start",
         registry_breg::contract::Operation::Snapshot => "snapshot",
         registry_breg::contract::Operation::Import => "import",
     }
@@ -11188,7 +10014,7 @@ fn success_lead(report: &SuccessReport) -> String {
         // `explain lifecycle` is the one explain that compiles nothing, and
         // the absent revision is how the report says so.
         "explain" if report.revision.is_none() => {
-            "Explained the engine's request lifecycle. No project was compiled.".to_owned()
+            "Explained the engine's Proposal lifecycle. No project was compiled.".to_owned()
         }
         "explain" => "Explained the compiled inventory.".to_owned(),
         other => format!("{other} succeeded."),
@@ -11261,8 +10087,8 @@ fn write_success(
     }
 }
 
-fn write_planner_test_success(
-    report: &PlannerTestSuccessReport,
+fn write_action_test_success(
+    report: &ActionTestSuccessReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -11315,7 +10141,7 @@ fn write_planner_test_success(
                 let mut pairs = vec![("compiled revision", report.compiled_revision.clone())];
                 match &report.action {
                     Some(action) => pairs.push(("action", action.clone())),
-                    None => pairs.push(("request entity", report.request_entity.clone())),
+                    None => pairs.push(("action", report.action_id.clone())),
                 }
                 pairs.extend([
                     (kind_label, identity.kind.to_owned()),
@@ -12079,8 +10905,8 @@ fn write_field_encryption_preflight_success(
                              responses, {} outbox payloads",
                             field.plaintext_row_count,
                             field.journal_row_count,
-                            field.request_target_row_count,
-                            field.request_proposal_row_count,
+                            field.proposal_target_row_count,
+                            field.proposal_submission_row_count,
                             field.idempotency_row_count,
                             field.outbox_row_count
                         ),
@@ -12166,19 +10992,19 @@ fn write_field_encryption_erase_history_success(
                         .to_string(),
                 ),
                 (
-                    "scrubbed request targets",
+                    "scrubbed Proposal targets",
                     report
                         .outcome
                         .outcome
-                        .scrubbed_request_target_count
+                        .scrubbed_proposal_target_count
                         .to_string(),
                 ),
                 (
-                    "scrubbed request proposals",
+                    "scrubbed Proposal submissions",
                     report
                         .outcome
                         .outcome
-                        .scrubbed_request_proposal_count
+                        .scrubbed_proposal_submission_count
                         .to_string(),
                 ),
                 (
@@ -12723,12 +11549,15 @@ fn write_history_erase_success(
                     report.outcome.scrubbed_cached_response_count.to_string(),
                 ),
                 (
-                    "scrubbed request targets",
-                    report.outcome.scrubbed_request_target_count.to_string(),
+                    "scrubbed Proposal targets",
+                    report.outcome.scrubbed_proposal_target_count.to_string(),
                 ),
                 (
-                    "scrubbed request proposals",
-                    report.outcome.scrubbed_request_proposal_count.to_string(),
+                    "scrubbed Proposal submissions",
+                    report
+                        .outcome
+                        .scrubbed_proposal_submission_count
+                        .to_string(),
                 ),
                 (
                     "removed descriptors",
@@ -13092,8 +11921,8 @@ fn write_webhook_discard_success(
     write_result(result, stderr)
 }
 
-fn write_request_retention_list_success(
-    report: &RequestRetentionListSuccessReport,
+fn write_proposal_retention_list_success(
+    report: &ProposalRetentionListSuccessReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -13106,7 +11935,7 @@ fn write_request_retention_list_success(
         report
             .outcome
             .page
-            .requests
+            .proposals
             .iter()
             .map(serde_json::to_string)
             .collect::<Result<Vec<String>, _>>()
@@ -13114,7 +11943,7 @@ fn write_request_retention_list_success(
             .and_then(|requests| {
                 let mut lines = report::Lines::new();
                 lines.lead(&format!(
-                    "Listed the retained requests. {}.",
+                    "Listed the retained Proposals. {}.",
                     report::counted(requests.len(), "request")
                 ));
                 if let Some(cursor) = &report.outcome.page.next_cursor {
@@ -13132,8 +11961,8 @@ fn write_request_retention_list_success(
     write_result(result, stderr)
 }
 
-fn write_request_retention_dry_run_success(
-    report: &RequestRetentionDryRunSuccessReport,
+fn write_proposal_retention_dry_run_success(
+    report: &ProposalRetentionDryRunSuccessReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -13158,9 +11987,9 @@ fn write_request_retention_dry_run_success(
                     }
                 ),
                         &[
-                            ("request entity", dry_run.request_entity_id.clone()),
-                            ("request id", dry_run.request_id.clone()),
-                            ("proposal version", dry_run.proposal_version.to_string()),
+                            ("action", dry_run.action_id.clone()),
+                            ("proposal id", dry_run.proposal_id.clone()),
+                            ("submission version", dry_run.submission_version.to_string()),
                             ("retention mode", dry_run.retention_mode.to_owned()),
                             ("pinned", dry_run.pinned.to_string()),
                             (
@@ -13206,8 +12035,8 @@ fn write_attachment_cleanup_success(
     write_result(result, stderr)
 }
 
-fn write_request_retention_erase_success(
-    report: &RequestRetentionEraseSuccessReport,
+fn write_proposal_retention_erase_success(
+    report: &ProposalRetentionEraseSuccessReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -13223,11 +12052,11 @@ fn write_request_retention_erase_success(
                 .map_err(io::Error::other)
                 .and_then(|erasure| {
                     render_report(
-                        "Erased the retained request.",
+                        "Erased the retained Proposal.",
                         &[
-                            ("request entity", erase.request_entity_id.clone()),
-                            ("request id", erase.request_id.clone()),
-                            ("proposal version", erase.proposal_version.to_string()),
+                            ("action", erase.action_id.clone()),
+                            ("proposal id", erase.proposal_id.clone()),
+                            ("submission version", erase.submission_version.to_string()),
                             ("retention mode", erase.retention_mode.to_owned()),
                             ("erased", erasure),
                         ],
@@ -13258,9 +12087,12 @@ fn write_review_recovery_success(
                 _ => "Closed the review.",
             },
             &[
-                ("request entity", recovery.request_entity_id.clone()),
-                ("request id", recovery.request_id.clone()),
-                ("proposal version", recovery.proposal_version.to_string()),
+                ("action", recovery.action_id.clone()),
+                ("proposal id", recovery.proposal_id.clone()),
+                (
+                    "submission version",
+                    recovery.submission_version.to_string(),
+                ),
                 ("authority", recovery.authority.clone()),
                 ("previous state", recovery.previous_state.clone()),
                 (
@@ -13594,18 +12426,17 @@ mod tests {
     }
 
     #[test]
-    fn the_initialized_dev_clients_and_journeys_open_with_their_schema_modeline() {
+    fn initialization_emits_the_small_canonical_project() {
         let files = init_files();
-        for (path, schema) in [
-            ("dev-clients.yaml", "dev-clients/dev-clients.v1alpha1"),
-            (FIXTURE_JOURNEYS_PATH, "journeys/journeys.v1"),
-        ] {
-            let text = String::from_utf8(files[path].clone()).expect("UTF-8");
-            let expected = format!(
-                "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/{schema}.schema.json"
-            );
-            assert_eq!(text.lines().next(), Some(expected.as_str()), "{path}");
-        }
+        assert_eq!(
+            files.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["README.md", "registry.yaml"]
+        );
+        assert_eq!(
+            files["registry.yaml"],
+            include_bytes!("../../../products/breg/examples/refactor/minimal/registry.yaml")
+        );
+        assert!(registry_breg::contract::parse_project_yaml(&files["registry.yaml"]).is_ok());
     }
 
     #[test]
@@ -14130,15 +12961,26 @@ mod tests {
 
     #[test]
     fn init_template_conflicts_with_every_flag_that_shapes_a_derived_project() {
-        assert!(
-            Cli::try_parse_from(["bregctl", "init", "project", "--template", "seed-lots"]).is_ok()
-        );
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "init",
+            "project",
+            "--template",
+            "minimal-directory"
+        ])
+        .is_ok());
         for conflicting in [
             vec!["--from", "publicschema"],
             vec!["--from", "publicschema", "--selection", "selection.yaml"],
             vec!["--from", "publicschema", "--starter", "household"],
         ] {
-            let mut arguments = vec!["bregctl", "init", "project", "--template", "seed-lots"];
+            let mut arguments = vec![
+                "bregctl",
+                "init",
+                "project",
+                "--template",
+                "minimal-directory",
+            ];
             arguments.extend(conflicting);
             assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
         }
@@ -14186,10 +13028,10 @@ mod tests {
     }
 
     #[test]
-    fn request_retention_cleanup_accepts_config_without_request_scope() {
+    fn proposal_retention_cleanup_accepts_config_without_request_scope() {
         let parsed = Cli::try_parse_from([
             "bregctl",
-            "request-retention",
+            "proposal-retention",
             "cleanup-attachments",
             "--runtime-config",
             "/tmp/runtime.yaml",
@@ -14197,13 +13039,13 @@ mod tests {
         .unwrap();
         assert!(matches!(
             parsed.command,
-            Command::RequestRetention(RequestRetentionArgs {
-                command: RequestRetentionCommand::CleanupAttachments(_)
+            Command::ProposalRetention(ProposalRetentionArgs {
+                command: ProposalRetentionCommand::CleanupAttachments(_)
             })
         ));
         let removed = Cli::try_parse_from([
             "bregctl",
-            "request-retention",
+            "proposal-retention",
             "cleanup-attachments",
             "--config",
             "/tmp/runtime.yaml",
@@ -14212,8 +13054,8 @@ mod tests {
         assert_eq!(removed.kind(), clap::error::ErrorKind::UnknownArgument);
         let report = AttachmentCleanupSuccessReport {
             ok: true,
-            command: "request-retention cleanup-attachments",
-            outcome: registry_breg::request_retention::AttachmentCleanup {
+            command: "proposal-retention cleanup-attachments",
+            outcome: registry_breg::proposal_retention::AttachmentCleanup {
                 pending_external_deletions: 2,
                 external_deletion_tombstones: 3,
             },
@@ -14221,7 +13063,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(report).unwrap(),
             serde_json::json!({
-                "ok":true, "command":"request-retention cleanup-attachments",
+                "ok":true, "command":"proposal-retention cleanup-attachments",
                 "pendingExternalDeletions":2, "externalDeletionTombstones":3,
             })
         );
@@ -14244,14 +13086,14 @@ mod tests {
     }
 
     #[test]
-    fn request_retention_binding_diagnostic_identifies_recovery() {
-        let report = request_retention_failure(
-            "request-retention erase",
-            RequestRetentionCliError::AttachmentStorageBindingMismatch,
+    fn proposal_retention_binding_diagnostic_identifies_recovery() {
+        let report = proposal_retention_failure(
+            "proposal-retention erase",
+            ProposalRetentionCliError::AttachmentStorageBindingMismatch,
         );
         let value = serde_json::to_value(report).unwrap();
         let encoded = value.to_string();
-        assert!(encoded.contains("request-retention.attachment-storage.binding-mismatch"));
+        assert!(encoded.contains("proposal-retention.attachment-storage.binding-mismatch"));
         assert!(encoded.contains("restore the original attachment storage binding"));
     }
 
@@ -14490,39 +13332,6 @@ mod tests {
     }
 
     #[test]
-    fn project_planner_test_parser_requires_entity_and_request_file() {
-        let parsed = Cli::try_parse_from([
-            "bregctl",
-            "project",
-            "planner-test",
-            "project",
-            "--entity",
-            "request",
-            "--request",
-            "request.json",
-        ])
-        .expect("planner test parses");
-        let Command::Project(project) = parsed.command else {
-            panic!("project command parsed");
-        };
-        let ProjectCommand::PlannerTest(args) = project.command else {
-            panic!("planner-test command parsed");
-        };
-        assert_eq!(args.project, PathBuf::from("project"));
-        assert_eq!(args.entity.as_deref(), Some("request"));
-        assert_eq!(args.request, Some(PathBuf::from("request.json")));
-        assert!(Cli::try_parse_from([
-            "bregctl",
-            "project",
-            "planner-test",
-            "project",
-            "--entity",
-            "request",
-        ])
-        .is_err());
-    }
-
-    #[test]
     fn an_action_declaring_no_evidence_explains_no_evidence_lifecycle() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/breg/acceptance/person-registration-rhai");
@@ -14531,20 +13340,12 @@ mod tests {
         )
         .unwrap();
         let assets = project
-            .actions
+            .functions
             .iter()
-            .map(|action| {
-                let script = action
-                    .handler
-                    .as_ref()
-                    .and_then(|handler| handler.script())
-                    .expect("a rhai handler")
-                    .to_owned();
-                registry_breg::contract::ModuleAssetSource {
-                    module: None,
-                    bytes: fs::read(root.join(&script)).unwrap(),
-                    path: script,
-                }
+            .map(|function| registry_breg::contract::ModuleAssetSource {
+                module: None,
+                path: function.source.clone(),
+                bytes: fs::read(root.join(&function.source)).unwrap(),
             })
             .collect::<Vec<_>>();
         let compiled = registry_breg::compiler::compile_project_with_assets(
@@ -14558,11 +13359,9 @@ mod tests {
         let actions = explanation["actions"].as_array().unwrap();
         assert!(!actions.is_empty());
         for action in actions {
-            assert!(action.get("evidence").is_none());
-            assert_eq!(
-                action["handler"]["evaluation"],
-                "after-locked-receipt-recovery-before-target-locks"
-            );
+            assert_eq!(action["dependencies"]["evidence"], json!([]));
+            assert_eq!(action["plan"]["function"]["abi"], "registry.action-plan/v1");
+            assert!(action["revision"].as_str().unwrap().starts_with("sha256:"));
         }
     }
 
@@ -14583,306 +13382,17 @@ mod tests {
         let actions = explanation["actions"].as_array().unwrap();
         assert!(!actions.is_empty());
         for action in actions {
-            assert_eq!(action["handler"]["abi"], "registry.action-handler/v1");
-            assert_eq!(action["evidence"]["maximumCalls"], 2);
-            assert_eq!(action["evidence"]["maximumConcurrentEvaluations"], 8);
-            assert_eq!(
-                action["handler"]["evaluation"],
-                "outside-postgres-after-admission-and-receipt-preflight"
-            );
-        }
-    }
-
-    #[test]
-    fn change_request_explain_reports_source_free_rhai_contract_and_authority() {
-        let compiled = match compile(&planner_acceptance_root(), ProfileArg::Authoring, "explain") {
-            Ok(compiled) => compiled,
-            Err(failure) => panic!(
-                "Rhai fixture did not compile for explanation: {}",
-                failure.diagnostics[0].code
-            ),
-        };
-        let explanation = explain_change_requests(&compiled).expect("explanation renders");
-        let request = explanation["requests"]
-            .as_array()
-            .and_then(|requests| {
-                requests.iter().find(|request| {
-                    request["requestEntity"].as_str() == Some("person-name-change-request")
-                })
-            })
-            .expect("Rhai request is explained");
-        let entity = &compiled.entities()["person-name-change-request"];
-        let schema: Value = serde_json::from_slice(
-            &compiled
-                .artifacts()
-                .get("generated/schemas/person-name-change-request.schema.json")
+            assert_eq!(action["plan"]["function"]["abi"], "registry.action-plan/v1");
+            let evidence = action["dependencies"]["evidence"].as_array().unwrap();
+            assert_eq!(evidence.len(), 2);
+            assert!(evidence.iter().all(|binding| binding["contractFingerprint"]
+                .as_str()
                 .unwrap()
-                .bytes,
-        )
-        .unwrap();
-        let fields = request["fields"].as_array().unwrap();
-        assert!(!fields.is_empty());
-        assert_eq!(fields.len(), entity.stored_fields.len());
-        for (field, descriptor) in entity.stored_fields.iter().zip(fields) {
-            assert_eq!(descriptor["field"], field.logical.id);
-            assert_eq!(descriptor["apiName"], field.logical.api_name);
-            assert_eq!(
-                descriptor["schema"],
-                schema["properties"][&field.logical.api_name]
-            );
+                .starts_with("sha256:")
+                && binding["provider"] == "farmer-registry"));
+            assert!(action["plan"]["function"]["scriptSource"].is_null());
+            assert!(action["revision"].as_str().unwrap().starts_with("sha256:"));
         }
-        assert_eq!(request["planner"]["type"], "rhai");
-        assert_eq!(
-            request["planner"]["abi"],
-            registry_breg::contract::CHANGE_REQUEST_PLAN_ABI_V1
-        );
-        assert_eq!(
-            request["planner"]["rhaiVersion"],
-            registry_breg::change_request::CHANGE_REQUEST_PLANNER_RHAI_VERSION
-        );
-        assert!(request["planner"]["scriptSha256"]
-            .as_str()
-            .is_some_and(|digest| digest.starts_with("sha256:")));
-        assert_eq!(
-            request["planner"]["declaringOrigin"],
-            json!({"type": "project"})
-        );
-        assert_eq!(request["planner"]["limits"]["maximumOperations"], 100_000);
-        assert_eq!(request["planner"]["limits"]["maximumModules"], 0);
-        assert_eq!(
-            request["planner"]["possibleWrites"][0]["operation"],
-            "patch"
-        );
-        assert_eq!(request["review"], json!({"type": "none"}));
-        assert_eq!(request["onApproved"], json!({"mode": "manual"}));
-        assert_eq!(request["application"], json!({}));
-        assert!(explanation["controlledWrites"]
-            .as_array()
-            .and_then(|writes| writes.iter().find(|write| write["entity"] == "person"))
-            .and_then(|write| write["eligibleRequestTypes"].as_array())
-            .is_some_and(|requests| requests
-                .iter()
-                .any(|request| { request.as_str() == Some("person-name-change-request") })));
-
-        let rendered = serde_json::to_string(&explanation).expect("explanation serializes");
-        for forbidden in [
-            "person-name-change.rhai",
-            "scripts/",
-            "fn plan",
-            "let display_name",
-        ] {
-            assert!(
-                !rendered.contains(forbidden),
-                "explanation leaked {forbidden}"
-            );
-        }
-    }
-
-    #[test]
-    fn project_planner_test_output_is_canonical_and_value_free() {
-        let directory = TestDirectory::create();
-        let request_path = directory.path.join("request.json");
-        let record_id = "550e8400-e29b-41d4-a716-446655440000";
-        let given_name = "given-name-secret-canary";
-        let family_name = "family-name-secret-canary";
-        fs::write(
-            &request_path,
-            serde_json::to_vec(&json!({
-                "person": record_id,
-                "given-name": given_name,
-                "family-name": family_name,
-                "handling": "assisted",
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let project = planner_acceptance_root();
-        let arguments = vec![
-            OsString::from("bregctl"),
-            OsString::from("--format"),
-            OsString::from("json"),
-            OsString::from("project"),
-            OsString::from("planner-test"),
-            project.into_os_string(),
-            OsString::from("--entity"),
-            OsString::from("person-name-change-request"),
-            OsString::from("--request"),
-            request_path.clone().into_os_string(),
-        ];
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        assert_eq!(
-            run_from(arguments, &mut stdout, &mut stderr),
-            ExitCode::SUCCESS
-        );
-        assert!(stderr.is_empty());
-        let rendered = String::from_utf8(stdout).expect("planner summary is UTF-8");
-        let value: Value = serde_json::from_str(rendered.trim_end()).expect("summary is JSON");
-        let mut canonical = canonicalize_json(&value).expect("summary canonicalizes");
-        canonical.push(b'\n');
-        assert_eq!(rendered.as_bytes(), canonical);
-        assert_eq!(value["planner"]["kind"], "rhai");
-        assert_eq!(value["planner"]["abi"], "registry.change-request-plan/v1");
-        assert!(value["planner"]["scriptSha256"]
-            .as_str()
-            .is_some_and(|digest| digest.starts_with("sha256:")));
-        assert!(value.get("disposition").is_none());
-        assert!(value.get("queueReason").is_none());
-        assert_eq!(value["effects"][0]["id"], "effect-1");
-        assert_eq!(value["effects"][0]["targetKind"], "existing");
-        assert_eq!(value["effects"][0]["operation"], "patch");
-        assert_eq!(value["effects"][0]["fields"], json!(["display-name"]));
-        assert_eq!(value["effects"][0]["dependsOn"], json!([]));
-        assert_eq!(value["counts"]["effects"], 1);
-        assert_eq!(value["counts"]["fieldMutations"], 1);
-        for redacted in [
-            record_id,
-            given_name,
-            family_name,
-            "person-name-change.rhai",
-            "scripts/",
-            "let display_name",
-        ] {
-            assert!(!rendered.contains(redacted), "leaked {redacted}");
-        }
-
-        let dynamic_project = directory.path.join("dynamic-project");
-        fs::create_dir_all(dynamic_project.join("scripts")).unwrap();
-        fs::copy(
-            planner_acceptance_root().join("registry.yaml"),
-            dynamic_project.join("registry.yaml"),
-        )
-        .unwrap();
-        fs::write(
-            dynamic_project.join("scripts/person-name-change.rhai"),
-            br#"fn plan(ctx) {
-                #{
-                    effects: [#{
-                        id: ctx.request["given-name"],
-                        target: #{fromField: "person"},
-                        operation: "patch",
-                        set: #{"display-name": ctx.request["family-name"]}
-                    }]
-                }
-            }
-            "#,
-        )
-        .unwrap();
-        let dynamic = match planner_test(&ProjectPlannerTestArgs {
-            project: dynamic_project,
-            entity: Some("person-name-change-request".to_owned()),
-            request: Some(request_path),
-            action: None,
-            input: None,
-            expect: None,
-        }) {
-            Ok(report) => report,
-            Err(failure) => panic!(
-                "dynamic planner was refused with {}",
-                failure.diagnostics[0].code
-            ),
-        };
-        assert_eq!(dynamic.effects[0].id, "effect-1");
-        let dynamic = serde_json::to_string(&dynamic).expect("dynamic summary renders");
-        for redacted in [record_id, given_name, family_name] {
-            assert!(!dynamic.contains(redacted), "leaked {redacted}");
-        }
-    }
-
-    #[test]
-    fn project_planner_test_refusals_are_stable_and_value_free() {
-        let directory = TestDirectory::create();
-        let request_path = directory.path.join("request.json");
-        let project = planner_acceptance_root();
-
-        fs::write(&request_path, b"{").unwrap();
-        assert_planner_test_failure(
-            &project,
-            "person-name-change-request",
-            &request_path,
-            "planner-test.request.invalid",
-        );
-
-        let canary = "unbounded-secret-canary".repeat(900);
-        fs::write(
-            &request_path,
-            serde_json::to_vec(&json!({"given-name": canary})).unwrap(),
-        )
-        .unwrap();
-        assert_planner_test_failure(
-            &project,
-            "person-name-change-request",
-            &request_path,
-            "planner-test.request.bounds",
-        );
-
-        fs::write(&request_path, br#"{"undeclared-secret":"canary"}"#).unwrap();
-        assert_planner_test_failure(
-            &project,
-            "person-name-change-request",
-            &request_path,
-            "planner-test.request.fields",
-        );
-
-        fs::write(&request_path, b"{}").unwrap();
-        assert_planner_test_failure(
-            &project,
-            "person",
-            &request_path,
-            "planner-test.entity.not-request",
-        );
-        assert_planner_test_failure(
-            &project,
-            "person-name-change-request",
-            &request_path,
-            "change-request.planner.execution",
-        );
-
-        let declarative = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/starters/public-organizations/core")
-            .canonicalize()
-            .expect("declarative fixture canonicalizes");
-        assert_planner_test_failure(
-            &declarative,
-            "name-correction",
-            &request_path,
-            "planner-test.planner.declarative",
-        );
-    }
-
-    fn assert_planner_test_failure(
-        project: &Path,
-        entity: &str,
-        request: &Path,
-        expected_code: &str,
-    ) {
-        let failure = planner_test(&ProjectPlannerTestArgs {
-            project: project.to_owned(),
-            entity: Some(entity.to_owned()),
-            request: Some(request.to_owned()),
-            action: None,
-            input: None,
-            expect: None,
-        })
-        .expect_err("planner test is refused");
-        assert_eq!(failure.diagnostics.len(), 1);
-        assert_eq!(failure.diagnostics[0].code, expected_code);
-        let rendered = serde_json::to_string(&failure).expect("failure renders");
-        for redacted in [
-            "unbounded-secret-canary",
-            "undeclared-secret",
-            "person-name-change.rhai",
-            "scripts/",
-        ] {
-            assert!(!rendered.contains(redacted), "leaked {redacted}");
-        }
-    }
-
-    fn planner_acceptance_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance/person-name-change-rhai")
-            .canonicalize()
-            .expect("planner fixture canonicalizes")
     }
 
     #[test]
@@ -15057,7 +13567,7 @@ mod tests {
                 "data",
                 "statistics",
                 "webhook",
-                "request-retention",
+                "proposal-retention",
                 "review-recovery",
                 "evidence-retention",
                 "idempotency-retention",
@@ -15348,8 +13858,8 @@ mod tests {
                 scrubbed_outbox_payload_count: 1,
                 scrubbed_cached_response_count: 1,
                 scrubbed_ingestion_receipt_count: 1,
-                scrubbed_request_target_count: 1,
-                scrubbed_request_proposal_count: 0,
+                scrubbed_proposal_target_count: 1,
+                scrubbed_proposal_submission_count: 0,
                 removed_descriptor_count: 0,
             },
         };
@@ -15748,7 +14258,9 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://example-registry.example.test
-entities:
+datasets:
+  - id: test-dataset
+recordTypes:
   - id: record
     primaryDataset: test-dataset
     route: records
@@ -15765,8 +14277,8 @@ accessProfiles:
     requiredScopes: unrestricted
     requiredPurposes: [operations]
     permissions:
-      entities:
-        - entity: record
+      records:
+        - recordType: record
           rowBoundaries: unrestricted
           operations: [create, get, list, patch]
           readableFields: [code]
@@ -15901,25 +14413,23 @@ accessProfiles:
 kind: BRegModule
 id: persons
 version: 0.1.0
-extendEntities:
-  - entity: person
+extendRecordTypes:
+  - recordType: person
     derived:
       - id: person-summary
         sql: sql/summary.sql
         key: id
-    changeRequest:
-      planner:
-        kind: rhai
-        script: planners/person.rhai
-        abi: registry.change-request-plan/v1
-      review: {type: none}
-actions:
-  - id: normalize-person
-    handler:
-      type: rhai
-      script: handlers/person.rhai
-      abi: registry.action-handler/v1
-      writes: []
+functions:
+  - id: person-plan
+    runtime: rhai
+    source: planners/person.rhai
+    entrypoint: plan
+    abi: registry.action-plan/v1
+  - id: normalize-person-plan
+    runtime: rhai
+    source: handlers/person.rhai
+    entrypoint: plan
+    abi: registry.action-plan/v1
 "#;
 
         fn plant_module_with_assets(root: &Path, sql: &[u8], planner: &[u8], handler: &[u8]) {
@@ -16179,7 +14689,7 @@ fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recove
         assert_eq!(diagnostic.code, code);
         assert_eq!(
             diagnostic.path,
-            "entities[person].fields[identifier].pattern"
+            "recordTypes[person].fields[identifier].pattern"
         );
         assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
         assert_eq!(
@@ -16692,12 +15202,12 @@ fn operator_maintenance_reports_a_held_migration_lock_as_in_progress() {
             "idempotency-retention.in-progress",
         ),
         (
-            request_retention_failure(
-                "request-retention erase",
-                RequestRetentionCliError::MigrationLockHeld,
+            proposal_retention_failure(
+                "proposal-retention erase",
+                ProposalRetentionCliError::MigrationLockHeld,
             ),
-            "request-retention erase",
-            "request-retention.in-progress",
+            "proposal-retention erase",
+            "proposal-retention.in-progress",
         ),
         (
             import_authority_failure(
@@ -16880,7 +15390,7 @@ fn native_pattern_schema_test_diagnostic_identifies_only_the_authored_field() {
     assert_eq!(diagnostic.code, "breg.field.pattern-syntax-invalid");
     assert_eq!(
         diagnostic.path,
-        "entities[person].fields[identifier].pattern"
+        "recordTypes[person].fields[identifier].pattern"
     );
     assert_eq!(diagnostic.artifact, DiagnosticArtifact::SchemaTestCandidate);
     assert_eq!(
@@ -17188,8 +15698,8 @@ mod field_encryption_lifecycle_cli_tests {
                                     unique_blind_index: true,
                                     plaintext_row_count: 3,
                                     journal_row_count: 5,
-                                    request_target_row_count: 2,
-                                    request_proposal_row_count: 1,
+                                    proposal_target_row_count: 2,
+                                    proposal_submission_row_count: 1,
                                     idempotency_row_count: 1,
                                     outbox_row_count: 1,
                                     duplicate_record_ids: vec![
@@ -17259,8 +15769,8 @@ mod field_encryption_lifecycle_cli_tests {
                         scrubbed_change_context_count: 1,
                         scrubbed_outbox_payload_count: 1,
                         scrubbed_cached_response_count: 1,
-                        scrubbed_request_target_count: 2,
-                        scrubbed_request_proposal_count: 1,
+                        scrubbed_proposal_target_count: 2,
+                        scrubbed_proposal_submission_count: 1,
                         removed_descriptor_count: 0,
                         rebaseline: registry_breg::history_rebaseline::HistoryRebaselineOutcome {
                             baseline_position: 3,
@@ -17285,7 +15795,7 @@ mod field_encryption_lifecycle_cli_tests {
         );
         let rendered = String::from_utf8(stdout).expect("json is UTF-8");
         assert!(rendered.contains("\"command\": \"field-encryption erase-history\""));
-        assert!(rendered.contains("\"scrubbedRequestTargetCount\": 2"));
+        assert!(rendered.contains("\"scrubbedProposalTargetCount\": 2"));
         assert!(rendered.contains("\"baselinePosition\": 3"));
         assert!(!rendered.to_lowercase().contains("operator"));
         assert!(!rendered.to_lowercase().contains("reason"));

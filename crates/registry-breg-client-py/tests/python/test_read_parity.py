@@ -151,7 +151,7 @@ class ReadParityTests(unittest.TestCase):
         self.assertIsNone(second["continuation"])
         self.assertTrue(any("bbox=100.1%2C13.1%2C100.2%2C13.2" in path for path, _ in self.requests))
 
-    def test_temporal_snapshot_relationship_revision_and_history_reads(self) -> None:
+    def test_temporal_snapshot_relationship_revision_reads(self) -> None:
         current = self.client.list_current_records("companies", top=1)
         self.assertIsNone(
             self.client.continue_current_list(current["continuation"])["continuation"]
@@ -183,17 +183,13 @@ class ReadParityTests(unittest.TestCase):
 
         revision = self.client.get_record_revision("companies", RECORD_ID, 1)
         self.assertEqual(json.loads(revision["body"])["data"]["recordIdentifier"], RECORD_ID)
-        self.client.get_record(
-            "companies",
-            RECORD_ID,
-            request_history_after_proposal_version=2**32 - 1,
-        )
-        self.assertTrue(
-            any(
-                "requestHistoryAfterProposalVersion=4294967295" in path
-                for path, _ in self.requests
+        count = len(self.requests)
+        with self.assertRaises(TypeError):
+            self.client.get_record(
+                "companies", RECORD_ID, request_history_after_proposal_version=2**32 - 1,
             )
-        )
+        self.assertEqual(len(self.requests), count)
+
 
 
 if __name__ == "__main__":

@@ -34,7 +34,7 @@ pub(crate) struct Item {
 #[derive(Debug, Serialize)]
 pub(crate) struct ReviewPage<'a> {
     pub request_id: &'a str,
-    pub entity_label: &'a str,
+    pub action_label: &'a str,
     pub target_label: &'a str,
     pub current: &'a [Item],
     pub proposed: &'a [Item],
@@ -61,7 +61,7 @@ impl Templates {
         // the first person who reaches it.
         templates.review(&ReviewPage {
             request_id: "00000000-0000-4000-8000-000000000000",
-            entity_label: "",
+            action_label: "",
             target_label: "",
             current: &[],
             proposed: &[],
@@ -129,7 +129,7 @@ mod tests {
         let html = templates
             .review(&ReviewPage {
                 request_id: "00000000-0000-4000-8000-000000000000",
-                entity_label: "<i>entity</i>",
+                action_label: "<i>entity</i>",
                 target_label: "<u>target</u>",
                 current: &hostile,
                 proposed: &hostile,

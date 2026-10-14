@@ -22,31 +22,30 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::extract::{Path as UrlPath, State};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::IntoResponse as _;
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_yaml, RegistryProject};
+use registry_breg::CompiledRegistry;
+use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
+use registry_breg::contract::{RegistryProject, parse_project_yaml};
 use registry_breg::fixtures::{
-    validate_fixture_journeys, validate_schema_test_receipt_for_package, FixtureError,
-    FixtureSourceFile, PostgresFixtureTestRunner, SchemaTestSources, ValidatedFixtureJourneys,
+    FixtureError, FixtureSourceFile, PostgresFixtureTestRunner, SchemaTestSources,
+    ValidatedFixtureJourneys, validate_fixture_journeys, validate_schema_test_receipt_for_package,
 };
 use registry_breg::package::{
-    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
-    PackageMigrationPlanInput, PackageSourceFile, PreparedPackage, VerifiedPackage,
-    FIXTURE_JOURNEYS_PATH,
+    FIXTURE_JOURNEYS_PATH, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
+    PackageSourceFile, PreparedPackage, VerifiedPackage, load_package, prepare_package,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
-    managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
+    ExpectedManagedCatalog, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema, managed_schema_fingerprint,
 };
-use registry_breg::startup::{prepare_with_connection_config_for_test, PreparedServer};
-use registry_breg::CompiledRegistry;
+use registry_breg::startup::{PreparedServer, prepare_with_connection_config_for_test};
 use registry_platform_crypto::PrivateJwk;
-use registry_platform_testing::{fixtures as testing_fixtures, jwks_from_private_jwk, MockIdp};
-use serde_json::{json, Value};
+use registry_platform_testing::{MockIdp, fixtures as testing_fixtures, jwks_from_private_jwk};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
 use tower::Service as _;

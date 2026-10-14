@@ -9,11 +9,12 @@ mod postgres_harness;
 use std::{fs, os::unix::fs::PermissionsExt as _, path::PathBuf, time::Duration};
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
+use registry_breg::CompiledRegistry;
+use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::migration::{
-    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
+    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, apply_verified_package,
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ExternalBackupBinding, MigrationRehearsalReceipt, RehearsalFixture,
@@ -22,23 +23,22 @@ use registry_breg::migration_plan::{
     ReviewedMigrationRecovery, ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
-    compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSourceFile, VerifiedPackage,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest,
+    PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+    VerifiedPackage, compiled_registry_change_set, load_package, prepare_package,
 };
 use registry_breg::postgres::{
-    begin_record_transaction, install_compiled_schema, managed_schema_fingerprint,
-    provision_postgis_prerequisites, verify_catalog_identity_for_catalog, verify_postgis,
     ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresFailure,
-    RegistryLockKey, SqlIdentifier,
+    RegistryLockKey, SqlIdentifier, begin_record_transaction, install_compiled_schema,
+    managed_schema_fingerprint, provision_postgis_prerequisites,
+    verify_catalog_identity_for_catalog, verify_postgis,
 };
-use registry_breg::startup::{prepare_startup, StartupError};
-use registry_breg::CompiledRegistry;
+use registry_breg::startup::{StartupError, prepare_startup};
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
@@ -115,22 +115,26 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
         .expect("reviewed bbox successor package prepares"),
         local_context(),
     );
-    assert!(spatial_package
-        .verified
-        .manifest()
-        .migration_plan
-        .statements
-        .iter()
-        .any(|statement| statement
-            .sql
-            .contains("registry_spatial_ext.geometry(Point,4326)")));
-    assert!(spatial_package
-        .verified
-        .manifest()
-        .migration_plan
-        .statements
-        .iter()
-        .any(|statement| statement.sql.contains("USING gist")));
+    assert!(
+        spatial_package
+            .verified
+            .manifest()
+            .migration_plan
+            .statements
+            .iter()
+            .any(|statement| statement
+                .sql
+                .contains("registry_spatial_ext.geometry(Point,4326)"))
+    );
+    assert!(
+        spatial_package
+            .verified
+            .manifest()
+            .migration_plan
+            .statements
+            .iter()
+            .any(|statement| statement.sql.contains("USING gist"))
+    );
 
     let missing_postgis = apply(
         &database,
@@ -477,7 +481,7 @@ fn compile_variant(variant: Variant) -> CompiledRegistry {
 
 fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"spatial-migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://spatial-migration.example.test","title":"Spatial Migration Registry","publisher":{{"id":"spatial-migration-registry-authority","name":"Spatial Migration Publisher"}}}},"publicService":{{"id":"spatial-migration-registry-service","title":"Spatial Migration Registry"}},"datasets":[{{"id":"spatial-migration-registry","title":"Spatial Migration Dataset","owner":"Spatial Migration Publisher","status":"active"}}],"dataServices":[{{"id":"spatial-migration-registry-data-service","title":"Spatial Migration Registry","endpointUrl":"https://spatial-migration.example.test","servesDatasets":["spatial-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"datasets":[{{"id": "spatial-migration-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"spatial-migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://spatial-migration.example.test","title":"Spatial Migration Registry","publisher":{{"id":"spatial-migration-registry-authority","name":"Spatial Migration Publisher"}}}},"publicService":{{"id":"spatial-migration-registry-service","title":"Spatial Migration Registry"}},"datasets":[{{"id":"spatial-migration-registry","title":"Spatial Migration Dataset","owner":"Spatial Migration Publisher","status":"active"}}],"dataServices":[{{"id":"spatial-migration-registry-data-service","title":"Spatial Migration Registry","endpointUrl":"https://spatial-migration.example.test","servesDatasets":["spatial-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }

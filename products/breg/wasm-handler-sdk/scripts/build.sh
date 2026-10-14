@@ -40,11 +40,11 @@ for arg in "$@"; do
 done
 
 mkdir -p artifacts
-cargo build -p "$CRATE" --profile "$PROFILE" --target "$TARGET"
+cargo build --locked -p "$CRATE" --profile "$PROFILE" --target "$TARGET"
 cp "target/$TARGET/$PROFILE/$MODULE" "artifacts/$MODULE"
 
 if ((preinit)); then
-	cargo run --quiet -p breg-wasm-preinit --release -- \
+	cargo run --locked --quiet -p breg-wasm-preinit --release -- \
 		"artifacts/$MODULE" "artifacts/$PREINIT_MODULE"
 fi
 
@@ -80,5 +80,5 @@ while IFS=$'\t' read -r artifact bytes ceiling verdict hash; do
 done <"$sizes"
 
 if ((run_proof)); then
-	cargo test -p breg-wasm-admission-proof
+	cargo test --locked -p breg-wasm-admission-proof
 fi

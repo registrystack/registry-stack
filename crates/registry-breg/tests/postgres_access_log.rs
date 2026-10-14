@@ -6,28 +6,28 @@
 mod postgres_harness;
 
 use axum::{
-    body::{to_bytes, Body},
-    http::{Method, Request, StatusCode},
     Router,
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode},
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, authenticated_router,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
     PostgresSnapshotReadService, RegistryLockKey, RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
 };
-use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
+use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_json};
 use registry_platform_audit::AuditProfile;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{oidc_verifier_config, MockIdp};
-use serde_json::{json, Value};
+use registry_platform_testing::{MockIdp, oidc_verifier_config};
+use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tower::ServiceExt;
 use zeroize::Zeroizing;
@@ -49,21 +49,21 @@ impl ReadinessProbe for Ready {
 }
 
 fn compiled() -> CompiledRegistry {
-    let permission = json!({"entity":"entry", "operations":["get","list","lookup"],
+    let permission = json!({"recordType":"entry", "operations":["get","list","lookup"],
         "readableFields":["label"], "lookups":[{"selector":"by-subject","valueOrigin":"request"}],
         "rowBoundaries":"unrestricted"});
-    let source = json!({
+    let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
+        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
             "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                 {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "selectorProfiles":[{"id":"by-subject","fields":["subject"]}],
             "accessLog":{"subjectField":"subject","trustedIntermediaries":["evidence-service"],
                 "exemptions":{"investigator":{"reason":"investigation-policy-canary","delayDays":7}}}}],
         "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{"entities":[permission.clone()]}},
-            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{"entities":[permission]}}
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{"records":[permission.clone()]}},
+            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{"records":[permission]}}
         ]
     });
     compile_project(
@@ -75,10 +75,10 @@ fn compiled() -> CompiledRegistry {
 }
 
 fn compiled_relationships() -> CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "entities":[
+        "recordTypes":[
             {"id":"case","primaryDataset":"records","route":"cases","mutationMode":"mutable","classification":"restricted",
                 "fields":[{"id":"case-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"}],
                 "readPaths":[{"id":"people","through":"case-person","to":"person","route":"people"}]},
@@ -96,20 +96,20 @@ fn compiled_relationships() -> CompiledRegistry {
         ],
         "accessProfiles":[
             {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
-                "entities":[
-                    {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
+                "records":[
+                    {"recordType":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
                 ]
             }},
             {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{
-                "entities":[
-                    {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
+                "records":[
+                    {"recordType":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
                         "readPaths":[{"path":"people","readableFields":["label"]}]},
-                    {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
+                    {"recordType":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
                 ]
             }},
             {"id":"relationship-investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{
-                "entities":[
-                    {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
+                "records":[
+                    {"recordType":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
                         "readPaths":[{"path":"people","readableFields":["label"]}]}
                 ]
             }}
@@ -468,8 +468,8 @@ async fn subject_access_log_requires_current_record_ownership_and_records_each_r
 }
 
 #[tokio::test]
-async fn forwarded_access_attribution_requires_a_verified_trusted_client_and_never_grants_subject_access(
-) {
+async fn forwarded_access_attribution_requires_a_verified_trusted_client_and_never_grants_subject_access()
+ {
     let (db, app, idp) = setup().await;
     let route = format!("/v1/records/entries/{RECORD_A}");
     let forwarding = ("requesting-agency-éducation", "requesting-purpose-canary");
@@ -549,11 +549,12 @@ async fn access_log_exemptions_are_delayed_audited_and_expire_without_runtime_de
     );
     let (_, hidden) = history(&app, &owner, RECORD_A, "").await;
     assert_eq!(hidden["events"].as_array().unwrap().len(), 0);
-    assert!(db
-        .audit_entries()
-        .iter()
-        .any(|entry| entry["schema"] == "breg-access-log/v1"
-            && entry["record"]["operation"] == "visibility-delay"));
+    assert!(
+        db.audit_entries()
+            .iter()
+            .any(|entry| entry["schema"] == "breg-access-log/v1"
+                && entry["record"]["operation"] == "visibility-delay")
+    );
     db.admin.execute("UPDATE registry_internal.registry_subject_access_log SET accessed_at=accessed_at-interval '8 days',visible_after=visible_after-interval '8 days',expires_at=expires_at-interval '8 days'",&[]).await.unwrap();
     let (_, visible) = history(&app, &owner, RECORD_A, "").await;
     assert_eq!(
@@ -565,20 +566,24 @@ async fn access_log_exemptions_are_delayed_audited_and_expire_without_runtime_de
     assert_eq!(expired["events"].as_array().unwrap().len(), 0);
     let pool = db.runtime_config.build_pool().unwrap();
     let client = pool.get_for_test().await.unwrap();
-    assert!(client
-        .execute(
-            "DELETE FROM registry_internal.registry_subject_access_log",
-            &[]
-        )
-        .await
-        .is_err());
-    assert!(client
-        .execute(
-            "UPDATE registry_internal.registry_subject_access_log SET purpose='spoof'",
-            &[]
-        )
-        .await
-        .is_err());
+    assert!(
+        client
+            .execute(
+                "DELETE FROM registry_internal.registry_subject_access_log",
+                &[]
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .execute(
+                "UPDATE registry_internal.registry_subject_access_log SET purpose='spoof'",
+                &[]
+            )
+            .await
+            .is_err()
+    );
     let removed: i64 = client
         .query_one("SELECT registry_internal.expire_subject_access_log()", &[])
         .await
@@ -680,9 +685,11 @@ async fn relationship_exemptions_bind_the_source_entity_without_profile_name_col
         exemption_audits[0]["record"]["selectedAccessProfile"],
         "relationship-investigator"
     );
-    assert!(!exemption_audits[0]
-        .to_string()
-        .contains("relationship-policy-canary"));
+    assert!(
+        !exemption_audits[0]
+            .to_string()
+            .contains("relationship-policy-canary")
+    );
 
     db.admin
         .execute(
@@ -706,9 +713,11 @@ async fn relationship_exemptions_bind_the_source_entity_without_profile_name_col
     .await;
     let events = after_delay["events"].as_array().unwrap();
     assert_eq!(events.len(), 2);
-    assert!(events
-        .iter()
-        .any(|event| event["exemptionReason"] == "relationship-policy-canary"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event["exemptionReason"] == "relationship-policy-canary")
+    );
 
     db.assert_every_audit_request_answered_once();
     drop(app);
@@ -848,23 +857,23 @@ async fn a_retention_tick_without_failure_records_its_last_success() {
 }
 
 fn compiled_with_history() -> CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
+        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
             "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                 {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "accessLog":{"subjectField":"subject"}}],
         "accessProfiles":[
             {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
-                "entities":[
-                    {"entity":"entry","operations":["get","snapshot","revisions"],"readableFields":["label"],
+                "records":[
+                    {"recordType":"entry","operations":["get","snapshot","revisions"],"readableFields":["label"],
                         "revisionAccess":true,"rowBoundaries":"unrestricted"}
                 ]
             }},
             {"id":"steward","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
-                "entities":[
-                    {"entity":"entry","operations":["create"],"readableFields":["subject","label"],
+                "records":[
+                    {"recordType":"entry","operations":["create"],"readableFields":["subject","label"],
                         "writableFields":["subject","label"],"rowBoundaries":"unrestricted"}
                 ]
             }}

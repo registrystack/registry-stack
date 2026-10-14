@@ -1,26 +1,20 @@
 import {
   BaseRegistryClient,
   BaseRegistryClientError,
-  BRegAttachmentSlot,
-  BRegAttachmentUpload,
   BRegActionTargetConditions,
   BRegBatchBinding,
-  BRegChangeRequestPlannerWrite,
-  BRegChangeRequestTarget,
   BRegCreateBinding,
-  BRegImmediateActionBinding,
+  BRegActionBinding,
   BRegIngestionChunk,
-  BRegLifecycleAction,
-  BRegLifecycleAuthority,
   BRegMetadata,
   BRegPatchBinding,
   BRegPreparedAction,
   BRegPreparedCreate,
-  BRegPreparedLifecycle,
   BRegRecoveredAction,
   BRegRecoveredCreate,
-  BRegRecoveredLifecycle,
-  BRegRetainedRequestHistoryPage,
+  BRegProposal,
+  BRegProposalGetBinding,
+  BRegPreparedProposal,
   BRegTombstoneBinding,
   AsOfListContinuation,
   CurrentListContinuation,
@@ -38,21 +32,22 @@ import {
 declare const client: BaseRegistryClient
 declare const create: BRegCreateBinding
 declare const patch: BRegPatchBinding
-declare const authority: BRegLifecycleAuthority
-declare const action: BRegLifecycleAction
 declare const metadata: BRegMetadata
 declare const record: RecordEnvelope
 declare const continuation: ListContinuation
-declare const slot: BRegAttachmentSlot
-declare const upload: BRegAttachmentUpload
 declare const preparedAction: BRegPreparedAction
 declare const preparedCreate: BRegPreparedCreate
-declare const preparedLifecycle: BRegPreparedLifecycle
+declare const proposal: BRegProposal
+declare const proposalGet: BRegProposalGetBinding
+declare const preparedProposal: BRegPreparedProposal
 declare const recoveredAction: BRegRecoveredAction
 declare const recoveredCreate: BRegRecoveredCreate
-declare const recoveredLifecycle: BRegRecoveredLifecycle
-declare const immediateAction: BRegImmediateActionBinding
+declare const immediateAction: BRegActionBinding
 declare const conditions: BRegActionTargetConditions
+client.getProposal(metadata.selectProposalGet('reviewer'), '00000000-0000-4000-8000-000000000001')
+client.getProposal(proposalGet, proposal.identifier)
+// @ts-expect-error Get capability comes only from caller-visible metadata.
+new BRegProposalGetBinding()
 declare const batch: BRegBatchBinding
 declare const chunk: BRegIngestionChunk
 declare const tombstone: BRegTombstoneBinding
@@ -61,7 +56,6 @@ declare const asOfContinuation: AsOfListContinuation
 declare const snapshotContinuation: SnapshotListContinuation
 declare const relationshipContinuation: RelationshipListContinuation
 declare const geoJsonContinuation: GeoJsonListContinuation
-declare const historyPage: BRegRetainedRequestHistoryPage
 
 if (metadata.statisticalDatasets !== null) {
   const dataset = metadata.statisticalDatasets[0]
@@ -101,13 +95,8 @@ client.createRecord(create, { name: 'Ada' }, 'create-person-1')
 client.patchRecord(patch, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', [
   { op: 'replace', field: 'name', value: 'Grace' },
 ], 'patch-person-1')
-client.lifecycleActions(authority, record)
-client.requestHistory(record)?.proposals.flatMap((proposal) => proposal.resultReferences)
-historyPage.findApplication('request', '9f6973f9-10b3-4c58-b41b-494cba26796f', 2, '8f6973f9-10b3-4c58-b41b-494cba26796f')?.resultReferences[0].targetRevision.toFixed()
-client.executeLifecycleAction(action, 'approve-request-1')
 client.recordRevisions('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 'auditor')
 client.getRecordRevision('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 2)
-client.getRecord('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', { requestHistoryAfterProposalVersion: 2 })
 client.getGeoJsonRecord('people', '9f6973f9-10b3-4c58-b41b-494cba26796f')
 client.getGeoJsonRecordJson('people', '9f6973f9-10b3-4c58-b41b-494cba26796f')
 client.listGeoJsonRecords('people', { bbox: ['100.1', '13.1', '100.2', '13.2'] })
@@ -175,12 +164,14 @@ BRegPreparedCreate.fromBytes(preparedCreate.toBytes())
 client.recoverCreate(create, preparedCreate)
 client.executeRecoveredCreate(create, recoveredCreate)
 client.executeRecoveredCreateJson(create, recoveredCreate)
-client.prepareLifecycleAction(authority, record, action, 'prepared-action-1').toBytes()
-client.prepareLifecycleActionJson(authority, '{}', action, 'prepared-action-2').toBytes()
-BRegPreparedLifecycle.fromBytes(preparedLifecycle.toBytes())
-client.recoverLifecycleAction(authority, preparedLifecycle)
-client.executeRecoveredLifecycleAction(recoveredLifecycle)
-client.executeRecoveredLifecycleActionJson(recoveredLifecycle)
+client.startProposal(immediateAction, '{}', 'proposal-start')
+client.executeRecoveredProposalStart(immediateAction, recoveredAction)
+client.readProposal(proposal)
+client.listProposals(metadata.selectProposals('author'), '{}')
+client.prepareProposal(proposal, 'submit', '{}', 'proposal-submit').toBytes()
+BRegPreparedProposal.fromBytes(preparedProposal.toBytes())
+client.recoverProposal(proposal, preparedProposal)
+client.executeProposal(preparedProposal)
 client.continueList(continuation)
 record.data.recordIdentifier.toUpperCase()
 record.data.revisionIdentifier.toUpperCase()
@@ -191,22 +182,6 @@ continuation.registryIdentifier.toUpperCase()
 continuation.datasetIdentifier.toUpperCase()
 continuation.entityTypeIdentifier.toUpperCase()
 if (metadata.etag !== null) metadata.etag.toUpperCase()
-const reviewRequirement = metadata.changeRequestCapability('person')?.review
-if (reviewRequirement && 'authority' in reviewRequirement) reviewRequirement.policyId.toUpperCase()
-const changeRequestEffect = metadata.changeRequestCapability('person')?.effects[0]
-changeRequestEffect?.target.entity.toUpperCase()
-changeRequestEffect?.target.fromField?.toUpperCase()
-changeRequestEffect?.set[0]?.fromEffect?.toUpperCase()
-metadata.changeRequestCapability('person')?.planner.writes[0]?.fields[0]?.toUpperCase()
-// @ts-expect-error A change-request binding names one source, never both.
-const bothBindings: BRegChangeRequestTarget = { entity: 'person', fromField: 'person', fromEffect: 'create' }
-bothBindings.entity.toUpperCase()
-// @ts-expect-error A planner write targets a stored record, never another effect.
-const plannerFromEffect: BRegChangeRequestPlannerWrite = { target: { entity: 'person', fromEffect: 'create' }, operation: 'patch', fields: [] }
-plannerFromEffect.operation.toUpperCase()
-record.data.request?.review?.submission.authority.toUpperCase()
-record.data.request?.submitterReference?.toUpperCase()
-client.executeLifecycleAction(action, 'actor-receipt').then((outcome) => outcome.value.actorReference?.toUpperCase())
 
 // @ts-expect-error Direct writes require metadata-selected opaque authority.
 client.createRecord({}, { name: 'Ada' }, 'create-person-1')
@@ -232,32 +207,13 @@ client.patchRecordJson(patch, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"'
 client.getRecordJson('people', '9f6973f9-10b3-4c58-b41b-494cba26796f').then(result => result.valueJson.toUpperCase())
 client.listRecordsJson('people').then(result => result.continuation?.skiptoken.toUpperCase())
 client.lookupRecordJson('people', 'identifier', '{"name":"Ada"}')
-client.lifecycleActionsJson(authority, '{}')
-client.executeLifecycleActionJson(action, 'exact-action')
-action.bodyJson.toUpperCase()
 metadata.operations.map(operation => operation.query?.filterableFields.map(field => field.apiName))
-metadata.operations.flatMap(operation => operation.readableRequestFields)
 metadata.operations.map(operation => operation.request.allowCreate === false)
 // @ts-expect-error Exact JSON methods require text, not already coerced JavaScript values.
 client.createRecordJson(create, { wide: 9007199254740992 }, 'exact-create')
 
-const reasonAction: BRegLifecycleAction = action.withReason("Applied after external approval.")
-client.executeLifecycleAction(reasonAction, "apply-1")
 
-metadata.selectAttachments('company', 'company-writer').map((value) => value.slotIdentifier)
-slot.prepareUpload('application/pdf', Buffer.from('%PDF-1.7'))
-client.uploadAttachment(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', upload, 'upload-1')
-client.uploadAttachmentJson(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', upload, 'upload-1')
-client.downloadAttachment(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', 2).then((raw) => raw.body.byteLength)
 client.statisticsLive('population', null, null, 'reader', 'csv').then((raw) => raw.reprDigest?.toUpperCase())
-client.deleteAttachment(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', 'remove-1')
-client.deleteAttachmentJson(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', 'remove-1')
-const value = slot.valueIn(record)
-if (value.kind === 'filled') value.value.sha256.toUpperCase()
-// @ts-expect-error Slot policy is served metadata, never caller-set.
-slot.maximumBytes = 1
-// @ts-expect-error Uploads must be bound to a slot before they can be sent.
-client.uploadAttachment(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', Buffer.from('%PDF-1.7'), 'upload-1')
 
 const once = new BaseRegistryClient({ baseUrl: 'https://registry.example.test/', maxMutationRetries: 0 })
 void once

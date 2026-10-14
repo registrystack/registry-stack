@@ -2,105 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha4.schema.json",
   "title": "ActionsExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain actions`. Every node is reconstructed field by field by bregctl and is pinned in full, except `fieldType` (a passthrough of the compiled field-type source) and `handler.possibleWrites`/`evidence.capabilities` (both raw passthroughs of compiled-model values), which are declared opaque. No tracked fixture exercises a WASM handler (`handler.kind == \"wasm\"`); that branch is pinned from source but unexercised by the test gate. No tracked fixture exercises a `clear` field mutation; that branch is likewise pinned but unexercised.",
+  "description": "Native source-free Action definitions used by the compiler, runtime and CLI. Reviewed function bytes and filesystem paths are absent.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "actions"],
-  "$defs": {
-    "DerivedId": {
-      "description": "An identifier the compiler derives from local identifiers: two or more local identifiers joined by `.`. It is never authored.",
-      "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
-      "type": "string"
-    },
-    "LocalId": {
-      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
-      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-      "type": "string"
-    },
-    "fieldType": {
-      "type": "object",
-      "description": "Passthrough of the compiled field type. Shape follows FieldTypeSource and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the compiled field type as the engine holds it; its shape follows FieldTypeSource and is outside this contract version."
-    },
-    "fieldRef": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["field", "apiName"],
-      "properties": {
-        "field": { "type": "string" },
-        "apiName": { "type": "string" }
-      }
-    },
-    "inputRef": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["input", "apiName", "fieldType", "required", "classification"],
-      "properties": {
-        "input": { "type": "string" },
-        "apiName": { "type": "string" },
-        "fieldType": { "$ref": "#/$defs/fieldType" },
-        "required": { "type": "boolean" },
-        "classification": { "enum": ["public", "internal", "restricted"] }
-      }
-    },
-    "operation": {
-      "enum": [
-        "create", "get", "lookup", "list", "patch", "tombstone", "batch",
-        "revisions", "snapshot", "submit-request", "revise-request",
-        "cancel-request", "apply-request", "invoke"
-      ]
-    },
-    "rowBoundary": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["claim", "field", "operator"],
-      "properties": {
-        "claim": { "type": "string" },
-        "field": { "type": "string" },
-        "operator": { "enum": ["equals", "in"] }
-      }
-    },
-    "actionTargetSource": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["type", "effect"],
-          "properties": {
-            "type": { "const": "effect" },
-            "effect": { "type": "string" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["type", "input"],
-          "properties": {
-            "type": { "const": "input" },
-            "input": { "$ref": "#/$defs/inputRef" }
-          }
-        }
-      ]
-    },
-    "route": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "id", "kind", "method", "path", "operation", "accessProfiles",
-        "defaultAccessProfile", "requiresIdempotencyKey"
-      ],
-      "properties": {
-        "id": { "$ref": "#/$defs/DerivedId" },
-        "kind": { "enum": ["invoke", "target-conditions"] },
-        "method": { "const": "POST" },
-        "path": { "type": "string" },
-        "operation": { "$ref": "#/$defs/operation" },
-        "accessProfiles": { "type": "array", "items": { "type": "string" } },
-        "defaultAccessProfile": { "type": ["string", "null"] },
-        "requiresIdempotencyKey": { "type": "boolean" }
-      }
-    }
-  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "registryId",
+    "revision",
+    "recordTypes",
+    "actions"
+  ],
   "properties": {
     "apiVersion": {
       "const": "id.registrystack.org/formats/breg/actions-explanation/v1alpha4"
@@ -108,304 +20,273 @@
     "kind": {
       "const": "BRegActionsExplanation"
     },
+    "registryId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "recordTypes": {
+      "type": "array"
+    },
     "actions": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "id", "sourceModule", "contractFingerprint", "routes", "inputs", "effects",
-          "targets", "requiredConditionKeys", "permissions", "results", "bounds"
+          "id",
+          "apiName",
+          "revision",
+          "display",
+          "execution",
+          "inputs",
+          "plan",
+          "commitGuards",
+          "dependencies",
+          "bounds"
         ],
         "properties": {
-          "id": { "$ref": "#/$defs/LocalId" },
-          "sourceModule": { "type": ["string", "null"] },
-          "contractFingerprint": { "type": "string" },
-          "routes": { "type": "array", "items": { "$ref": "#/$defs/route" } },
-          "inputs": { "type": "array", "items": { "$ref": "#/$defs/inputRef" } },
-          "effects": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["id", "operation", "target", "fields", "dependsOn"],
-              "properties": {
-                "id": { "$ref": "#/$defs/LocalId" },
-                "operation": { "$ref": "#/$defs/operation" },
-                "target": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["entity", "binding"],
-                  "properties": {
-                    "entity": { "type": "string" },
-                    "binding": {
-                      "oneOf": [
-                        {
-                          "type": "object",
-                          "additionalProperties": false,
-                          "required": ["type"],
-                          "properties": { "type": { "const": "create" } }
-                        },
-                        {
-                          "type": "object",
-                          "additionalProperties": false,
-                          "required": ["type", "input"],
-                          "properties": {
-                            "type": { "const": "existing" },
-                            "input": { "type": "string" }
-                          }
-                        }
-                      ]
-                    }
-                  }
-                },
-                "fields": {
-                  "type": "array",
-                  "items": {
-                    "oneOf": [
-                      {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["type", "target", "value"],
-                        "properties": {
-                          "type": { "const": "set" },
-                          "target": { "$ref": "#/$defs/fieldRef" },
-                          "value": {
-                            "oneOf": [
-                              {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["type"],
-                                "properties": { "type": { "const": "computed" } }
-                              },
-                              {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["type", "input"],
-                                "properties": {
-                                  "type": { "const": "from-input" },
-                                  "input": { "$ref": "#/$defs/inputRef" }
-                                }
-                              },
-                              {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["type", "effect", "targetEntity"],
-                                "properties": {
-                                  "type": { "const": "from-effect" },
-                                  "effect": { "type": "string" },
-                                  "targetEntity": { "type": "string" }
-                                }
-                              }
-                            ]
-                          }
-                        }
-                      },
-                      {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["type", "target"],
-                        "properties": {
-                          "type": { "const": "clear" },
-                          "target": { "$ref": "#/$defs/fieldRef" }
-                        }
-                      }
-                    ]
-                  }
-                },
-                "dependsOn": { "type": "array", "items": { "type": "string" } }
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "apiName": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "display": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
           },
-          "targets": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["entity", "operation", "fields", "source", "conditionRequired"],
-              "properties": {
-                "entity": { "type": "string" },
-                "operation": { "$ref": "#/$defs/operation" },
-                "fields": { "type": "array", "items": { "$ref": "#/$defs/fieldRef" } },
-                "source": { "$ref": "#/$defs/actionTargetSource" },
-                "conditionRequired": { "type": "boolean" }
+          "execution": {
+            "type": "object",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "enum": [
+                  "immediate",
+                  "proposal"
+                ]
               }
-            }
+            },
+            "x-registry-passthrough": "The fixed mode and complete typed Proposal policy are owned by the compiled engine contract."
           },
-          "requiredConditionKeys": { "type": "array", "items": { "type": "string" } },
-          "permissions": {
+          "inputs": {
             "type": "array",
             "items": {
               "type": "object",
-              "additionalProperties": false,
               "required": [
-                "profile", "default", "requiredScopes", "requiredPurposes",
-                "operations", "targets", "results"
+                "id",
+                "apiName",
+                "label",
+                "schema",
+                "required",
+                "nullable"
               ],
               "properties": {
-                "profile": { "type": "string" },
-                "default": { "type": "boolean" },
-                "requiredScopes": { "type": "array", "items": { "type": "string" } },
-                "requiredPurposes": { "type": "array", "items": { "type": "string" } },
-                "operations": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/operation" } },
-                "targets": {
-                  "type": "array",
-                  "description": "The permission's discriminated target uses. Each entry carries the action operation and source governed by this profile together with its target lock's row boundaries.",
-                  "items": {
+                "id": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "apiName": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "schema": {
+                  "type": "object",
+                  "x-registry-foreign": "json-schema-2020-12"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "nullable": {
+                  "type": "boolean"
+                }
+              },
+              "x-registry-passthrough": "Normalized compiled logical field metadata; its field type and schema are owned by the engine."
+            }
+          },
+          "plan": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "effects",
+              "function",
+              "order"
+            ],
+            "properties": {
+              "effects": {
+                "type": "array"
+              },
+              "function": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "sourceModule",
+                  "abi",
+                  "writes",
+                  "refusals",
+                  "id",
+                  "entrypoint",
+                  "capabilities",
+                  "boundInputs"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "rhai",
+                      "wasm"
+                    ]
+                  },
+                  "sourceModule": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "abi": {
+                    "const": "registry.action-plan/v1"
+                  },
+                  "rhaiVersion": {
+                    "type": "string"
+                  },
+                  "scriptSha256": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  "moduleSha256": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  "limits": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": ["entity", "operation", "source", "rowBoundaries"],
-                    "properties": {
-                      "entity": { "type": "string" },
-                      "operation": { "$ref": "#/$defs/operation" },
-                      "source": { "$ref": "#/$defs/actionTargetSource" },
-                      "rowBoundaries": { "type": "array", "items": { "$ref": "#/$defs/rowBoundary" } }
+                    "x-registry-passthrough": "Compiled function resource ceilings, owned and bounded by the engine."
+                  },
+                  "writes": {
+                    "type": "array"
+                  },
+                  "refusals": {
+                    "type": "object",
+                    "propertyNames": {
+                      "$ref": "#/$defs/LocalId"
+                    },
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "id": {
+                    "$ref": "#/$defs/LocalId"
+                  },
+                  "entrypoint": {
+                    "type": "string"
+                  },
+                  "capabilities": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "evidence"
+                      ]
+                    },
+                    "uniqueItems": true
+                  },
+                  "boundInputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
                     }
                   }
-                },
-                "results": { "type": "array", "items": { "type": "string" } }
+                }
+              },
+              "order": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                }
               }
             }
           },
-          "results": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["effect", "entity", "operation"],
-              "properties": {
-                "effect": { "type": "string" },
-                "entity": { "type": "string" },
-                "operation": { "$ref": "#/$defs/operation" }
+          "commitGuards": {
+            "type": "array"
+          },
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "evidence"
+            ],
+            "properties": {
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "x-registry-passthrough": "Exact provider-published Evidence contract and bindings, compiled by the engine."
+                },
+                "x-registry-passthrough": "The exact compiled Evidence relying-party closure is owned by the engine."
               }
             }
           },
           "bounds": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["maximumTargets", "maximumFieldMutations", "maximumSnapshotBytes"],
-            "properties": {
-              "maximumTargets": { "type": "integer", "minimum": 0, "maximum": 65535 },
-              "maximumFieldMutations": { "type": "integer", "minimum": 0, "maximum": 65535 },
-              "maximumSnapshotBytes": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
-            }
-          },
-          "handler": {
-            "type": "object",
-            "additionalProperties": false,
             "required": [
-              "kind", "abi", "entrypoint", "context", "inputKeys", "possibleWrites",
-              "refusals", "outcomes", "omittedSlots", "evaluation", "reads", "replay"
+              "maximumTargets",
+              "maximumFieldMutations",
+              "maximumSnapshotBytes"
             ],
             "properties": {
-              "kind": { "enum": ["rhai", "wasm"] },
-              "abi": { "type": "string" },
-              "entrypoint": { "const": "handle" },
-              "context": { "const": "ctx.inputs" },
-              "inputKeys": { "const": "authored-ids" },
-              "possibleWrites": {
-                "type": "array",
-                "description": "Passthrough of the compiled handler's possible writes. Shape follows the compiled model and is outside this contract version.",
-                "items": { "type": "object", "x-registry-passthrough": "bregctl writes each possible handler write as the compiled model holds it; its shape and is outside this contract version." }
+              "maximumTargets": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
               },
-              "refusals": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["code", "label"],
-                  "properties": {
-                    "code": { "type": "string" },
-                    "label": { "type": "string" }
-                  }
-                }
+              "maximumFieldMutations": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 128
               },
-              "outcomes": {
-                "type": "array",
-                "uniqueItems": true,
-                "items": { "enum": ["effects", "refusal"] }
-              },
-              "omittedSlots": { "type": "string" },
-              "evaluation": { "type": "string" },
-              "reads": { "const": "supplied-inputs-only" },
-              "replay": { "const": "recover-committed-result-without-handler-evaluation" },
-              "scriptSha256": { "type": "string" },
-              "rhaiVersion": { "type": "string" },
-              "limits": {
-                "type": "object",
-                "description": "Passthrough of the compiled handler's limits. Shape follows the compiled model and is outside this contract version.",
-                "x-registry-passthrough": "bregctl writes the compiled handler limits as the engine holds them; their shape follows CompiledActionHandlerLimits and is outside this contract version."
-              },
-              "moduleSha256": { "type": "string" },
-              "compatibility": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "minimumServer", "serversBeforeWasmSupport", "serversBuiltWithoutTheFeature", "moduleSha256"
-                ],
-                "properties": {
-                  "minimumServer": { "const": "registry-breg built with the wasm feature" },
-                  "serversBeforeWasmSupport": {
-                    "const": "refuse the package at load with a typed handler error and no state change"
-                  },
-                  "serversBuiltWithoutTheFeature": {
-                    "const": "refuse the package during load because handler rederivation requires WASM support"
-                  },
-                  "moduleSha256": { "type": "string" }
-                }
-              }
-            }
-          },
-          "evidence": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "capabilities", "maximumCalls", "maximumCallsPerCapability", "maximumConcurrentEvaluations",
-              "maximumRetainedBytes", "maximumResponseBytes", "retentionDays",
-              "maximumAssertionLifetimeSeconds", "clockSkewSeconds", "maximumObservationAgeSeconds",
-              "defaultActionDeadlineMilliseconds", "deadline", "invocation", "disclosure", "lifecycle"
-            ],
-            "properties": {
-              "capabilities": {
-                "type": "array",
-                "description": "Passthrough of the action's declared Evidence capabilities. Shape follows the compiled model and is outside this contract version.",
-                "items": { "type": "object", "x-registry-passthrough": "bregctl writes each declared Evidence capability as the compiled model holds it; its shape and is outside this contract version." }
-              },
-              "maximumCalls": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maximumCallsPerCapability": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maximumConcurrentEvaluations": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maximumRetainedBytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maximumResponseBytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "retentionDays": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maximumAssertionLifetimeSeconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "clockSkewSeconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maximumObservationAgeSeconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "defaultActionDeadlineMilliseconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "deadline": { "type": "string" },
-              "invocation": { "type": "string" },
-              "disclosure": { "type": "string" },
-              "lifecycle": { "type": "string" }
-            }
-          },
-          "requires": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["input", "entity", "field", "equals", "evaluated"],
-              "properties": {
-                "input": { "$ref": "#/$defs/inputRef" },
-                "entity": { "type": "string" },
-                "field": { "$ref": "#/$defs/fieldRef" },
-                "equals": {
-                  "description": "Passthrough of an arbitrary compiled comparison value; any JSON type is valid."
-                },
-                "evaluated": { "const": "before-effects-under-target-lock" }
+              "maximumSnapshotBytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2097152
               }
             }
           }
         }
       }
+    }
+  },
+  "$defs": {
+    "LocalId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
     }
   }
 }

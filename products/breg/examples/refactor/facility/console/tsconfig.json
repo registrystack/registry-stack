@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "rootDir": "../../../../../..",
+    "noEmit": true,
+    "target": "es2022",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "types": ["node"],
+    "typeRoots": ["../../../../../../crates/registry-breg-client-node/node_modules/@types"],
+    "paths": {
+      "@registrystack/client": ["../../../../../../crates/registry-stack-client-node/index.d.ts"]
+    }
+  },
+  "files": ["console.ts", "../../../../generated/refactor/generated/sdk/project.ts"]
+}

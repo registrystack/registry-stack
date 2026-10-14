@@ -8,18 +8,7 @@
 
 use uuid::Uuid;
 
-use crate::model::CompiledChangeRequestOnApprovedMode;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HumanIdentityBinding {
-    pub issuer: String,
-    pub subject: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SourceContextBinding {
-    pub reference: String,
-}
+use crate::model::CompiledProposalApplication;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewSubjectBinding {
@@ -46,29 +35,6 @@ pub struct AcceptedReviewBinding {
     pub subject: ReviewSubjectBinding,
     pub policy: ReviewPolicyBinding,
     pub submission_digest: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReviewSubmissionJob {
-    pub job_id: Uuid,
-    pub request_entity_id: String,
-    pub request_id: Uuid,
-    pub proposal_version: u32,
-    pub authority: String,
-    pub policy_id: String,
-    pub idempotency_key: String,
-    pub expected_submission_digest: String,
-    pub initiator: Option<HumanIdentityBinding>,
-    pub source_context: SourceContextBinding,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReviewCancellationJob {
-    pub job_id: Uuid,
-    pub request_entity_id: String,
-    pub request_id: Uuid,
-    pub proposal_version: u32,
-    pub accepted: AcceptedReviewBinding,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,9 +105,20 @@ pub struct AcceptedReviewEvidence {
     policy: ReviewPolicyBinding,
     submission_digest: String,
     completed_at: String,
+    available_until: String,
+    observed_at: String,
 }
 
 impl AcceptedReviewEvidence {
+    #[cfg(feature = "runtime")]
+    pub(crate) fn result_id(&self) -> Uuid {
+        self.result_id
+    }
+    #[cfg(test)]
+    pub(crate) fn with_observed_at_for_test(mut self, observed_at: &str) -> Self {
+        self.observed_at = observed_at.to_owned();
+        self
+    }
     #[cfg(feature = "runtime")]
     pub fn from_protocol(
         authority: &str,
@@ -224,82 +201,63 @@ impl AcceptedReviewEvidence {
             policy: result.policy.clone(),
             submission_digest: result.submission_digest.clone(),
             completed_at: result.completed_at.clone(),
+            available_until: result.available_until.clone(),
+            observed_at: chrono::Utc::now().to_rfc3339(),
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn matches_proposal(
         &self,
         authority: &str,
-        policy_id: &str,
+        source: &str,
+        policy: &registry_review_protocol::PolicyBinding,
         request_id: &str,
-        proposal_version: u32,
+        submission_version: u32,
         proposal_digest: &str,
+        commit_time: &str,
     ) -> bool {
+        let fresh = (|| {
+            let observed = chrono::DateTime::parse_from_rfc3339(&self.observed_at).ok()?;
+            let available = chrono::DateTime::parse_from_rfc3339(&self.available_until).ok()?;
+            let commit = chrono::DateTime::parse_from_rfc3339(commit_time).ok()?;
+            Some(
+                commit >= observed
+                    && commit < available
+                    && commit.signed_duration_since(observed) <= chrono::Duration::seconds(30),
+            )
+        })()
+        .unwrap_or(false);
         self.authority == authority
-            && self.policy.id == policy_id
+            && self.subject.subject_type == "proposal"
+            && self.policy.id == policy.id
+            && self.policy.version == policy.version
+            && self.policy.digest == policy.digest.as_str()
+            && self.subject.source == source
             && self.subject.id == request_id
-            && self.subject.version == proposal_version.to_string()
+            && self.subject.version == submission_version.to_string()
             && self.subject.digest == proposal_digest
+            && fresh
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CompletionInboxState {
-    Pending,
-    Correlated,
-    Unmatched,
-    Applied,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReviewCompletionInboxEntry {
-    pub event_id: Uuid,
-    pub authority: String,
-    pub review_request_id: Uuid,
-    pub result_id: Uuid,
-    pub completed_at: String,
-    pub state: CompletionInboxState,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReviewFeedCheckpoint {
-    pub authority: String,
-    pub cursor: Option<Uuid>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProposalApplicationJob {
-    pub job_id: Uuid,
-    pub request_entity_id: String,
-    pub request_id: Uuid,
-    pub proposal_version: u32,
-    pub proposal_digest: String,
-    pub executor: String,
-    pub evidence: AcceptedReviewEvidence,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ApplicationBindingError {
-    ManualExecutor,
-    AutomaticExecutor,
+    AttemptBudget,
 }
 
 pub fn validate_application_binding(
-    mode: CompiledChangeRequestOnApprovedMode,
-    executor: Option<&str>,
+    application: &CompiledProposalApplication,
 ) -> Result<(), ApplicationBindingError> {
-    match (mode, executor) {
-        (CompiledChangeRequestOnApprovedMode::Manual, None) => Ok(()),
-        (CompiledChangeRequestOnApprovedMode::Manual, Some(_)) => {
-            Err(ApplicationBindingError::ManualExecutor)
-        }
-        (CompiledChangeRequestOnApprovedMode::Automatic, Some(executor))
-            if !executor.trim().is_empty() =>
+    match application {
+        CompiledProposalApplication::Manual => Ok(()),
+        CompiledProposalApplication::Automatic { maximum_attempts }
+            if (1..=32).contains(maximum_attempts) =>
         {
             Ok(())
         }
-        (CompiledChangeRequestOnApprovedMode::Automatic, _) => {
-            Err(ApplicationBindingError::AutomaticExecutor)
+        CompiledProposalApplication::Automatic { .. } => {
+            Err(ApplicationBindingError::AttemptBudget)
         }
     }
 }
@@ -314,8 +272,8 @@ mod tests {
             request_id: Uuid::nil(),
             subject: ReviewSubjectBinding {
                 source: "breg".to_owned(),
-                subject_type: "change_request".to_owned(),
-                id: "request-1".to_owned(),
+                subject_type: "proposal".to_owned(),
+                id: "proposal-1".to_owned(),
                 version: "3".to_owned(),
                 digest: format!("sha256:{}", "a".repeat(64)),
             },
@@ -384,23 +342,21 @@ mod tests {
     }
 
     #[test]
-    fn executor_is_owned_only_by_automatic_application() {
+    fn builtin_automatic_application_has_a_bounded_attempt_budget() {
         assert_eq!(
-            validate_application_binding(CompiledChangeRequestOnApprovedMode::Manual, None),
+            validate_application_binding(&CompiledProposalApplication::Manual),
             Ok(())
         );
         assert_eq!(
-            validate_application_binding(
-                CompiledChangeRequestOnApprovedMode::Manual,
-                Some("breg-apply")
-            ),
-            Err(ApplicationBindingError::ManualExecutor)
+            validate_application_binding(&CompiledProposalApplication::Automatic {
+                maximum_attempts: 0,
+            }),
+            Err(ApplicationBindingError::AttemptBudget)
         );
         assert_eq!(
-            validate_application_binding(
-                CompiledChangeRequestOnApprovedMode::Automatic,
-                Some("breg-apply")
-            ),
+            validate_application_binding(&CompiledProposalApplication::Automatic {
+                maximum_attempts: 10,
+            }),
             Ok(())
         );
     }

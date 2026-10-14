@@ -19,18 +19,20 @@ pub(crate) const UPDATE_APPLICATION: &str = "update_application";
 pub(crate) const PREPARE_REVIEW: &str = "prepare_review";
 pub(crate) const GET_APPLICATION_STATUS: &str = "get_application_status";
 
-pub(crate) const TOOL_NAMES: [&str; 6] = [
+pub(crate) const LIST_APPLICATIONS: &str = "list_applications";
+
+pub(crate) const TOOL_NAMES: [&str; 7] = [
     DESCRIBE_SERVICE,
     GET_MY_DETAILS,
     START_APPLICATION,
     UPDATE_APPLICATION,
     PREPARE_REVIEW,
     GET_APPLICATION_STATUS,
+    LIST_APPLICATIONS,
 ];
 
-/// The most edits one `update_application` call may carry. The registry's own
-/// patch limit is higher; the gateway reserves one operation for the target
-/// precondition it adds itself.
+/// The most input edits one `update_application` call may carry. The complete
+/// input is sent under the Proposal's promoted revision condition.
 pub(crate) const MAXIMUM_EDITS: usize = 64;
 
 /// A value-free reason an argument set was refused.
@@ -297,6 +299,36 @@ fn only_keys(arguments: &Map<String, Value>, allowed: &[&str]) -> Result<(), Arg
     }
 }
 
+/// Resume only the caller's own applications; filters and page size are fixed.
+pub(crate) fn list_input_schema() -> Map<String, Value> {
+    object_schema(
+        Map::from_iter([(
+            "cursor".to_owned(),
+            json!({"type":"string","minLength":1,"maxLength":512}),
+        )]),
+        &[],
+    )
+}
+pub(crate) fn parse_list(
+    arguments: Option<&Map<String, Value>>,
+) -> Result<Option<String>, ArgumentError> {
+    let Some(arguments) = arguments else {
+        return Ok(None);
+    };
+    only_keys(arguments, &["cursor"])?;
+    match arguments.get("cursor") {
+        None => Ok(None),
+        Some(Value::String(cursor))
+            if !cursor.is_empty()
+                && cursor.len() <= 512
+                && cursor.bytes().all(|b| b > 32 && b < 127) =>
+        {
+            Ok(Some(cursor.clone()))
+        }
+        _ => Err(ArgumentError::WrongType),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,7 +499,7 @@ mod tests {
         let metadata = registry_breg_client::BRegMetadata::from_slice(&divergent_fixture())
             .expect("divergent fixture metadata");
         let spec = ContractSpec {
-            target_field: "target-ref".to_owned(),
+            target_input: "target-ref".to_owned(),
             ..spec()
         };
         let contract = Contract::derive(&metadata, &spec).expect("divergent contract");

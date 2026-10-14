@@ -1,7 +1,7 @@
 {% extends "layout.html" %}
-{% block title %}{{ entity_label }}{% endblock %}
+{% block title %}{{ action_label }}{% endblock %}
 {% block main %}
-<h1>{{ entity_label }}</h1>
+<h1>{{ action_label }}</h1>
 {% if notice %}
 <p class="notice" data-notice="request-changed">This request changed after you opened it. Check the values below and submit again if they are still right.</p>
 {% endif %}
@@ -24,7 +24,7 @@
 </dl>
 </section>
 {% if view %}
-<form method="post" action="/requests/{{ request_id }}/submit">
+<form method="post" action="/proposals/{{ request_id }}/submit">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <input type="hidden" name="view" value="{{ view }}">
 <button type="submit">Submit this request</button>

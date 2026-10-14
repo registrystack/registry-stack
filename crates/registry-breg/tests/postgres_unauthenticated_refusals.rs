@@ -10,26 +10,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, Response, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_yaml;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::metrics::{self, Metrics};
 use registry_breg::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
-    PostgresRecordReadService, RegistryLockKey, RegistryStateTestIdentity,
+    ExpectedManagedCatalog, PostgresRecordReadService, RegistryLockKey, RegistryStateTestIdentity,
+    initialize_registry_state_for_catalog_test, install_compiled_schema,
 };
 use registry_breg::startup::with_request_timeout_and_metrics_for_test;
 use registry_platform_audit::AuditProfile;
 use serde_json::Value;
-use tower::util::ServiceExt as _;
 use tower::Service as _;
+use tower::util::ServiceExt as _;
 use zeroize::Zeroizing;
 
 const PACKAGE_ID: &str = "unauthenticated-refusal-registry";
@@ -45,7 +45,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -55,14 +55,17 @@ entities:
     fields:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.public]
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [label]
@@ -73,8 +76,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [get, list]
           readableFields: [label, jurisdiction]
           filterableFields: [label, jurisdiction]
@@ -87,8 +90,8 @@ accessProfiles:
 /// journal: it is refused before any profile is resolved or row is read,
 /// while a refusal that carries a principal is journaled exactly as before.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unauthenticated_requests_are_refused_before_any_read_while_principal_refusals_are_journaled(
-) {
+async fn unauthenticated_requests_are_refused_before_any_read_while_principal_refusals_are_journaled()
+ {
     let database = TestDatabase::create(8).await;
     let (migration, migration_task) = database.connect_migration().await;
     let registry = Arc::new(compiled_registry());

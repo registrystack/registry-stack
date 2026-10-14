@@ -44,7 +44,7 @@ async fn read(
                 invalid_query(),
                 &correlation,
             )
-            .await
+            .await;
         }
     };
     let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
@@ -88,7 +88,6 @@ async fn read(
             id: record_id.expect("validated record id").clone(),
         },
         maximum_records: 1,
-        request_history_after_proposal_version: None,
         correlation: correlation.clone(),
     };
     match service.records.access_log(request, cursor, limit).await {

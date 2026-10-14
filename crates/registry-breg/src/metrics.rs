@@ -34,12 +34,12 @@ use std::{
 };
 
 use axum::{
+    Router,
     body::Body,
     extract::{MatchedPath, State},
-    http::{header::CONTENT_TYPE, HeaderValue, Request, StatusCode},
+    http::{HeaderValue, Request, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
 
 use crate::postgres::RuntimePool;
@@ -412,21 +412,22 @@ async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>,
                                       AND state.lease_expires_at <= transaction_timestamp())), 0),
                     COALESCE((SELECT EXTRACT(EPOCH FROM transaction_timestamp()
                                       - MIN(GREATEST(s.next_attempt_at, s.lease_until)))::float8
-                                FROM registry_internal.registry_request_review_submissions s
+                                FROM registry_internal.registry_proposal_review_submissions s
                                WHERE s.state IN ('pending','submitting','uncertain','cancelling')
                                  AND {submission_claimable}), 0),
                     COALESCE((SELECT EXTRACT(EPOCH FROM transaction_timestamp()
                                       - MIN(q.next_attempt_at))::float8
-                                FROM registry_internal.registry_request_application_jobs q
+                                FROM registry_internal.registry_proposal_application_jobs q
+                                JOIN registry_internal.registry_proposal_state p USING(action_id,proposal_id)
                                WHERE q.state IN ('queued','applying')
-                                 AND q.attempt_count < $1
-                                 AND q.next_attempt_at <= transaction_timestamp()
-                                 AND {claimable}), 0)",
+                                 AND q.attempt_count < q.maximum_attempts
+                                 AND p.state='submitted' AND p.submission_version=q.submission_version
+                                 AND p.blocked_reason IS NULL AND p.detail_erased_at IS NULL
+                                 AND q.next_attempt_at <= transaction_timestamp()), 0)",
                 schema = crate::webhook::DELIVERY_SCHEMA,
                 submission_claimable = crate::review_store::REVIEW_SUBMISSION_CLAIMABLE,
-                claimable = crate::review_store::APPLICATION_JOB_CLAIMABLE,
             ),
-            &[&crate::review_store::MAX_APPLICATION_ATTEMPTS],
+            &[],
         )
         .await
         .map_err(|_| ())?;

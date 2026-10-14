@@ -3,16 +3,15 @@
 //! Everything the page reads from the registry, always under the person's
 //! own token and the one configured access profile.
 //!
-//! The registry does not tie a request's target to the person holding the
-//! request: a person may hold a draft naming someone else's record. So a
-//! review reads the draft, then reads the record its target field names. A
+//! The registry does not tie a Proposal's target to the person holding the
+//! Proposal: a person may hold a draft naming someone else's record. So a
+//! review reads the draft, then reads the record its target input names. A
 //! page offers the submit form only when both reads succeed, and a submit
 //! repeats both reads before it calls the registry.
 
 use registry_breg_client::{
-    BRegLifecycleAction, BRegLifecycleOperation, BRegMetadata, BRegMetadataOperation,
-    BRegOperationKind, BRegRecordOptions, BaseRegistryClient, BaseRegistryClientError,
-    RegistryRecordSingleResponse,
+    BRegMetadata, BRegMetadataOperation, BRegOperationKind, BRegProposal, BRegRecordOptions,
+    BaseRegistryClient, BaseRegistryClientError, RegistryRecordSingleResponse,
 };
 use serde_json::Value;
 
@@ -50,14 +49,15 @@ impl Refusal {
 
 /// A draft and its target, both read under the person's token.
 pub(crate) struct Review {
-    pub entity_label: String,
+    pub action_label: String,
     pub target_label: String,
     pub current: Vec<Item>,
     pub proposed: Vec<Item>,
     /// The target record revision whose values `current` shows.
     pub target: RecordRevision,
     /// The submit action the registry advertises on the draft right now.
-    pub submit: Option<BRegLifecycleAction>,
+    pub submit: Option<BRegProposal>,
+    pub proposal: BRegProposal,
 }
 
 /// One revision of one record, as the registry identified it.
@@ -68,12 +68,12 @@ pub(crate) struct RecordRevision {
 }
 
 pub(crate) struct Profile<'a> {
-    pub entity: &'a str,
-    pub target_field: &'a str,
+    pub action: &'a str,
+    pub target_input: &'a str,
     pub access_profile: &'a str,
 }
 
-/// Read the draft `request_id` and the record its target field names.
+/// Read the draft `request_id` and the record its target input names.
 pub(crate) async fn load(
     registry: &BaseRegistryClient,
     profile: &Profile<'_>,
@@ -84,95 +84,94 @@ pub(crate) async fn load(
         .await
         .map_err(|error| Refusal::from_client(&error))?
         .value;
-    let request_get =
-        get_operation(&metadata, profile.entity, profile.access_profile).ok_or_else(|| {
-            Refusal::Unavailable(
-                "the registry metadata describes no read of the configured request entity"
-                    .to_owned(),
-            )
-        })?;
-    let options = BRegRecordOptions::default()
-        .access_profile(profile.access_profile)
-        .map_err(|_| Refusal::Unavailable("the access profile is invalid".to_owned()))?;
-    let draft = registry
-        .get_record(route(request_get)?, request_id, &options)
+    let get = metadata
+        .select_proposal_get(profile.access_profile)
+        .map_err(|_| Refusal::NotFound)?;
+    let proposal = registry
+        .get_proposal(&get, request_id)
         .await
         .map_err(|error| Refusal::from_client(&error))?
         .value;
-
-    let target_field = request_get
-        .fields()
+    if proposal.action_id() != profile.action {
+        return Err(Refusal::NotFound);
+    }
+    let action = metadata
+        .actions()
         .iter()
-        .find(|field| field.identifier() == profile.target_field)
-        .ok_or_else(|| {
-            Refusal::Unavailable(
-                "the registry metadata does not describe the configured target field".to_owned(),
-            )
-        })?;
-    // A reference may name several reads for the profile, such as a list
-    // and a lookup beside the get, so the kind decides which one is taken.
-    let target_get = target_field
-        .reference()
-        .and_then(|reference| {
-            reference
-                .operations()
-                .iter()
-                .filter(|candidate| candidate.access_profile() == profile.access_profile)
-                .find_map(|candidate| {
-                    metadata
-                        .operation(candidate.operation_identifier())
-                        .filter(|operation| {
-                            matches!(operation.kind(), BRegOperationKind::Get)
-                                && operation.access_profile() == profile.access_profile
-                        })
-                })
+        .find(|action| {
+            action.identifier() == profile.action
+                && action.access_profile() == profile.access_profile
         })
-        .ok_or_else(|| {
-            Refusal::Unavailable(
-                "the registry metadata describes no read of the target field's record".to_owned(),
-            )
-        })?;
-    // A draft that names no target, or a target this person may not read,
-    // offers nothing to confirm.
-    let target_id = draft
-        .data
-        .domain_data
-        .get(target_field.api_name())
+        .ok_or(Refusal::NotFound)?;
+    let target_input = action
+        .reference_inputs()
+        .iter()
+        .find(|input| input.input_identifier() == profile.target_input)
+        .ok_or(Refusal::NotFound)?;
+    let target_get = get_operation(
+        &metadata,
+        target_input.target_record_type(),
+        profile.access_profile,
+    )
+    .ok_or(Refusal::NotFound)?;
+    let input = proposal.input().ok_or(Refusal::NotFound)?;
+    let target_id = input
+        .get(target_input.api_name())
         .and_then(Value::as_str)
         .filter(|value| crate::canonical_uuid(value))
         .ok_or(Refusal::NotFound)?;
+    let options = BRegRecordOptions::default()
+        .access_profile(profile.access_profile)
+        .map_err(|_| Refusal::NotFound)?;
     let target = registry
         .get_record(route(target_get)?, target_id, &options)
         .await
         .map_err(|error| Refusal::from_client(&error))?
         .value;
-
-    let authority = metadata
-        .select_lifecycle(profile.entity, profile.access_profile)
-        .map_err(|_| {
-            Refusal::Unavailable(
-                "the registry metadata describes no lifecycle for the request entity".to_owned(),
-            )
-        })?;
-    let submit = registry
-        .lifecycle_actions(&authority, &draft)
-        .map_err(|_| {
-            Refusal::Unavailable("the draft's lifecycle actions are not valid".to_owned())
-        })?
-        .into_iter()
-        .find(|action| action.operation() == BRegLifecycleOperation::SubmitRequest);
-
+    let proposed = action
+        .inputs()
+        .iter()
+        .filter(|field| field.identifier() != profile.target_input)
+        .filter_map(|field| {
+            input.get(field.api_name()).map(|value| Item {
+                label: field.label().to_owned(),
+                value: display_value(value),
+            })
+        })
+        .collect();
+    let action_label = action
+        .display()
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or(action.identifier())
+        .to_owned();
+    let submit = proposal
+        .link("submit")
+        .filter(|link| {
+            link.availability()
+                .is_none_or(|availability| availability.available)
+        })
+        .map(|_| proposal.clone());
     Ok(Review {
-        entity_label: request_get.entity_label().to_owned(),
-        target_label: target_get.entity_label().to_owned(),
-        current: items(target_get, &target, None),
-        proposed: items(request_get, &draft, Some(profile.target_field)),
+        action_label,
+        target_label: target_get.record_type_label().to_owned(),
+        current: items(target_get, &target),
+        proposed,
         target: RecordRevision {
             record: target.data.record_identifier.clone(),
             revision: target.data.revision_identifier.clone(),
         },
         submit,
+        proposal,
     })
+}
+fn display_value(value: &Value) -> String {
+    match value {
+        Value::Null => NOT_PROVIDED.to_owned(),
+        Value::String(text) if text.is_empty() => NOT_PROVIDED.to_owned(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
 }
 
 fn get_operation<'a>(
@@ -182,7 +181,7 @@ fn get_operation<'a>(
 ) -> Option<&'a BRegMetadataOperation> {
     metadata.operations().iter().find(|operation| {
         matches!(operation.kind(), BRegOperationKind::Get)
-            && operation.source_entity() == entity
+            && operation.source_record_type() == entity
             && operation.access_profile() == access_profile
     })
 }
@@ -202,15 +201,10 @@ fn route(operation: &BRegMetadataOperation) -> Result<&str, Refusal> {
 
 /// The readable fields of `record`, labelled from caller-filtered metadata,
 /// with coded values shown by their labels.
-fn items(
-    operation: &BRegMetadataOperation,
-    record: &RegistryRecordSingleResponse,
-    skip: Option<&str>,
-) -> Vec<Item> {
+fn items(operation: &BRegMetadataOperation, record: &RegistryRecordSingleResponse) -> Vec<Item> {
     operation
         .fields()
         .iter()
-        .filter(|field| Some(field.identifier()) != skip)
         .filter(|field| {
             operation
                 .readable_fields()

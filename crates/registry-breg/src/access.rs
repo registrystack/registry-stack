@@ -15,7 +15,7 @@ use crate::diagnostics::Diagnostic;
 use crate::model::{CompiledActionInventory, CompiledEntity, CompiledRegistry};
 
 fn profile_path(entity: &str, profile: &str) -> String {
-    format!("entities[id={entity}].accessProfiles[id={profile}]")
+    format!("recordTypes[id={entity}].accessProfiles[id={profile}]")
 }
 
 pub(crate) fn validate_access_requirements(
@@ -24,7 +24,7 @@ pub(crate) fn validate_access_requirements(
 ) {
     for entity in entities.values() {
         if let Some(requirements) = &entity.access_requirements {
-            let path = format!("entities[id={}].accessRequirements", entity.id);
+            let path = format!("recordTypes[id={}].accessRequirements", entity.id);
             if requirements.required_scopes.is_empty()
                 && requirements.allowed_purposes.is_empty()
                 && requirements.row_boundaries.is_empty()
@@ -144,25 +144,17 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 && profile.operations.contains(&Operation::List)
                 && profile.row_boundaries.is_empty()
                 && profile.membership_boundaries.is_empty()
-                && profile.request_visibility.is_none()
             {
                 findings.push(Diagnostic::finding("breg.access.profile-unrestricted-collection", format!("{path}.rowBoundaries"),
                     "this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access"));
             }
-            let unrestricted_non_read = profile.request_visibility.is_some()
-                && profile
-                    .operations
-                    .iter()
-                    .any(|operation| !matches!(operation, Operation::Get | Operation::List));
             if entity.classification != Classification::Public
                 && profile.row_boundaries.is_empty()
                 && profile.membership_boundaries.is_empty()
-                && ((!profile.operations.contains(&Operation::List)
-                    && profile.request_visibility.is_none())
-                    || unrestricted_non_read)
+                && !profile.operations.contains(&Operation::List)
             {
                 findings.push(Diagnostic::finding("breg.access.profile-unrestricted-rows", format!("{path}.rowBoundaries"),
-                    "this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access"));
+                    "this profile has no claim-bound row restriction for its granted operations; Review this registry-wide access"));
             }
             let write_operations = [Operation::Create, Operation::Patch, Operation::Import]
                 .into_iter()
@@ -263,7 +255,7 @@ pub(crate) fn compiled_access_findings(
         for entity in crate::consent::self_bound_targets(action, entities) {
             for grant in &action.permissions {
                 link_bound.insert(format!(
-                    "actions[id={}].permissions[profile={}].targets[entity={entity}].rowBoundaries",
+                    "actions[id={}].permissions[profile={}].targets[recordType={entity}].rowBoundaries",
                     action.id, grant.profile_id
                 ));
             }
@@ -277,6 +269,7 @@ pub(crate) fn compiled_access_findings(
         // A `self` consent issuer's subject and record targets are bound
         // through the caller's principal link, not by a row boundary.
         if reach.rows == "all"
+            && !reach.owner_only
             && !link_bound.contains(&reach.source_path)
             && entities
                 .get(&reach.entity)
@@ -326,7 +319,7 @@ pub(crate) fn project_access_findings(
     }
     for entity in entities.values() {
         if let Some(requirements) = &entity.access_requirements {
-            let path = format!("entities[id={}].accessRequirements", entity.id);
+            let path = format!("recordTypes[id={}].accessRequirements", entity.id);
             for (member, items) in [
                 ("requiredScopes", &requirements.required_scopes),
                 ("allowedPurposes", &requirements.allowed_purposes),
@@ -672,7 +665,7 @@ pub struct RowReachExplanation {
     pub row_boundaries: Vec<RowBoundarySource>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub membership_boundaries: Vec<MembershipBoundarySource>,
-    pub owner_only_request_reads: bool,
+    pub owner_only: bool,
 }
 
 fn row_reach(
@@ -700,7 +693,7 @@ fn row_reach(
             },
             row_boundaries: boundaries.to_vec(),
             membership_boundaries: memberships.to_vec(),
-            owner_only_request_reads: owner,
+            owner_only: owner,
         });
     };
     for entity in entities.values() {
@@ -713,52 +706,8 @@ fn row_reach(
                 "entity",
                 &profile.row_boundaries,
                 &profile.membership_boundaries,
-                profile.request_visibility.is_some(),
+                false,
             );
-            for id in &profile.submitter_targets {
-                if let Some(target) = entities
-                    .get(id)
-                    .and_then(|entity| entity.access_profiles.get(&profile.id))
-                {
-                    add(
-                        id,
-                        &profile.id,
-                        format!("{path}.submitterTargets[entity={id}]"),
-                        "submitter_target",
-                        &target.row_boundaries,
-                        &[],
-                        false,
-                    );
-                }
-            }
-            for target in &profile.apply_targets {
-                add(
-                    &target.entity,
-                    &profile.id,
-                    format!(
-                        "{path}.applyTargets[entity={}].rowBoundaries",
-                        target.entity
-                    ),
-                    "apply_target",
-                    &target.row_boundaries,
-                    &[],
-                    false,
-                );
-            }
-            for target in &profile.request_presence {
-                add(
-                    &target.request_type,
-                    &profile.id,
-                    format!(
-                        "{path}.requestPresence[requestType={}].rowBoundaries",
-                        target.request_type
-                    ),
-                    "request_presence",
-                    &target.row_boundaries,
-                    &[],
-                    false,
-                );
-            }
         }
     }
     for action in &actions.actions {
@@ -768,7 +717,7 @@ fn row_reach(
                     &target.entity_id,
                     &grant.profile_id,
                     format!(
-                        "actions[id={}].permissions[profile={}].targets[entity={}].rowBoundaries",
+                        "actions[id={}].permissions[profile={}].targets[recordType={}].rowBoundaries",
                         action.id, grant.profile_id, target.entity_id
                     ),
                     "action_target",
@@ -776,6 +725,24 @@ fn row_reach(
                     &[],
                     false,
                 );
+            }
+        }
+        if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+            for grant in &proposal.permissions {
+                for target in &grant.targets {
+                    add(
+                        &target.entity_id,
+                        &grant.profile_id,
+                        format!(
+                            "actions[id={}].execution.proposal.permissions[profile={}].targets[recordType={}].rowBoundaries",
+                            action.id, grant.profile_id, target.entity_id
+                        ),
+                        "proposal_target",
+                        &target.row_boundaries,
+                        &[],
+                        grant.ownership == Some(crate::contract::ProposalOwnership::Caller),
+                    );
+                }
             }
         }
     }
@@ -792,7 +759,7 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
     AccessExplanation {
         scope_matching: "all required scopes must be present",
         purpose_matching: "one allowed purpose must match; a profile that names none accepts every purpose",
-        row_matching: "all claim-bound and current membership row predicates must hold; rowBoundaries written as unrestricted mean no claim-bound row restriction; requestVisibility owner additionally limits request reads",
+        row_matching: "all claim-bound and current membership row predicates must hold; rowBoundaries written as unrestricted mean no claim-bound row restriction; Proposal caller ownership additionally limits Proposal operations",
         profile_selection: "one profile per request; selecting its name never grants authority and profiles are not merged",
         relationship_matching: "relationship paths use the root profile row boundaries and the path's target field permissions; target direct profiles do not apply",
         missing_claims: "missing required direct claims cannot satisfy their row boundary or verified-claim lookup; types and scalar/set shape are listed in claimContract",

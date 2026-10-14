@@ -15,12 +15,12 @@ use std::collections::BTreeMap;
 use std::error::Error;
 
 use registry_stack_client::breg::{
-    BRegActionInvocationRequest, BRegActionReceipt, BRegActionResultReference,
-    BRegActionTargetConditions, BRegActionTargetConditionsRequest, BRegComplete, BRegCreateBinding,
-    BRegCreateRequest, BRegIdempotencyKey, BRegImmediateActionBinding, BRegImmediateActionError,
-    BRegLifecycleAction, BRegLifecycleAuthority, BRegMetadata, BRegMetadataSelectionError,
-    BRegPreparedAction, BRegPreparedCreate, BRegPreparedLifecycle, BRegRecordFormat,
-    BaseRegistryClient, BaseRegistryClientError, Uuid,
+    BRegActionBinding, BRegActionError, BRegActionInvocationRequest, BRegActionReceipt,
+    BRegActionResultReference, BRegActionTargetConditions, BRegActionTargetConditionsRequest,
+    BRegComplete, BRegCreateBinding, BRegCreateRequest, BRegIdempotencyKey, BRegMetadata,
+    BRegMetadataSelectionError, BRegPreparedAction, BRegPreparedCreate, BRegPreparedProposal,
+    BRegProposal, BRegProposalCollection, BRegProposalGetBinding, BRegProposalPage,
+    BRegProposalQuery, BRegRecordFormat, BaseRegistryClient, BaseRegistryClientError, Uuid,
 };
 use serde_json::{Map, Value};
 
@@ -34,16 +34,16 @@ async fn every_action_method_names_its_types(
     inputs: Map<String, Value>,
     key: &BRegIdempotencyKey,
 ) -> Result<(), Box<dyn Error>> {
-    let selected: Result<BRegImmediateActionBinding, BRegMetadataSelectionError> =
-        metadata.select_immediate_action("action", profile);
+    let selected: Result<BRegActionBinding, BRegMetadataSelectionError> =
+        metadata.select_action("action", profile);
     let action = selected?;
 
-    let target: Result<BRegActionTargetConditionsRequest, BRegImmediateActionError> =
+    let target: Result<BRegActionTargetConditionsRequest, BRegActionError> =
         BRegActionTargetConditionsRequest::new(&action, target_inputs);
     let conditions: BRegComplete<BRegActionTargetConditions> =
         client.action_target_conditions(&action, &target?).await?;
 
-    let invocation: Result<BRegActionInvocationRequest, BRegImmediateActionError> =
+    let invocation: Result<BRegActionInvocationRequest, BRegActionError> =
         BRegActionInvocationRequest::new(&action, inputs.clone(), Some(&conditions.value));
     let request = invocation?;
     let prepared: Result<BRegPreparedAction, BaseRegistryClientError> =
@@ -58,7 +58,7 @@ async fn every_action_method_names_its_types(
     let results: &BTreeMap<String, BRegActionResultReference> = receipt.value.results();
     for reference in results.values() {
         let _: (&str, Uuid, u64) = (
-            reference.entity_identifier(),
+            reference.record_type_identifier(),
             reference.record_identifier(),
             reference.revision(),
         );
@@ -66,13 +66,13 @@ async fn every_action_method_names_its_types(
     Ok(())
 }
 
-/// The prepared Create and lifecycle values a caller persists beside a
+/// The prepared Create and Proposal values a caller persists beside a
 /// prepared action, named through the facade alone.
 fn every_prepared_write_names_its_types(
     client: &BaseRegistryClient,
     binding: &BRegCreateBinding,
     create: &BRegCreateRequest,
-    authority: &BRegLifecycleAuthority,
+    proposal: &BRegProposal,
     key: &BRegIdempotencyKey,
 ) -> Result<(), BaseRegistryClientError> {
     let prepared: BRegPreparedCreate =
@@ -81,9 +81,24 @@ fn every_prepared_write_names_its_types(
     let _: (BRegCreateRequest, BRegIdempotencyKey, BRegRecordFormat) =
         client.recover_create(binding, &restored)?;
 
-    let lifecycle = BRegPreparedLifecycle::from_slice(&[])?;
-    let _: (BRegLifecycleAction, BRegIdempotencyKey) =
-        client.recover_lifecycle_action(authority, &lifecycle)?;
+    let prepared: BRegPreparedProposal =
+        client.prepare_proposal(proposal, "submit", Value::Object(Map::new()), key)?;
+    let restored = BRegPreparedProposal::from_slice(prepared.as_bytes())?;
+    let _: BRegPreparedProposal = client.recover_proposal(proposal, &restored)?;
+    Ok(())
+}
+
+/// Get and List remain separate capabilities; resumed transitions use promoted links.
+async fn every_proposal_method_names_its_types(
+    client: &BaseRegistryClient,
+    get: &BRegProposalGetBinding,
+    collection: &BRegProposalCollection,
+    query: &BRegProposalQuery,
+    id: &str,
+) -> Result<(), BaseRegistryClientError> {
+    let current: BRegComplete<BRegProposal> = client.get_proposal(get, id).await?;
+    let _: BRegComplete<BRegProposal> = client.read_proposal(&current.value).await?;
+    let _: BRegComplete<BRegProposalPage> = client.list_proposals(collection, query).await?;
     Ok(())
 }
 
@@ -93,4 +108,5 @@ fn the_facade_names_every_action_type() {
     // calling one would need a Base Registry Engine.
     let _ = every_action_method_names_its_types;
     let _ = every_prepared_write_names_its_types;
+    let _ = every_proposal_method_names_its_types;
 }

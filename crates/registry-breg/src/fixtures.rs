@@ -12,21 +12,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-use axum::body::{to_bytes, Body};
+use axum::Router;
+use axum::body::{Body, to_bytes};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, IF_MATCH};
 use axum::http::{HeaderMap, Method, Request, Response, StatusCode};
-use axum::Router;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use registry_platform_httpsec::{response_trace_id, TraceId};
+use registry_platform_httpsec::{TraceId, response_trace_id};
 use registry_platform_oidc::{JwksFetcher, TokenVerifier};
 use registry_platform_yaml::{
-    shape_union, tagged_union, ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Node,
-    RemovedKey, Report, RetiredApiVersion, Severity, Source, UniqueList,
+    ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Node, RemovedKey, Report,
+    RetiredApiVersion, Severity, Source, UniqueList, shape_union, tagged_union,
 };
 #[cfg(feature = "schema")]
-use registry_platform_yaml::{BoundedU32, Digest as FormatDigest, LocalId};
+use registry_platform_yaml::{BoundedU32, LocalId};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use zeroize::Zeroizing;
@@ -34,10 +34,10 @@ use zeroize::Zeroizing;
 use crate::api::{HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture};
 use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use crate::auth::RegistryAuthenticator;
-use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
-use crate::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
+use crate::compiler::{CompileProfile, compile_project_with_assets, module_digest_with_assets};
 use crate::contract::{AccessProfileSource, LookupValueOrigin, Operation};
-use crate::data::{validate_field_value, DataImportOperation, DataImportPlan, FieldValue};
+use crate::contract::{ModuleAssetSource, parse_module_yaml, parse_project_yaml};
+use crate::data::{DataImportOperation, DataImportPlan, FieldValue, validate_field_value};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::event_destination::EventDestinationActivationError;
 use crate::import_authority::{
@@ -52,14 +52,14 @@ use crate::model::{CompiledQueryKind, CompiledQueryOperation, CompiledRegistry, 
 #[cfg(any(test, feature = "postgres-test"))]
 use crate::package::VerifiedPackage;
 use crate::package::{
-    PackageCompileProfile, PackageFileRole, PreparedPackage, FIXTURE_JOURNEYS_PATH,
-    MAX_RHAI_PLANNER_SOURCE_BYTES,
+    FIXTURE_JOURNEYS_PATH, MAX_RHAI_PLANNER_SOURCE_BYTES, PackageCompileProfile, PackageFileRole,
+    PreparedPackage,
 };
 use crate::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
     PreparedSchemaTestCatalogVerifier, PreparedSchemaTestDatabase, RuntimePool,
 };
-use crate::rhai_planner::ChangeRequestPlannerError;
+use crate::rhai_planner::PlanError;
 use crate::runtime_config::RuntimeConfig;
 #[cfg(feature = "postgres-test")]
 use crate::startup::PreparedServer;
@@ -368,7 +368,7 @@ struct StepSource {
     id: String,
     #[serde(default)]
     action: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "recordType")]
     entity: String,
     access_profile: String,
     #[serde(default)]
@@ -484,36 +484,6 @@ enum ActionSource {
         #[serde(default)]
         idempotency_key: Option<String>,
     },
-    SubmitRequest {
-        record_capture: String,
-        etag_capture: String,
-    },
-    ReviseRequest {
-        record_capture: String,
-        etag_capture: String,
-        rebase: bool,
-    },
-    CancelRequest {
-        record_capture: String,
-        etag_capture: String,
-    },
-    ApplyRequest {
-        record_capture: String,
-        etag_capture: String,
-        #[serde(default, deserialize_with = "members::proposal_version")]
-        #[cfg_attr(
-            feature = "schema",
-            schemars(with = "Option<BoundedU32<1, { u32::MAX }>>")
-        )]
-        proposal_version: Option<u32>,
-        #[serde(default)]
-        proposal_version_capture: Option<String>,
-        #[serde(default, deserialize_with = "members::digest")]
-        #[cfg_attr(feature = "schema", schemars(with = "Option<FormatDigest>"))]
-        effect_digest: Option<String>,
-        #[serde(default)]
-        effect_digest_capture: Option<String>,
-    },
 }
 tagged_union!(ActionSource);
 
@@ -546,14 +516,7 @@ impl ActionSource {
             Self::TargetConditions { input } | Self::Invoke { input, .. } => {
                 fill_object(input, body("/input"));
             }
-            Self::Get { .. }
-            | Self::List {}
-            | Self::Query { .. }
-            | Self::ReadPath { .. }
-            | Self::SubmitRequest { .. }
-            | Self::ReviseRequest { .. }
-            | Self::CancelRequest { .. }
-            | Self::ApplyRequest { .. } => {}
+            Self::Get { .. } | Self::List {} | Self::Query { .. } | Self::ReadPath { .. } => {}
         }
     }
 
@@ -567,10 +530,6 @@ impl ActionSource {
             Self::Patch { .. } => Operation::Patch,
             Self::Batch { .. } => Operation::Batch,
             Self::TargetConditions { .. } | Self::Invoke { .. } => Operation::Invoke,
-            Self::SubmitRequest { .. } => Operation::SubmitRequest,
-            Self::ReviseRequest { .. } => Operation::ReviseRequest,
-            Self::CancelRequest { .. } => Operation::CancelRequest,
-            Self::ApplyRequest { .. } => Operation::ApplyRequest,
         }
     }
 
@@ -586,10 +545,6 @@ impl ActionSource {
             Self::Batch { .. } => "batch".to_owned(),
             Self::TargetConditions { .. } => "target-conditions".to_owned(),
             Self::Invoke { .. } => "invoke".to_owned(),
-            Self::SubmitRequest { .. } => "request.submit".to_owned(),
-            Self::ReviseRequest { .. } => "request.revise".to_owned(),
-            Self::CancelRequest { .. } => "request.cancel".to_owned(),
-            Self::ApplyRequest { .. } => "request.apply".to_owned(),
         };
         format!("records.{entity_id}.{suffix}")
     }
@@ -770,7 +725,7 @@ fn fill_object(target: &mut Map<String, Value>, value: Option<Value>) {
 mod members {
     use std::collections::BTreeMap;
 
-    use registry_platform_yaml::{BoundedU32, Digest, ExternalId, Invalid, LocalId};
+    use registry_platform_yaml::{BoundedU32, ExternalId, Invalid, LocalId};
     use serde::de::IgnoredAny;
     use serde::{Deserialize, Deserializer};
     use serde_json::{Map, Value};
@@ -833,18 +788,6 @@ mod members {
         const MAX: u32 = super::MAX_SUPPORTED_POSTGRES_MAJOR as u32;
         let major = BoundedU32::<MIN, MAX>::deserialize(deserializer)?;
         u16::try_from(major.get()).map_err(|_| Invalid::out_of_range(MIN, MAX).into_error())
-    }
-
-    pub(super) fn proposal_version<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Option<u32>, D::Error> {
-        BoundedU32::<1, { u32::MAX }>::deserialize(deserializer).map(|version| Some(version.get()))
-    }
-
-    pub(super) fn digest<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Option<String>, D::Error> {
-        Digest::deserialize(deserializer).map(|digest| Some(digest.into_string()))
     }
 
     /// A request or expectation body: the reader checks that it is a
@@ -1022,7 +965,6 @@ impl FixtureRoute {
 #[derive(Clone)]
 struct CaptureSource {
     entity: Option<String>,
-    operation: Operation,
     has_etag: bool,
     condition_map: bool,
 }
@@ -1338,12 +1280,10 @@ pub fn validate_fixture_journeys(
                         capture.is_some(),
                         !step.capture_results.is_empty(),
                     )?;
-                    let capture_result_entities = validate_request_capture_results(
-                        &request,
-                        entity,
-                        &step.access_profile,
-                        &step.capture_results,
-                    )?;
+                    if !step.capture_results.is_empty() {
+                        return Err(FixtureError::JourneyShapeRefused);
+                    }
+                    let capture_result_entities = BTreeMap::new();
                     let response_readable_field_ids = match &request {
                         ActionSource::ReadPath { path, .. } => profile
                             .read_paths
@@ -1373,7 +1313,6 @@ pub fn validate_fixture_journeys(
                         identifier.to_owned(),
                         CaptureSource {
                             entity: entity_id.clone(),
-                            operation,
                             has_etag: !matches!(
                                 action,
                                 ActionSource::TargetConditions { .. } | ActionSource::Invoke { .. }
@@ -1387,7 +1326,6 @@ pub fn validate_fixture_journeys(
                         identifier.to_owned(),
                         CaptureSource {
                             entity: Some(entity),
-                            operation: Operation::Invoke,
                             has_etag: false,
                             condition_map: false,
                         },
@@ -1445,24 +1383,6 @@ fn validate_action_references(
             etag_capture,
             ..
         } => &[record_capture, etag_capture],
-        ActionSource::SubmitRequest {
-            record_capture,
-            etag_capture,
-        }
-        | ActionSource::ReviseRequest {
-            record_capture,
-            etag_capture,
-            ..
-        }
-        | ActionSource::CancelRequest {
-            record_capture,
-            etag_capture,
-        }
-        | ActionSource::ApplyRequest {
-            record_capture,
-            etag_capture,
-            ..
-        } => &[record_capture, etag_capture],
         ActionSource::Import { .. }
         | ActionSource::Create { .. }
         | ActionSource::List { .. }
@@ -1501,17 +1421,6 @@ fn validate_action_references(
     {
         return Err(FixtureError::LogicalReferenceRefused);
     }
-    if is_request_action(action.operation()) {
-        let step_entity = step_entity.ok_or(FixtureError::LogicalReferenceRefused)?;
-        for reference in references {
-            let source = captures
-                .get(*reference)
-                .ok_or(FixtureError::LogicalReferenceRefused)?;
-            if source.entity.as_deref() != Some(step_entity) || source.operation != Operation::Get {
-                return Err(FixtureError::LogicalReferenceRefused);
-            }
-        }
-    }
     if let ActionSource::Invoke { preconditions, .. } = action {
         for condition in preconditions.values() {
             let Some(reference) = condition.condition_capture.as_deref() else {
@@ -1525,27 +1434,12 @@ fn validate_action_references(
             }
         }
     }
-    for reference in request_action_proposal_refs(action) {
-        let Some(source) = captures.get(reference) else {
-            return Err(FixtureError::LogicalReferenceRefused);
-        };
-        if !valid_stable_id(reference) {
-            return Err(FixtureError::LogicalReferenceRefused);
-        }
-        if source.entity.as_deref() != step_entity || source.operation != Operation::Get {
-            return Err(FixtureError::LogicalReferenceRefused);
-        }
-    }
     Ok(())
 }
 
 fn etag_references(action: &ActionSource) -> Vec<&str> {
     match action {
-        ActionSource::Patch { etag_capture, .. }
-        | ActionSource::SubmitRequest { etag_capture, .. }
-        | ActionSource::ReviseRequest { etag_capture, .. }
-        | ActionSource::CancelRequest { etag_capture, .. }
-        | ActionSource::ApplyRequest { etag_capture, .. } => vec![etag_capture],
+        ActionSource::Patch { etag_capture, .. } => vec![etag_capture],
         _ => Vec::new(),
     }
 }
@@ -1586,11 +1480,7 @@ fn collect_action_value_record_refs<'a>(
         ActionSource::Get { .. }
         | ActionSource::List { .. }
         | ActionSource::Query { .. }
-        | ActionSource::ReadPath { .. }
-        | ActionSource::SubmitRequest { .. }
-        | ActionSource::ReviseRequest { .. }
-        | ActionSource::CancelRequest { .. }
-        | ActionSource::ApplyRequest { .. } => Ok(()),
+        | ActionSource::ReadPath { .. } => Ok(()),
     }
 }
 
@@ -1639,21 +1529,6 @@ fn collect_value_record_refs<'a>(
             Ok(())
         }
         _ => Ok(()),
-    }
-}
-
-fn request_action_proposal_refs(action: &ActionSource) -> Vec<&str> {
-    match action {
-        ActionSource::ApplyRequest {
-            proposal_version_capture,
-            effect_digest_capture,
-            ..
-        } => proposal_version_capture
-            .iter()
-            .chain(effect_digest_capture.iter())
-            .map(String::as_str)
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -1747,7 +1622,6 @@ fn action_profile_from_grant(
         required_purposes: grant.required_purposes.clone().into(),
         operations: grant.operations.clone().into(),
         readable_fields: Default::default(),
-        readable_request_fields: Default::default(),
         writable_fields: Default::default(),
         filterable_fields: Default::default(),
         sortable_fields: Default::default(),
@@ -1759,12 +1633,8 @@ fn action_profile_from_grant(
             .collect(),
         membership_boundaries: Vec::new(),
         require_consent: Vec::new(),
-        request_visibility: None,
         lookups: Vec::new(),
         read_paths: Vec::new(),
-        apply_targets: Vec::new(),
-        submitter_targets: Default::default(),
-        request_presence: Vec::new(),
         allow_count: false,
         revision_access: false,
         provenance_fields: Vec::new(),
@@ -1909,8 +1779,8 @@ fn condition_input_api_names(action: &CompiledAction) -> BTreeSet<String> {
         .effects
         .iter()
         .filter_map(|effect| match &effect.target.binding {
-            crate::model::CompiledActionTargetBinding::Existing { input } => Some(input.as_str()),
-            crate::model::CompiledActionTargetBinding::Create => None,
+            crate::model::CompiledPlanTargetBinding::Existing { input } => Some(input.as_str()),
+            crate::model::CompiledPlanTargetBinding::Create => None,
         })
         .collect::<BTreeSet<_>>();
     action
@@ -1945,39 +1815,6 @@ fn validate_capture_results(
             .map(|compiled| compiled.target.entity_id.clone())
             .ok_or(FixtureError::LogicalReferenceRefused)?;
         captures.insert(capture.clone(), target_entity_id);
-    }
-    Ok(captures)
-}
-
-fn validate_request_capture_results(
-    request: &ActionSource,
-    entity: &crate::model::CompiledEntity,
-    profile_id: &str,
-    capture_results: &BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>, FixtureError> {
-    let mut captures = BTreeMap::new();
-    if capture_results.is_empty() {
-        return Ok(captures);
-    }
-    if !matches!(request, ActionSource::ApplyRequest { .. }) {
-        return Err(FixtureError::JourneyShapeRefused);
-    }
-    let change_request = entity
-        .change_request
-        .as_ref()
-        .ok_or(FixtureError::LogicalReferenceRefused)?;
-    for (effect_id, capture) in capture_results {
-        let effect = change_request
-            .effects
-            .iter()
-            .find(|effect| effect.id == *effect_id && effect.operation == Operation::Create)
-            .ok_or(FixtureError::LogicalReferenceRefused)?;
-        if !change_request.apply_permissions.iter().any(|grant| {
-            grant.profile_id == profile_id && grant.target_entity_id == effect.target.entity_id
-        }) {
-            return Err(FixtureError::LogicalReferenceRefused);
-        }
-        captures.insert(capture.clone(), effect.target.entity_id.clone());
     }
     Ok(captures)
 }
@@ -2146,94 +1983,9 @@ fn validate_action_fields(
             }
             Ok(())
         }
-        ActionSource::SubmitRequest { .. }
-        | ActionSource::ReviseRequest { .. }
-        | ActionSource::CancelRequest { .. } => {
-            validate_request_action_plan(action, entity)?;
-            if canonical_size(&request_action_body(action, &BTreeMap::new())?)? > MAX_BODY_BYTES {
-                return Err(FixtureError::JourneyTooLarge);
-            }
-            Ok(())
-        }
-        ActionSource::ApplyRequest { .. } => {
-            validate_request_action_plan(action, entity)?;
-            validate_request_action_proposal_binding(action)?;
-            Ok(())
-        }
         ActionSource::TargetConditions { .. } | ActionSource::Invoke { .. } => {
             Err(FixtureError::LogicalReferenceRefused)
         }
-    }
-}
-
-fn validate_request_action_plan(
-    action: &ActionSource,
-    entity: &crate::model::CompiledEntity,
-) -> Result<(), FixtureError> {
-    let request = entity
-        .change_request
-        .as_ref()
-        .ok_or(FixtureError::LogicalReferenceRefused)?;
-    let operation = action.operation();
-    if request
-        .actions
-        .iter()
-        .any(|candidate| candidate.operation.access_operation() == operation)
-    {
-        Ok(())
-    } else {
-        Err(FixtureError::LogicalReferenceRefused)
-    }
-}
-
-fn validate_request_action_proposal_binding(action: &ActionSource) -> Result<(), FixtureError> {
-    let binding = request_action_binding(action)?;
-    if binding.proposal_version.is_some() == binding.proposal_version_capture.is_some()
-        || binding.effect_digest.is_some() == binding.effect_digest_capture.is_some()
-        || binding.proposal_version == Some(0)
-    {
-        return Err(FixtureError::LogicalReferenceRefused);
-    }
-    if let Some(digest) = binding.effect_digest {
-        validate_digest(digest)?;
-    }
-    Ok(())
-}
-
-struct RequestActionBinding<'a> {
-    proposal_version: Option<u32>,
-    proposal_version_capture: Option<&'a str>,
-    effect_digest: Option<&'a str>,
-    effect_digest_capture: Option<&'a str>,
-}
-
-fn request_action_binding(action: &ActionSource) -> Result<RequestActionBinding<'_>, FixtureError> {
-    match action {
-        ActionSource::ApplyRequest {
-            proposal_version,
-            proposal_version_capture,
-            effect_digest,
-            effect_digest_capture,
-            ..
-        } => Ok(RequestActionBinding {
-            proposal_version: *proposal_version,
-            proposal_version_capture: proposal_version_capture.as_deref(),
-            effect_digest: effect_digest.as_deref(),
-            effect_digest_capture: effect_digest_capture.as_deref(),
-        }),
-        _ => Err(FixtureError::LogicalReferenceRefused),
-    }
-}
-
-fn validate_digest(value: &str) -> Result<(), FixtureError> {
-    if value.len() == 71
-        && value.starts_with("sha256:")
-        && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
-        && value[7..].bytes().all(|byte| !byte.is_ascii_uppercase())
-    {
-        Ok(())
-    } else {
-        Err(FixtureError::LogicalReferenceRefused)
     }
 }
 
@@ -2525,46 +2277,8 @@ fn internalize_entity_action(
                 })
                 .collect::<Result<Vec<_>, FixtureError>>()?,
         },
-        ActionSource::SubmitRequest {
-            record_capture,
-            etag_capture,
-        } => ActionSource::SubmitRequest {
-            record_capture: record_capture.clone(),
-            etag_capture: etag_capture.clone(),
-        },
-        ActionSource::ReviseRequest {
-            record_capture,
-            etag_capture,
-            rebase,
-        } => ActionSource::ReviseRequest {
-            record_capture: record_capture.clone(),
-            etag_capture: etag_capture.clone(),
-            rebase: *rebase,
-        },
-        ActionSource::CancelRequest {
-            record_capture,
-            etag_capture,
-        } => ActionSource::CancelRequest {
-            record_capture: record_capture.clone(),
-            etag_capture: etag_capture.clone(),
-        },
-        ActionSource::ApplyRequest {
-            record_capture,
-            etag_capture,
-            proposal_version,
-            proposal_version_capture,
-            effect_digest,
-            effect_digest_capture,
-        } => ActionSource::ApplyRequest {
-            record_capture: record_capture.clone(),
-            etag_capture: etag_capture.clone(),
-            proposal_version: *proposal_version,
-            proposal_version_capture: proposal_version_capture.clone(),
-            effect_digest: effect_digest.clone(),
-            effect_digest_capture: effect_digest_capture.clone(),
-        },
         ActionSource::TargetConditions { .. } | ActionSource::Invoke { .. } => {
-            return Err(FixtureError::LogicalReferenceRefused)
+            return Err(FixtureError::LogicalReferenceRefused);
         }
     })
 }
@@ -2608,11 +2322,8 @@ fn externalize_field_set<'a>(
     fields
         .into_iter()
         .map(|field| {
-            entity
-                .attachments
-                .get(field)
-                .map(|slot| slot.id.clone())
-                .or_else(|| field_api_name(entity, field).map(str::to_owned))
+            field_api_name(entity, field)
+                .map(str::to_owned)
                 .ok_or(FixtureError::LogicalReferenceRefused)
         })
         .collect()
@@ -2731,44 +2442,6 @@ fn externalize_action(
             preconditions: preconditions.clone(),
             idempotency_key: idempotency_key.clone(),
         },
-        ActionSource::SubmitRequest {
-            record_capture,
-            etag_capture,
-        } => ActionSource::SubmitRequest {
-            record_capture: record_capture.clone(),
-            etag_capture: etag_capture.clone(),
-        },
-        ActionSource::ReviseRequest {
-            record_capture,
-            etag_capture,
-            rebase,
-        } => ActionSource::ReviseRequest {
-            record_capture: record_capture.clone(),
-            etag_capture: etag_capture.clone(),
-            rebase: *rebase,
-        },
-        ActionSource::CancelRequest {
-            record_capture,
-            etag_capture,
-        } => ActionSource::CancelRequest {
-            record_capture: record_capture.clone(),
-            etag_capture: etag_capture.clone(),
-        },
-        ActionSource::ApplyRequest {
-            record_capture,
-            etag_capture,
-            proposal_version,
-            proposal_version_capture,
-            effect_digest,
-            effect_digest_capture,
-        } => ActionSource::ApplyRequest {
-            record_capture: record_capture.clone(),
-            etag_capture: etag_capture.clone(),
-            proposal_version: *proposal_version,
-            proposal_version_capture: proposal_version_capture.clone(),
-            effect_digest: effect_digest.clone(),
-            effect_digest_capture: effect_digest_capture.clone(),
-        },
     })
 }
 
@@ -2808,10 +2481,10 @@ fn validate_expectation(
     {
         return Err(FixtureError::JourneyShapeRefused);
     }
-    if captures_results && !matches!(operation, Operation::Invoke | Operation::ApplyRequest) {
+    if captures_results && operation != Operation::Invoke {
         return Err(FixtureError::JourneyShapeRefused);
     }
-    if is_request_action(operation) || operation == Operation::Invoke {
+    if operation == Operation::Invoke {
         if !expectation.fields.is_empty() || expectation.count.is_some() {
             return Err(FixtureError::JourneyShapeRefused);
         }
@@ -2835,13 +2508,7 @@ fn validate_expectation(
                 | Operation::Invoke
                 | Operation::Import
                 | Operation::Snapshot => 200,
-                Operation::SubmitRequest
-                | Operation::ReviseRequest
-                | Operation::CancelRequest
-                | Operation::ApplyRequest => 200,
-                Operation::Tombstone | Operation::Revisions => {
-                    return Err(FixtureError::LogicalReferenceRefused)
-                }
+                _ => return Err(FixtureError::LogicalReferenceRefused),
             };
             if expectation.status != expected || expectation.problem_code.is_some() {
                 return Err(FixtureError::JourneyShapeRefused);
@@ -2852,10 +2519,6 @@ fn validate_expectation(
                 }
             } else if matches!(operation, Operation::List | Operation::Batch) {
                 if expectation.count.is_none() || !expectation.fields.is_empty() || captures {
-                    return Err(FixtureError::JourneyShapeRefused);
-                }
-            } else if is_request_action(operation) {
-                if expectation.count.is_some() || captures {
                     return Err(FixtureError::JourneyShapeRefused);
                 }
             } else if operation == Operation::Invoke {
@@ -3029,7 +2692,6 @@ impl fmt::Debug for SuccessfulFixtureJourneys {
 #[derive(Clone)]
 struct Observation {
     kind: ObservationKind,
-    document: Value,
 }
 
 #[derive(Clone)]
@@ -3046,7 +2708,6 @@ enum ObservationKind {
 
 #[derive(Clone)]
 struct ActionResultReference {
-    entity: String,
     record_id: String,
     revision: u64,
 }
@@ -4094,33 +3755,6 @@ fn fixture_request(
             )?)?;
             content_type = Some("application/json");
         }
-        ActionSource::SubmitRequest {
-            record_capture,
-            etag_capture,
-        }
-        | ActionSource::ReviseRequest {
-            record_capture,
-            etag_capture,
-            ..
-        }
-        | ActionSource::CancelRequest {
-            record_capture,
-            etag_capture,
-        }
-        | ActionSource::ApplyRequest {
-            record_capture,
-            etag_capture,
-            ..
-        } => {
-            let record_id = observed_record_id(observations, record_capture)?;
-            let action_if_match =
-                captured_request_action_if_match(observations, etag_capture, &step.action)?;
-            path = path.replace("{record_id}", record_id);
-            method = Method::POST;
-            body = json_body(&request_action_body(&step.action, observations)?)?;
-            content_type = Some("application/json");
-            if_match = Some(action_if_match);
-        }
         ActionSource::TargetConditions { input } => {
             method = Method::POST;
             body = json_body(&json!({"input": resolve_fixture_value_refs(
@@ -4180,10 +3814,6 @@ fn fixture_request(
             | ActionSource::Patch { .. }
             | ActionSource::Batch { .. }
             | ActionSource::Invoke { .. }
-            | ActionSource::SubmitRequest { .. }
-            | ActionSource::ReviseRequest { .. }
-            | ActionSource::CancelRequest { .. }
-            | ActionSource::ApplyRequest { .. }
     ) {
         let key_id = match &step.action {
             ActionSource::Invoke {
@@ -4310,35 +3940,6 @@ fn resolve_fixture_value_refs(
     .map_err(|_| FixtureError::RequestConstructionRefused)
 }
 
-fn request_action_body(
-    action: &ActionSource,
-    observations: &BTreeMap<String, Observation>,
-) -> Result<Value, FixtureError> {
-    match action {
-        ActionSource::SubmitRequest { .. } | ActionSource::CancelRequest { .. } => Ok(json!({})),
-        ActionSource::ReviseRequest { rebase, .. } => Ok(json!({"rebase": *rebase})),
-        ActionSource::ApplyRequest { .. } => {
-            let binding = request_action_binding(action)?;
-            let version = match (binding.proposal_version, binding.proposal_version_capture) {
-                (Some(version), None) => version,
-                (None, Some(reference)) => captured_proposal_version(observations, reference)?,
-                _ => return Err(FixtureError::RequestConstructionRefused),
-            };
-            let digest = match (binding.effect_digest, binding.effect_digest_capture) {
-                (Some(digest), None) => digest.to_owned(),
-                (None, Some(reference)) => captured_effect_digest(observations, reference)?,
-                _ => return Err(FixtureError::RequestConstructionRefused),
-            };
-            validate_digest(&digest)?;
-            Ok(json!({
-                "proposalVersion": version,
-                "effectDigest": digest,
-            }))
-        }
-        _ => Err(FixtureError::RequestConstructionRefused),
-    }
-}
-
 fn immediate_action_preconditions_body(
     preconditions: &BTreeMap<String, ImmediateActionPreconditionSource>,
     observations: &BTreeMap<String, Observation>,
@@ -4365,92 +3966,11 @@ fn immediate_action_preconditions_body(
         .map(Value::Object)
 }
 
-fn captured_request_action_if_match(
-    observations: &BTreeMap<String, Observation>,
-    reference: &str,
-    action: &ActionSource,
-) -> Result<String, FixtureError> {
-    let observation = observations
-        .get(reference)
-        .ok_or(FixtureError::RequestConstructionRefused)?;
-    let actions = observation
-        .document
-        .pointer("/data/request/actions")
-        .and_then(Value::as_array)
-        .ok_or(FixtureError::RequestConstructionRefused)?;
-    let expected_operation = request_action_name(action)?;
-    let mut matches = actions.iter().filter(|candidate| {
-        candidate
-            .get("operation")
-            .and_then(Value::as_str)
-            .is_some_and(|operation| operation == expected_operation)
-    });
-    let entry = matches
-        .next()
-        .filter(|_| matches.next().is_none())
-        .ok_or(FixtureError::RequestConstructionRefused)?;
-    let if_match = entry
-        .get("ifMatch")
-        .and_then(Value::as_str)
-        .filter(|value| {
-            value.len() > 7
-                && value.len() <= MAX_BINDING_BYTES
-                && value.starts_with("\"breg-")
-                && value.ends_with('"')
-        })
-        .ok_or(FixtureError::RequestConstructionRefused)?;
-    Ok(if_match.to_owned())
-}
-
-fn request_action_name(action: &ActionSource) -> Result<&'static str, FixtureError> {
-    match action {
-        ActionSource::SubmitRequest { .. } => Ok("submit-request"),
-        ActionSource::ReviseRequest { .. } => Ok("revise-request"),
-        ActionSource::CancelRequest { .. } => Ok("cancel-request"),
-        ActionSource::ApplyRequest { .. } => Ok("apply-request"),
-        _ => Err(FixtureError::RequestConstructionRefused),
-    }
-}
-
-fn captured_proposal_version(
-    observations: &BTreeMap<String, Observation>,
-    reference: &str,
-) -> Result<u32, FixtureError> {
-    observations
-        .get(reference)
-        .and_then(|observation| {
-            observation
-                .document
-                .pointer("/data/request/proposalVersion")
-                .and_then(Value::as_u64)
-        })
-        .filter(|version| *version > 0 && *version <= u64::from(u32::MAX))
-        .map(|version| version as u32)
-        .ok_or(FixtureError::RequestConstructionRefused)
-}
-
-fn captured_effect_digest(
-    observations: &BTreeMap<String, Observation>,
-    reference: &str,
-) -> Result<String, FixtureError> {
-    let digest = observations
-        .get(reference)
-        .and_then(|observation| {
-            observation
-                .document
-                .pointer("/data/request/effectDigest")
-                .and_then(Value::as_str)
-        })
-        .ok_or(FixtureError::RequestConstructionRefused)?;
-    validate_digest(digest)?;
-    Ok(digest.to_owned())
-}
-
 async fn accept_response(
     step: &ValidatedStep,
     response: Response<Body>,
     observations: &mut BTreeMap<String, Observation>,
-    pool: Option<&RuntimePool>,
+    _pool: Option<&RuntimePool>,
 ) -> Result<(), FixtureError> {
     let status = response.status();
     let headers = response.headers().clone();
@@ -4467,21 +3987,11 @@ async fn accept_response(
         }
     }
     if !step.capture_results.is_empty() {
-        if matches!(step.action, ActionSource::ApplyRequest { .. }) {
-            capture_request_results(
-                step,
-                &document,
-                observations,
-                pool.ok_or(FixtureError::ExecutionRefused)?,
-            )
-            .await?;
-        } else {
-            capture_immediate_action_results(step, &document, observations)?;
-        }
+        capture_immediate_action_results(step, &document, observations)?;
     }
     if let Some(capture) = step.capture.as_ref() {
         let kind = capture_observation_kind(step, &headers, &document)?;
-        observations.insert(capture.clone(), Observation { kind, document });
+        observations.insert(capture.clone(), Observation { kind });
     }
     Ok(())
 }
@@ -4531,97 +4041,6 @@ fn capture_observation_kind(
 // This is a schema-test observation, not a runtime response or a target read.
 // Only a successful authenticated apply may reach it. Preflight requires the
 // selected profile's apply grant; subsequent API reads still need GET authority.
-async fn capture_request_results(
-    step: &ValidatedStep,
-    document: &Value,
-    observations: &mut BTreeMap<String, Observation>,
-    pool: &RuntimePool,
-) -> Result<(), FixtureError> {
-    let ActionSource::ApplyRequest { record_capture, .. } = &step.action else {
-        return Err(FixtureError::ResponseShapeRefused);
-    };
-    let request_id = observed_record_id(observations, record_capture)?;
-    if document.get("id").and_then(Value::as_str) != Some(request_id) {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    let entity_id = step
-        .entity
-        .as_deref()
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    let record_id =
-        uuid::Uuid::parse_str(request_id).map_err(|_| FixtureError::ResponseShapeRefused)?;
-    let mut client = pool
-        .get()
-        .await
-        .map_err(|_| FixtureError::ExecutionRefused)?;
-    let transaction = client
-        .transaction()
-        .await
-        .map_err(|_| FixtureError::ExecutionRefused)?;
-    let workflow = crate::request_store::load(&transaction, entity_id, record_id, false)
-        .await
-        .map_err(|_| FixtureError::ExecutionRefused)?;
-    let receipt = workflow
-        .application()
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    let application = document
-        .pointer("/request/application")
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    if application.get("applicationId").and_then(Value::as_str)
-        != Some(receipt.application_id().as_str())
-        || application.get("proposalVersion").and_then(Value::as_u64)
-            != Some(u64::from(receipt.version().get()))
-        || application.get("effectDigest").and_then(Value::as_str)
-            != Some(receipt.effect_digest().as_str())
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    let proposal = workflow
-        .proposal(receipt.version())
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    let mut captured = BTreeMap::new();
-    for (effect_id, capture) in &step.capture_results {
-        let effect = proposal
-            .effects()
-            .iter()
-            .find(|effect| {
-                effect.id().as_str() == effect_id && effect.operation() == Operation::Create
-            })
-            .ok_or(FixtureError::ResponseShapeRefused)?;
-        let target_id = effect
-            .target()
-            .reserved_record_id()
-            .ok_or(FixtureError::ResponseShapeRefused)?;
-        let result = receipt
-            .result_links()
-            .iter()
-            .find(|result| {
-                result.entity_id() == effect.target().entity_id() && result.record_id() == target_id
-            })
-            .ok_or(FixtureError::ResponseShapeRefused)?;
-        captured.insert(
-            capture.clone(),
-            Observation {
-                kind: ObservationKind::Record {
-                    record_id: result.record_id().as_str().to_owned(),
-                    etag: format!("\"breg-action-result-{}\"", result.record_revision().get()),
-                },
-                document: json!({
-                    "id": result.record_id().as_str(),
-                    "entity": result.entity_id().as_str(),
-                    "revision": result.record_revision().get(),
-                    "data": {}
-                }),
-            },
-        );
-    }
-    transaction
-        .commit()
-        .await
-        .map_err(|_| FixtureError::ExecutionRefused)?;
-    observations.extend(captured);
-    Ok(())
-}
 
 fn capture_immediate_action_results(
     step: &ValidatedStep,
@@ -4640,12 +4059,6 @@ fn capture_immediate_action_results(
                     record_id: result.record_id.clone(),
                     etag: format!("\"breg-action-result-{}\"", result.revision),
                 },
-                document: json!({
-                    "id": result.record_id,
-                    "entity": result.entity,
-                    "revision": result.revision,
-                    "data": {}
-                }),
             },
         );
     }
@@ -4883,12 +4296,6 @@ fn assert_response(
                     &step.expect.fields,
                 )?;
             }
-            ActionSource::SubmitRequest { .. }
-            | ActionSource::ReviseRequest { .. }
-            | ActionSource::CancelRequest { .. }
-            | ActionSource::ApplyRequest { .. } => {
-                assert_request_action_shape(document)?;
-            }
             ActionSource::TargetConditions { .. } => {
                 parse_target_conditions(document)?;
             }
@@ -4955,9 +4362,9 @@ fn parse_immediate_action_results(
         if !valid_stable_id(effect) {
             return Err(FixtureError::ResponseShapeRefused);
         }
-        let result = exact_object(result, &["entity", "recordId", "revision"])?;
-        let entity = result
-            .get("entity")
+        let result = exact_object(result, &["recordType", "recordId", "revision"])?;
+        let _record_type = result
+            .get("recordType")
             .and_then(Value::as_str)
             .filter(|value| valid_stable_id(value))
             .ok_or(FixtureError::ResponseShapeRefused)?;
@@ -4974,97 +4381,12 @@ fn parse_immediate_action_results(
         parsed.insert(
             effect.clone(),
             ActionResultReference {
-                entity: entity.to_owned(),
                 record_id: record_id.to_owned(),
                 revision,
             },
         );
     }
     Ok(parsed)
-}
-
-fn assert_request_action_shape(value: &Value) -> Result<(), FixtureError> {
-    let object = exact_object(
-        value,
-        &["id", "revision", "snapshot", "actorReference", "request"],
-    )?;
-    let identifier = object
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    assert_actor_reference(
-        object
-            .get("actorReference")
-            .ok_or(FixtureError::ResponseShapeRefused)?,
-    )?;
-    if object
-        .get("revision")
-        .and_then(Value::as_u64)
-        .is_none_or(|revision| revision == 0)
-        || !uuid::Uuid::parse_str(identifier).is_ok_and(|parsed| parsed.to_string() == identifier)
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    assert_snapshot_reference(object)?;
-    let request = object
-        .get("request")
-        .and_then(Value::as_object)
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    if request.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "bregState" | "proposalVersion" | "effectDigest" | "proposal" | "application"
-        )
-    }) || !["bregState", "proposalVersion", "effectDigest"]
-        .iter()
-        .all(|key| request.contains_key(*key))
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    assert_request_state(request)?;
-    assert_optional_proposal_version(request.get("proposalVersion"))?;
-    assert_optional_effect_digest(
-        request
-            .get("effectDigest")
-            .ok_or(FixtureError::ResponseShapeRefused)?,
-    )?;
-    if let Some(proposal) = request.get("proposal") {
-        assert_request_proposal_shape(proposal)?;
-    }
-    if let Some(application) = request.get("application") {
-        if !application.is_null() {
-            assert_request_application_shape(application)?;
-        }
-    }
-    Ok(())
-}
-
-fn assert_request_proposal_shape(value: &Value) -> Result<(), FixtureError> {
-    if value.is_null() {
-        return Ok(());
-    }
-    let proposal = exact_object(value, &["review"])?;
-    let review = proposal
-        .get("review")
-        .and_then(Value::as_object)
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    match review.get("type").and_then(Value::as_str) {
-        Some("none") if review.len() == 1 => return Ok(()),
-        Some("required") if review.len() == 3 => {}
-        _ => return Err(FixtureError::ResponseShapeRefused),
-    }
-    let authority = review
-        .get("authority")
-        .and_then(Value::as_str)
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    let policy_id = review
-        .get("policyId")
-        .and_then(Value::as_str)
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    if !valid_stable_id(authority) || !valid_stable_id(policy_id) {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    Ok(())
 }
 
 fn exact_object<'a>(
@@ -5093,11 +4415,7 @@ fn assert_record_shape(
     if object.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "recordIdentifier"
-                | "revisionIdentifier"
-                | "domainData"
-                | "request"
-                | "requestPresence"
+            "recordIdentifier" | "revisionIdentifier" | "domainData"
         )
     }) || !["recordIdentifier", "revisionIdentifier", "domainData"]
         .iter()
@@ -5106,9 +4424,6 @@ fn assert_record_shape(
         return Err(FixtureError::ResponseShapeRefused);
     }
     assert_record_members(object, readable_fields, expected_fields)?;
-    if let Some(request) = object.get("request") {
-        assert_request_record_metadata_shape(request)?;
-    }
     Ok(())
 }
 
@@ -5214,475 +4529,13 @@ fn assert_record_meta(object: &Map<String, Value>) -> Result<(), FixtureError> {
     Ok(())
 }
 
-fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureError> {
-    let request = value
-        .as_object()
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    if request.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "bregState"
-                | "proposalVersion"
-                | "effectDigest"
-                | "proposal"
-                | "editable"
-                | "actions"
-                | "history"
-                | "application"
-                | "review"
-                | "detailErased"
-                | "submitterReference"
-                | "applierReference"
-        )
-    }) || !["bregState", "proposalVersion"]
-        .iter()
-        .all(|key| request.contains_key(*key))
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    assert_request_state(request)?;
-    assert_optional_proposal_version(request.get("proposalVersion"))?;
-    for key in ["submitterReference", "applierReference"] {
-        if let Some(actor_reference) = request.get(key) {
-            assert_actor_reference(actor_reference)?;
-        }
-    }
-    if let Some(digest) = request.get("effectDigest") {
-        assert_optional_effect_digest(digest)?;
-    }
-    if let Some(proposal) = request.get("proposal") {
-        assert_request_proposal_shape(proposal)?;
-    }
-    if let Some(editable) = request.get("editable") {
-        if !editable.is_boolean() {
-            return Err(FixtureError::ResponseShapeRefused);
-        }
-    }
-    if let Some(actions) = request.get("actions") {
-        let actions = actions
-            .as_array()
-            .ok_or(FixtureError::ResponseShapeRefused)?;
-        for action in actions {
-            assert_request_action_link_shape(action)?;
-        }
-    }
-    if let Some(history) = request.get("history") {
-        assert_request_history_shape(history)?;
-    }
-    if let Some(application) = request.get("application") {
-        assert_request_application_shape(application)?;
-    }
-    if let Some(review) = request.get("review") {
-        assert_request_review_shape(review)?;
-    }
-    Ok(())
-}
-
-fn assert_request_review_shape(value: &Value) -> Result<(), FixtureError> {
-    let review = exact_object(
-        value,
-        &[
-            "submission",
-            "result",
-            "delivery",
-            "application",
-            "recovery",
-        ],
-    )?;
-    assert_review_submission(&review["submission"])?;
-    assert_review_result(&review["result"])?;
-    assert_review_delivery(&review["delivery"])?;
-    assert_review_application(&review["application"])?;
-    assert_review_recovery(&review["recovery"])?;
-    Ok(())
-}
-
-fn closed_review_object<'a>(
-    value: &'a Value,
-    allowed: &[&str],
-    required: &[&str],
-) -> Result<&'a Map<String, Value>, FixtureError> {
-    let object = value
-        .as_object()
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    if object.keys().any(|key| !allowed.contains(&key.as_str()))
-        || required.iter().any(|key| !object.contains_key(*key))
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    Ok(object)
-}
-
-fn bounded_review_text(value: Option<&Value>) -> Result<&str, FixtureError> {
-    value
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty() && text.len() <= 128 && !text.chars().any(char::is_control))
-        .ok_or(FixtureError::ResponseShapeRefused)
-}
-
-fn review_uuid(value: Option<&Value>) -> Result<(), FixtureError> {
-    let value = bounded_review_text(value)?;
-    if uuid::Uuid::parse_str(value).is_ok_and(|parsed| parsed.to_string() == value) {
-        Ok(())
-    } else {
-        Err(FixtureError::ResponseShapeRefused)
-    }
-}
-
-fn assert_review_submission(value: &Value) -> Result<(), FixtureError> {
-    let submission = closed_review_object(
-        value,
-        &[
-            "state",
-            "authority",
-            "requestId",
-            "submissionDigest",
-            "recoveryDeadline",
-            "policy",
-        ],
-        &["state", "authority"],
-    )?;
-    let state = bounded_review_text(submission.get("state"))?;
-    if !matches!(
-        state,
-        "pending" | "accepted" | "uncertain" | "cancelling" | "cancelled" | "failed"
-    ) {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    bounded_review_text(submission.get("authority"))?;
-    if submission.contains_key("recoveryDeadline") {
-        assert_response_timestamp(submission.get("recoveryDeadline"), false)?;
-    }
-    let accepted_fields = ["requestId", "submissionDigest", "policy"];
-    if state == "accepted" || submission.contains_key("requestId") {
-        if accepted_fields
-            .iter()
-            .any(|field| !submission.contains_key(*field))
-        {
-            return Err(FixtureError::ResponseShapeRefused);
-        }
-        review_uuid(submission.get("requestId"))?;
-        validate_digest(bounded_review_text(submission.get("submissionDigest"))?)
-            .map_err(|_| FixtureError::ResponseShapeRefused)?;
-        let policy = exact_object(&submission["policy"], &["id", "version", "digest"])?;
-        bounded_review_text(policy.get("id"))?;
-        bounded_review_text(policy.get("version"))?;
-        validate_digest(bounded_review_text(policy.get("digest"))?)
-            .map_err(|_| FixtureError::ResponseShapeRefused)?;
-    } else if accepted_fields
-        .iter()
-        .any(|field| submission.contains_key(*field))
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    Ok(())
-}
-
-fn assert_review_result(value: &Value) -> Result<(), FixtureError> {
-    let result = closed_review_object(
-        value,
-        &["state", "resultId", "completedAt", "availableUntil"],
-        &["state"],
-    )?;
-    let state = bounded_review_text(result.get("state"))?;
-    if !matches!(
-        state,
-        "pending"
-            | "approved"
-            | "rejected"
-            | "changesRequested"
-            | "answered"
-            | "cancelled"
-            | "superseded"
-    ) {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    let terminal = ["resultId", "completedAt", "availableUntil"];
-    if state == "pending" {
-        if terminal.iter().any(|field| result.contains_key(*field)) {
-            return Err(FixtureError::ResponseShapeRefused);
-        }
-    } else {
-        if terminal.iter().any(|field| !result.contains_key(*field)) {
-            return Err(FixtureError::ResponseShapeRefused);
-        }
-        review_uuid(result.get("resultId"))?;
-        assert_response_timestamp(result.get("completedAt"), false)?;
-        assert_response_timestamp(result.get("availableUntil"), false)?;
-    }
-    Ok(())
-}
-
-fn assert_review_delivery(value: &Value) -> Result<(), FixtureError> {
-    let delivery = closed_review_object(value, &["state", "eventId", "receivedAt"], &["state"])?;
-    let state = bounded_review_text(delivery.get("state"))?;
-    if !matches!(
-        state,
-        "polling" | "received" | "reconciled" | "unmatched" | "exhausted"
-    ) {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    if delivery.contains_key("eventId") != delivery.contains_key("receivedAt") {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    if delivery.contains_key("eventId") {
-        review_uuid(delivery.get("eventId"))?;
-        assert_response_timestamp(delivery.get("receivedAt"), false)?;
-    }
-    Ok(())
-}
-
-fn assert_review_application(value: &Value) -> Result<(), FixtureError> {
-    let application = closed_review_object(
-        value,
-        &[
-            "mode",
-            "state",
-            "executor",
-            "applicationId",
-            "attempts",
-            "nextAttemptAt",
-            "receiptRecovered",
-        ],
-        &["mode", "state"],
-    )?;
-    let mode = bounded_review_text(application.get("mode"))?;
-    let state = bounded_review_text(application.get("state"))?;
-    if !matches!(mode, "manual" | "automatic")
-        || !matches!(
-            state,
-            "awaitingReview" | "ready" | "queued" | "applying" | "applied" | "blocked" | "expired"
-        )
-        || (mode == "manual" && application.contains_key("executor"))
-        || (mode == "automatic" && !application.contains_key("executor"))
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    if let Some(executor) = application.get("executor") {
-        bounded_review_text(Some(executor))?;
-    }
-    if application.contains_key("applicationId") {
-        review_uuid(application.get("applicationId"))?;
-    }
-    if (application.contains_key("nextAttemptAt") && !application.contains_key("attempts"))
-        || (mode == "manual"
-            && (application.contains_key("attempts") || application.contains_key("nextAttemptAt")))
-        || (application.contains_key("nextAttemptAt") && !matches!(state, "queued" | "applying"))
-        || (application.contains_key("receiptRecovered")
-            && (mode != "automatic"
-                || state != "applied"
-                || !application.contains_key("applicationId")
-                || application.get("receiptRecovered").and_then(Value::as_bool) != Some(true)))
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    if let Some(attempts) = application.get("attempts") {
-        if attempts.as_u64().is_none_or(|attempts| attempts > 1000) {
-            return Err(FixtureError::ResponseShapeRefused);
-        }
-    }
-    if application.contains_key("nextAttemptAt") {
-        assert_response_timestamp(application.get("nextAttemptAt"), false)?;
-    }
-    Ok(())
-}
-
-fn assert_review_recovery(value: &Value) -> Result<(), FixtureError> {
-    let recovery = closed_review_object(value, &["state", "code"], &["state"])?;
-    match bounded_review_text(recovery.get("state"))? {
-        "none" if !recovery.contains_key("code") => Ok(()),
-        "operatorAttention" => bounded_review_text(recovery.get("code")).map(|_| ()),
-        _ => Err(FixtureError::ResponseShapeRefused),
-    }
-}
-
-fn assert_response_timestamp(value: Option<&Value>, nullable: bool) -> Result<(), FixtureError> {
-    let value = value.ok_or(FixtureError::ResponseShapeRefused)?;
-    if nullable && value.is_null() {
-        return Ok(());
-    }
-    let timestamp = value
-        .as_str()
-        .filter(|timestamp| timestamp.len() <= 128)
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    chrono::DateTime::parse_from_rfc3339(timestamp)
-        .map(|_| ())
-        .map_err(|_| FixtureError::ResponseShapeRefused)
-}
-
-fn assert_request_state(request: &Map<String, Value>) -> Result<(), FixtureError> {
-    let allowed_states = BTreeSet::from(["draft", "submitted", "cancelled", "applied"]);
-    if request
-        .get("bregState")
-        .and_then(Value::as_str)
-        .is_none_or(|state| !allowed_states.contains(state))
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    Ok(())
-}
-
-fn assert_optional_proposal_version(value: Option<&Value>) -> Result<(), FixtureError> {
-    let value = value.ok_or(FixtureError::ResponseShapeRefused)?;
-    if !value.is_null()
-        && value
-            .as_u64()
-            .is_none_or(|version| version == 0 || version > u64::from(u32::MAX))
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    Ok(())
-}
-
-fn assert_optional_effect_digest(value: &Value) -> Result<(), FixtureError> {
-    if !value.is_null() {
-        validate_digest(value.as_str().ok_or(FixtureError::ResponseShapeRefused)?)?;
-    }
-    Ok(())
-}
-
-fn assert_request_action_link_shape(value: &Value) -> Result<(), FixtureError> {
-    let action = value
-        .as_object()
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    if action.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "operation"
-                | "method"
-                | "href"
-                | "ifMatch"
-                | "rebase"
-                | "proposalVersion"
-                | "effectDigest"
-        )
-    }) || !["operation", "method", "href", "ifMatch"]
-        .iter()
-        .all(|key| action.contains_key(*key))
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    if action
-        .get("operation")
-        .and_then(Value::as_str)
-        .is_none_or(|operation| operation.len() > MAX_IDENTIFIER_BYTES)
-        || action.get("method").and_then(Value::as_str) != Some("POST")
-        || action
-            .get("href")
-            .and_then(Value::as_str)
-            .is_none_or(|href| !href.starts_with('/') || href.len() > MAX_BINDING_BYTES)
-        || action
-            .get("ifMatch")
-            .and_then(Value::as_str)
-            .is_none_or(|etag| {
-                etag.len() <= 7
-                    || etag.len() > MAX_BINDING_BYTES
-                    || !etag.starts_with("\"breg-")
-                    || !etag.ends_with('"')
-            })
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    if let Some(rebase) = action.get("rebase") {
-        if !rebase.is_boolean() {
-            return Err(FixtureError::ResponseShapeRefused);
-        }
-    }
-    if action.contains_key("proposalVersion") {
-        assert_optional_proposal_version(action.get("proposalVersion"))?;
-    }
-    if let Some(digest) = action.get("effectDigest") {
-        assert_optional_effect_digest(digest)?;
-    }
-    Ok(())
-}
-
-fn assert_actor_reference(value: &Value) -> Result<(), FixtureError> {
-    if value
-        .as_str()
-        .is_none_or(|actor_reference| actor_reference.is_empty() || actor_reference.len() > 512)
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    Ok(())
-}
-
-fn assert_request_history_shape(value: &Value) -> Result<(), FixtureError> {
-    let history = exact_object(value, &["proposals", "nextAfterProposalVersion"])?;
-    let proposals = history
-        .get("proposals")
-        .and_then(Value::as_array)
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    for proposal in proposals {
-        let proposal = proposal
-            .as_object()
-            .ok_or(FixtureError::ResponseShapeRefused)?;
-        if !proposal.contains_key("proposalVersion")
-            || !proposal.contains_key("bregState")
-            || proposal
-                .get("proposalVersion")
-                .and_then(Value::as_u64)
-                .is_none_or(|version| version == 0 || version > u64::from(u32::MAX))
-        {
-            return Err(FixtureError::ResponseShapeRefused);
-        }
-    }
-    let cursor = history
-        .get("nextAfterProposalVersion")
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    if !cursor.is_null()
-        && cursor
-            .as_u64()
-            .is_none_or(|version| version == 0 || version > u64::from(u32::MAX))
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    Ok(())
-}
-
-fn assert_request_application_shape(value: &Value) -> Result<(), FixtureError> {
-    let application = value
-        .as_object()
-        .ok_or(FixtureError::ResponseShapeRefused)?;
-    if application.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "id" | "applicationId"
-                | "proposalVersion"
-                | "effectDigest"
-                | "appliedAt"
-                | "reasonPresent"
-                | "reason"
-        )
-    }) || !application.contains_key("proposalVersion")
-    {
-        return Err(FixtureError::ResponseShapeRefused);
-    }
-    if let Some(identifier) = application
-        .get("id")
-        .or_else(|| application.get("applicationId"))
-    {
-        let identifier = identifier
-            .as_str()
-            .ok_or(FixtureError::ResponseShapeRefused)?;
-        if !uuid::Uuid::parse_str(identifier).is_ok_and(|parsed| parsed.to_string() == identifier) {
-            return Err(FixtureError::ResponseShapeRefused);
-        }
-    }
-    assert_optional_proposal_version(application.get("proposalVersion"))?;
-    if let Some(digest) = application.get("effectDigest") {
-        assert_optional_effect_digest(digest)?;
-    }
-    Ok(())
-}
-
 /// The details a refused change-request plan may carry: one for each closed
 /// planner kind, taken from the planner's own vocabulary.
-static PLAN_REFUSED_DETAILS: [&str; ChangeRequestPlannerError::PLAN_REFUSALS.len()] = {
-    let mut details = [""; ChangeRequestPlannerError::PLAN_REFUSALS.len()];
+static PLAN_REFUSED_DETAILS: [&str; PlanError::PLAN_REFUSALS.len()] = {
+    let mut details = [""; PlanError::PLAN_REFUSALS.len()];
     let mut index = 0;
     while index < details.len() {
-        details[index] = ChangeRequestPlannerError::PLAN_REFUSALS[index].problem_detail();
+        details[index] = PlanError::PLAN_REFUSALS[index].problem_detail();
         index += 1;
     }
     details
@@ -6822,27 +5675,14 @@ fn operation_method(operation: Operation) -> HttpMethod {
         | Operation::Lookup
         | Operation::Batch
         | Operation::Invoke
-        | Operation::Import => HttpMethod::Post,
+        | Operation::Import
+        | Operation::Start => HttpMethod::Post,
         Operation::Get | Operation::List | Operation::Revisions | Operation::Snapshot => {
             HttpMethod::Get
         }
         Operation::Patch => HttpMethod::Patch,
         Operation::Tombstone => HttpMethod::Delete,
-        Operation::SubmitRequest
-        | Operation::ReviseRequest
-        | Operation::CancelRequest
-        | Operation::ApplyRequest => HttpMethod::Post,
     }
-}
-
-fn is_request_action(operation: Operation) -> bool {
-    matches!(
-        operation,
-        Operation::SubmitRequest
-            | Operation::ReviseRequest
-            | Operation::CancelRequest
-            | Operation::ApplyRequest
-    )
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -6870,34 +5710,31 @@ mod tests {
 
     use crate::compiler::module_digest;
     use crate::package::{
-        load_package, prepare_package, prepare_package_with_project_assets, PackageBuildRequest,
-        PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+        PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
+        PackageSourceFile, load_package, prepare_package, prepare_package_with_project_assets,
     };
 
     /// A request decoded the way the journeys reader decodes one: the shape
     /// first, then each HTTP body read from the authored value.
+    #[test]
+    fn retired_entity_lifecycle_syntax_is_rejected() {
+        for operation in [
+            "submit-request",
+            "revise-request",
+            "cancel-request",
+            "apply-request",
+            "approve-request",
+            "reject-request",
+            "request-revision",
+        ] {
+            assert!(action_from_json(json!({"type": operation})).is_err());
+        }
+    }
+
     fn action_from_json(value: Value) -> Result<ActionSource, serde_json::Error> {
         let mut action: ActionSource = serde_json::from_value(value.clone())?;
         action.fill_bodies(&|pointer| value.pointer(pointer).cloned());
         Ok(action)
-    }
-
-    #[test]
-    fn fixture_request_actions_expose_only_source_owned_lifecycle_operations() {
-        for operation in ["approve-request", "reject-request", "request-revision"] {
-            let source = json!({"type":operation, "stage":"review", "recordCapture":"record", "etagCapture":"record", "proposalVersion":1, "effectDigest":format!("sha256:{}", "a".repeat(64))});
-            assert!(action_from_json(source).is_err());
-        }
-        let action = action_from_json(json!({
-            "type":"apply-request", "recordCapture":"record", "etagCapture":"record",
-            "proposalVersion":1,
-            "effectDigest":format!("sha256:{}", "a".repeat(64))
-        }))
-        .unwrap();
-        assert_eq!(
-            request_action_body(&action, &BTreeMap::new()).unwrap(),
-            json!({"proposalVersion":1,"effectDigest":format!("sha256:{}", "a".repeat(64))})
-        );
     }
 
     #[test]
@@ -6931,97 +5768,6 @@ mod tests {
         assert_eq!(
             validate_expectation(&expectation, Operation::Import, &profile, false, false),
             Ok(())
-        );
-    }
-
-    #[test]
-    fn fixture_request_metadata_accepts_disclosed_review_state() {
-        let mut request = json!({
-            "bregState": "submitted",
-            "proposalVersion": 1,
-            "review": {
-                "submission": {"state":"accepted","authority":"casework-a","requestId":"00000000-0000-4000-8000-000000000001","submissionDigest":format!("sha256:{}", "a".repeat(64)),"recoveryDeadline":"2026-09-18T12:00:00Z","policy":{"id":"registry-correction","version":"1","digest":format!("sha256:{}", "b".repeat(64))}},
-                "result": {"state":"approved","resultId":"00000000-0000-4000-8000-000000000002","completedAt":"2026-09-11T12:00:00Z","availableUntil":"2026-10-11T12:00:00Z"},
-                "delivery": {"state":"reconciled","eventId":"00000000-0000-4000-8000-000000000003","receivedAt":"2026-09-11T12:00:01Z"},
-                "application": {"mode":"manual","state":"ready"},
-                "recovery": {"state":"none"}
-            },
-            "editable": false,
-            "actions": []
-        });
-
-        assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
-        request["submitterReference"] = json!("submitter-reference");
-        request["applierReference"] = json!("applier-reference");
-        assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
-        for key in ["submitterReference", "applierReference"] {
-            request[key] = json!("x".repeat(512));
-            assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
-            for invalid in [Value::Null, json!(""), json!("x".repeat(513)), json!(false)] {
-                request[key] = invalid;
-                assert_eq!(
-                    assert_request_record_metadata_shape(&request),
-                    Err(FixtureError::ResponseShapeRefused)
-                );
-            }
-            request[key] = json!(format!("{key}-value"));
-        }
-        request["review"]["privateReviewer"] = json!("must-not-pass");
-        assert_eq!(
-            assert_request_record_metadata_shape(&request),
-            Err(FixtureError::ResponseShapeRefused)
-        );
-        request["review"]
-            .as_object_mut()
-            .unwrap()
-            .remove("privateReviewer");
-        request["review"]["application"]["executor"] = json!("must-not-pass-for-manual");
-        assert_eq!(
-            assert_request_record_metadata_shape(&request),
-            Err(FixtureError::ResponseShapeRefused)
-        );
-        request["review"]["application"]
-            .as_object_mut()
-            .unwrap()
-            .remove("executor");
-        request["review"]["application"]["mode"] = json!("automatic");
-        request["review"]["application"]["state"] = json!("queued");
-        request["review"]["application"]["executor"] = json!("breg-worker");
-        request["review"]["application"]["attempts"] = json!(3);
-        request["review"]["application"]["nextAttemptAt"] = json!("2026-09-11T12:00:05Z");
-        assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
-        request["review"]["application"]["attempts"] = json!(1001);
-        assert_eq!(
-            assert_request_record_metadata_shape(&request),
-            Err(FixtureError::ResponseShapeRefused)
-        );
-        request["review"]["application"]["attempts"] = json!(3);
-        request["review"]["application"]["retryToken"] = json!("must-not-pass");
-        assert_eq!(
-            assert_request_record_metadata_shape(&request),
-            Err(FixtureError::ResponseShapeRefused)
-        );
-        request["review"]["application"]
-            .as_object_mut()
-            .unwrap()
-            .remove("retryToken");
-        request["review"]["application"]["state"] = json!("blocked");
-        request["review"]["application"]
-            .as_object_mut()
-            .unwrap()
-            .remove("nextAttemptAt");
-        assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
-        request["review"]["result"]["state"] = json!("changesrequested");
-        assert_eq!(
-            assert_request_record_metadata_shape(&request),
-            Err(FixtureError::ResponseShapeRefused)
-        );
-        request["review"]["result"]["state"] = json!("changesRequested");
-        request["review"]["submission"]["submissionDigest"] =
-            json!(format!("sha256:{}", "c".repeat(63)));
-        assert_eq!(
-            assert_request_record_metadata_shape(&request),
-            Err(FixtureError::ResponseShapeRefused)
         );
     }
 
@@ -7257,7 +6003,7 @@ journeys:
   - id: list-people
     steps:
       - id: list-people
-        entity: person
+        recordType: person
         accessProfile: person-operator
         claims: {principal: fixture-operator, purpose: person-maintenance}
         request: {type: list}
@@ -7414,21 +6160,33 @@ journeys:
         );
     }
 
+    fn native_rhai_fixture_project() -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+            "project":{"id":"planner-fixture","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
+            "package":{"sourceRevision":"fixture-project-source"},
+            "datasets":[{"id":"people"}],
+            "recordTypes":[{"id":"person","primaryDataset":"people","route":"people","mutationMode":"mutable",
+                "fields":[{"id":"name","type":"string","maximumLength":80,"required":true,"classification":"internal"}]}],
+            "functions":[{"id":"person-plan","runtime":"rhai","source":"scripts/person-name-change.rhai","entrypoint":"plan","abi":"registry.action-plan/v1"}],
+            "actions":[{"id":"rename-person","execution":{"mode":"immediate"},
+                "inputs":[{"id":"person","type":"reference","target":"person","required":true,"classification":"internal"},
+                    {"id":"name","type":"string","maximumLength":80,"required":true,"classification":"internal"}],
+                "plan":{"type":"function","function":"person-plan","inputs":["person","name"],
+                    "writes":[{"id":"person","target":{"fromInput":"person"},"operation":"patch","fields":["name"]}]}}],
+            "accessProfiles":[{"id":"person-operator","principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["person-maintenance"],
+                "permissions":{"records":[{"recordType":"person","operations":["get","list"],"readableFields":["name"],"rowBoundaries":"unrestricted"}],
+                    "actions":[{"action":"rename-person","operations":["invoke"],"targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}]
+        })).unwrap()
+    }
+
+    const NATIVE_RHAI_FIXTURE_SCRIPT: &[u8] =
+        br#"fn plan(ctx) { #{effects:[#{id:"person",set:#{name:ctx.inputs.name}}]} }"#;
+
     #[test]
     fn project_rhai_asset_survives_prepared_and_verified_schema_test_rederivation() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance/person-name-change-rhai");
-        let project = String::from_utf8(
-            std::fs::read(root.join("registry.yaml")).expect("planner project reads"),
-        )
-        .expect("planner project is UTF-8")
-        .replace(
-            "sourceRevision: person-name-change-rhai-acceptance-0.1.0",
-            "sourceRevision: fixture-project-source",
-        )
-        .into_bytes();
-        let script = std::fs::read(root.join("scripts/person-name-change.rhai"))
-            .expect("planner script reads");
+        let project = native_rhai_fixture_project();
+        let script = NATIVE_RHAI_FIXTURE_SCRIPT.to_vec();
         let prepared = prepare_package_with_project_assets(
             PackageBuildRequest {
                 from_package_digest: None,
@@ -7546,12 +6304,12 @@ journeys:
             .evidence_providers
             .iter()
             .map(|provider| provider.contracts.clone())
-            .chain(source.actions.iter().filter_map(|action| {
-                action
-                    .handler
-                    .as_ref()
-                    .and_then(|handler| handler.script().map(str::to_owned))
-            }))
+            .chain(
+                source
+                    .functions
+                    .iter()
+                    .map(|function| function.source.clone()),
+            )
             .collect::<BTreeSet<_>>()
             .into_iter()
             .map(|path| PackageSourceFile {
@@ -7644,30 +6402,20 @@ journeys:
 
     #[test]
     fn module_rhai_asset_role_survives_prepared_schema_test_rederivation() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance/person-name-change-rhai");
-        let authored_project = String::from_utf8(
-            std::fs::read(root.join("registry.yaml")).expect("planner project reads"),
-        )
-        .expect("planner project is UTF-8")
-        .replace(
-            "sourceRevision: person-name-change-rhai-acceptance-0.1.0",
-            "sourceRevision: fixture-project-source",
-        )
-        .into_bytes();
-        let script = std::fs::read(root.join("scripts/person-name-change.rhai"))
-            .expect("planner script reads");
+        let authored_project = native_rhai_fixture_project();
+        let script = NATIVE_RHAI_FIXTURE_SCRIPT.to_vec();
         let mut project_value: Value =
             serde_norway::from_slice(&authored_project).expect("planner project converts");
         let entities = project_value
             .as_object_mut()
-            .and_then(|project| project.remove("entities"))
+            .and_then(|project| project.remove("recordTypes"))
             .expect("planner project has entities");
         let module_value = json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "person-module",
             "version": "0.1.0",
-            "entities": entities,
+            "recordTypes": entities,
+            "functions": project_value.as_object_mut().unwrap().remove("functions").unwrap(),
         });
         let module_bytes = serde_json::to_vec(&module_value).expect("module serializes");
         let module = parse_module_yaml(&module_bytes).expect("planner module parses");
@@ -8451,7 +7199,7 @@ journeys:
                 }
                 if let Some(capture) = step.capture.as_ref() {
                     let kind = capture_observation_kind(step, &headers, &document)?;
-                    observations.insert(capture.clone(), Observation { kind, document });
+                    observations.insert(capture.clone(), Observation { kind });
                 }
             }
         }
@@ -8464,113 +7212,9 @@ journeys:
     }
 
     #[test]
-    fn request_action_fixture_uses_discovered_action_if_match() {
-        let route = CompiledRoute {
-            id: "records.request.request.submit".to_owned(),
-            entity_id: "request".to_owned(),
-            method: HttpMethod::Post,
-            path: "/v1/records/requests/{record_id}/actions/submit".to_owned(),
-            operation: Operation::SubmitRequest,
-            query_kind: None,
-            revision_kind: None,
-            maximum_records: Some(1),
-            access_profiles: vec!["submitter".to_owned()],
-            default_access_profile: Some("submitter".to_owned()),
-        };
-        let profile: AccessProfileSource = serde_json::from_value(json!({
-            "id": "submitter",
-            "principalClaim": "principal",
-            "operations": ["submit-request"],
-            "rowBoundaries": []
-        }))
-        .expect("test profile parses");
-        let step = ValidatedStep {
-            id: "submit-request".to_owned(),
-            entity: Some("request".to_owned()),
-            action_id: None,
-            access_profile: "submitter".to_owned(),
-            claims: ClaimsSource::default(),
-            route: FixtureRoute::Entity(route),
-            profile,
-            response_readable_fields: BTreeSet::new(),
-            action: ActionSource::SubmitRequest {
-                record_capture: "before-submit".to_owned(),
-                etag_capture: "before-submit".to_owned(),
-            },
-            problem_bindings: FixtureProblemBindings::default(),
-            expect: ExpectationSource {
-                refusal_code: None,
-                entity_id: None,
-                field_id: None,
-                outcome: ExpectedOutcome::Success,
-                status: 200,
-                problem_code: None,
-                fields: Map::new(),
-                count: None,
-            },
-            capture: None,
-            capture_results: BTreeMap::new(),
-        };
-        let mut observations = BTreeMap::new();
-        observations.insert(
-            "before-submit".to_owned(),
-            Observation {
-                kind: ObservationKind::Record {
-                    record_id: "123e4567-e89b-12d3-a456-426614174000".to_owned(),
-                    etag: "\"breg-ordinary-get-etag\"".to_owned(),
-                },
-                document: json!({
-                    "data": {
-                        "recordIdentifier": "123e4567-e89b-12d3-a456-426614174000",
-                        "revisionIdentifier": "1",
-                        "request": {
-                            "bregState": "draft",
-                            "proposalVersion": 1,
-                            "effectDigest": null,
-                            "actions": [{
-                                "operation": "submit-request",
-                                "href": "/v1/records/requests/123e4567-e89b-12d3-a456-426614174000/actions/submit",
-                                "ifMatch": "\"breg-action-submit\""
-                            }]
-                        },
-                        "domainData": {}
-                    },
-                    "meta": {
-                        "registryIdentifier": "fixture-registry",
-                        "datasetIdentifier": "fixture-registry",
-                        "entityTypeIdentifier": "request"
-                    }
-                }),
-            },
-        );
-
-        let request = fixture_request("test-journey", &step, &observations, "a.b.c")
-            .expect("request action uses discovered action precondition");
-        assert_eq!(
-            request
-                .headers()
-                .get(IF_MATCH)
-                .and_then(|value| value.to_str().ok()),
-            Some("\"breg-action-submit\"")
-        );
-
-        observations
-            .get_mut("before-submit")
-            .expect("observation exists")
-            .document["data"]["request"]
-            .as_object_mut()
-            .expect("request metadata is object")
-            .remove("actions");
-        assert_eq!(
-            fixture_request("test-journey", &step, &observations, "a.b.c").unwrap_err(),
-            FixtureError::RequestConstructionRefused
-        );
-    }
-
-    #[test]
     fn a_refused_plan_admits_every_closed_planner_detail_and_nothing_else() {
         let step = plan_refused_step();
-        for kind in ChangeRequestPlannerError::PLAN_REFUSALS {
+        for kind in PlanError::PLAN_REFUSALS {
             assert_eq!(
                 assert_response(
                     &step,
@@ -8582,7 +7226,7 @@ journeys:
             );
         }
         for detail in [
-            ChangeRequestPlannerError::Deadline.problem_detail(),
+            PlanError::Deadline.problem_detail(),
             "The change-request planner refused the submission.",
             "The change-request planner refused the submission: change_request.planner.unknown.",
         ] {
@@ -8619,10 +7263,7 @@ journeys:
         let (title, details) =
             problem_contract(400, Some("request.plan_refused")).expect("registered problem");
         assert_eq!(title, "Bad Request");
-        assert_eq!(
-            details.len(),
-            ChangeRequestPlannerError::PLAN_REFUSALS.len()
-        );
+        assert_eq!(details.len(), PlanError::PLAN_REFUSALS.len());
         assert!(problem_contract(400, Some("request.plan_declined")).is_none());
         assert!(problem_contract(503, Some("request.plan_refused")).is_none());
     }
@@ -8668,7 +7309,7 @@ journeys:
             entity_id: "request".to_owned(),
             method: HttpMethod::Post,
             path: "/v1/records/requests/{record_id}/actions/submit".to_owned(),
-            operation: Operation::SubmitRequest,
+            operation: Operation::Invoke,
             query_kind: None,
             revision_kind: None,
             maximum_records: Some(1),
@@ -8678,7 +7319,7 @@ journeys:
         let profile: AccessProfileSource = serde_json::from_value(json!({
             "id": "submitter",
             "principalClaim": "principal",
-            "operations": ["submit-request"],
+            "operations": ["invoke"],
             "rowBoundaries": []
         }))
         .expect("test profile parses");
@@ -8691,9 +7332,10 @@ journeys:
             route: FixtureRoute::Entity(route),
             profile,
             response_readable_fields: BTreeSet::new(),
-            action: ActionSource::SubmitRequest {
-                record_capture: "before-submit".to_owned(),
-                etag_capture: "before-submit".to_owned(),
+            action: ActionSource::Invoke {
+                input: Map::new(),
+                preconditions: BTreeMap::new(),
+                idempotency_key: None,
             },
             problem_bindings: FixtureProblemBindings::default(),
             expect: ExpectationSource {
@@ -8728,14 +7370,9 @@ journeys:
             .unwrap()
             .pattern = Some(".*".to_owned());
         let assets = project
-            .actions
+            .functions
             .iter()
-            .filter_map(|action| {
-                action
-                    .handler
-                    .as_ref()
-                    .and_then(|handler| handler.script().map(str::to_owned))
-            })
+            .map(|function| function.source.clone())
             .map(|script| ModuleAssetSource {
                 module: None,
                 bytes: std::fs::read(root.join(&script)).unwrap(),
@@ -8816,14 +7453,6 @@ journeys:
         assert!(assert_response(pattern, StatusCode::CONFLICT, &generic_document).is_err());
 
         let mut concealed = plan_refused_step();
-        concealed.action = ActionSource::ApplyRequest {
-            record_capture: "before-apply".to_owned(),
-            etag_capture: "before-apply".to_owned(),
-            proposal_version: None,
-            proposal_version_capture: None,
-            effect_digest: None,
-            effect_digest_capture: None,
-        };
         concealed.expect.status = 409;
         concealed.expect.problem_code = Some("mutation.conflict".to_owned());
         assert_response(&concealed, StatusCode::CONFLICT, &generic_document).unwrap();

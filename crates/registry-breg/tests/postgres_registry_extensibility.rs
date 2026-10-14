@@ -9,29 +9,29 @@ mod postgres_harness;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, authenticated_router,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_platform_audit::AuditProfile;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{oidc_verifier_config, MockIdp};
-use serde_json::{json, Value};
+use registry_platform_testing::{MockIdp, oidc_verifier_config};
+use serde_json::{Value, json};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 

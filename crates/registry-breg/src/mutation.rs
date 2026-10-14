@@ -6,8 +6,8 @@ mod action;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) use action::erase_expired_action_evidence;
 pub(crate) use action::{HookProposalApplication, HookProposalOutcome};
-mod request;
-pub(crate) use request::{request_action_etag, RequestEvidencePreflight, RequestReceiptPreflight};
+mod proposal;
+pub(crate) use proposal::{ProposalApplyPreflight, proposal_operation_name};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -17,68 +17,68 @@ use deadpool_postgres::Client;
 use registry_platform_audit::{AuditEntry, AuditProfile, AuditRequest};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::field_encryption::{
-    envelope_member_json, FieldCryptoError, MAX_FIELD_PLAINTEXT_BYTES,
+    FieldCryptoError, MAX_FIELD_PLAINTEXT_BYTES, envelope_member_json,
 };
 use registry_platform_hooks::HookHandlerKind;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio_postgres::types::ToSql;
-use tokio_postgres::{error::SqlState, GenericClient, Transaction};
+use tokio_postgres::{GenericClient, Transaction, error::SqlState};
 use uuid::Uuid;
 
 use crate::artifacts::event_data_schema_binding;
 use crate::audit::{
-    action_terminal_entry, begin_action_pre_io_audit, begin_pre_io_audit, profile_is_keyed,
-    record_action_pre_io_audit, record_pre_io_audit, terminal_entry, PreIoAudit, PreIoAuditKind,
-    RegistryAudit, RegistryAuditError, TerminalAudit, TerminalAuditOutcome,
+    PreIoAudit, PreIoAuditKind, RegistryAudit, RegistryAuditError, TerminalAudit,
+    TerminalAuditOutcome, action_terminal_entry, begin_action_pre_io_audit, begin_pre_io_audit,
+    profile_is_keyed, record_action_pre_io_audit, record_pre_io_audit, terminal_entry,
 };
 use crate::compiler::{
-    event_classification_ceiling, WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER,
-    WEBHOOK_INITIAL_BACKOFF_MS, WEBHOOK_MAXIMUM_ATTEMPTS, WEBHOOK_MAXIMUM_BACKOFF_MS,
+    WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER, WEBHOOK_INITIAL_BACKOFF_MS,
+    WEBHOOK_MAXIMUM_ATTEMPTS, WEBHOOK_MAXIMUM_BACKOFF_MS, event_classification_ceiling,
 };
 use crate::contract::{
     AccessProfileSource, EventTrigger, FieldTypeSource, MutationMode, Operation,
 };
 use crate::correlation::RequestCorrelation;
-use crate::data::{validate_field_value, FieldValue};
+use crate::data::{FieldValue, validate_field_value};
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::field_encryption::FieldEncryptionService;
 use crate::history_commit::{
-    allocate_revision_commit, install_history_commit_schema, CommitAllocation, HistoryCommitError,
-    RevisionCommitMember,
+    CommitAllocation, HistoryCommitError, RevisionCommitMember, allocate_revision_commit,
+    install_history_commit_schema,
 };
 use crate::history_context::{ChangeContext, CommitOrigin};
 use crate::history_schema::MAX_HISTORY_SNAPSHOT_BYTES;
 use crate::idempotency::{
-    insert_result, lock_and_load, resolve_action_binding, resolve_binding,
-    resolve_hook_action_binding, resolve_hook_key_reference, ActionIdempotencyBinding,
-    HeldResponse, IdempotencyBinding, IdempotencyError, IdempotencyKeyDomain, IdempotencyPolicy,
-    PermittedResponseHeader, StoredResultMetadata, MAX_HELD_BODY_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
-    MAX_IMMEDIATE_ACTION_RESULTS,
+    ActionIdempotencyBinding, HeldResponse, IdempotencyBinding, IdempotencyError,
+    IdempotencyKeyDomain, IdempotencyPolicy, MAX_HELD_BODY_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
+    MAX_IMMEDIATE_ACTION_RESULTS, PermittedResponseHeader, StoredResultMetadata, insert_result,
+    lock_and_load, resolve_action_binding, resolve_binding, resolve_hook_action_binding,
+    resolve_hook_key_reference,
 };
 use crate::ingestion_store::{
-    record_attempt, IngestionAttemptOutcome, IngestionChunkCommit, IngestionRunStatus,
+    IngestionAttemptOutcome, IngestionChunkCommit, IngestionRunStatus, record_attempt,
 };
 pub use crate::ingestion_store::{IngestionChunkBinding, IngestionRefusal};
 use crate::model::{
-    ActionRouteKind, CompiledAction, CompiledActionEffect, CompiledActionMutation,
-    CompiledActionTargetBinding, CompiledActionValue, CompiledEntity, CompiledEventDelivery,
-    CompiledField, CompiledFieldEncryption, CompiledRegistry, CompiledRoute,
-    CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
+    ActionRouteKind, CompiledAction, CompiledEntity, CompiledEventDelivery, CompiledField,
+    CompiledFieldEncryption, CompiledPlanEffect, CompiledPlanMutation, CompiledPlanTargetBinding,
+    CompiledPlanValue, CompiledRegistry, CompiledRoute, CompiledWebhookDeliveryMode,
+    CompiledWebhookRetryProfile, HttpMethod,
 };
 use crate::outbox::{
-    event_data_schemas, insert_configured_events, EnvelopeBinding, OutboxError, OutboxMutation,
+    EnvelopeBinding, OutboxError, OutboxMutation, event_data_schemas, insert_configured_events,
 };
 use crate::postgres::{
-    begin_action_transaction, begin_record_transaction, ActionClaimContext, ClaimContext,
-    ExpectedRegistryIdentity, ImmediateActionLinkBinding, ImmediateActionLinkContext,
-    ImmediateActionTargetBinding, ImmediateActionTargetContext, RegistryLockKey,
-    RowBoundaryContext, SqlIdentifier,
+    ActionClaimContext, ClaimContext, ExpectedRegistryIdentity, ImmediateActionLinkBinding,
+    ImmediateActionLinkContext, ImmediateActionTargetBinding, ImmediateActionTargetContext,
+    RegistryLockKey, RowBoundaryContext, SqlIdentifier, begin_action_transaction,
+    begin_record_transaction,
 };
 use crate::problem_location::{BatchItemMember, PatchMember, RequestLocation};
 use crate::record_profile::{self, RecordRepresentation};
-use crate::revision::{canonical_snapshot, insert_revision, RevisionError, RevisionInsert};
+use crate::revision::{RevisionError, RevisionInsert, canonical_snapshot, insert_revision};
 
 const MAX_LOGICAL_ID_BYTES: usize = 256;
 const TOMBSTONE_CURSOR: &str = "registry_tombstone_current";
@@ -136,15 +136,15 @@ pub async fn install_mutation_schema(
                  binding_reference text NOT NULL CHECK (binding_reference <> ''),
                  result_kind text NOT NULL
                      CONSTRAINT registry_idempotency_result_kind_values
-                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'release', 'erased')),
+                     CHECK (result_kind IN ('record', 'batch', 'proposal', 'immediate_action', 'release', 'erased')),
                  record_reference text CHECK (record_reference <> ''),
                  record_revision bigint CHECK (record_revision > 0),
                  result_count smallint
                      CONSTRAINT registry_idempotency_result_count_check CHECK (
                          result_count IS NULL OR result_count BETWEEN 1 AND 100 OR
-                         (result_kind = 'immediate_action'
+                         (result_kind IN ('immediate_action', 'proposal')
                              AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS})),
-                 proposal_version bigint CHECK (proposal_version > 0),
+                 submission_version bigint CHECK (submission_version > 0),
                  response_status smallint NOT NULL CHECK (response_status BETWEEN 200 AND 299),
                  response_body bytea
                      CONSTRAINT registry_idempotency_response_body_bounds CHECK (
@@ -183,29 +183,29 @@ pub async fn install_mutation_schema(
                  CONSTRAINT registry_idempotency_result_shape CHECK (
                      (result_kind = 'record' AND record_reference IS NOT NULL
                          AND record_revision IS NOT NULL AND result_count IS NULL
-                         AND proposal_version IS NULL)
+                         AND submission_version IS NULL)
                      OR
                      (result_kind = 'batch' AND record_reference IS NULL
                          AND record_revision IS NULL AND result_count IS NOT NULL
-                         AND proposal_version IS NULL)
+                         AND submission_version IS NULL)
                      OR
-                     (result_kind = 'application' AND record_reference IS NOT NULL
+                     (result_kind = 'proposal' AND record_reference IS NOT NULL
                          AND record_revision IS NOT NULL AND result_count IS NOT NULL
-                         AND result_count BETWEEN 1 AND 16
-                         AND proposal_version IS NOT NULL)
+                         AND result_count BETWEEN 0 AND 16
+                         AND submission_version IS NOT NULL)
                      OR
                      (result_kind = 'immediate_action' AND record_reference IS NULL
                          AND record_revision IS NULL AND result_count IS NOT NULL
                          AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
-                         AND proposal_version IS NULL)
+                         AND submission_version IS NULL)
                      OR
                      (result_kind = 'release' AND record_reference IS NOT NULL
                          AND record_revision IS NOT NULL AND result_count IS NULL
-                         AND proposal_version IS NULL)
+                         AND submission_version IS NULL)
                      OR
                      (result_kind = 'erased' AND record_reference IS NULL
                          AND record_revision IS NULL AND result_count IS NULL
-                         AND proposal_version IS NULL)
+                         AND submission_version IS NULL)
                  )
              );
              CREATE UNIQUE INDEX IF NOT EXISTS registry_idempotency_caller_key
@@ -298,7 +298,7 @@ pub async fn install_mutation_schema(
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
-    crate::request_store::install(migration, runtime_role).await?;
+    crate::proposal_store::install(migration, runtime_role).await?;
     crate::subject_access_log::install(migration, runtime_role)
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -348,7 +348,6 @@ pub struct MutationPlan {
     registry_id: String,
     route: CompiledRoute,
     entity: CompiledEntity,
-    submitter_target_entities: BTreeMap<String, CompiledEntity>,
     event_deliveries: Vec<CompiledEventDelivery>,
     temporal_exclusion_constraints: Vec<String>,
     /// A create item of an `import` route. Change control does not count it
@@ -412,19 +411,6 @@ impl MutationPlan {
             registry_id: registry.registry_id().to_owned(),
             route: route.clone(),
             entity: entity.clone(),
-            submitter_target_entities: entity
-                .access_profiles
-                .values()
-                .flat_map(|profile| &profile.submitter_targets)
-                .map(|id| {
-                    registry
-                        .entities()
-                        .get(id)
-                        .cloned()
-                        .map(|entity| (id.clone(), entity))
-                        .ok_or(MutationError::InvalidRequest)
-                })
-                .collect::<Result<_, _>>()?,
             event_deliveries,
             temporal_exclusion_constraints,
             imported_item: false,
@@ -434,27 +420,6 @@ impl MutationPlan {
     #[must_use]
     pub fn operation_id(&self) -> &str {
         &self.route.id
-    }
-
-    /// Derive a slot route only from an existing compiled draft-patch grant.
-    pub(crate) fn attachment(
-        mut self,
-        slot_id: &str,
-        removal: bool,
-    ) -> Result<Self, MutationError> {
-        if self.route.operation != Operation::Patch
-            || self.entity.change_request.is_none()
-            || !self.entity.attachments.contains_key(slot_id)
-        {
-            return Err(MutationError::InvalidRequest);
-        }
-        let method = if removal {
-            HttpMethod::Delete
-        } else {
-            HttpMethod::Patch
-        };
-        self.route = crate::attachment::route(&self.route, slot_id, method);
-        Ok(self)
     }
 
     #[must_use]
@@ -507,7 +472,6 @@ impl MutationPlan {
                 default_access_profile: Some(profile_id.to_owned()),
             },
             entity: self.entity.clone(),
-            submitter_target_entities: self.submitter_target_entities.clone(),
             event_deliveries: self.event_deliveries.clone(),
             temporal_exclusion_constraints: self.temporal_exclusion_constraints.clone(),
             imported_item: self.route.operation == Operation::Import,
@@ -689,7 +653,6 @@ pub enum BatchMutationItem {
 pub enum MutationBody {
     Create(Map<String, Value>),
     Patch(Vec<PatchOperation>),
-    Attachment(crate::attachment::AttachmentMutation),
     Tombstone,
 }
 
@@ -869,113 +832,6 @@ impl MutationCoordinator {
         self
     }
 
-    async fn stage_attachment(
-        &self,
-        client: &mut Client,
-        request: &MutationRequest<'_>,
-    ) -> Result<(), MutationError> {
-        let MutationBody::Attachment(attachment) = &request.body else {
-            return Ok(());
-        };
-        let Some(bytes) = &attachment.bytes else {
-            return Ok(());
-        };
-        if matches!(
-            &self.attachment_storage,
-            crate::attachment_storage::AttachmentStorage::Database
-        ) {
-            return Ok(());
-        }
-        let transaction = begin_record_transaction(
-            client,
-            self.lock_key,
-            self.lock_timeout,
-            &self.expected,
-            request.claims,
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-        let tx = transaction.transaction();
-        install_request_visibility_context(
-            tx,
-            &request.plan.entity,
-            request.claims,
-            self.audit.profile(),
-            &self.expected.database_id,
-        )
-        .await?;
-        let binding = resolve_binding(
-            self.audit.profile(),
-            &self.idempotency,
-            &IdempotencyBinding {
-                key: request.idempotency_key,
-                context: request.claims,
-                method: request.plan.route.method,
-                route: &request.plan.route.path,
-                target_record: request.record_id,
-                package_revision: &self.expected.activation_id,
-                response_fields: &request.response_fields,
-                canonical_request_digest: canonical_request_digest(request)?,
-                key_domain: IdempotencyKeyDomain::Caller,
-            },
-        )?;
-        let stored = lock_and_load(tx, &binding).await?;
-        let actor = request_actor_reference(
-            self.audit.profile(),
-            &self.expected.database_id,
-            request.claims,
-        )?;
-        let id = Uuid::parse_str(request.record_id.ok_or(MutationError::InvalidRequest)?)
-            .map_err(|_| MutationError::InvalidRequest)?;
-        crate::request_store::require_owned_draft(tx, &request.plan.entity.id, id, &actor).await?;
-        let current = load_current_row_for_update(tx, request).await?;
-        request::admit_submitter_targets(
-            tx,
-            &request.plan.entity,
-            &request.plan.submitter_target_entities,
-            request.claims,
-            &current.data,
-        )
-        .await?;
-        if stored.is_none() {
-            let etag = strong_record_etag_for_representation(
-                self.audit.profile(),
-                request.claims,
-                &self.expected.activation_id,
-                &current.record_id,
-                current.record_revision,
-                &request.response_fields,
-                request.representation,
-                attachment_verification_etag_fields(
-                    &request.plan.entity,
-                    &current.attachment_metadata,
-                )
-                .as_ref(),
-            )?;
-            if request
-                .expected_etag
-                .is_none_or(|expected| expected.as_bytes().ct_eq(etag.as_bytes()).unwrap_u8() != 1)
-            {
-                return Err(MutationError::PreconditionFailed);
-            }
-            if let Some(grant) = request.claims.task_grant() {
-                self.check_task_authority(grant).await?;
-            }
-            crate::attachment_store::stage_external(
-                tx,
-                &crate::attachment_store::content_hash(bytes),
-                bytes.len() as u64,
-                &self.attachment_storage.binding_digest(),
-                &self.attachment_verification.binding_digest(),
-            )
-            .await?;
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(|_| MutationError::Unavailable)
-    }
-
     /// Execute a mutation only through durable attempt/refusal and terminal
     /// audit gates. No public mutation entry point bypasses this ordering.
     pub async fn execute(
@@ -1057,11 +913,6 @@ impl MutationCoordinator {
             return Err(error);
         }
         let _attempt = self.begin_boundary_audit(&request).await?;
-        if let Err(error) = self.stage_attachment(client, &request).await {
-            self.record_boundary_audit(&request, PreIoAuditKind::Refusal)
-                .await?;
-            return Err(error);
-        }
         let result = self.execute_after_attempt(client, &request, fault).await;
         if failure_is_refusal(&result) && !fault.is_enabled() {
             self.record_boundary_audit(&request, PreIoAuditKind::Refusal)
@@ -1255,108 +1106,12 @@ impl MutationCoordinator {
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
-        install_request_visibility_context(
-            transaction.transaction(),
-            &request.plan.entity,
-            request.claims,
-            self.audit.profile(),
-            &self.expected.database_id,
-        )
-        .await?;
-
         let stored = lock_and_load(transaction.transaction(), &binding).await?;
-        let mut attachment_version = None;
-        if matches!(&request.body, MutationBody::Attachment(_)) {
-            let actor = request_actor_reference(
-                self.audit.profile(),
-                &self.expected.database_id,
-                request.claims,
-            )?;
-            let id = Uuid::parse_str(request.record_id.ok_or(MutationError::InvalidRequest)?)
-                .map_err(|_| MutationError::InvalidRequest)?;
-            crate::request_store::require_owned_draft(
-                transaction.transaction(),
-                &request.plan.entity.id,
-                id,
-                &actor,
-            )
-            .await?;
-            let current = load_current_row_for_update(transaction.transaction(), request).await?;
-            request::admit_submitter_targets(
-                transaction.transaction(),
-                &request.plan.entity,
-                &request.plan.submitter_target_entities,
-                request.claims,
-                &current.data,
-            )
-            .await?;
-            let header = crate::request_store::load_header(
-                transaction.transaction(),
-                &request.plan.entity.id,
-                id,
-                false,
-            )
-            .await?;
-            attachment_version = Some(header.proposal_version);
-            if stored.is_some()
-                && transaction
-                    .transaction()
-                    .query_opt(
-                        "SELECT 1 FROM registry_internal.registry_request_idempotency_links
-                 WHERE key_reference = $1 AND request_entity_id = $2 AND request_id = $3
-                   AND proposal_version = $4",
-                        &[
-                            &binding.key_reference,
-                            &request.plan.entity.id,
-                            &id,
-                            &header.proposal_version,
-                        ],
-                    )
-                    .await
-                    .map_err(|_| MutationError::Unavailable)?
-                    .is_none()
-            {
-                return Err(MutationError::PreconditionFailed);
-            }
-        }
         if let Some(stored) = stored {
-            if !request.plan.entity.access_profiles[request.claims.access_profile()]
-                .submitter_targets
-                .is_empty()
-            {
-                // Reauthorize the exact retained result target, including create
-                // retries, before releasing cached request data.
-                let envelope: Value = serde_json::from_slice(stored.response.body())
-                    .map_err(|_| MutationError::Unavailable)?;
-                let api_data = envelope
-                    .get("data")
-                    .and_then(|member| member.get("domainData"))
-                    .and_then(Value::as_object)
-                    .ok_or(MutationError::Unavailable)?;
-                let intake = request
-                    .plan
-                    .entity
-                    .stored_fields
-                    .iter()
-                    .filter_map(|field| {
-                        api_data
-                            .get(&field.logical.api_name)
-                            .map(|value| (field.logical.id.clone(), value.clone()))
-                    })
-                    .collect();
-                request::admit_submitter_targets(
-                    transaction.transaction(),
-                    &request.plan.entity,
-                    &request.plan.submitter_target_entities,
-                    request.claims,
-                    &intake,
-                )
-                .await?;
-            }
             if !matches!(&stored.metadata, StoredResultMetadata::Record { .. }) {
                 return Err(MutationError::Unavailable);
             }
-            let entry = mutation_terminal_entry(
+            let entry = terminal_entry(
                 self.audit.profile(),
                 TerminalAudit {
                     grant: request.claims.grant_audit().cloned(),
@@ -1374,7 +1129,7 @@ impl MutationCoordinator {
                             record_reference, ..
                         } => Some(record_reference.clone()),
                         StoredResultMetadata::Batch { .. }
-                        | StoredResultMetadata::Application { .. }
+                        | StoredResultMetadata::Proposal { .. }
                         | StoredResultMetadata::ImmediateAction { .. }
                         | StoredResultMetadata::Release { .. } => None,
                     },
@@ -1383,7 +1138,7 @@ impl MutationCoordinator {
                             record_revision, ..
                         } => Some(*record_revision),
                         StoredResultMetadata::Batch { .. }
-                        | StoredResultMetadata::Application { .. }
+                        | StoredResultMetadata::Proposal { .. }
                         | StoredResultMetadata::ImmediateAction { .. }
                         | StoredResultMetadata::Release { .. } => None,
                     },
@@ -1391,8 +1146,6 @@ impl MutationCoordinator {
                     field_set_reference: None,
                     correlation: request.correlation.clone(),
                 },
-                &request.body,
-                attachment_version,
             )?;
             transaction
                 .commit()
@@ -1408,11 +1161,10 @@ impl MutationCoordinator {
             });
         }
 
-        if let Some(grant) = request.claims.task_grant() {
-            if request.plan.entity.change_request.is_none() {
-                return Err(MutationError::PreconditionFailed);
-            }
-            self.check_task_authority(grant).await?;
+        // Task grants authorize the promoted Action and Proposal operations.
+        // Direct record CRUD never derives authority from a lifecycle grant.
+        if request.claims.task_grant().is_some() {
+            return Err(MutationError::PreconditionFailed);
         }
         fault.fail_at(MutationFaultPoint::BeforeCurrentRow)?;
         let current = apply_current_row(
@@ -1420,9 +1172,6 @@ impl MutationCoordinator {
             request,
             self.audit.profile(),
             &self.expected.activation_id,
-            &self.expected.database_id,
-            &self.attachment_storage,
-            &self.attachment_verification.binding_digest(),
             self.field_encryption.as_deref(),
         )
         .await?;
@@ -1451,17 +1200,6 @@ impl MutationCoordinator {
                 principal_reference: &binding.principal_reference,
                 request_reference: &binding.request_reference,
                 snapshot: &snapshot,
-            },
-        )
-        .await?;
-        let request_version = link_request_record_revision(
-            transaction.transaction(),
-            &request.plan.entity,
-            &current,
-            if request.plan.route.operation == Operation::Create {
-                "request_create"
-            } else {
-                "request_patch"
             },
         )
         .await?;
@@ -1524,11 +1262,9 @@ impl MutationCoordinator {
             },
         )
         .await?;
-        let mut current = current;
-        load_attachment_response_metadata(transaction.transaction(), request, &mut current).await?;
         let held = self.held_response(request, &current, committed.reference.to_string())?;
         fault.fail_at(MutationFaultPoint::BeforeTerminalAudit)?;
-        let entry = mutation_terminal_entry(
+        let entry = terminal_entry(
             self.audit.profile(),
             TerminalAudit {
                 grant: request.claims.grant_audit().cloned(),
@@ -1547,8 +1283,6 @@ impl MutationCoordinator {
                 field_set_reference: None,
                 correlation: request.correlation.clone(),
             },
-            &request.body,
-            request_version,
         )?;
         fault.fail_at(MutationFaultPoint::BeforeIdempotency)?;
         insert_result(
@@ -1561,16 +1295,6 @@ impl MutationCoordinator {
             &held,
         )
         .await?;
-        if let Some(version) = request_version {
-            crate::request_store::link_idempotency_result(
-                transaction.transaction(),
-                &binding.key_reference,
-                &request.plan.entity.id,
-                current.record_uuid,
-                version,
-            )
-            .await?;
-        }
         fault.fail_at(MutationFaultPoint::BeforeCommit)?;
         transaction
             .commit()
@@ -2007,7 +1731,6 @@ impl MutationCoordinator {
         )
         .await?;
         let mut held_items = Vec::with_capacity(request.items.len());
-        let mut request_receipt_links = Vec::new();
         let mut commit_members = Vec::with_capacity(request.items.len());
         for (item_index, item) in request.items.iter().enumerate() {
             let item_plan = request
@@ -2031,9 +1754,6 @@ impl MutationCoordinator {
                 &item_request,
                 self.audit.profile(),
                 &self.expected.activation_id,
-                &self.expected.database_id,
-                &self.attachment_storage,
-                &self.attachment_verification.binding_digest(),
                 self.field_encryption.as_deref(),
             )
             .await?;
@@ -2062,16 +1782,6 @@ impl MutationCoordinator {
                 },
             )
             .await?;
-            if let Some(version) = link_request_record_revision(
-                transaction.transaction(),
-                &item_plan.entity,
-                &current,
-                "request_batch",
-            )
-            .await?
-            {
-                request_receipt_links.push((current.record_uuid, version));
-            }
             fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
             let trigger = mutation_trigger(item_plan.route.operation);
             let data_schemas = event_data_schemas(
@@ -2185,16 +1895,6 @@ impl MutationCoordinator {
             &held,
         )
         .await?;
-        for (request_id, version) in request_receipt_links {
-            crate::request_store::link_idempotency_result(
-                transaction.transaction(),
-                &binding.key_reference,
-                &request.plan.entity.id,
-                request_id,
-                version,
-            )
-            .await?;
-        }
         let mut run_record = None;
         let mut authority_records = Vec::new();
         if let (Some(chunk_binding), Some(run)) = (request.ingestion, ingestion_run.as_ref()) {
@@ -2307,12 +2007,11 @@ impl MutationCoordinator {
         current: &CurrentRow,
         snapshot_reference: String,
     ) -> Result<HeldResponse, MutationError> {
-        let mut data = response_data(
+        let data = response_data(
             &request.plan.entity,
             &current.data,
             &request.response_fields,
         )?;
-        data.extend(current.attachment_metadata.clone());
         let member = record_profile::record_member(
             current.record_id.clone(),
             current.record_revision.to_string(),
@@ -2335,8 +2034,6 @@ impl MutationCoordinator {
             current.record_revision,
             &request.response_fields,
             request.representation,
-            attachment_verification_etag_fields(&request.plan.entity, &current.attachment_metadata)
-                .as_ref(),
         )?;
         let mut headers = BTreeMap::from([
             (
@@ -2388,7 +2085,6 @@ pub(crate) fn strong_record_etag(
         record_revision,
         response_fields,
         RecordRepresentation::Json,
-        None,
     )
 }
 
@@ -2401,7 +2097,6 @@ pub(crate) fn strong_record_etag_for_representation(
     record_revision: i64,
     response_fields: &BTreeSet<String>,
     representation: RecordRepresentation,
-    attachment_verification: Option<&Value>,
 ) -> Result<String, MutationError> {
     let key_hasher = profile.key_hasher();
     let principal_reference = claims
@@ -2446,7 +2141,7 @@ pub(crate) fn strong_record_etag_for_representation(
         "verifiedPurpose": claims.purpose(),
         "rowBoundaries": row_boundaries,
     });
-    let mut etag_input = json!({
+    let etag_input = json!({
         "authorizationContext": authorization_context,
         "packageRevision": package_revision,
         "recordId": record_id,
@@ -2454,9 +2149,6 @@ pub(crate) fn strong_record_etag_for_representation(
         "responseFields": response_fields,
         "responseRepresentation": representation.content_type(),
     });
-    if let Some(status) = attachment_verification {
-        etag_input["attachmentVerification"] = status.clone();
-    }
     let etag_input = canonicalize_json(&etag_input).map_err(|_| MutationError::InvalidRequest)?;
     let etag_input = std::str::from_utf8(&etag_input).map_err(|_| MutationError::InvalidRequest)?;
     let digest = profile
@@ -2500,7 +2192,7 @@ pub enum MutationError {
     /// travels with the error so the refusal is recorded and reported by the
     /// planner's closed vocabulary, never by script text or request values.
     #[error("change-request planner produced no plan")]
-    PlannerFailure(crate::rhai_planner::ChangeRequestPlannerError),
+    PlannerFailure(crate::rhai_planner::PlanError),
     #[error("action handler produced no effects")]
     ActionHandlerFailure(crate::action_handler::ActionHandlerError),
     #[error("the declared Evidence dependency could not be accepted")]
@@ -2551,7 +2243,6 @@ enum MutationFaultPoint {
     BeforeCurrentRow,
     BeforeRevision,
     BeforeOutbox,
-    AfterFirstBatchItem,
     BeforeTerminalAudit,
     BeforeIdempotency,
     BeforeCommit,
@@ -2585,7 +2276,7 @@ impl FaultControl {
 }
 
 #[derive(Clone)]
-struct CurrentRow {
+pub(crate) struct CurrentRow {
     record_uuid: Uuid,
     record_id: String,
     record_revision: i64,
@@ -2593,87 +2284,6 @@ struct CurrentRow {
     record_lifecycle: String,
     before_data: Option<Map<String, Value>>,
     data: Map<String, Value>,
-    attachment_metadata: Map<String, Value>,
-}
-
-async fn load_attachment_response_metadata(
-    transaction: &Transaction<'_>,
-    request: &MutationRequest<'_>,
-    row: &mut CurrentRow,
-) -> Result<(), MutationError> {
-    if request.plan.entity.attachments.is_empty() {
-        return Ok(());
-    }
-    let header = crate::request_store::load_header(
-        transaction,
-        &request.plan.entity.id,
-        row.record_uuid,
-        false,
-    )
-    .await?;
-    let selected = request
-        .response_fields
-        .iter()
-        .filter(|id| request.plan.entity.attachments.contains_key(*id))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    row.attachment_metadata = crate::attachment_store::metadata_for_read(
-        transaction,
-        &request.plan.entity.id,
-        row.record_uuid,
-        header.proposal_version,
-        &selected,
-    )
-    .await?
-    .into_iter()
-    .collect();
-    for slot in selected {
-        row.attachment_metadata.entry(slot).or_insert(Value::Null);
-    }
-    Ok(())
-}
-
-/// Only asynchronous status changes need another component beyond the typed
-/// record revision. Disabled verification preserves the existing ETag format.
-pub(crate) fn attachment_verification_etag_fields(
-    entity: &CompiledEntity,
-    data: &Map<String, Value>,
-) -> Option<Value> {
-    let fields = entity
-        .attachments
-        .keys()
-        .filter_map(|slot| {
-            let status = data.get(slot)?.get("verificationStatus")?.as_str()?;
-            (status != "notRequired").then(|| (slot.clone(), Value::String(status.to_owned())))
-        })
-        .collect::<Map<_, _>>();
-    (!fields.is_empty()).then_some(Value::Object(fields))
-}
-
-async fn link_request_record_revision(
-    transaction: &Transaction<'_>,
-    entity: &CompiledEntity,
-    current: &CurrentRow,
-    link_kind: &str,
-) -> Result<Option<i64>, MutationError> {
-    if entity.change_request.is_none() {
-        return Ok(None);
-    }
-    let header =
-        crate::request_store::load_header(transaction, &entity.id, current.record_uuid, false)
-            .await?;
-    crate::request_store::link_request_revision(
-        transaction,
-        &entity.id,
-        current.record_uuid,
-        current.record_revision,
-        &entity.id,
-        current.record_uuid,
-        header.proposal_version,
-        link_kind,
-    )
-    .await?;
-    Ok(Some(header.proposal_version))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2682,9 +2292,6 @@ async fn apply_current_row(
     request: &MutationRequest<'_>,
     audit_profile: &AuditProfile,
     package_revision: &str,
-    identity_scope: &str,
-    attachment_storage: &crate::attachment_storage::AttachmentStorage,
-    verification_policy: &str,
     field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<CurrentRow, MutationError> {
     if request
@@ -2697,64 +2304,21 @@ async fn apply_current_row(
                 && !(request.plan.imported_item
                     && request.plan.route.operation == Operation::Create)
         })
-        || (request.plan.entity.change_request.is_some()
-            && request.plan.route.operation == Operation::Tombstone)
     {
         return Err(MutationError::InvalidRequest);
     }
     match request.plan.route.operation {
         Operation::Create => {
-            let authored_fields = request.body.submitted_fields()?;
             let record_uuid = Uuid::new_v4();
             let record_id = record_uuid.to_string();
             let MutationBody::Create(data) = &request.body else {
                 return Err(MutationError::InvalidRequest);
             };
             authorize_record_snapshot(request, data, record_uuid)?;
-            request::admit_submitter_targets(
-                transaction,
-                &request.plan.entity,
-                &request.plan.submitter_target_entities,
-                request.claims,
-                data,
-            )
-            .await?;
             let row = apply_create_row(transaction, request, &record_id, field_encryption).await?;
-            if request.plan.entity.change_request.is_some() {
-                let owner = request_actor_reference(audit_profile, identity_scope, request.claims)?;
-                crate::request_store::initialize_draft(
-                    transaction,
-                    &request.plan.entity.id,
-                    row.record_uuid,
-                    &owner,
-                )
-                .await?;
-                crate::request_store::record_authored_intake_fields(
-                    transaction,
-                    &request.plan.entity.id,
-                    row.record_uuid,
-                    authored_fields.iter().map(String::as_str),
-                )
-                .await?;
-            }
             Ok(row)
         }
         Operation::Patch => {
-            if request.plan.entity.change_request.is_some() {
-                let actor = request_actor_reference(audit_profile, identity_scope, request.claims)?;
-                let record_id = request.record_id.ok_or(MutationError::InvalidRequest)?;
-                let record_uuid =
-                    Uuid::parse_str(record_id).map_err(|_| MutationError::InvalidRequest)?;
-                // Use the same state-before-record lock order as lifecycle
-                // actions so draft changes cannot race submission or replay.
-                crate::request_store::require_owned_draft(
-                    transaction,
-                    &request.plan.entity.id,
-                    record_uuid,
-                    &actor,
-                )
-                .await?;
-            }
             let current = load_current_row_for_update(transaction, request).await?;
             let expected = request
                 .expected_etag
@@ -2768,140 +2332,23 @@ async fn apply_current_row(
                 current.record_revision,
                 &request.response_fields,
                 request.representation,
-                attachment_verification_etag_fields(
-                    &request.plan.entity,
-                    &current.attachment_metadata,
-                )
-                .as_ref(),
             )?;
             if expected.ct_eq(current_etag.as_bytes()).unwrap_u8() != 1 {
                 return Err(MutationError::PreconditionFailed);
             }
             let before_data = current.data.clone();
-            let data = if let MutationBody::Attachment(attachment) = &request.body {
-                // An attachment write changes no field, so its prospective
-                // row is the current one. Authorize it before the object
-                // store or attachment table is written, like every other
-                // refusal on this path.
-                authorize_record_snapshot(request, &current.data, current.record_uuid)?;
-                let entity = &request.plan.entity;
-                let header = crate::request_store::load_header(
-                    transaction,
-                    &entity.id,
-                    current.record_uuid,
-                    false,
-                )
-                .await?;
-                match (&attachment.content_type, &attachment.bytes) {
-                    (Some(content_type), Some(bytes)) => {
-                        let actor =
-                            request_actor_reference(audit_profile, identity_scope, request.claims)?;
-                        let backend = attachment_storage.binding_digest();
-                        if let crate::attachment_storage::AttachmentStorage::S3(store) =
-                            attachment_storage
-                        {
-                            let hash = crate::attachment_store::content_hash(bytes);
-                            crate::attachment_store::lock_for_put(
-                                transaction,
-                                &entity.id,
-                                current.record_uuid,
-                                header.proposal_version,
-                                &attachment.slot_id,
-                                &hash,
-                            )
-                            .await?;
-                            crate::attachment_store::require_backend(
-                                transaction,
-                                &hash,
-                                &backend,
-                                bytes.len() as u64,
-                            )
-                            .await?;
-                            store
-                                .put(&hash, bytes.clone())
-                                .await
-                                .map_err(|_| MutationError::Unavailable)?;
-                        }
-                        crate::attachment_store::put(
-                            transaction,
-                            &entity.id,
-                            current.record_uuid,
-                            header.proposal_version,
-                            &attachment.slot_id,
-                            content_type,
-                            bytes,
-                            &actor,
-                            &backend,
-                            verification_policy,
-                        )
-                        .await?;
-                    }
-                    (None, None) => {
-                        crate::attachment_store::remove(
-                            transaction,
-                            &entity.id,
-                            current.record_uuid,
-                            header.proposal_version,
-                            &attachment.slot_id,
-                        )
-                        .await?;
-                    }
-                    _ => return Err(MutationError::InvalidRequest),
-                }
-                Map::new()
-            } else {
-                apply_patch_document(request, &current.data)?
-            };
+            let data = apply_patch_document(request, &current.data)?;
             let mut admitted_intake = current.data.clone();
             admitted_intake.extend(data.clone());
-            if !matches!(&request.body, MutationBody::Attachment(_)) {
-                authorize_record_snapshot(request, &admitted_intake, current.record_uuid)?;
-            }
-            request::admit_submitter_targets(
+            authorize_record_snapshot(request, &admitted_intake, current.record_uuid)?;
+            let mut row = apply_patch_row(
                 transaction,
-                &request.plan.entity,
-                &request.plan.submitter_target_entities,
-                request.claims,
-                &admitted_intake,
+                request,
+                current.record_revision,
+                data,
+                field_encryption,
             )
             .await?;
-            let mut row = if matches!(&request.body, MutationBody::Attachment(_)) {
-                let table = quote_identifier(&request.plan.entity.physical_table);
-                let returning = returning_projection(&request.plan.entity);
-                let sql = format!(
-                    "UPDATE registry_data.{table} SET record_revision = record_revision + 1,
-                     active_package_revision = DEFAULT, updated_at = transaction_timestamp()
-                     WHERE record_id = $1::text::uuid AND record_revision = $2
-                     AND record_lifecycle = 'active' RETURNING {returning}",
-                );
-                let row = transaction
-                    .query_opt(&sql, &[&current.record_id, &current.record_revision])
-                    .await
-                    .map_err(|error| map_field_database_error(error, &request.plan.entity))?
-                    .ok_or(MutationError::PreconditionFailed)?;
-                row_to_current(&request.plan.entity, &row)?
-            } else {
-                apply_patch_row(
-                    transaction,
-                    request,
-                    current.record_revision,
-                    data,
-                    field_encryption,
-                )
-                .await?
-            };
-            if request.plan.entity.change_request.is_some()
-                && !matches!(&request.body, MutationBody::Attachment(_))
-            {
-                let authored_fields = request.body.submitted_fields()?;
-                crate::request_store::record_authored_intake_fields(
-                    transaction,
-                    &request.plan.entity.id,
-                    row.record_uuid,
-                    authored_fields.iter().map(String::as_str),
-                )
-                .await?;
-            }
             row.predecessor_revision = Some(current.record_revision);
             row.before_data = Some(before_data);
             Ok(row)
@@ -2920,11 +2367,6 @@ async fn apply_current_row(
                 current.record_revision,
                 &request.response_fields,
                 request.representation,
-                attachment_verification_etag_fields(
-                    &request.plan.entity,
-                    &current.attachment_metadata,
-                )
-                .as_ref(),
             )?;
             if expected.ct_eq(current_etag.as_bytes()).unwrap_u8() != 1 {
                 return Err(MutationError::PreconditionFailed);
@@ -2995,6 +2437,59 @@ async fn apply_patch_row(
         field_encryption,
     )
     .await
+}
+
+/// Write one validated plan target inside its owning controller's transaction.
+/// The controller installs and checks its own authority context before this
+/// call. PostgreSQL RLS remains active for both Action and Proposal writers.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn write_plan_row(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    record_uuid: Uuid,
+    expected_revision: Option<i64>,
+    fields: Map<String, Value>,
+    before: Option<&Map<String, Value>>,
+    field_encryption: Option<&FieldEncryptionService>,
+) -> Result<CurrentRow, MutationError> {
+    if fields.is_empty()
+        || fields
+            .keys()
+            .any(|field| !entity.fields.contains_key(field))
+    {
+        return Err(MutationError::InvalidRequest);
+    }
+    let record_id = record_uuid.to_string();
+    let mut current = match expected_revision {
+        None => {
+            if before.is_some()
+                || entity
+                    .fields
+                    .values()
+                    .any(|field| field.required && !fields.contains_key(&field.id))
+            {
+                return Err(MutationError::InvalidRequest);
+            }
+            insert_current_row(transaction, entity, &record_id, &fields, field_encryption).await?
+        }
+        Some(revision) => {
+            if revision < 1 || before.is_none() {
+                return Err(MutationError::InvalidRequest);
+            }
+            update_current_row(
+                transaction,
+                entity,
+                &record_id,
+                revision,
+                fields,
+                field_encryption,
+            )
+            .await?
+        }
+    };
+    current.predecessor_revision = expected_revision;
+    current.before_data = before.cloned();
+    Ok(current)
 }
 
 async fn insert_current_row(
@@ -3267,7 +2762,6 @@ async fn apply_tombstone_row(
         record_lifecycle: "tombstoned".to_owned(),
         before_data: Some(current.data.clone()),
         data: current.data,
-        attachment_metadata: current.attachment_metadata,
     })
 }
 
@@ -3293,9 +2787,7 @@ async fn load_current_row_for_update(
         .await
         .map_err(map_database_error)?
         .ok_or(MutationError::PreconditionFailed)?;
-    let mut current = row_to_current(&request.plan.entity, &row)?;
-    load_attachment_response_metadata(transaction, request, &mut current).await?;
-    Ok(current)
+    row_to_current(&request.plan.entity, &row)
 }
 
 async fn load_tombstone_row_for_update(
@@ -3344,7 +2836,6 @@ fn normalize_mutation_body(
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         MutationBody::Tombstone => Ok(MutationBody::Tombstone),
-        MutationBody::Attachment(attachment) => Ok(MutationBody::Attachment(attachment.clone())),
     }
 }
 
@@ -3716,7 +3207,6 @@ fn row_to_current(
         record_lifecycle,
         before_data: None,
         data,
-        attachment_metadata: Map::new(),
     })
 }
 
@@ -3733,16 +3223,16 @@ fn validate_request(
         .map_err(|_| MutationError::InvalidRequest)?;
     let profile = selected_profile(request)?;
     let submitted_fields = request.body.submitted_fields()?;
-    if request.claims.entity_id() != request.plan.entity.id
+    if request.claims.task_grant().is_some()
+        || request.claims.entity_id() != request.plan.entity.id
         || request.claims.principal().is_none()
         || request.plan.route.id.is_empty()
         || request.plan.route.id.len() > MAX_LOGICAL_ID_BYTES
         || request.plan.entity.id.is_empty()
         || request.plan.entity.id.len() > MAX_LOGICAL_ID_BYTES
-        || submitted_fields.iter().any(|field| match &request.body {
-            MutationBody::Attachment(_) => !request.plan.entity.attachments.contains_key(field),
-            _ => !request.plan.entity.fields.contains_key(field),
-        })
+        || submitted_fields
+            .iter()
+            .any(|field| !request.plan.entity.fields.contains_key(field))
         || submitted_fields
             .iter()
             .any(|field| !profile.writable_fields.contains(field))
@@ -3783,32 +3273,6 @@ fn validate_request(
             if request.record_id.is_some_and(valid_uuid)
                 && request.expected_etag.is_some_and(valid_strong_etag)
                 && matches!(request.body, MutationBody::Tombstone) => {}
-        Operation::Patch
-            if request.record_id.is_some_and(valid_uuid)
-                && request.expected_etag.is_some_and(valid_strong_etag)
-                && matches!(&request.body, MutationBody::Attachment(_)) =>
-        {
-            let MutationBody::Attachment(attachment) = &request.body else {
-                unreachable!("attachment request matched above")
-            };
-            let slot = request
-                .plan
-                .entity
-                .attachments
-                .get(&attachment.slot_id)
-                .ok_or(MutationError::InvalidRequest)?;
-            if request.plan.entity.change_request.is_none() {
-                return Err(MutationError::InvalidRequest);
-            }
-            match (&attachment.content_type, &attachment.bytes) {
-                (Some(content_type), Some(bytes))
-                    if !bytes.is_empty()
-                        && bytes.len() <= slot.maximum_bytes as usize
-                        && slot.content_types.contains(content_type) => {}
-                (None, None) => {}
-                _ => return Err(MutationError::InvalidRequest),
-            }
-        }
         _ => return Err(MutationError::InvalidRequest),
     }
     if let MutationBody::Create(data) = &request.body {
@@ -3884,7 +3348,7 @@ fn admit_submitted_names(
                 }
             }
         }
-        MutationBody::Tombstone | MutationBody::Attachment(_) => {}
+        MutationBody::Tombstone => {}
     }
     Ok(())
 }
@@ -4115,26 +3579,6 @@ fn selected_profile<'a>(
     Ok(profile)
 }
 
-/// Build the `response` entry for one mutation. The caller appends it after
-/// the mutation transaction commits and before the response is released.
-fn mutation_terminal_entry(
-    profile: &AuditProfile,
-    terminal: TerminalAudit,
-    body: &MutationBody,
-    version: Option<i64>,
-) -> Result<AuditEntry, RegistryAuditError> {
-    if let MutationBody::Attachment(attachment) = body {
-        crate::audit::attachment_terminal_entry(
-            profile,
-            terminal,
-            &attachment.slot_id,
-            version.ok_or(RegistryAuditError::InvalidContext)?,
-        )
-    } else {
-        terminal_entry(profile, terminal)
-    }
-}
-
 fn canonical_request_digest(request: &MutationRequest<'_>) -> Result<[u8; 32], MutationError> {
     let canonical = canonicalize_json(&json!({
         "method": method_name(request.plan.route.method),
@@ -4175,7 +3619,6 @@ impl MutationBody {
                 })
                 .collect(),
             Self::Tombstone => Ok(Vec::new()),
-            Self::Attachment(attachment) => Ok(vec![attachment.slot_id.clone()]),
         }
     }
 }
@@ -4201,14 +3644,6 @@ fn mutation_body_json(body: &MutationBody) -> Value {
                 .collect(),
         ),
         MutationBody::Tombstone => json!({"tombstone": true}),
-        MutationBody::Attachment(attachment) => json!({
-            "attachment": {
-                "slotId": attachment.slot_id,
-                "contentType": attachment.content_type,
-                "size": attachment.bytes.as_ref().map(Vec::len),
-                "sha256": attachment.sha256(),
-            }
-        }),
     }
 }
 
@@ -4231,50 +3666,6 @@ fn record_reference(
         .key_hasher()
         .audit_reference_hash("breg-record-v1", package_revision, record_id)
         .map_err(|_| MutationError::Unavailable)
-}
-
-pub(crate) fn request_actor_reference(
-    profile: &AuditProfile,
-    database_id: &str,
-    claims: &ClaimContext,
-) -> Result<String, MutationError> {
-    let principal = claims.principal().ok_or(MutationError::InvalidRequest)?;
-    profile
-        .key_hasher()
-        .audit_reference_hash("breg-request-actor-v1", database_id, principal)
-        .map_err(|_| MutationError::Unavailable)
-}
-
-pub(crate) async fn install_request_visibility_context(
-    transaction: &Transaction<'_>,
-    entity: &CompiledEntity,
-    claims: &ClaimContext,
-    audit_profile: &AuditProfile,
-    database_id: &str,
-) -> Result<(), MutationError> {
-    // A read path answers on the source profile's path grant, so its target
-    // entity may hold no entry for the profile at all. Such a profile cannot
-    // declare owner visibility there: there is nothing to install. Writes
-    // reach this only after their own profile entry was checked.
-    if entity.change_request.is_none()
-        || !entity
-            .access_profiles
-            .get(claims.access_profile())
-            .is_some_and(|profile| {
-                profile.request_visibility == Some(crate::contract::RequestVisibilitySource::Owner)
-            })
-    {
-        return Ok(());
-    }
-    let owner_reference = request_actor_reference(audit_profile, database_id, claims)?;
-    transaction
-        .execute(
-            "SELECT set_config('registry.request_owner_reference', $1, true)",
-            &[&owner_reference],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    Ok(())
 }
 
 fn sql_value(value: &Value, field_type: &FieldTypeSource) -> Result<Option<String>, MutationError> {
@@ -4749,13 +4140,15 @@ mod tests {
             ),
             Err(MutationError::InvalidRequest)
         );
-        assert!(sql_value(
-            &json!({"type":"Point","coordinates":[100.1234,10.1234]}),
-            &FieldTypeSource::Crs84Point {
-                precision: 4,
-                bbox: None,
-            },
-        )
-        .is_ok());
+        assert!(
+            sql_value(
+                &json!({"type":"Point","coordinates":[100.1234,10.1234]}),
+                &FieldTypeSource::Crs84Point {
+                    precision: 4,
+                    bbox: None,
+                },
+            )
+            .is_ok()
+        );
     }
 }

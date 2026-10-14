@@ -6,10 +6,8 @@
 mod tests;
 
 use super::*;
-use crate::data::{validate_field_value, FieldValue};
-use crate::model::{
-    ActionRouteKind, CompiledAction, CompiledActionRoute, CompiledActionTargetBinding,
-};
+use crate::data::{FieldValue, validate_field_value};
+use crate::model::{ActionRouteKind, CompiledAction, CompiledActionRoute};
 
 pub(super) struct AuthorizedActionSurface<'a> {
     pub route: &'a CompiledActionRoute,
@@ -99,13 +97,12 @@ fn authorize_action<'a>(
     options: &QueryOptions,
 ) -> Option<AuthorizedActionSurface<'a>> {
     service.mutations.as_ref()?;
-    if claims.grant().is_some() {
-        return None;
-    }
     let inventory = service.registry.actions();
     // A caller cannot construct an alternate path, operation or action under a
     // valid route identifier. Discovery and dispatch use this same inventory.
-    if !inventory.routes.contains(route) || route.operation != Operation::Invoke {
+    if !inventory.routes.contains(route)
+        || !matches!(route.operation, Operation::Invoke | Operation::Start)
+    {
         return None;
     }
     let access = inventory.access.iter().find(|entry| {
@@ -126,11 +123,26 @@ fn authorize_action<'a>(
         .actions
         .iter()
         .find(|action| action.id == route.action_id)?;
+    if route.operation == Operation::Start {
+        proposals::authorize(
+            &service.registry,
+            action,
+            claims,
+            Some(selected),
+            crate::postgres::ProposalAuthorityOperation::Start,
+            None,
+        )?;
+    } else if claims.grant().is_none()
+        && (claims.actor_subject().is_some()
+            || claims.actor_kind() == Some(registry_platform_oidc::ActorKind::Agent))
+    {
+        return None;
+    }
     let grant = action
         .permissions
         .iter()
         .find(|grant| grant.profile_id == selected)?;
-    if !grant.operations.contains(&Operation::Invoke)
+    if !grant.operations.contains(&route.operation)
         || grant.principal_claim.as_deref() != claims.principal_claim()
         || !grant
             .required_scopes
@@ -160,7 +172,11 @@ fn authorize_action<'a>(
         ) {
             return None;
         }
-        if expected == crate::contract::ActorKindSource::Agent && claims.actor_subject().is_none() {
+        if route.operation == Operation::Invoke
+            && expected == crate::contract::ActorKindSource::Agent
+            && claims.actor_subject().is_none()
+            && claims.grant().is_none()
+        {
             return None;
         }
     }
@@ -179,6 +195,11 @@ fn authorize_action<'a>(
         return None;
     }
     let principal = claims.principal()?;
+    let task_grant = if route.operation == Operation::Invoke {
+        action_task_grant_binding(action, grant, claims).ok()?
+    } else {
+        None
+    };
     let target_authority = grant
         .targets
         .iter()
@@ -200,8 +221,51 @@ fn authorize_action<'a>(
             target_authority,
             grant.results.clone(),
         )
-        .with_grant_audit(claims),
+        .with_grant_audit(claims)
+        .with_task_grant(task_grant),
     })
+}
+
+fn action_task_grant_binding(
+    action: &CompiledAction,
+    permission: &crate::model::CompiledActionPermission,
+    claims: &VerifiedRequestClaims,
+) -> Result<Option<crate::task_grant::TaskGrantBinding>, ()> {
+    match (&permission.task_grant, claims.grant()) {
+        (None, None) => Ok(None),
+        (Some(source), Some(grant)) => {
+            if source.source_issuer != grant.source_issuer()
+                || permission.actor_kind != Some(crate::contract::ActorKindSource::Agent)
+                || Some(grant.client()) != claims.requester_client()
+                || Some(grant.principal()) != claims.principal()
+                || Some(grant.purpose()) != claims.purpose()
+                || !grant
+                    .bounds()
+                    .breg_permissions()
+                    .is_some_and(|permissions| {
+                        permissions.iter().any(|bound| {
+                            bound.collection() == format!("action:{}", action.id)
+                                && bound
+                                    .operations()
+                                    .iter()
+                                    .any(|operation| operation == "invoke")
+                        })
+                    })
+            {
+                return Err(());
+            }
+            let binding = crate::task_grant::TaskGrantBinding::from_verified(
+                grant,
+                claims.grant_subjects().clone(),
+            )
+            .map_err(|_| ())?;
+            if !binding.is_current() {
+                return Err(());
+            }
+            Ok(Some(binding))
+        }
+        _ => Err(()),
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // Axum extractors are the HTTP contract.
@@ -356,14 +420,7 @@ impl ParseActionError {
 }
 
 fn condition_inputs(action: &CompiledAction) -> BTreeSet<&str> {
-    action
-        .effects
-        .iter()
-        .filter_map(|effect| match &effect.target.binding {
-            CompiledActionTargetBinding::Existing { input } => Some(input.as_str()),
-            CompiledActionTargetBinding::Create => None,
-        })
-        .collect()
+    crate::plan::condition_inputs(action)
 }
 
 fn parse_body(

@@ -7,14 +7,14 @@
 //! handler module is admitted (read once, size-checked, hashed, structurally
 //! validated against the platform ABI, captured into the compiled handler and
 //! the package closure) or refused with a typed diagnostic naming the
-//! violation. Execution stays refused everywhere; these tests never run a
-//! guest.
+//! violation. Runtime execution is covered separately; these admission tests
+//! never run a guest.
 
-use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_json, ModuleAssetSource, ACTION_HANDLER_ABI_V1};
-use registry_breg::model::CompiledActionHandlerKind;
-use registry_breg::wasm_handler::{MAXIMUM_WASM_MODULE_BYTES, MAX_PACKAGE_WASM_MODULES};
-use serde_json::{json, Value};
+use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
+use registry_breg::contract::{ACTION_PLAN_ABI_V1, ModuleAssetSource, parse_project_json};
+use registry_breg::model::CompiledPlanFunctionKind;
+use registry_breg::wasm_handler::{MAX_PACKAGE_WASM_MODULES, MAXIMUM_WASM_MODULE_BYTES};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 /// A minimal module satisfying the guest byte ABI: zero imports, the exact
@@ -90,23 +90,25 @@ fn wasm_project() -> Value {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"wasm-admission","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "datasets":[{"id":"test-dataset"}],
+          "recordTypes":[{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "fields":[
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ]
           }],
+          "functions":[{"id":"person-plan","runtime":"wasm","source":"wasm/handler.wasm","entrypoint":"handle","abi":"registry.action-plan/v1"}],
           "actions":[{
-            "id":"register-person",
+            "id":"register-person","execution":{"mode":"immediate"},
             "inputs":[
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
-            "handler":{
-              "type":"wasm","module":"wasm/handler.wasm","abi":"registry.action-handler/v1",
+            "plan":{
+              "type":"function","function":"person-plan","inputs":["person-code","legal-name"],
               "writes":[{
-                "id":"person","target":{"entity":"person"},"operation":"create",
+                "id":"person","target":{"recordType":"person"},"operation":"create",
                 "fields":["person-code","legal-name"]
               }]
             }
@@ -115,7 +117,7 @@ fn wasm_project() -> Value {
             "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":{"actions":[{
               "action":"register-person","operations":["invoke"],
-              "targets":[{"entity":"person","rowBoundaries":"unrestricted"}],
+              "targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],
               "results":["person"]
             }]}
           }]
@@ -144,7 +146,7 @@ fn compile_with_module(
 
 fn compiled_handler(
     registry: &registry_breg::CompiledRegistry,
-) -> registry_breg::model::CompiledActionHandler {
+) -> registry_breg::model::CompiledPlanFunction {
     registry
         .actions()
         .actions
@@ -183,8 +185,8 @@ fn a_minimal_abi_module_compiles_into_the_handler_inventory() {
     let registry = compile_with_module(wasm_project(), "wasm/handler.wasm", bytes.clone())
         .expect("a minimal ABI module is admitted");
     let handler = compiled_handler(&registry);
-    assert_eq!(handler.kind, CompiledActionHandlerKind::Wasm);
-    assert_eq!(handler.abi, ACTION_HANDLER_ABI_V1);
+    assert_eq!(handler.kind, CompiledPlanFunctionKind::Wasm);
+    assert_eq!(handler.abi, ACTION_PLAN_ABI_V1);
     assert_eq!(handler.module_path, "wasm/handler.wasm");
     assert_eq!(handler.module_bytes, bytes);
     assert_eq!(
@@ -219,7 +221,7 @@ fn a_missing_module_asset_reports_the_authored_path() {
         .map(|_| ())
         .expect_err("a declared module without its asset is refused");
     let diagnostic = first_code(&failure, "breg.action.handler-module-asset-missing");
-    assert_eq!(diagnostic.path, "actions[register-person].handler.module");
+    assert_eq!(diagnostic.path, "functions[id=person-plan].source");
     assert!(
         diagnostic.message.contains("wasm/handler.wasm"),
         "the diagnostic names the authored path: {}",
@@ -234,7 +236,7 @@ fn a_module_over_the_structural_ceiling_is_refused_before_validation() {
         .map(|_| ())
         .expect_err("a module beyond the structural ceiling is refused");
     let diagnostic = first_code(&failure, "breg.action.handler-module-bound");
-    assert_eq!(diagnostic.path, "actions[register-person].handler.module");
+    assert_eq!(diagnostic.path, "functions[id=person-plan].source");
     // The refusal names the structural ceiling: the ceiling every build and
     // package enforces, not an operator's execution-time configuration.
     assert_eq!(MAXIMUM_WASM_MODULE_BYTES, 5 * 1024 * 1024);
@@ -269,7 +271,7 @@ fn wat_text_is_not_admitted_as_a_module_binary() {
     .map(|_| ())
     .expect_err("WebAssembly text is not a module binary");
     let diagnostic = first_code(&failure, "breg.action.handler-module-invalid");
-    assert_eq!(diagnostic.path, "actions[register-person].handler.module");
+    assert_eq!(diagnostic.path, "functions[id=person-plan].source");
 }
 
 #[test]
@@ -288,7 +290,7 @@ fn a_module_with_a_disallowed_import_is_refused_by_name() {
         .map(|_| ())
         .expect_err("a module with an import is refused");
     let diagnostic = first_code(&failure, "breg.action.handler-module-import-unsupported");
-    assert_eq!(diagnostic.path, "actions[register-person].handler.module");
+    assert_eq!(diagnostic.path, "functions[id=person-plan].source");
     assert!(
         diagnostic.message.contains("\"env\"") && diagnostic.message.contains("\"log\""),
         "the diagnostic names the disallowed import: {}",
@@ -310,7 +312,7 @@ fn a_module_missing_a_required_export_is_refused_by_name() {
         .map(|_| ())
         .expect_err("a module missing result_len is refused");
     let diagnostic = first_code(&failure, "breg.action.handler-module-export-missing");
-    assert_eq!(diagnostic.path, "actions[register-person].handler.module");
+    assert_eq!(diagnostic.path, "functions[id=person-plan].source");
     assert!(
         diagnostic.message.contains("result_len"),
         "the diagnostic names the missing export: {}",
@@ -369,25 +371,25 @@ fn wasm_handler_field_discipline_is_reported_per_backend() {
     // pairs the backend with its source reference, so the refusal arrives
     // while the project is read.
     let mut with_script = wasm_project();
-    with_script["actions"][0]["handler"]["script"] = json!("scripts/handler.rhai");
+    with_script["functions"][0]["script"] = json!("scripts/handler.rhai");
     let failure = parse_project_json(&serde_json::to_vec(&with_script).unwrap())
         .map(|_| ())
         .expect_err("a WASM handler cannot declare a Rhai script");
-    let diagnostic = first_code(&failure, "breg.source.shape-invalid");
+    let diagnostic = first_code(&failure, "config.unknown-key");
     assert!(
-        diagnostic.message.contains("unknown field `script`"),
+        diagnostic.message.contains("`script`"),
         "the refusal does not name the member the author wrote: {}",
         diagnostic.message
     );
 
     // A non-.wasm module path never reaches the asset lookup.
     let mut bad_path = wasm_project();
-    bad_path["actions"][0]["handler"]["module"] = json!("wasm/handler.txt");
+    bad_path["functions"][0]["source"] = json!("wasm/handler.txt");
     let failure = compile_with_module(bad_path, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
         .map(|_| ())
         .expect_err("a non-wasm module path is refused");
     let diagnostic = first_code(&failure, "breg.action.handler-module-source-invalid");
-    assert_eq!(diagnostic.path, "actions[register-person].handler.module");
+    assert_eq!(diagnostic.path, "functions[id=person-plan].source");
 }
 
 #[test]
@@ -449,18 +451,19 @@ fn an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature() {
         failure.diagnostics()
     );
 
-    // The same declaration compiles once a Rhai handler carries it.
-    let writes = project["actions"][0]["handler"]["writes"].clone();
-    project["actions"][0]["handler"] = json!({
-        "type": "rhai", "script": "handlers/register.rhai",
-        "abi": ACTION_HANDLER_ABI_V1, "writes": writes
+    // The same declared capability is admitted by an input-bound Rhai plan.
+    project["functions"][0] = json!({
+        "id":"person-plan", "runtime":"rhai", "source":"handlers/register.rhai",
+        "entrypoint":"plan", "abi":ACTION_PLAN_ABI_V1,
+        "capabilities":["evidence:farmer-status"]
     });
+    project["actions"][0]["plan"]["capabilities"] = json!(["evidence:farmer-status"]);
     let registry = compile(
         &project,
         ModuleAssetSource {
             module: None,
             path: "handlers/register.rhai".to_owned(),
-            bytes: b"fn handle(ctx) { #{effects: []} }".to_vec(),
+            bytes: b"fn plan(ctx) { #{effects: []} }".to_vec(),
         },
     )
     .expect("a Rhai handler carries the same Evidence declaration");
@@ -483,19 +486,19 @@ fn the_per_package_wasm_module_count_is_bounded() {
         // numeric order: the ceiling is hit by the 17th action.
         let id = format!("register-person-{index:02}");
         actions.push(json!({
-            "id": id,
+            "id": id,"execution":{"mode":"immediate"},
             "inputs":[
               {"id":"person-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
-            "handler":{
-              "type":"wasm","module":"wasm/handler.wasm","abi":"registry.action-handler/v1",
-              "writes":[{"id":"person","target":{"entity":"person"},"operation":"create","fields":["person-code","legal-name"]}]
+            "plan":{
+              "type":"function","function":"person-plan","inputs":["person-code","legal-name"],
+              "writes":[{"id":"person","target":{"recordType":"person"},"operation":"create","fields":["person-code","legal-name"]}]
             }
         }));
         permissions.push(json!({
             "action": id, "operations":["invoke"],
-            "targets":[{"entity":"person","rowBoundaries":"unrestricted"}],
+            "targets":[{"recordType":"person","rowBoundaries":"unrestricted"}],
             "results":["person"]
         }));
     }
@@ -505,10 +508,7 @@ fn the_per_package_wasm_module_count_is_bounded() {
         .map(|_| ())
         .expect_err("a package beyond the module-count ceiling is refused");
     let diagnostic = first_code(&failure, "breg.action.handler-modules-bound");
-    assert_eq!(
-        diagnostic.path,
-        "actions[register-person-16].handler.module"
-    );
+    assert_eq!(diagnostic.path, "functions[id=person-plan].source");
 }
 
 /// The package closure test needs the package module, which the runtime
@@ -517,8 +517,8 @@ fn the_per_package_wasm_module_count_is_bounded() {
 mod package_closure {
     use super::*;
     use registry_breg::package::{
-        inspect_package_integrity, prepare_package_with_project_assets, PackageBuildRequest,
-        PackageError, PackageMigrationPlanInput, PackageSourceFile, PreparedPackage,
+        PackageBuildRequest, PackageError, PackageMigrationPlanInput, PackageSourceFile,
+        PreparedPackage, inspect_package_integrity, prepare_package_with_project_assets,
     };
 
     /// Build and prepare the wasm admission project as a package carrying
@@ -591,7 +591,7 @@ mod package_closure {
             .handler
             .as_ref()
             .expect("the wasm handler rederives");
-        assert_eq!(handler.kind, CompiledActionHandlerKind::Wasm);
+        assert_eq!(handler.kind, CompiledPlanFunctionKind::Wasm);
         assert_eq!(handler.module_bytes, bytes);
         assert_eq!(
             handler.module_sha256.as_deref(),

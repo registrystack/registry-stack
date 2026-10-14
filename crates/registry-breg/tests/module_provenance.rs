@@ -6,25 +6,25 @@
 //! error), so provenance is exactly one `Option<String>` per id, `Some`
 //! naming a module or absent meaning the project root.
 
-use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_module_json, parse_project_json, RegistryModule};
+use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::contract::{RegistryModule, parse_module_json, parse_project_json};
 use registry_breg::model::CompiledEntity;
 
 fn provenance_project() -> registry_breg::contract::RegistryProject {
     parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"module-provenance","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://module-provenance.example.test"},
           "modules":[{"id":"declarer","version":"1"},{"id":"extender","version":"1"}],
-          "entities":[{
+          "recordTypes":[{
             "id":"root-case","primaryDataset":"test-dataset","route":"root-cases","mutationMode":"mutable",
             "fields":[{"id":"root-field","type":"string","maximumLength":8,"classification":"internal"}]
           }],
           "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
-              "entities":[
-                {"entity":"root-case","operations":["get"],"readableFields":["root-field"],"rowBoundaries":"unrestricted"},
-                {"entity":"module-case","operations":["get"],"readableFields":["base-field","extra-field"],"rowBoundaries":"unrestricted"}
+              "records":[
+                {"recordType":"root-case","operations":["get"],"readableFields":["root-field"],"rowBoundaries":"unrestricted"},
+                {"recordType":"module-case","operations":["get"],"readableFields":["base-field","extra-field"],"rowBoundaries":"unrestricted"}
               ]
             }
           }]
@@ -35,7 +35,7 @@ fn provenance_project() -> registry_breg::contract::RegistryProject {
 
 fn declarer_module() -> RegistryModule {
     parse_module_json(
-        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"declarer","version":"1","entities":[{
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"declarer","version":"1","recordTypes":[{
           "id":"module-case","primaryDataset":"test-dataset","route":"module-cases","mutationMode":"mutable",
           "fields":[{"id":"base-field","type":"string","maximumLength":8,"classification":"internal"}],
           "hooks":[{"id":"module-case-created","phase":"after","trigger":"created","projection":["base-field"]}],
@@ -47,8 +47,8 @@ fn declarer_module() -> RegistryModule {
 
 fn extender_module() -> RegistryModule {
     parse_module_json(
-        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"extender","version":"1","extendEntities":[{
-          "entity":"module-case",
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"extender","version":"1","extendRecordTypes":[{
+          "recordType":"module-case",
           "fields":[{"id":"extra-field","type":"string","maximumLength":8,"classification":"internal"}],
           "hooks":[{"id":"module-case-extended","phase":"after","trigger":"created","projection":["extra-field"]}],
           "constraints":[{"type":"unique","fields":["extra-field"]}]
@@ -174,10 +174,10 @@ fn extension_attributes_appended_ids_to_the_extending_module_only() {
 #[test]
 fn module_free_project_omits_source_module_and_module_origins() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"module-free","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://module-free.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
             "fields":[{"id":"label","type":"string","maximumLength":8,"classification":"internal"}],
             "hooks":[{"id":"case-created","phase":"after","trigger":"created","projection":["label"]}],
@@ -185,8 +185,8 @@ fn module_free_project_omits_source_module_and_module_origins() {
           }],
           "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
-              "entities":[
-                {"entity":"case","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
+              "records":[
+                {"recordType":"case","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
               ]
             }
           }]

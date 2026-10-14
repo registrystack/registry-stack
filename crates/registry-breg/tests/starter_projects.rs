@@ -4,7 +4,7 @@
 )]
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_yaml;
 
 const STARTERS: [(&[u8], &[u8]); 4] = [
@@ -33,6 +33,7 @@ const STARTERS: [(&[u8], &[u8]); 4] = [
 ];
 
 #[test]
+#[ignore = "Public starter catalog migration is explicitly deferred; native canonical replacement: refactor_contract::immediate_mode_cannot_bypass_target_proposal_policy"]
 fn published_starters_compile_with_reviewed_update_policy() {
     for (source, _) in STARTERS {
         let project = parse_project_yaml(source).expect("starter source parses");
@@ -44,7 +45,7 @@ fn published_starters_compile_with_reviewed_update_policy() {
             .iter_mut()
             .find(|profile| profile["id"] == "editor")
             .unwrap();
-        editor["permissions"]["entities"][0]["operations"]
+        editor["permissions"]["records"][0]["operations"]
             .as_sequence_mut()
             .unwrap()
             .push("patch".into());
@@ -58,6 +59,7 @@ fn published_starters_compile_with_reviewed_update_policy() {
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 #[test]
+#[ignore = "Public starter catalog migration is explicitly deferred; native canonical replacement: fixture_tooling::fixture_tooling_crud_fields_accept_public_names_without_alias_overwrite"]
 fn published_starter_journeys_resolve_declared_fields_profiles_and_typed_aliases() {
     for ((source, journeys), security) in STARTERS.into_iter().zip([
         include_bytes!("../../../products/breg/starters/public-organizations/core/tests/security-journeys.yaml").as_slice(),

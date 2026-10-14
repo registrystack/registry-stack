@@ -117,7 +117,7 @@ operations, actions, change-request capabilities, and optional caller-filtered
 statistical dataset descriptions. `BRegMetadata::statistical_datasets()` returns
 validated inert JSON; release-only readers can receive these descriptions with
 no entities or entity operations. Descriptions grant no entity authority.
-`select_immediate_action`, `select_batch`, and `select_tombstone`
+`select_action`, `select_batch`, and `select_tombstone`
 require complete executable contracts bound to the source, profile, and package.
 Every operation lists its `readableRequestFields`, empty when the selected
 profile holds no request metadata grant; metadata without it is refused. A

@@ -10,15 +10,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderValue, Request, StatusCode};
-use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::Algorithm;
+use jsonwebtoken::jwk::JwkSet;
 use registry_breg::api::{
-    authenticated_router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError,
-    ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError, ReadinessProbe,
+    RecordReadRequest, RecordReadService, ServiceFuture, VerifiedClaimValue, VerifiedRequestClaims,
+    authenticated_router,
 };
 use registry_breg::auth::{
     AuthenticationConfigError, AuthenticationError, AuthorityClaimConfig, RegistryAuthenticator,
@@ -29,18 +29,18 @@ use registry_breg::problem::ProblemCode;
 use registry_breg::review_store::{
     ReviewAuthorityClient, ReviewAuthorityRegistry, ReviewCompletionReceiver,
 };
-use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
+use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_yaml};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    access_token_typ_set, ActorKind, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError,
-    TokenVerifier, TokenVerifierConfig,
+    ActorKind, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
+    TokenVerifierConfig, access_token_typ_set,
 };
 use registry_platform_testing::{
-    fixtures, jwks_from_private_jwk, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
+    MockIdp, fixtures, jwks_from_private_jwk, oidc_verifier_config, sign_ed25519_compact_jwt,
 };
 use registry_review_client::{ReviewClient, ReviewClientConfig};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
@@ -60,7 +60,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -72,14 +72,17 @@ entities:
       - {id: secret, type: string, required: true, maximumLength: 100, classification: restricted}
       - {id: jurisdiction, type: string, required: true, maximumLength: 100, classification: internal}
       - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [get]
           readableFields: [label]
           rowBoundaries: unrestricted
@@ -88,8 +91,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [case-management-never-rendered]
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [get]
           readableFields: [label, secret]
           rowBoundaries:
@@ -105,7 +108,7 @@ project:
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
-entities:
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -115,14 +118,17 @@ entities:
     fields:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: caseworker
     default: true
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [get]
           readableFields: [label]
           rowBoundaries:
@@ -133,7 +139,7 @@ const CONTEXTUAL_PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: contextual-auth, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
-entities:
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -143,6 +149,9 @@ entities:
     fields:
       - {id: label, type: string, required: true, maximumLength: 100, classification: public}
       - {id: tenant, type: string, required: true, maximumLength: 100, classification: internal}
+datasets:
+  - {id: test-dataset}
+
 accessProfiles:
   - id: standing-human
     principalClaim: sub
@@ -151,8 +160,8 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [record-review]
     permissions:
-      entities:
-        - {entity: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
+      records:
+        - {recordType: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
   - id: standing-agent
     principalClaim: sub
     requiredScopes: unrestricted
@@ -160,8 +169,8 @@ accessProfiles:
     requesterClients: [agent-client]
     requiredPurposes: [citizen-self-service]
     permissions:
-      entities:
-        - {entity: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
+      records:
+        - {recordType: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
   - id: delegated-agent
     default: true
     principalClaim: sub
@@ -171,8 +180,8 @@ accessProfiles:
     requiredPurposes: [record-review]
     taskGrant: {sourceIssuer: https://casework.example}
     permissions:
-      entities:
-        - entity: case
+      records:
+        - recordType: case
           operations: [get]
           readableFields: [label]
           rowBoundaries:
@@ -666,11 +675,26 @@ async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority(
     let refused = harness
         .send(
             &format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent"),
-            &[bearer(&harness.signed_token(wider, "JWT"))],
+            &[bearer(&harness.signed_token(wider.clone(), "JWT"))],
             None,
         )
         .await;
-    assert_ne!(refused.status(), StatusCode::OK);
+    assert_eq!(refused.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 2);
+    let token = harness.signed_token(wider, "JWT");
+    let list = harness
+        .send(
+            "/v1/records/cases?accessProfile=delegated-agent",
+            &[bearer(&token)],
+            None,
+        )
+        .await;
+    assert_ne!(list.status(), StatusCode::OK);
+    assert_eq!(
+        harness.records.calls.load(Ordering::SeqCst),
+        2,
+        "the profile's Get-only ceiling refuses List before Record IO"
+    );
 }
 
 #[test]
@@ -850,7 +874,7 @@ async fn trusted_actor_makes_the_token_an_agent_whatever_kind_it_carries() {
 }
 
 #[test]
-fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutation() {
+fn task_profiles_refuse_direct_record_mutation() {
     let direct = CONTEXTUAL_PROJECT.replace(
         "operations: [get]\n          readableFields: [label]\n          rowBoundaries:",
         "operations: [create, get]\n          readableFields: [label]\n          writableFields: [label]\n          rowBoundaries:",
@@ -860,36 +884,6 @@ fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutatio
         .expect_err("direct target mutation is refused");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "breg.access-profile.task-grant-direct-mutation-forbidden"
-    }));
-
-    let task_grant_reviewer = include_str!("fixtures/authority-mapping.yaml").replace(
-        "  - id: reviewer\n    default: true\n    principalClaim: registry_principal",
-        "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {sourceIssuer: https://casework.example}",
-    );
-
-    // A task-grant profile cannot hold apply-request, so applying the
-    // change request needs its own, non-delegated profile; otherwise the
-    // fixture's applyTargets completeness check has nothing to satisfy it.
-    let governed = task_grant_reviewer
-        .replace(
-            "operations: [get, submit-request, apply-request",
-            "operations: [create, get, patch, submit-request",
-        )
-        .replace(
-            "          applyTargets:\n            - entity: asset\n              rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n",
-            "",
-        )
-        + "  - id: applier\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      entities:\n        - entity: correction\n          operations: [apply-request]\n          readableFields: [asset, label]\n          rowBoundaries: unrestricted\n          applyTargets:\n            - entity: asset\n              rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n";
-    let project = parse_project_yaml(governed.as_bytes()).expect("governed draft project parses");
-    compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("governed request draft create and patch remain available");
-
-    let project = parse_project_yaml(task_grant_reviewer.as_bytes())
-        .expect("task-grant apply-request project parses");
-    let failure = compile_project(&project, &[], CompileProfile::Authoring)
-        .expect_err("a task-grant profile cannot apply a reviewed request");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.access-profile.task-grant-operation-forbidden"
     }));
 }
 
@@ -1186,9 +1180,11 @@ async fn repeated_values_in_a_multi_valued_claim_collapse_to_one_authority() {
     assert_eq!(harness.records.calls.load(Ordering::SeqCst), 2);
 
     let mut too_many_distinct = valid_claims();
-    too_many_distinct["jurisdictions"] = json!((0..65)
-        .map(|index| format!("area-{index}-never-rendered"))
-        .collect::<Vec<_>>());
+    too_many_distinct["jurisdictions"] = json!(
+        (0..65)
+            .map(|index| format!("area-{index}-never-rendered"))
+            .collect::<Vec<_>>()
+    );
     let distinct_token = harness.signed_token(too_many_distinct, "JWT");
     assert_refused_without_record_call(&harness, &distinct_token).await;
 }
@@ -1217,13 +1213,15 @@ async fn an_array_audience_requires_exact_membership_and_well_formed_bounds() {
         json!([AUDIENCE, "  "]),
         json!([AUDIENCE, AUDIENCE]),
         json!([AUDIENCE, 4]),
-        json!((0..17)
-            .map(|index| if index == 0 {
-                AUDIENCE.to_owned()
-            } else {
-                format!("urn:aud:{index}")
-            })
-            .collect::<Vec<_>>()),
+        json!(
+            (0..17)
+                .map(|index| if index == 0 {
+                    AUDIENCE.to_owned()
+                } else {
+                    format!("urn:aud:{index}")
+                })
+                .collect::<Vec<_>>()
+        ),
     ] {
         let mut claims = valid_claims();
         claims["aud"] = audience;
@@ -1489,10 +1487,12 @@ async fn static_jwks_key_refusal_is_bounded_and_repinning_restores_authenticatio
     );
     let event: Value = serde_json::from_str(logs.trim()).expect("production-shaped JSON log");
     assert!(event.get("target").is_none());
-    assert!(event["fields"]["message"]
-        .as_str()
-        .expect("message field")
-        .contains("unknown or disallowed key identifier"));
+    assert!(
+        event["fields"]["message"]
+            .as_str()
+            .expect("message field")
+            .contains("unknown or disallowed key identifier")
+    );
     assert!(logs.contains("does not establish provider key rotation"));
     for value in [
         &rotated,
@@ -1701,10 +1701,12 @@ fn compile_action_claim_source(source: &Value) -> CompiledRegistry {
 #[tokio::test]
 async fn action_only_target_claims_are_mapped_without_crud_grants() {
     let registry = compile_action_claim_source(&action_only_claim_source());
-    assert!(registry
-        .entities()
-        .values()
-        .all(|entity| entity.access_profiles.is_empty()));
+    assert!(
+        registry
+            .entities()
+            .values()
+            .all(|entity| entity.access_profiles.is_empty())
+    );
     let idp = MockIdp::start().await;
     let authenticator = authenticator(&registry, &idp, authority_claims()).unwrap();
     let mut token_claims = valid_claims();
@@ -1789,7 +1791,7 @@ async fn action_only_principal_purpose_and_claim_shape_conflicts_are_checked() {
     let mut conflicting = source;
     conflicting["accessProfiles"].as_array_mut().unwrap().push(json!({
         "id": "reader", "principalClaim": "registry_principal", "requiredScopes": ["registry:parent:process"],
-        "permissions": {"entities": [{"entity": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]}
+        "permissions": {"records": [{"recordType": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]}
     }));
     let registry = compile_action_claim_source(&conflicting);
     assert_eq!(
@@ -2149,12 +2151,13 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
         .authenticate(&idp.mint_token(json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": RECORD_ID})))
         .await
         .is_ok());
-    assert!(auth
-        .authenticate(&idp.mint_token(
+    assert!(
+        auth.authenticate(&idp.mint_token(
             json!({"aud": AUDIENCE, "registry_actor_kind": "service", "sub": RECORD_ID})
         ))
         .await
-        .is_err());
+        .is_err()
+    );
 
     // Principal reuse preserves the exact selected string. Every string-encoded
     // scalar field applies its ordinary validation, without an identifier whitelist.
@@ -2212,10 +2215,12 @@ async fn action_only_purpose_and_target_claims_are_discovered_from_signed_tokens
     let project =
         parse_project_yaml(include_bytes!("fixtures/action-authority-mapping.yaml")).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    assert!(registry
-        .entities()
-        .values()
-        .all(|entity| entity.access_profiles.is_empty()));
+    assert!(
+        registry
+            .entities()
+            .values()
+            .all(|entity| entity.access_profiles.is_empty())
+    );
     let idp = MockIdp::start().await;
     let auth = authenticator(&registry, &idp, authority_claims()).unwrap();
     let base = json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": PRINCIPAL, "scope": "case.rename", "purpose": "case-management", "regions": ["north"]});
@@ -2365,11 +2370,13 @@ async fn ambiguous_route_without_default_requires_explicit_selection_without_gue
     let source = PROJECT.replace("    default: true\n", "");
     let project = parse_project_yaml(source.as_bytes()).unwrap();
     let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
-    assert!(registry
-        .access()
-        .entries
-        .iter()
-        .all(|entry| entry.default_profile_id.is_none()));
+    assert!(
+        registry
+            .access()
+            .entries
+            .iter()
+            .all(|entry| entry.default_profile_id.is_none())
+    );
     let harness = Harness::with_registry(registry).await;
     let token = harness.valid_token();
     let path = "/v1/records/cases/00000000-0000-4000-8000-000000000001";

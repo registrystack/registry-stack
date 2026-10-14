@@ -1,0 +1,437 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind": "BRegProject",
+  "project": {
+    "id": "farmer-landholding-evidence",
+    "canonicalBaseIri": "https://farmer-landholding-evidence.example.gov",
+    "version": "0.1.0",
+    "defaultLanguage": "en"
+  },
+  "package": {
+    "sourceRevision": "farmer-landholding-evidence-acceptance-0.1.0"
+  },
+  "manifestProjection": {
+    "accessProfile": "landholding-reader",
+    "classificationCeiling": "internal",
+    "catalog": {
+      "baseUrl": "https://farmer-landholding-evidence.example.gov",
+      "title": "Synthetic Landholding Catalog",
+      "description": "Conditional farmer eligibility Evidence acquisition in a governed action.",
+      "publisher": {
+        "id": "landholding-authority",
+        "name": "Synthetic Landholding Authority",
+        "iri": "https://farmer-landholding-evidence.example.gov/authority"
+      }
+    },
+    "publicService": {
+      "id": "landholding-service",
+      "title": "Synthetic Landholding Service"
+    },
+    "datasets": [
+      {
+        "id": "farmer-landholding-evidence",
+        "title": "Synthetic Landholding Registry",
+        "description": "Synthetic landholdings and procedure checks for Evidence action acceptance.",
+        "owner": "Synthetic Landholding Authority",
+        "status": "active"
+      }
+    ],
+    "dataServices": [
+      {
+        "id": "landholding-data-service",
+        "title": "Synthetic Landholding Data Service",
+        "endpointUrl": "https://farmer-landholding-evidence.example.gov",
+        "servesDatasets": [
+          "farmer-landholding-evidence"
+        ]
+      }
+    ],
+    "distributions": []
+  },
+  "actions": [
+    {
+      "id": "register-landholding",
+      "inputs": [
+        {
+          "id": "farmer-prefix",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maximumLength": 12,
+          "apiName": "farmerPrefix"
+        },
+        {
+          "id": "farmer-number",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maximumLength": 64,
+          "apiName": "farmerNumber"
+        },
+        {
+          "id": "parcel-code",
+          "type": "string",
+          "required": true,
+          "classification": "internal",
+          "maximumLength": 64,
+          "apiName": "parcelCode"
+        },
+        {
+          "id": "include-category",
+          "type": "boolean",
+          "required": true,
+          "classification": "internal",
+          "apiName": "includeCategory"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "farmer-status",
+          "provider": "farmer-registry",
+          "requirement": "urn:example:farmer:status-v1",
+          "subjects": {
+            "farmer": {
+              "profile": "farmer-number-v1"
+            }
+          },
+          "outputs": [
+            "active"
+          ],
+          "maximumObservationAgeSeconds": 60
+        },
+        {
+          "id": "farmer-category",
+          "provider": "farmer-registry",
+          "requirement": "urn:example:farmer:category-v1",
+          "subjects": {
+            "farmer": {
+              "profile": "farmer-number-v1"
+            }
+          },
+          "outputs": [
+            "category"
+          ],
+          "maximumObservationAgeSeconds": 60
+        }
+      ],
+      "execution": {
+        "mode": "immediate"
+      },
+      "plan": {
+        "type": "function",
+        "function": "register-landholding-plan",
+        "inputs": [
+          "farmer-prefix",
+          "farmer-number",
+          "parcel-code",
+          "include-category"
+        ],
+        "capabilities": [
+          "evidence"
+        ],
+        "writes": [
+          {
+            "id": "landholding",
+            "target": {
+              "recordType": "landholding"
+            },
+            "operation": "create",
+            "fields": [
+              "farmer-number",
+              "parcel-code",
+              "farmer-category"
+            ]
+          }
+        ],
+        "refusals": [
+          {
+            "code": "invalid-farmer-number",
+            "label": "A complete farmer identifier is required."
+          },
+          {
+            "code": "farmer-inactive",
+            "label": "Farmer is not eligible for registration."
+          }
+        ]
+      }
+    },
+    {
+      "id": "check-procedure",
+      "inputs": [
+        {
+          "id": "farmer-prefix",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maximumLength": 12,
+          "apiName": "farmerPrefix"
+        },
+        {
+          "id": "farmer-number",
+          "type": "string",
+          "required": true,
+          "classification": "restricted",
+          "maximumLength": 64,
+          "apiName": "farmerNumber"
+        },
+        {
+          "id": "parcel-code",
+          "type": "string",
+          "required": true,
+          "classification": "internal",
+          "maximumLength": 64,
+          "apiName": "parcelCode"
+        },
+        {
+          "id": "include-category",
+          "type": "boolean",
+          "required": true,
+          "classification": "internal",
+          "apiName": "includeCategory"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "farmer-status",
+          "provider": "farmer-registry",
+          "requirement": "urn:example:farmer:status-v1",
+          "subjects": {
+            "farmer": {
+              "profile": "farmer-number-v1"
+            }
+          },
+          "outputs": [
+            "active"
+          ],
+          "maximumObservationAgeSeconds": 60
+        },
+        {
+          "id": "farmer-category",
+          "provider": "farmer-registry",
+          "requirement": "urn:example:farmer:category-v1",
+          "subjects": {
+            "farmer": {
+              "profile": "farmer-number-v1"
+            }
+          },
+          "outputs": [
+            "category"
+          ],
+          "maximumObservationAgeSeconds": 60
+        }
+      ],
+      "execution": {
+        "mode": "immediate"
+      },
+      "plan": {
+        "type": "function",
+        "function": "check-procedure-plan",
+        "inputs": [
+          "farmer-prefix",
+          "farmer-number",
+          "parcel-code",
+          "include-category"
+        ],
+        "capabilities": [
+          "evidence"
+        ],
+        "writes": [
+          {
+            "id": "procedure-check",
+            "target": {
+              "recordType": "procedure-check"
+            },
+            "operation": "create",
+            "fields": [
+              "checked"
+            ]
+          }
+        ],
+        "refusals": [
+          {
+            "code": "invalid-farmer-number",
+            "label": "A complete farmer identifier is required."
+          },
+          {
+            "code": "farmer-inactive",
+            "label": "Farmer is not eligible for registration."
+          }
+        ]
+      }
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "landholding-registrar",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "registry:landholding:register"
+      ],
+      "requiredPurposes": [
+        "land-registration"
+      ],
+      "permissions": {
+        "actions": [
+          {
+            "action": "register-landholding",
+            "operations": [
+              "invoke"
+            ],
+            "targets": [
+              {
+                "rowBoundaries": "unrestricted",
+                "recordType": "landholding"
+              }
+            ],
+            "results": [
+              "landholding"
+            ]
+          },
+          {
+            "action": "check-procedure",
+            "operations": [
+              "invoke"
+            ],
+            "targets": [
+              {
+                "rowBoundaries": "unrestricted",
+                "recordType": "procedure-check"
+              }
+            ],
+            "results": [
+              "procedure-check"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "landholding-reader",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "registry:landholding:read"
+      ],
+      "requiredPurposes": [
+        "land-registration-audit"
+      ],
+      "permissions": {
+        "records": [
+          {
+            "operations": [
+              "get"
+            ],
+            "readableFields": [
+              "farmer-number",
+              "parcel-code",
+              "farmer-category"
+            ],
+            "rowBoundaries": "unrestricted",
+            "recordType": "landholding"
+          },
+          {
+            "operations": [
+              "get"
+            ],
+            "readableFields": [
+              "checked"
+            ],
+            "rowBoundaries": "unrestricted",
+            "recordType": "procedure-check"
+          }
+        ]
+      }
+    }
+  ],
+  "evidenceProviders": [
+    {
+      "id": "farmer-registry",
+      "contracts": "evidence/farmer-contracts.json",
+      "subjectResolution": "trusted-provider-exact-selector"
+    }
+  ],
+  "recordTypes": [
+    {
+      "id": "landholding",
+      "primaryDataset": "farmer-landholding-evidence",
+      "route": "landholdings",
+      "mutationMode": "create-only",
+      "fields": [
+        {
+          "id": "farmer-number",
+          "apiName": "farmerNumber",
+          "type": "string",
+          "required": true,
+          "maximumLength": 77,
+          "classification": "restricted"
+        },
+        {
+          "id": "parcel-code",
+          "apiName": "parcelCode",
+          "type": "string",
+          "required": true,
+          "maximumLength": 64,
+          "classification": "restricted"
+        },
+        {
+          "id": "farmer-category",
+          "apiName": "farmerCategory",
+          "type": "string",
+          "required": false,
+          "maximumLength": 64,
+          "classification": "restricted"
+        }
+      ],
+      "constraints": [
+        {
+          "type": "unique",
+          "fields": [
+            "parcel-code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "procedure-check",
+      "primaryDataset": "farmer-landholding-evidence",
+      "route": "procedure-checks",
+      "mutationMode": "create-only",
+      "fields": [
+        {
+          "id": "checked",
+          "type": "boolean",
+          "required": true,
+          "classification": "restricted"
+        }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "id": "register-landholding-plan",
+      "runtime": "rhai",
+      "source": "scripts/register-landholding.rhai",
+      "entrypoint": "plan",
+      "abi": "registry.action-plan/v1",
+      "capabilities": [
+        "evidence"
+      ]
+    },
+    {
+      "id": "check-procedure-plan",
+      "runtime": "rhai",
+      "source": "scripts/check-procedure.rhai",
+      "entrypoint": "plan",
+      "abi": "registry.action-plan/v1",
+      "capabilities": [
+        "evidence"
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "id": "farmer-landholding-evidence"
+    }
+  ]
+}

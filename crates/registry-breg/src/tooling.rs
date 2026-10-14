@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::CompiledRegistry;
 use crate::package::{
-    compiled_registry_change_set, CompiledRegistryChange, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode,
+    CompiledRegistryChange, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
+    compiled_registry_change_set,
 };
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -132,7 +132,6 @@ fn classify_change(
         | Code::AccessProfileAdded
         | Code::AccessProfileRemoved
         | Code::EntityAccessRequirementsChanged
-        | Code::ChangeRequestContractChanged
         | Code::RouteAdded
         | Code::RouteRemoved
         | Code::RouteChanged => DiffClassification::AccessChange,
@@ -249,8 +248,8 @@ fn access_change_details(
     candidate: &CompiledRegistry,
     change: &CompiledRegistryChange,
 ) -> Vec<AccessChangeDetail> {
-    use serde_json::{json, Value};
     use CompiledRegistryChangeCode as Code;
+    use serde_json::{Value, json};
     match change.code {
         Code::RecipientOrganizationAdded
         | Code::RecipientOrganizationRemoved
@@ -258,10 +257,9 @@ fn access_change_details(
         | Code::RecipientGroupAdded
         | Code::RecipientGroupRemoved
         | Code::RecipientGroupChanged => return recipient_details(baseline, candidate, change),
-        Code::ActionAdded
-        | Code::ActionChanged
-        | Code::ActionVocabularyCodesAdded
-        | Code::ActionTargetFieldsWidened => return action_details(baseline, candidate, change),
+        Code::ActionAdded | Code::ActionChanged => {
+            return action_details(baseline, candidate, change);
+        }
         _ => {}
     }
     let Some(entity) = change.target.entity_id.as_deref() else {
@@ -303,7 +301,7 @@ fn access_change_details(
             return consent_vocabulary_details(
                 before_entity.and_then(|e| e.fields.get(member)),
                 after_entity.and_then(|e| e.fields.get(member)),
-            )
+            );
         }
         _ => return vec![],
     };
@@ -349,7 +347,7 @@ const MAX_DURATION_RAISED: &str =
     "raising maximumDurationDays makes existing gives last longer than the notice said";
 const CODE_REMOVED: &str = "consent vocabulary codes are append-only; retire the code instead (an organization with no clients, or an id in retiredConsentScopes), since the migration also fails against existing rows that carry it";
 const STEWARD_ISSUER: &str = "steward actions create consent without the subject's principal";
-const ACTION_CODES_ADDED: &str = "the action accepts codes new to their vocabulary without review; check that each is one this action may write, such as a recipient or scope its notice names";
+const ACTION_CODES_CHANGED: &str = "the Action's accepted input codes changed; review the revised frozen execution contract and the codes it may write";
 const CONSENT_INDEXES_REBUILT: &str = "the migration builds these consent indexes with a plain CREATE INDEX inside its transaction, which blocks writes to the consent table until it commits, and dropping a prior index blocks reads as well; apply it when the table can wait";
 
 /// Whether `after` holds an item `before` lacks, reading an omitted list as empty.
@@ -400,9 +398,9 @@ fn recipient_details(
     candidate: &CompiledRegistry,
     change: &CompiledRegistryChange,
 ) -> Vec<AccessChangeDetail> {
-    use serde_json::{json, Value};
     use AccessChangeDirection::{Narrowing, ReviewRequired};
     use CompiledRegistryChangeCode as Code;
+    use serde_json::{Value, json};
     let Some(id) = change.target.member_id.as_deref() else {
         return vec![];
     };
@@ -457,8 +455,8 @@ fn consent_record_details(
     before: Option<&crate::model::CompiledConsentRecord>,
     after: Option<&crate::model::CompiledConsentRecord>,
 ) -> Vec<AccessChangeDetail> {
-    use serde_json::json;
     use AccessChangeDirection::{Narrowing, ReviewRequired};
+    use serde_json::json;
     let (Some(before), Some(after)) = (before, after) else {
         return vec![AccessChangeDetail {
             field: "consentRecord".into(),
@@ -542,8 +540,8 @@ fn action_details(
     change: &CompiledRegistryChange,
 ) -> Vec<AccessChangeDetail> {
     use crate::contract::ConsentIssuerSource;
-    use serde_json::{json, Map, Value};
     use CompiledRegistryChangeCode as Code;
+    use serde_json::{Map, Value, json};
     let Some(id) = change.target.member_id.as_deref() else {
         return vec![];
     };
@@ -571,10 +569,7 @@ fn action_details(
             reason: Some(STEWARD_ISSUER.to_owned()),
         });
     }
-    if matches!(
-        change.code,
-        Code::ActionVocabularyCodesAdded | Code::ActionTargetFieldsWidened
-    ) {
+    if change.code == Code::ActionChanged {
         let Some(before) = before else {
             return details;
         };
@@ -592,14 +587,12 @@ fn action_details(
             else {
                 continue;
             };
-            if previous.field_type != input.field_type {
+            if previous.field_type != input.field_type && !codes(input).is_null() {
                 widened_before.insert(input.id.clone(), codes(previous));
                 widened_after.insert(input.id.clone(), codes(input));
             }
         }
-        // A contract widened only through its target fields accepts no new
-        // input code, so there is nothing for this detail to show.
-        if change.code == Code::ActionTargetFieldsWidened && widened_after.is_empty() {
+        if widened_after.is_empty() {
             return details;
         }
         details.push(AccessChangeDetail {
@@ -607,7 +600,7 @@ fn action_details(
             direction: AccessChangeDirection::ReviewRequired,
             before: Value::Object(widened_before),
             after: Value::Object(widened_after),
-            reason: Some(ACTION_CODES_ADDED.to_owned()),
+            reason: Some(ACTION_CODES_CHANGED.to_owned()),
         });
     }
     details
@@ -771,7 +764,7 @@ impl ChangeTargetIds for CompiledRegistryChange {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::{compile_project, module_digest, CompileProfile};
+    use crate::compiler::{CompileProfile, compile_project, module_digest};
     use crate::contract::{parse_module_json, parse_project_json};
     use crate::package::CompiledRegistryChangeCode;
 
@@ -912,13 +905,16 @@ mod tests {
             !query_changes.is_empty(),
             "snapshot revocation removes query operations"
         );
-        assert!(query_changes
-            .iter()
-            .all(|change| change.classification == DiffClassification::AccessChange));
-        assert!(diff
-            .changes
-            .iter()
-            .all(|change| change.classification != DiffClassification::Unsupported));
+        assert!(
+            query_changes
+                .iter()
+                .all(|change| change.classification == DiffClassification::AccessChange)
+        );
+        assert!(
+            diff.changes
+                .iter()
+                .all(|change| change.classification != DiffClassification::Unsupported)
+        );
     }
 
     #[test]
@@ -939,13 +935,16 @@ mod tests {
             !query_changes.is_empty(),
             "snapshot adoption adds query operations"
         );
-        assert!(query_changes
-            .iter()
-            .all(|change| change.classification == DiffClassification::AccessChange));
-        assert!(diff
-            .changes
-            .iter()
-            .all(|change| change.classification != DiffClassification::Unsupported));
+        assert!(
+            query_changes
+                .iter()
+                .all(|change| change.classification == DiffClassification::AccessChange)
+        );
+        assert!(
+            diff.changes
+                .iter()
+                .all(|change| change.classification != DiffClassification::Unsupported)
+        );
     }
 
     #[test]
@@ -1044,7 +1043,7 @@ mod tests {
         profile_extra: &str,
     ) -> CompiledRegistry {
         let module_bytes = format!(
-            r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"membership","primaryDataset":"temporal-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"subject","type":"string","maximumLength":64,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["subject"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"consumer","principalClaim":"principal","operations":[{operations}],{access_fields}{profile_extra}}}]}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"membership","primaryDataset":"temporal-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"subject","type":"string","maximumLength":64,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["subject"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"consumer","principalClaim":"principal","operations":[{operations}],{access_fields}{profile_extra}}}]}}]}}"#
         );
         let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
         let digest = module_digest(&module);
@@ -1063,7 +1062,7 @@ mod tests {
         principal_claim: &str,
     ) -> CompiledRegistry {
         let module_bytes = format!(
-            r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":16,"classification":"{classification}"}}{extra_fields}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"{principal_claim}","operations":["get"],"readableFields":["code"]}}]{entity_members}}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":16,"classification":"{classification}"}}{extra_fields}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"{principal_claim}","operations":["get"],"readableFields":["code"]}}]{entity_members}}}]}}"#
         );
         let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
         let digest = module_digest(&module);

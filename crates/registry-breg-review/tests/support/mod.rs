@@ -29,8 +29,8 @@ use tempfile::TempDir;
 pub const CLIENT_ID: &str = "citizen-review-page";
 pub const RESOURCE: &str = "https://registry.example/base";
 pub const SCOPE: &str = "address-correction:self";
-pub const ENTITY: &str = "address-correction-request";
-pub const ROUTE: &str = "address-correction-requests";
+pub const ACTION: &str = "correct-address";
+
 pub const TARGET_ENTITY: &str = "person-address";
 pub const TARGET_ROUTE: &str = "person-addresses";
 pub const TARGET_FIELD: &str = "address";
@@ -70,7 +70,7 @@ pub struct Draft {
     pub owner: &'static str,
     pub target: &'static str,
     pub revision: u64,
-    pub proposal_version: u64,
+    pub submission_version: u64,
     pub action_generation: u64,
     pub submitted: bool,
 }
@@ -141,7 +141,7 @@ impl MockRegistry {
             owner,
             target,
             revision: 7,
-            proposal_version: 7,
+            submission_version: 1,
             action_generation: 1,
             submitted: false,
         };
@@ -217,7 +217,6 @@ impl MockRegistry {
         let mut drafts = self.drafts.lock().unwrap();
         let draft = drafts.get_mut(REQUEST_ID).unwrap();
         draft.revision += 1;
-        draft.proposal_version += 1;
         draft.action_generation += 1;
     }
 
@@ -325,11 +324,11 @@ impl MockRegistry {
 
     /// Every submit call, whatever the registry answered.
     pub fn submits(&self) -> u64 {
-        self.count(|call| call.starts_with("POST ") && call.ends_with("/actions/submit"))
+        self.count(|call| call.starts_with("POST ") && call.ends_with("/submit"))
     }
 
     pub fn submits_for(&self, request: &str) -> u64 {
-        let path = format!("POST /v1/records/{ROUTE}/{request}/actions/submit");
+        let path = format!("POST /v1/proposals/{request}/submit");
         self.count(|call| call == path)
     }
 
@@ -459,71 +458,7 @@ fn field(id: &str, api_name: &str, label: &str) -> Value {
     })
 }
 
-/// The request's fields as the real acceptance project declares them, plus a
-/// coded field and an empty one so label and absence rendering are exercised.
-fn request_fields() -> Value {
-    let mut address = field(TARGET_FIELD, TARGET_FIELD, "Registered address");
-    address["schema"] = json!({"type": "string", "format": "uuid"});
-    address["reference"] = json!({
-        "manualEntry": true,
-        "targetEntity": TARGET_ENTITY,
-        "operations": [{
-            "operationId": TARGET_GET,
-            "accessProfile": PROFILE,
-            "labelFields": ["address-line"]
-        }]
-    });
-    let mut reason = field("reason", "reason", "Reason for the change");
-    reason["codeLabels"] = json!({"relocation": "Moved house"});
-    json!([
-        address,
-        field("new-address-line", "newAddressLine", "New address line"),
-        field("new-locality", "newLocality", "New town"),
-        field("new-postal-code", "newPostalCode", "New postal code"),
-        reason,
-        field("unit", "unit", "Flat or unit")
-    ])
-}
-
-const REQUEST_READABLE: [&str; 6] = [
-    TARGET_FIELD,
-    "new-address-line",
-    "new-locality",
-    "new-postal-code",
-    "reason",
-    "unit",
-];
-
 const TARGET_READABLE: [&str; 3] = ["address-line", "locality", "postal-code"];
-
-fn operation(identifier: &str, method: &str, path: &str, kind: &str, request: Value) -> Value {
-    let capabilities = if kind == "get" {
-        json!([])
-    } else {
-        json!(["change_request_lifecycle"])
-    };
-    json!({
-        "id": identifier,
-        "method": method,
-        "path": path,
-        "operation": kind,
-        "sourceEntity": ENTITY,
-        "responseEntity": ENTITY,
-        "accessProfile": PROFILE,
-        "requiredCapabilities": capabilities,
-        "entityLabel": "Address correction requests",
-        "identifier": {"apiName": "id", "location": "envelope"},
-        "titleFields": ["new-address-line"],
-        "fields": request_fields(),
-        "readableFields": REQUEST_READABLE,
-        "readableRequestFields": [],
-        "createWritableFields": [],
-        "patchWritableFields": [],
-        "selectors": [],
-        "query": null,
-        "request": request
-    })
-}
 
 fn target_operation() -> Value {
     json!({
@@ -531,11 +466,11 @@ fn target_operation() -> Value {
         "method": "GET",
         "path": format!("/v1/records/{TARGET_ROUTE}/{{record_id}}"),
         "operation": "get",
-        "sourceEntity": TARGET_ENTITY,
-        "responseEntity": TARGET_ENTITY,
+        "sourceRecordType": TARGET_ENTITY,
+        "responseRecordType": TARGET_ENTITY,
         "accessProfile": PROFILE,
         "requiredCapabilities": [],
-        "entityLabel": "Registered addresses",
+        "recordTypeLabel": "Registered addresses",
         "identifier": {"apiName": "id", "location": "envelope"},
         "titleFields": ["address-line"],
         "fields": [
@@ -558,33 +493,14 @@ fn target_operation() -> Value {
 /// operations.
 pub fn metadata_with_target_list_first() -> Value {
     let mut document = metadata();
-    let list_reference = json!({
-        "operationId": TARGET_LIST,
-        "accessProfile": PROFILE,
-        "labelFields": ["address-line"]
-    });
-    let operations = document["operations"].as_array_mut().unwrap();
-    for operation in operations.iter_mut() {
-        for field in operation["fields"].as_array_mut().unwrap() {
-            if let Some(references) = field.pointer_mut("/reference/operations") {
-                references
-                    .as_array_mut()
-                    .unwrap()
-                    .insert(0, list_reference.clone());
-            }
-        }
-    }
-    operations.push(target_list_operation());
-    let target = document["entities"]
+    document["operations"]
         .as_array_mut()
         .unwrap()
-        .iter_mut()
-        .find(|entity| entity["id"] == TARGET_ENTITY)
-        .unwrap();
-    target["operations"]
+        .insert(0, target_list_operation());
+    document["recordTypes"][0]["operations"]
         .as_array_mut()
         .unwrap()
-        .push(json!({"operation": "list", "accessProfile": PROFILE}));
+        .push(json!({"operation":"list","accessProfile":PROFILE}));
     document
 }
 
@@ -623,103 +539,47 @@ fn target_list_operation() -> Value {
 
 /// The caller-filtered metadata the registry answers for `citizen-review`.
 pub fn metadata() -> Value {
-    let get = operation(
-        "records.address-correction-request.get",
-        "GET",
-        &format!("/v1/records/{ROUTE}/{{record_id}}"),
-        "get",
-        json!({"fieldNames": "api", "queryParameters": ["$select"]}),
-    );
-    let submit = operation(
-        "records.address-correction-request.request.submit",
-        "POST",
-        &format!("/v1/records/{ROUTE}/{{record_id}}/actions/submit"),
-        "submit-request",
-        json!({
-            "fieldNames": "api",
-            "queryParameters": [],
-            "body": "change_request_action",
-            "contentType": "application/json",
-            "ifMatchRequired": true,
-            "idempotencyKeyRequired": true,
-            "mutationSemantics": "change_request_lifecycle",
-            "schema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {}
-            }
-        }),
-    );
-    json!({
-        "id": "citizen-address-correction",
-        "version": "0.1.0",
-        "revision": METADATA_REVISION,
-        "metadataVersion": "1",
-        "entities": [
-            {
-                "id": ENTITY,
-                "datasetIdentifier": "citizen-address-correction",
-                "route": ROUTE,
-                "operations": [
-                    {"operation": "get", "accessProfile": PROFILE},
-                    {"operation": "submit-request", "accessProfile": PROFILE}
-                ],
-                "readableFields": REQUEST_READABLE,
-                "schema": format!("/v1/schemas/{ENTITY}")
-            },
-            {
-                "id": TARGET_ENTITY,
-                "datasetIdentifier": "citizen-address-correction",
-                "route": TARGET_ROUTE,
-                "operations": [{"operation": "get", "accessProfile": PROFILE}],
-                "readableFields": TARGET_READABLE,
-                "schema": format!("/v1/schemas/{TARGET_ENTITY}")
-            }
-        ],
-        "operations": [get, submit, target_operation()]
-    })
+    let mut document: Value = serde_json::from_slice(include_bytes!(
+        "../../../registry-breg-mcp/tests/fixtures/citizen-agent-metadata.json"
+    ))
+    .unwrap();
+    document["revision"] = json!(METADATA_REVISION);
+    document["recordTypes"] = json!([{"id":TARGET_ENTITY,"datasetIdentifier":"citizen-address-correction","route":TARGET_ROUTE,
+        "schema":format!("/v1/schemas/{TARGET_ENTITY}"),"operations":[{"operation":"get","accessProfile":PROFILE}],"readableFields":TARGET_READABLE}]);
+    document["operations"] = json!([target_operation()]);
+    document["proposals"] = json!({"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":[PROFILE]}});
+    document["actions"][0]["access"]["selectedProfile"] = json!(PROFILE);
+    document["actions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("route");
+    document["actions"][0]["routes"] = json!({});
+    document["actions"][0]["resultEffects"] = json!([]);
+    document["actions"][0]["display"]["label"] = json!("Address correction");
+    document["actions"][0]["revision"] = json!(METADATA_REVISION);
+    document["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|input| input["id"] != "owner");
+    for (id, api) in [("reason", "reason"), ("unit", "unit")] {
+        document["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({"id":id,"apiName":api,
+            "fieldType":{"type":"string","minimumLength":0,"maximumLength":200},"required":false,"nullable":true,"classification":"internal"}));
+    }
+    document
 }
 
 fn draft_record(identifier: &str, draft: &Draft) -> Value {
-    let actions = if draft.submitted {
-        json!([])
-    } else {
-        json!([{
-            "operation": "submit-request",
-            "method": "POST",
-            "href": format!(
-                "/v1/records/{ROUTE}/{identifier}/actions/submit?accessProfile={PROFILE}"
-            ),
-            "ifMatch": action_etag(draft.action_generation)
-        }])
-    };
-    json!({
-        "data": {
-            "recordIdentifier": identifier,
-            "revisionIdentifier": draft.revision.to_string(),
-            "domainData": {
-                "address": draft.target,
-                "newAddressLine": HOSTILE_STREET,
-                "newLocality": PROPOSED_LOCALITY,
-                "newPostalCode": "PS-205",
-                "reason": "relocation",
-                "unit": null
-            },
-            "request": {
-                "bregState": if draft.submitted { "submitted" } else { "draft" },
-                "proposalVersion": draft.proposal_version,
-                "effectDigest": EFFECT_DIGEST,
-                "editable": !draft.submitted,
-                "actions": actions
-            }
-        },
-        "meta": {
-            "registryIdentifier": "citizen-address-correction",
-            "datasetIdentifier": "citizen-address-correction",
-            "entityTypeIdentifier": ENTITY
-        }
-    })
+    json!({"id":identifier,"actionId":ACTION,"actionRevision":METADATA_REVISION,"revision":draft.revision,
+    "submissionVersion":draft.submission_version,"state":if draft.submitted {"submitted"} else {"draft"},
+    "effectDigest":EFFECT_DIGEST,
+    "input":{"address":draft.target,"newAddressLine":HOSTILE_STREET,"newLocality":PROPOSED_LOCALITY,"newPostalCode":"PS-205","reason":"relocation","unit":null},
+    "links":{
+        "self":{"method":"GET","path":format!("/v1/proposals/{identifier}"),"operation":"get","accessProfile":PROFILE},
+        "submit":{"method":"POST","path":format!("/v1/proposals/{identifier}/submit"),"operation":"submit","accessProfile":PROFILE,
+            "ifMatch":action_etag(draft.action_generation),"availability":{"available":!draft.submitted,"observedRevision":draft.revision,
+                "reason":if draft.submitted {json!("pending-review")} else {Value::Null},
+                "recovery":if draft.submitted {json!("receipt-only")} else {Value::Null}}}
+    }})
 }
 
 fn address_record(identifier: &str, address: &Address) -> Value {
@@ -784,7 +644,7 @@ async fn read_draft(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    registry.record_call("GET", format!("/v1/records/{ROUTE}/{identifier}"), &headers);
+    registry.record_call("GET", format!("/v1/proposals/{identifier}"), &headers);
     if *registry.refusing_tokens.lock().unwrap() {
         return problem(BRegProblemCode::AuthenticationRefused);
     }
@@ -801,7 +661,7 @@ async fn read_draft(
     if caller.as_deref() != Some(draft.owner) || !selects_profile(query.as_deref()) {
         return problem(BRegProblemCode::ResourceNotFound);
     }
-    record_response(ENTITY, &draft_record(&identifier, draft), draft.revision)
+    receipt_response(&draft_record(&identifier, draft))
 }
 
 async fn read_address(
@@ -840,7 +700,7 @@ async fn submit_draft(
 ) -> Response {
     registry.record_call(
         "POST",
-        format!("/v1/records/{ROUTE}/{identifier}/actions/submit"),
+        format!("/v1/proposals/{identifier}/submit"),
         &headers,
     );
     let caller = subject(&headers);
@@ -872,6 +732,9 @@ async fn submit_draft(
         return receipt_response(receipt);
     }
     if let Some(code) = registry.next_submit_problem.lock().unwrap().take() {
+        if code == BRegProblemCode::PreconditionFailed {
+            registry.apply_deferred_withdrawal();
+        }
         return problem(code);
     }
     if if_match != action_etag(draft.action_generation) {
@@ -885,17 +748,7 @@ async fn submit_draft(
     draft.submitted = true;
     draft.revision += 1;
     *registry.submit_effects.lock().unwrap() += 1;
-    let receipt = json!({
-        "id": identifier,
-        "revision": draft.revision,
-        "snapshot": format!("breg1_{identifier}"),
-        "request": {
-            "bregState": "submitted",
-            "proposalVersion": draft.proposal_version,
-            "effectDigest": EFFECT_DIGEST,
-            "application": null
-        }
-    });
+    let receipt = draft_record(&identifier, draft);
     replays.insert(key, (if_match, receipt.clone()));
     if registry
         .lose_next_submit_response
@@ -921,18 +774,12 @@ async fn start_registry() -> (Arc<MockRegistry>, String) {
     let registry = Arc::new(MockRegistry::new());
     let app = Router::new()
         .route("/tenant/base/v1/registry", get(registry_metadata))
-        .route(
-            &format!("/tenant/base/v1/records/{ROUTE}/{{id}}"),
-            get(read_draft),
-        )
+        .route("/tenant/base/v1/proposals/{id}", get(read_draft))
         .route(
             &format!("/tenant/base/v1/records/{TARGET_ROUTE}/{{id}}"),
             get(read_address),
         )
-        .route(
-            &format!("/tenant/base/v1/records/{ROUTE}/{{id}}/actions/submit"),
-            post(submit_draft),
-        )
+        .route("/tenant/base/v1/proposals/{id}/submit", post(submit_draft))
         .with_state(registry.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -1203,7 +1050,7 @@ impl Environment {
              publicOrigin: {origin}\n\
              secretProviders:\n  file:\n    root: {secrets}\n\
              signIn:\n  issuer: {issuer}\n  clientId: {CLIENT_ID}\n  clientKeyRef: secret:file/client-key.jwk\n  scopes: [\"{SCOPE}\"]\n\
-             registry:\n  baseUrl: {base_url}\n  resource: {RESOURCE}\n  entity: {ENTITY}\n  targetField: {TARGET_FIELD}\n  accessProfile: {PROFILE}\n\
+             registry:\n  baseUrl: {base_url}\n  resource: {RESOURCE}\n  action: {ACTION}\n  targetInput: {TARGET_FIELD}\n  accessProfile: {PROFILE}\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:file/audit-key\n\
              {extra}",
             secrets = secrets.display(),
@@ -1414,7 +1261,7 @@ impl Harness {
     pub async fn review_as(&self, subject: &str, request: &str) -> (String, Page) {
         let cookie = cookie_pair(&self.sign_in(subject).await);
         let page = self
-            .get(&format!("/requests/{request}"), Some(&cookie))
+            .get(&format!("/proposals/{request}"), Some(&cookie))
             .await;
         assert_eq!(page.status, StatusCode::OK, "{}", page.body);
         (cookie, page)
@@ -1430,7 +1277,7 @@ pub async fn sign_in_to(
     request: &str,
 ) -> Page {
     let start = page(
-        http.get(format!("{origin}/signin?return=%2Frequests%2F{request}"))
+        http.get(format!("{origin}/signin?return=%2Fproposals%2F{request}"))
             .send()
             .await
             .unwrap(),

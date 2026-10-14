@@ -188,7 +188,7 @@ async fn a_full_journey_leaves_no_credential_in_the_log_or_the_journal() {
     wait_until_healthy(&harness).await;
 
     let start = harness
-        .get(&format!("/signin?return=%2Frequests%2F{REQUEST_ID}"), None)
+        .get(&format!("/signin?return=%2Fproposals%2F{REQUEST_ID}"), None)
         .await;
     assert_eq!(start.status, StatusCode::SEE_OTHER, "{}", start.body);
     let state = parameter(start.location(), "state");
@@ -220,7 +220,7 @@ async fn a_full_journey_leaves_no_credential_in_the_log_or_the_journal() {
     // The same callback presented to a second sign-in carries the wrong
     // state: it is refused and logged, still without its values.
     let second = harness
-        .get(&format!("/signin?return=%2Frequests%2F{REQUEST_ID}"), None)
+        .get(&format!("/signin?return=%2Fproposals%2F{REQUEST_ID}"), None)
         .await;
     let second_cookie = cookie_pair(&second.set_cookie("breg-review-signin").unwrap());
     let replay = support::page(
@@ -236,14 +236,14 @@ async fn a_full_journey_leaves_no_credential_in_the_log_or_the_journal() {
     assert_eq!(replay.status, StatusCode::BAD_REQUEST);
 
     let review = harness
-        .get(&format!("/requests/{REQUEST_ID}"), Some(&session))
+        .get(&format!("/proposals/{REQUEST_ID}"), Some(&session))
         .await;
     assert_eq!(review.status, StatusCode::OK, "{}", review.body);
     let csrf = review.input("csrf").unwrap();
     let view = review.input("view").unwrap();
     let submitted = harness
         .post(
-            &format!("/requests/{REQUEST_ID}/submit"),
+            &format!("/proposals/{REQUEST_ID}/submit"),
             Some(&session),
             &[("csrf", &csrf), ("view", &view)],
         )

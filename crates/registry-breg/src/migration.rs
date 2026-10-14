@@ -10,30 +10,30 @@ use std::{
 };
 
 use registry_platform_audit::{AuditEntry, AuditRequest};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::audit::RegistryAudit;
 use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::generated_ddl::DdlStatement;
 use crate::history_schema::HistorySchemaDescriptor;
 use crate::migration_plan::{
-    read_backup_binding_document, ExternalBackupBinding, ReviewedMigrationStepDescriptor,
-    ValidatedReviewedMigrationPlan,
+    ExternalBackupBinding, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
+    read_backup_binding_document,
 };
 use crate::package::{
     CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, MigrationPlan, PackageFileRole,
     VerifiedPackage, VerifiedPredecessorPackage,
 };
 use crate::postgres::{
-    statement_checksum, ActivationPlanKind, BackupReference, ConnectionConfig,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceTransition,
-    MigrationArtifactBinding, MigrationKind, MigrationLedgerEntry, MigrationLedgerStep,
-    MigrationLedgerStepKind, PackageDdlStatement, PostgresFailure, RegistryLockKey,
-    ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedPackageExecutionRequest,
-    RoleMode, SqlIdentifier, VerifiedPackageApplyConnection,
+    ActivationPlanKind, BackupReference, ConnectionConfig, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, MaintenanceTransition, MigrationArtifactBinding, MigrationKind,
+    MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind, PackageDdlStatement,
+    PostgresFailure, RegistryLockKey, ReviewedExecutionOutcome, ReviewedFieldEncryptionContext,
+    ReviewedPackageExecutionRequest, RoleMode, SqlIdentifier, VerifiedPackageApplyConnection,
+    statement_checksum,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -97,11 +97,13 @@ pub enum MigrationError {
         record_ids: Vec<String>,
     },
     #[error(
-        "retain-plaintext-history requires clearing retained request snapshots before encrypting field `{field_id}` on entity `{entity_id}`"
+        "retain-plaintext-history requires clearing retained Proposal snapshots before encrypting field `{field_id}` on entity `{entity_id}`"
     )]
-    FieldEncryptionRetainedRequestSnapshots { entity_id: String, field_id: String },
-    #[error("active request proposals require rebase or cancellation before this package can be activated")]
-    ActiveRequestProposals,
+    FieldEncryptionRetainedProposalSnapshots { entity_id: String, field_id: String },
+    #[error(
+        "active Proposals must retain inspection and cancellation in the candidate package"
+    )]
+    ActiveProposalRecoveryUnavailable,
     #[error("destructive backup evidence is invalid")]
     BackupEvidence,
     /// The shared reader refused the backup binding document; the report
@@ -595,7 +597,7 @@ pub async fn read_activation_status(
     let recorded = match read {
         crate::postgres::ActivationStatusRead::Uninitialized => return Ok(None),
         crate::postgres::ActivationStatusRead::Unrecognized => {
-            return Err(MigrationError::UnrecognizedDatabase)
+            return Err(MigrationError::UnrecognizedDatabase);
         }
         crate::postgres::ActivationStatusRead::Recorded(recorded) => recorded,
     };
@@ -678,6 +680,8 @@ pub struct ApplyVerifiedPackageRequest<'a> {
     predecessor_migration_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
     predecessor_engine_capabilities: Option<&'a VerifiedPredecessorPackage>,
     event_destination_compatibility_inventory: Option<&'a EventDestinationCompatibilityInventory>,
+    proposal_activation_compatibility_inventory:
+        Option<&'a crate::proposal_retention::ProposalActivationCompatibilityInventory>,
     field_encryption: Option<AppliedFieldEncryptionKeySource<'a>>,
     fault_after_committed_chunks: Option<u64>,
     audit: Option<RegistryAudit>,
@@ -725,6 +729,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             predecessor_migration_baseline: None,
             predecessor_engine_capabilities: None,
             event_destination_compatibility_inventory: None,
+            proposal_activation_compatibility_inventory: None,
             field_encryption: None,
             fault_after_committed_chunks: None,
             audit: Some(audit),
@@ -755,11 +760,22 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             predecessor_migration_baseline: None,
             predecessor_engine_capabilities: None,
             event_destination_compatibility_inventory: None,
+            proposal_activation_compatibility_inventory: None,
             field_encryption: None,
             fault_after_committed_chunks: None,
             audit: None,
             operator_reference: None,
         }
+    }
+
+    /// Attach an opaque, fresh engine proof for retaining exact old Review closures.
+    #[must_use]
+    pub fn with_proposal_activation_compatibility(
+        mut self,
+        inventory: &'a crate::proposal_retention::ProposalActivationCompatibilityInventory,
+    ) -> Self {
+        self.proposal_activation_compatibility_inventory = Some(inventory);
+        self
     }
 
     /// Bind the operator's reference for this activation. The ledger and the
@@ -963,7 +979,7 @@ impl PlannedActivation {
                 "migration-role",
                 "runtime-write-authority",
                 "prerequisites",
-                "request-proposals",
+                "proposals",
                 "history-coverage",
                 "webhook-bindings",
                 "active-state",
@@ -1379,21 +1395,21 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                 .await;
             }
         }
-        // A role change keeps the compiled model, so no request proposal
+        // A role change keeps the compiled model, so no Proposal
         // needs a rebase.
         let proposals_guarded = if role_change {
             Ok(())
         } else {
-            crate::request_retention::guard_successor_activation(
-                connection.client_for_request_retention_guard(),
+            crate::proposal_retention::guard_successor_activation(
+                connection.client_for_proposal_retention_guard(),
                 request.package.registry(),
             )
             .await
         };
         if let Err(error) = proposals_guarded {
             let refused = match error {
-                crate::request_retention::RequestRetentionError::ActiveProposalRequiresRebase => {
-                    MigrationError::ActiveRequestProposals
+                crate::proposal_retention::ProposalRetentionError::ActiveProposalRecoveryUnavailable => {
+                    MigrationError::ActiveProposalRecoveryUnavailable
                 }
                 _ => MigrationError::ApplyFailed,
             };
@@ -1484,6 +1500,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         let superseded = match connection
             .activate_role_change(
                 request.package.registry(),
+                request.proposal_activation_compatibility_inventory,
                 current,
                 &target,
                 MaintenanceTransition {
@@ -1570,6 +1587,8 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         }
         let Ok(superseded) = connection
             .activate_verified_package(
+                request.package.registry(),
+                request.proposal_activation_compatibility_inventory,
                 current,
                 &target,
                 MaintenanceTransition {
@@ -1595,6 +1614,8 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     {
         if let Ok(superseded) = connection
             .activate_verified_package(
+                request.package.registry(),
+                request.proposal_activation_compatibility_inventory,
                 current,
                 &target,
                 MaintenanceTransition {
@@ -1642,6 +1663,8 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     }
     let activation_result = connection
         .activate_verified_package(
+            request.package.registry(),
+            request.proposal_activation_compatibility_inventory,
             current,
             &target,
             MaintenanceTransition {
@@ -1676,17 +1699,17 @@ async fn rehearse_begin(
             .await
             .map_err(|_| MigrationError::ApplyFailed);
     };
-    // The guard reads only request tables, which the control-plane
+    // The guard reads only Proposal tables, which the control-plane
     // reconciliation apply runs before it never changes.
     if !role_change {
-        crate::request_retention::guard_successor_activation(
-            connection.client_for_request_retention_guard(),
+        crate::proposal_retention::guard_successor_activation(
+            connection.client_for_proposal_retention_guard(),
             request.package.registry(),
         )
         .await
         .map_err(|error| match error {
-            crate::request_retention::RequestRetentionError::ActiveProposalRequiresRebase => {
-                MigrationError::ActiveRequestProposals
+            crate::proposal_retention::ProposalRetentionError::ActiveProposalRecoveryUnavailable => {
+                MigrationError::ActiveProposalRecoveryUnavailable
             }
             _ => MigrationError::ApplyFailed,
         })?;
@@ -1935,10 +1958,10 @@ async fn fail_with_error_and_release<T>(
             entity_id,
             record_ids,
         },
-        crate::postgres::PostgresKernelError::FieldEncryptionRetainedRequestSnapshots {
+        crate::postgres::PostgresKernelError::FieldEncryptionRetainedProposalSnapshots {
             entity_id,
             field_id,
-        } => MigrationError::FieldEncryptionRetainedRequestSnapshots {
+        } => MigrationError::FieldEncryptionRetainedProposalSnapshots {
             entity_id,
             field_id,
         },

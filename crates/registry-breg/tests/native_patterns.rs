@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_project_json, DerivedFieldSource, FieldSource};
+use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::contract::{DerivedFieldSource, FieldSource, parse_project_json};
 use registry_breg::generated_ddl::field_pattern_constraint_name;
 use serde_json::json;
 
 fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
-    let mut value = json!({
+    let mut value = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"native-patterns","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://patterns.example.test"},
         "manifestProjection":{
@@ -16,12 +16,12 @@ fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
             "datasets":[{"id":"records","title":"Records"}],
             "dataServices":[{"id":"api","title":"API","endpointUrl":"https://patterns.example.test/v1","servesDatasets":["records"]}]
         },
-        "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
+        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"identifier","type":"string","maximumLength":100,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":"unrestricted"}]}}]
+        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":"unrestricted"}]}}]
     });
     if let Some(pattern) = pattern {
-        value["entities"][0]["fields"][0]["pattern"] = json!(pattern);
+        value["recordTypes"][0]["fields"][0]["pattern"] = json!(pattern);
     }
     parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()
 }
@@ -42,12 +42,16 @@ fn native_pattern_is_persisted_bounded_and_not_a_portable_schema_pattern() {
         .iter()
         .find(|s| s.id == "entity.entry.field.identifier.pattern")
         .unwrap();
-    assert!(statement
-        .sql
-        .starts_with("SELECT '' ~ E'^[0-9]{13}$'; ALTER TABLE"));
-    assert!(statement
-        .sql
-        .contains(&field_pattern_constraint_name("entry", "identifier")));
+    assert!(
+        statement
+            .sql
+            .starts_with("SELECT '' ~ E'^[0-9]{13}$'; ALTER TABLE")
+    );
+    assert!(
+        statement
+            .sql
+            .contains(&field_pattern_constraint_name("entry", "identifier"))
+    );
     assert!(!statement.sql.contains("NOT VALID"));
     for artifact in registry.artifacts().entries().values().filter(|a| {
         a.path.ends_with(".json") && (a.path.contains("schema") || a.path.contains("openapi"))
@@ -61,24 +65,39 @@ fn native_pattern_is_persisted_bounded_and_not_a_portable_schema_pattern() {
     // Compilation is deliberately structural: only PostgreSQL validates ARE syntax.
     assert!(compile_project(&project(Some("[")), &[], CompileProfile::Authoring).is_ok());
     assert!(compile_project(&project(Some("")), &[], CompileProfile::Authoring).is_ok());
-    for invalid in ["x".repeat(4097), "a\0b".to_owned()] {
+    for invalid in ["x".repeat(4097)] {
         let error =
             compile_project(&project(Some(&invalid)), &[], CompileProfile::Authoring).unwrap_err();
-        assert!(error
-            .diagnostics()
-            .iter()
-            .any(|d| d.code == "breg.field.pattern-bounds-invalid"));
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|d| d.code == "breg.field.pattern-bounds-invalid")
+        );
         assert!(!format!("{error:?}").contains(&invalid));
     }
+    let mut source = serde_json::to_value(project(None)).unwrap();
+    source["recordTypes"][0]["fields"][0]["pattern"] = json!("a\0b");
+    let failure = parse_project_json(&serde_json::to_vec(&source).unwrap())
+        .expect_err("control characters are refused by the authored source reader");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "yaml.control-character")
+    );
+    assert!(!format!("{failure:?}").contains("a\0b"));
 }
 
 #[test]
 fn patterns_are_rejected_on_derived_and_non_string_fields_and_safely_quoted() {
     for kind in ["boolean", "int64", "uuid", "date"] {
-        assert!(serde_json::from_value::<FieldSource>(
-            json!({"id":"value","type":kind,"classification":"internal","pattern":"x"})
-        )
-        .is_err());
+        assert!(
+            serde_json::from_value::<FieldSource>(
+                json!({"id":"value","type":kind,"classification":"internal","pattern":"x"})
+            )
+            .is_err()
+        );
     }
     assert!(serde_json::from_value::<DerivedFieldSource>(json!({"id":"value","type":"string","maximumLength":20,"classification":"internal","pattern":"x"})).is_err());
     let pattern = "a'\\b";
@@ -99,8 +118,8 @@ fn patterns_are_rejected_on_derived_and_non_string_fields_and_safely_quoted() {
 #[test]
 fn native_pattern_evolution_has_stable_identity_and_explicit_reviewed_changes() {
     use registry_breg::package::{
-        change_set_to_applicable_migration_plan, compiled_registry_change_set,
         CompiledRegistryChangeClass as Class, CompiledRegistryChangeCode as Code,
+        change_set_to_applicable_migration_plan, compiled_registry_change_set,
     };
     let compile = |p| compile_project(&project(p), &[], CompileProfile::Authoring).unwrap();
     let base = compile(None);
@@ -108,15 +127,18 @@ fn native_pattern_evolution_has_stable_identity_and_explicit_reviewed_changes() 
     let changed = compile(Some("^[0-9]{13}$"));
     let prior = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
     let changes = compiled_registry_change_set(&base, &added, prior);
-    assert!(changes
-        .changes
-        .iter()
-        .any(|c| c.code == Code::FieldPatternAdded && c.class == Class::CompatibleAdditive));
+    assert!(
+        changes
+            .changes
+            .iter()
+            .any(|c| c.code == Code::FieldPatternAdded && c.class == Class::CompatibleAdditive)
+    );
     let plan = change_set_to_applicable_migration_plan(&changes).unwrap();
-    assert!(plan
-        .statements
-        .iter()
-        .any(|s| s.id == "entity.entry.field.identifier.pattern"));
+    assert!(
+        plan.statements
+            .iter()
+            .any(|s| s.id == "entity.entry.field.identifier.pattern")
+    );
     assert_eq!(
         added.physical_names().entities["entry"].constraints["pattern:identifier"],
         changed.physical_names().entities["entry"].constraints["pattern:identifier"]
@@ -126,13 +148,17 @@ fn native_pattern_evolution_has_stable_identity_and_explicit_reviewed_changes() 
         (&changed, &base, Code::FieldPatternRemoved),
     ] {
         let changes = compiled_registry_change_set(from, to, prior);
-        assert!(changes
-            .changes
-            .iter()
-            .any(|c| c.code == code && c.class == Class::DestructiveOrIrreversible));
+        assert!(
+            changes
+                .changes
+                .iter()
+                .any(|c| c.code == code && c.class == Class::DestructiveOrIrreversible)
+        );
         assert!(change_set_to_applicable_migration_plan(&changes).is_err());
     }
-    assert!(compiled_registry_change_set(&added, &added, prior)
-        .changes
-        .is_empty());
+    assert!(
+        compiled_registry_change_set(&added, &added, prior)
+            .changes
+            .is_empty()
+    );
 }

@@ -62,7 +62,7 @@ action and the same target inputs.
 
 ```python
 contract = client.registry_contract(profile)
-action = contract.select_immediate_action("rename-company", profile)
+action = contract.select_action("rename-company", profile)
 conditions = client.action_target_conditions(action, {"targetId": record_id})
 receipt = client.invoke_action(
     action,
@@ -148,7 +148,7 @@ prepared = client.prepare_action(binding, inputs, "rename-company-1", conditions
 saved = prepared.to_bytes()
 
 fresh = client.registry_contract(profile)
-binding = fresh.select_immediate_action("rename-company", profile)
+binding = fresh.select_action("rename-company", profile)
 restored = BRegPreparedAction.from_bytes(saved)
 recovered = client.recover_action(binding, restored, inputs, "rename-company-1")
 result = client.execute_recovered_action(binding, recovered)

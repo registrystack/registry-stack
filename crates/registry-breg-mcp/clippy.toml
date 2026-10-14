@@ -3,7 +3,7 @@
 # `breg-mcp` acts at the Base Registry Engine only as the citizen's delegated
 # agent: every outbound call carries a token exchanged for the verified inbound
 # token, and the tools it serves only read, draft, and edit the citizen's own
-# change request. The methods below are the ways a later change could step
+# Proposal. The methods below are the ways a later change could step
 # outside that, either by presenting a credential that is not the exchanged one
 # or by reaching a registry operation no tool offers.
 #
@@ -37,16 +37,19 @@ disallowed-methods = [
   { path = "registry_platform_httputil::client::build_client", reason = "outbound requests go only through the registry client the exchange configured" },
 
   # Registry operations no gateway tool offers. A citizen's agent drafts and
-  # edits a change request; it does not run lifecycle actions, tombstone,
+  # edits a Proposal; only its fixed edit wrapper may run a lifecycle transition, tombstone,
   # batch, invoke actions, manage attachments, ingest, or publish or withdraw
   # statistical releases.
-  { path = "registry_breg_client::BaseRegistryClient::execute_lifecycle_action", reason = "the gateway offers no lifecycle action" },
+  { path = "registry_breg_client::BaseRegistryClient::prepare_proposal", reason = "only gateway::execute_edit may prepare the fixed edit transition" },
+  { path = "registry_breg_client::BaseRegistryClient::execute_proposal", reason = "only gateway::execute_edit may execute the fixed edit transition" },
+  { path = "registry_breg_client::BaseRegistryClient::create_record", reason = "the gateway starts Proposals and offers no Record creation" },
+  { path = "registry_breg_client::BaseRegistryClient::patch_record", reason = "the gateway edits Proposals and offers no Record mutation" },
   { path = "registry_breg_client::BaseRegistryClient::tombstone_record", reason = "the gateway offers no tombstone" },
   { path = "registry_breg_client::BaseRegistryClient::batch_records", reason = "the gateway offers no batch write" },
   { path = "registry_breg_client::BaseRegistryClient::action_target_conditions", reason = "the gateway offers no governed action" },
   { path = "registry_breg_client::BaseRegistryClient::invoke_action", reason = "the gateway offers no governed action" },
-  { path = "registry_breg_client::BaseRegistryClient::upload_attachment", reason = "the gateway offers no attachment upload" },
-  { path = "registry_breg_client::BaseRegistryClient::delete_attachment", reason = "the gateway offers no attachment removal" },
+  { path = "registry_breg_client::BaseRegistryClient::upload_proposal_attachment", reason = "the gateway offers no attachment upload" },
+  { path = "registry_breg_client::BaseRegistryClient::delete_proposal_attachment", reason = "the gateway offers no attachment removal" },
   { path = "registry_breg_client::BaseRegistryClient::create_ingestion_run", reason = "the gateway offers no ingestion" },
   { path = "registry_breg_client::BaseRegistryClient::submit_ingestion_chunk", reason = "the gateway offers no ingestion" },
   { path = "registry_breg_client::BaseRegistryClient::cancel_ingestion_run", reason = "the gateway offers no ingestion" },

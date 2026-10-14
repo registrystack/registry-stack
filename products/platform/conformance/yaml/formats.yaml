@@ -316,7 +316,7 @@ formats:
   # of the format it writes there (CFG-SCHEMA-7: its first line is the schema
   # modeline). Formats with an entry above carry their `init` there.
   breg/project:
-    init: {command: "bregctl init {directory}", file: registry.yaml}
+    init: {command: "bregctl init {directory}", file: registry.yaml, association: native-kind}
     removedKeys:
       - /registry
       - /entities/0/fields/0/minLength

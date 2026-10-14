@@ -4,29 +4,24 @@
 
 #[path = "support/postgres_harness.rs"]
 mod postgres_harness;
-#[path = "support/source_bytes.rs"]
-mod source_bytes;
 
 use std::{collections::BTreeSet, fs, os::unix::fs::PermissionsExt as _, time::Duration};
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{
-    compile_project, compile_project_with_assets, module_digest, CompileProfile,
-};
-use registry_breg::contract::{
-    parse_module_yaml, parse_project_yaml, ModuleAssetSource, RegistryProject,
-};
+use registry_breg::CompiledRegistry;
+use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::field_encryption_backfill::{
-    preflight_field_encryption_backfill, FieldEncryptionBackfillPreflightRequest,
-    FieldEncryptionBackfillTimeouts,
+    FieldEncryptionBackfillPreflightRequest, FieldEncryptionBackfillTimeouts,
+    preflight_field_encryption_backfill,
 };
 use registry_breg::migration::{
-    apply_verified_package, bind_active_package, plan_verified_package, read_activation_status,
-    read_recorded_registry_state, successor_plan_is_empty, successor_plan_is_empty_for_predecessor,
     ActivationDeployment, ActivationPlan, AppliedFieldEncryptionKeySource, ApplyPrecondition,
     ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence,
     MigrationError, PlannedActivation, RecordedRegistryState, ReviewedMigrationFaultPoint,
+    apply_verified_package, bind_active_package, plan_verified_package, read_activation_status,
+    read_recorded_registry_state,
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
@@ -36,31 +31,28 @@ use registry_breg::migration_plan::{
     ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::migration_reconcile::{
-    reconcile_failed_migration, ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport,
-    ReconcileRequest, ReconcileTimeouts, UNRESOLVABLE_CATALOG_UNMATCHED,
+    ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport, ReconcileRequest,
+    ReconcileTimeouts, UNRESOLVABLE_CATALOG_UNMATCHED, reconcile_failed_migration,
 };
 use registry_breg::package::{
-    compiled_registry_change_set, load_package, load_predecessor_package, prepare_package,
-    prepare_package_with_project_assets, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
-    CompiledRegistryMigrationBaseline, PackageBuildRequest, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, PreparedPackage,
-    VerifiedPackage, VerifiedPredecessorPackage,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
+    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
+    PackageSourceFile, PreparedPackage, VerifiedPackage, compiled_registry_change_set,
+    load_package, prepare_package,
 };
 use registry_breg::postgres::{
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, MigrationRehearsalError, PostgresFailure,
+    PostgresKernelError, RehearsalAssertionPhase, RehearsalOutcome, SuccessorMigrationRehearsal,
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
-    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    MigrationRehearsalError, PostgresFailure, PostgresKernelError, RehearsalAssertionPhase,
-    RehearsalOutcome, SuccessorMigrationRehearsal,
+    verify_catalog_identity_for_catalog,
 };
-use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use registry_platform_crypto::field_encryption::ENVELOPE_MEMBER_TAG;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 const ENVIRONMENT: &str = "local";
@@ -264,158 +256,9 @@ async fn activate_without_access_log_collection(
     (prior, fingerprint, active, initial)
 }
 
-/// Copies the frozen person-registration package, rewrites its envelope,
-/// reseals the sum file, and reads the result as a predecessor.
-fn load_rewritten_person_package(
-    root: &std::path::Path,
-    rewrite: impl FnOnce(&mut serde_json::Value),
-) -> VerifiedPredecessorPackage {
-    let frozen = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/person-registration-rhai-package");
-    copy_package_tree(&frozen, root);
-    let manifest_path = root.join("package.json");
-    let mut envelope: serde_json::Value =
-        serde_json::from_slice(&fs::read(&manifest_path).expect("the package manifest reads"))
-            .expect("the package manifest parses");
-    rewrite(&mut envelope);
-    fs::write(
-        &manifest_path,
-        canonicalize_json(&envelope).expect("the rewritten envelope canonicalizes"),
-    )
-    .expect("the rewritten manifest is written");
-    fs::remove_file(root.join(SUM_FILE)).expect("the stale sum file is removed");
-    write_sum_file(
-        root,
-        None,
-        &PackageLimits {
-            max_files: 1_026,
-            max_file_bytes: 16 * 1024 * 1024,
-            max_total_bytes: 64 * 1024 * 1024,
-            max_depth: 16,
-            max_path_bytes: 512,
-        },
-        "test package",
-    )
-    .expect("the rewritten package closes");
-    load_predecessor_package(root, &local_context())
-        .expect("the rewritten package verifies as a predecessor")
-}
-
-fn copy_package_tree(source: &std::path::Path, destination: &std::path::Path) {
-    for entry in fs::read_dir(source).expect("the frozen package directory reads") {
-        let entry = entry.expect("the frozen package entry reads");
-        let target = destination.join(entry.file_name());
-        if entry
-            .file_type()
-            .expect("the frozen package entry type reads")
-            .is_dir()
-        {
-            fs::create_dir(&target).expect("the package subdirectory is created");
-            copy_package_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), &target).expect("the package file is copied");
-        }
-    }
-}
-
-fn person_registration_acceptance_root() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/acceptance/person-registration-rhai")
-}
-
-fn person_registration_project(with_migration_note: bool) -> RegistryProject {
-    let mut project = serde_json::to_value(
-        parse_project_yaml(
-            &fs::read(person_registration_acceptance_root().join("registry.yaml"))
-                .expect("the person-registration acceptance project is present"),
-        )
-        .expect("the person-registration acceptance project parses"),
-    )
-    .expect("the project serializes");
-    project["package"]["sourceRevision"] = serde_json::json!(SOURCE_REVISION);
-    if with_migration_note {
-        project["entities"][0]["fields"]
-            .as_array_mut()
-            .expect("person fields are an array")
-            .push(serde_json::json!({
-                "id": "migration-note",
-                "type": "string",
-                "required": false,
-                "maximumLength": 32,
-                "classification": "internal"
-            }));
-    }
-    serde_json::from_value(project).expect("the test project remains valid source")
-}
-
-fn person_registration_assets() -> Vec<PackageSourceFile> {
-    [
-        "scripts/register-person.rhai",
-        "scripts/register-person-with-registration.rhai",
-    ]
-    .into_iter()
-    .map(|path| PackageSourceFile {
-        path: path.to_owned(),
-        bytes: fs::read(person_registration_acceptance_root().join(path))
-            .unwrap_or_else(|error| panic!("the handler script {path} is present: {error}")),
-    })
-    .collect()
-}
-
-fn compile_person_registration(
-    project: &RegistryProject,
-    assets: &[PackageSourceFile],
-) -> CompiledRegistry {
-    let compiler_assets = assets
-        .iter()
-        .map(|asset| ModuleAssetSource {
-            module: None,
-            path: asset.path.clone(),
-            bytes: asset.bytes.clone(),
-        })
-        .collect::<Vec<_>>();
-    compile_project_with_assets(project, &[], &compiler_assets, CompileProfile::Production)
-        .expect("the person-registration project compiles")
-}
-
-fn prepare_and_load_person_registration(
-    project: &RegistryProject,
-    assets: &[PackageSourceFile],
-    fingerprint: &str,
-    from_package_digest: Option<&str>,
-    migration_plan: PackageMigrationPlanInput,
-) -> VerifiedPackage {
-    let prepared = prepare_package_with_project_assets(
-        PackageBuildRequest {
-            from_package_digest: from_package_digest.map(str::to_owned),
-            compiler_source_revision: SOURCE_REVISION.to_owned(),
-            schema_fingerprint: fingerprint.to_owned(),
-            project: PackageSourceFile {
-                path: "source/registry.yaml".to_owned(),
-                bytes: source_bytes::source_bytes(project),
-            },
-            modules: Vec::new(),
-            fixture_journeys: PackageSourceFile {
-                path: "tests/journeys.yaml".to_owned(),
-                bytes: fs::read(person_registration_acceptance_root().join("tests/journeys.yaml"))
-                    .expect("the person-registration fixture journeys are present"),
-            },
-            migration_plan,
-        },
-        assets.to_vec(),
-    )
-    .unwrap_or_else(|error| {
-        panic!(
-            "the person-registration package prepares (from {:?}): {error:?}",
-            from_package_digest
-        )
-    });
-    publish_and_load(prepared, local_context())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_and_activation_closed(
-) {
+async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_and_activation_closed()
+ {
     let database = TestDatabase::create(1).await;
     let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
     database
@@ -549,9 +392,11 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
 
     let ledger_before_destructive = ledger_snapshot(&database).await;
     assert_eq!(ledger_before_destructive.len(), 2);
-    assert!(ledger_before_destructive
-        .iter()
-        .all(|entry| entry.2 == "applied"));
+    assert!(
+        ledger_before_destructive
+            .iter()
+            .all(|entry| entry.2 == "applied")
+    );
     let immutable_replay = apply(
         &database,
         &required_package,
@@ -588,9 +433,11 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     );
     let view_transition = &destructive_package.manifest().migration_plan.statements;
     assert_eq!(view_transition.len(), 1);
-    assert!(view_transition[0]
-        .sql
-        .starts_with("CREATE VIEW registry_source."));
+    assert!(
+        view_transition[0]
+            .sql
+            .starts_with("CREATE VIEW registry_source.")
+    );
     assert!(!view_transition[0].sql.contains("CASCADE"));
     let backup_root = tempfile::Builder::new()
         .prefix("registry-backup-canary-")
@@ -863,10 +710,12 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     assert_ready_target(&database, &destructive_active).await;
     assert_legacy_column_absent(&database, &required).await;
     assert_eq!(ledger_snapshot(&database).await.len(), 3);
-    assert!(ledger_snapshot(&database)
-        .await
-        .iter()
-        .all(|entry| entry.2 == "applied"));
+    assert!(
+        ledger_snapshot(&database)
+            .await
+            .iter()
+            .all(|entry| entry.2 == "applied")
+    );
     // The destructive activation records the backup the applying attempt was
     // bound to, as the binding described it, so the ledger names what a
     // restore would use.
@@ -1214,8 +1063,8 @@ async fn real_postgres_reconciliation_completes_reverts_or_refuses_a_pinned_targ
 /// entry leaves the pinned target, the ledger, and the journal as they were,
 /// and a later writer can still revert the same target.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_reconciliation_changes_nothing_when_the_audit_writer_refuses_its_request_entry(
-) {
+async fn real_postgres_reconciliation_changes_nothing_when_the_audit_writer_refuses_its_request_entry()
+ {
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -1977,9 +1826,11 @@ async fn real_postgres_a_resumed_activation_keeps_its_roles_and_records_its_oper
             runtime_role: database.runtime_role.as_str().to_owned(),
         }
     );
-    assert!(other_roles
-        .to_string()
-        .contains("rerun the apply with the database roles it started with"));
+    assert!(
+        other_roles
+            .to_string()
+            .contains("rerun the apply with the database roles it started with")
+    );
 
     let resumed = apply_verified_package(
         request(
@@ -2364,8 +2215,8 @@ async fn real_postgres_a_failed_role_change_activation_keeps_the_serving_runtime
 /// role it would have served with no grant, so the registry keeps the exact
 /// catalog its serving roles verify.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_a_role_change_refused_before_maintenance_grants_the_new_runtime_role_nothing(
-) {
+async fn real_postgres_a_role_change_refused_before_maintenance_grants_the_new_runtime_role_nothing()
+ {
     let (database, package) = initial_package_database().await;
     let single = apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.migration_config,
@@ -2521,9 +2372,11 @@ async fn real_postgres_a_successor_with_other_roles_is_refused_before_maintenanc
             runtime_role: database.runtime_role.as_str().to_owned(),
         }
     );
-    assert!(refused
-        .to_string()
-        .contains("apply the active package with the new roles first"));
+    assert!(
+        refused
+            .to_string()
+            .contains("apply the active package with the new roles first")
+    );
     let activations: i64 = database
         .admin
         .query_one(
@@ -3079,8 +2932,8 @@ async fn real_postgres_erasure_orders_the_revisions_an_adoption_kept() {
                   history_commit_position,
                   sealed_row_count, sealed_journal_row_count,
                   accepted_plaintext_journal_row_count,
-                  accepted_request_target_row_count,
-                  accepted_request_proposal_row_count,
+                  accepted_proposal_target_row_count,
+                  accepted_proposal_submission_row_count,
                   accepted_idempotency_row_count, accepted_outbox_row_count)
              SELECT 'asset', 'code', 'pre-ledger-revision', 'erase-and-rebaseline',
                     latest_position + 1, 0, 0, 0, 0, 0, 0, 0
@@ -3129,7 +2982,7 @@ async fn real_postgres_erasure_orders_the_revisions_an_adoption_kept() {
     .await
     .expect("erasure orders the revisions the adoption kept");
 
-    assert_eq!(outcome.scrubbed_request_proposal_count, 1);
+    assert_eq!(outcome.scrubbed_proposal_submission_count, 1);
     let erased: bool = database
         .admin
         .query_one(
@@ -4694,7 +4547,7 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
         .expect_err("retain mode refuses frozen guard plaintext");
     assert_eq!(
         refused,
-        MigrationError::FieldEncryptionRetainedRequestSnapshots {
+        MigrationError::FieldEncryptionRetainedProposalSnapshots {
             entity_id: "asset".to_owned(),
             field_id: "secret".to_owned(),
         }
@@ -5368,7 +5221,7 @@ fn compile_variant(variant: Variant) -> CompiledRegistry {
 
 fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://migration.example.test","title":"Migration Registry","publisher":{{"id":"migration-registry-authority","name":"Migration Publisher"}}}},"publicService":{{"id":"migration-registry-service","title":"Migration Registry"}},"datasets":[{{"id":"migration-registry","title":"Migration Dataset","owner":"Migration Publisher","status":"active"}}],"dataServices":[{{"id":"migration-registry-data-service","title":"Migration Registry","endpointUrl":"https://migration.example.test","servesDatasets":["migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://migration.example.test","title":"Migration Registry","publisher":{{"id":"migration-registry-authority","name":"Migration Publisher"}}}},"publicService":{{"id":"migration-registry-service","title":"Migration Registry"}},"datasets":[{{"id":"migration-registry","title":"Migration Dataset","owner":"Migration Publisher","status":"active"}}],"dataServices":[{{"id":"migration-registry-data-service","title":"Migration Registry","endpointUrl":"https://migration.example.test","servesDatasets":["migration-registry"]}}]}},"datasets":[{{"id":"migration-registry"}}],"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -5380,9 +5233,9 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
     ) {
         let mut source: serde_json::Value =
             serde_json::from_slice(&module_bytes(Variant::Base)).unwrap();
-        source["entities"][0]["fields"][0]["required"] = serde_json::json!(true);
+        source["recordTypes"][0]["fields"][0]["required"] = serde_json::json!(true);
         if matches!(variant, Variant::SubjectWithLog) {
-            source["entities"][0]["accessLog"] = serde_json::json!({"subjectField":"code"});
+            source["recordTypes"][0]["accessLog"] = serde_json::json!({"subjectField":"code"});
         }
         return serde_json::to_vec(&source).unwrap();
     }
@@ -5410,7 +5263,10 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         _ => None,
     };
     let legacy = if let Some(pattern) = pattern {
-        format!(",{{\"id\":\"legacy\",\"type\":\"string\",\"maximumLength\":16,\"classification\":\"internal\",\"pattern\":{}}}", serde_json::to_string(pattern).unwrap())
+        format!(
+            ",{{\"id\":\"legacy\",\"type\":\"string\",\"maximumLength\":16,\"classification\":\"internal\",\"pattern\":{}}}",
+            serde_json::to_string(pattern).unwrap()
+        )
     } else {
         legacy.to_owned()
     };
@@ -5424,7 +5280,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         _ => "",
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -7333,6 +7189,7 @@ async fn reconcile_with_catalog(
             .expect("test owns a keyed audit profile"),
     );
     reconcile_failed_migration(ReconcileRequest {
+        proposal_activation_compatibility_inventory: None,
         config: &database.migration_config,
         target_package: package,
         current,

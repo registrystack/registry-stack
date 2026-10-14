@@ -6,13 +6,13 @@
 #[allow(dead_code)]
 mod postgres_harness;
 
-use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_json, ModuleAssetSource};
+use registry_breg::compiler::{CompileProfile, compile_project, compile_project_with_assets};
+use registry_breg::contract::{ModuleAssetSource, parse_project_json};
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
-    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, RegistryStateTestIdentity,
+    ExpectedManagedCatalog, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema, verify_catalog_identity_for_catalog,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn compile(
     source: Value,
@@ -32,7 +32,7 @@ fn project_with_entities(entities: Value) -> Value {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://logical-sql-names.example.test"
         },
-        "entities": entities
+        "recordTypes": entities
     })
 }
 
@@ -51,10 +51,12 @@ fn fields_that_only_differ_after_postgres_identifier_limit_are_refused() {
     }])))
     .expect_err("PostgreSQL would collapse the two source-view columns");
 
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.field.sql-name-duplicate"));
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.field.sql-name-duplicate")
+    );
 }
 
 #[test]
@@ -78,10 +80,12 @@ fn entities_that_only_differ_after_postgres_identifier_limit_are_refused() {
     ])))
     .expect_err("PostgreSQL would collapse the two source-view names");
 
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.entity.sql-name-duplicate"));
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.entity.sql-name-duplicate")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

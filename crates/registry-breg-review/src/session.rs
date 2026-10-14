@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use registry_breg_client::{BRegLifecycleAction, BaseRegistryClient};
+use registry_breg_client::{BRegPreparedProposal, BaseRegistryClient};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
@@ -92,9 +92,8 @@ impl PendingSignIn {
 pub(crate) struct View {
     pub id: String,
     pub request_id: String,
-    pub action: BRegLifecycleAction,
+    pub attempt: BRegPreparedProposal,
     pub target: RecordRevision,
-    pub idempotency_key: String,
 }
 
 pub(crate) struct Session {

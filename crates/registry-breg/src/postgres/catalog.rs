@@ -13,8 +13,8 @@ use crate::model::CompiledRegistry;
 #[cfg(feature = "postgres-test")]
 use super::schema::install_empty_history_baseline_for_compiled_registry;
 use super::{
-    migration_ledger::install_migration_ledger, spatial_bbox_role, verify_btree_gist,
     PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
+    migration_ledger::install_migration_ledger, spatial_bbox_role, verify_btree_gist,
 };
 
 pub(super) const MANAGED_SCHEMAS: &[&str] = &[
@@ -261,7 +261,7 @@ impl ExpectedManagedCatalog {
             "UPDATE",
         );
         catalog.sequence(DELIVERY_SEQUENCE, ["SELECT", "USAGE"]);
-        for (table, privileges) in crate::request_store::REQUEST_TABLES {
+        for (table, privileges) in crate::proposal_store::PROPOSAL_TABLES {
             catalog.table(
                 &format!("registry_internal.{table}"),
                 privileges.iter().copied(),
@@ -349,6 +349,9 @@ impl ExpectedManagedCatalog {
                     .map(TablePrivilege::as_sql),
                 Some((true, true)),
             );
+            if table.runtime_lock_column {
+                catalog.column_privilege(&name, "record_id", "runtime", "UPDATE");
+            }
             for policy in &table.policies {
                 catalog.policies.insert(ManagedPolicy {
                     table: name.clone(),
@@ -911,12 +914,12 @@ pub(crate) async fn install_registry_state_schema(
                  accepted_plaintext_journal_row_count bigint NOT NULL
                      CONSTRAINT registry_field_encryption_flip_accepted_journal_nonnegative
                      CHECK (accepted_plaintext_journal_row_count >= 0),
-                 accepted_request_target_row_count bigint NOT NULL
+                 accepted_proposal_target_row_count bigint NOT NULL
                      CONSTRAINT registry_field_encryption_flip_accepted_targets_nonnegative
-                     CHECK (accepted_request_target_row_count >= 0),
-                 accepted_request_proposal_row_count bigint NOT NULL
+                     CHECK (accepted_proposal_target_row_count >= 0),
+                 accepted_proposal_submission_row_count bigint NOT NULL
                      CONSTRAINT registry_field_encryption_flip_accepted_proposals_nonnegative
-                     CHECK (accepted_request_proposal_row_count >= 0),
+                     CHECK (accepted_proposal_submission_row_count >= 0),
                  accepted_idempotency_row_count bigint NOT NULL
                      CONSTRAINT registry_field_encryption_flip_accepted_idempotency_nonnegative
                      CHECK (accepted_idempotency_row_count >= 0),

@@ -1255,34 +1255,6 @@
       ],
       "type": "object"
     },
-    "RawReviewExecutorConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "accessProfile": {
-          "type": "string"
-        },
-        "endpoint": {
-          "type": "string"
-        },
-        "privateKeyJwt": {
-          "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig",
-          "description": "A refreshing client-assertion credential for the executing registry.\nExactly one of `tokenRef` and `privateKeyJwt` is written."
-        },
-        "registryId": {
-          "type": "string"
-        },
-        "tokenRef": {
-          "$ref": "#/$defs/SecretReference",
-          "description": "A static bearer token for the executing registry. Exactly one of\n`tokenRef` and `privateKeyJwt` is written."
-        }
-      },
-      "required": [
-        "endpoint",
-        "registryId",
-        "accessProfile"
-      ],
-      "type": "object"
-    },
     "RawReviewPrivateKeyJwtConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1579,16 +1551,6 @@
     "reviewAuthorities": {
       "additionalProperties": {
         "$ref": "#/$defs/RawReviewAuthorityConfig"
-      },
-      "default": {},
-      "propertyNames": {
-        "$ref": "#/$defs/LocalId"
-      },
-      "type": "object"
-    },
-    "reviewExecutors": {
-      "additionalProperties": {
-        "$ref": "#/$defs/RawReviewExecutorConfig"
       },
       "default": {},
       "propertyNames": {

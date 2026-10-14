@@ -68,62 +68,7 @@ struct CreateEvidence {
     format: BRegRecordFormat,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LifecycleEvidence {
-    version: u8,
-    source: String,
-    authority: Value,
-    action: Value,
-    body: String,
-    idempotency_key: String,
-}
-
 capsule!(BRegPreparedCreate, CreateEvidence);
-
-/// Inert minimal lifecycle-action evidence for explicit, exact recovery.
-/// It contains no access token, record fields, proposal, external-review
-/// status, or history. Store it with the attempt in application-protected state.
-pub struct BRegPreparedLifecycle(Zeroizing<Vec<u8>>);
-
-impl BRegPreparedLifecycle {
-    pub fn from_slice(bytes: &[u8]) -> Result<Self, BaseRegistryClientError> {
-        if bytes.len() > MAXIMUM_PREPARED_BYTES {
-            return Err(refusal());
-        }
-        let value = crate::strict_json::from_slice(bytes).map_err(|_| refusal())?;
-        decode_lifecycle_evidence(value)?;
-        Ok(Self(Zeroizing::new(bytes.to_vec())))
-    }
-
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    fn encode(value: &LifecycleEvidence) -> Result<Self, BaseRegistryClientError> {
-        let bytes = Zeroizing::new(serde_json::to_vec(value).map_err(|_| refusal())?);
-        Self::from_slice(&bytes)
-    }
-
-    fn decode(&self) -> Result<LifecycleEvidence, BaseRegistryClientError> {
-        let value = serde_json::from_slice(&self.0).map_err(|_| refusal())?;
-        decode_lifecycle_evidence(value)
-    }
-}
-
-impl fmt::Debug for BRegPreparedLifecycle {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("BRegPreparedLifecycle(<redacted>)")
-    }
-}
-
-fn decode_lifecycle_evidence(value: Value) -> Result<LifecycleEvidence, BaseRegistryClientError> {
-    match value.get("version").and_then(Value::as_u64) {
-        Some(2) => serde_json::from_value(value).map_err(|_| refusal()),
-        _ => Err(refusal()),
-    }
-}
 
 fn create_identity(binding: &BRegCreateBinding) -> Value {
     serde_json::json!({
@@ -132,7 +77,7 @@ fn create_identity(binding: &BRegCreateBinding) -> Value {
         "revision": binding.registry_revision(),
         "operation": binding.operation_identifier(),
         "profile": binding.access_profile(),
-        "entity": binding.entity_identifier(),
+        "entity": binding.record_type_identifier(),
         "path": binding.path(),
         "schema": binding.request_schema(),
         "writable": binding.writable_api_names(),
@@ -199,66 +144,5 @@ impl BaseRegistryClient {
         self.validate_create_binding(binding, &request)?;
         request.bind_recovery(binding, &key, evidence.format);
         Ok((request, key, evidence.format))
-    }
-
-    /// Prepare the exact promoted action's minimal authority and record binding.
-    /// Record fields, proposal, external-review status, and history are excluded.
-    /// No token acquisition or I/O occurs; persist before execution.
-    pub fn prepare_lifecycle_action(
-        &self,
-        authority: &BRegLifecycleAuthority,
-        record: &RegistryRecordSingleResponse,
-        action: &BRegLifecycleAction,
-        key: &BRegIdempotencyKey,
-    ) -> Result<BRegPreparedLifecycle, BaseRegistryClientError> {
-        let reason = action.body().to_value().get("reason").cloned();
-        let candidates = self
-            .lifecycle_actions(authority, record)
-            .map_err(|_| refusal())?;
-        if !candidates.into_iter().any(|candidate| {
-            let candidate = match reason.as_ref() {
-                Some(Value::String(reason)) => candidate.with_reason(reason),
-                None => Ok(candidate),
-                _ => return false,
-            };
-            candidate.is_ok_and(|candidate| candidate == *action)
-        }) {
-            return Err(refusal());
-        }
-        BRegPreparedLifecycle::encode(&LifecycleEvidence {
-            version: 2,
-            source: self.source_binding(),
-            authority: authority.recovery_identity(),
-            action: action.recovery_identity(),
-            body: serde_json::to_string(action.body()).map_err(|_| refusal())?,
-            idempotency_key: key.as_str().to_owned(),
-        })
-    }
-
-    /// Revalidate the *original* action against freshly fetched caller-filtered
-    /// metadata, even when the committed operation no longer appears on today's
-    /// record. Never substitute a newly advertised action or precondition.
-    ///
-    /// The server still enforces current authorization and exact idempotency
-    /// replay. The caller must retain the original principal and database
-    /// generation; these cannot be inferred from a token provider.
-    pub fn recover_lifecycle_action(
-        &self,
-        authority: &BRegLifecycleAuthority,
-        prepared: &BRegPreparedLifecycle,
-    ) -> Result<(BRegLifecycleAction, BRegIdempotencyKey), BaseRegistryClientError> {
-        let evidence = prepared.decode()?;
-        if evidence.version != 2
-            || evidence.source != self.source_binding()
-            || !authority.matches_source(&evidence.source)
-            || !authority.matches_recovery_identity(&evidence.authority)
-        {
-            return Err(refusal());
-        }
-        let action = authority
-            .recover_action(evidence.action, &evidence.body)
-            .map_err(|_| refusal())?;
-        let key = BRegIdempotencyKey::parse(evidence.idempotency_key).map_err(|_| refusal())?;
-        Ok((action, key))
     }
 }

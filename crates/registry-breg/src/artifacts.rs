@@ -4,29 +4,31 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::contract::{
-    EventConditionSource, EventTrigger, FieldTypeSource, HookSource, MutationMode, Operation,
-    ProvenanceFieldSource,
+    EventTrigger, FieldTypeSource, HookSource, MutationMode, Operation, ProvenanceFieldSource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
 use crate::manifest_adapter::project_manifest_artifacts;
 use crate::model::{
     ActionRouteKind, CompiledAccessInventory, CompiledAction, CompiledActionInput,
-    CompiledActionInventory, CompiledActionRoute, CompiledActionTargetUseSource,
-    CompiledChangeRequestMutation, CompiledChangeRequestPlanner,
-    CompiledChangeRequestRetentionMode, CompiledChangeRequestTargetBinding,
-    CompiledChangeRequestValue, CompiledEntity, CompiledEventDeliveryInventory,
+    CompiledActionInventory, CompiledActionRoute, CompiledEntity, CompiledEventDeliveryInventory,
     CompiledManifestProjection, CompiledMetadataInventory, CompiledModuleIdentity,
     CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
     CompiledQueryTemporalValueKind, CompiledRecipients, CompiledRevisionKind, CompiledRoute,
     CompiledRouteInventory, CompiledStatisticalDataset, HttpMethod,
 };
-use crate::physical_names::{hex_prefix, PhysicalNameInventory};
-use crate::record_profile::{link_header_value, CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER};
+use crate::physical_names::{PhysicalNameInventory, hex_prefix};
+use crate::record_profile::{CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER, link_header_value};
+
+#[path = "project_sdk.rs"]
+mod project_sdk;
+#[path = "proposal_artifacts.rs"]
+mod proposal_artifacts;
+pub(crate) use proposal_artifacts::append_proposal_openapi;
 
 pub const REGISTRY_METADATA_ARTIFACT_PATH: &str = "generated/metadata/registry.json";
 
@@ -77,6 +79,7 @@ pub(crate) struct EffectiveModel<'a> {
     pub manifest_projection: Option<&'a CompiledManifestProjection>,
     pub module_order: &'a [String],
     pub module_closure: &'a [CompiledModuleIdentity],
+    #[serde(rename = "recordTypes")]
     pub entities: &'a BTreeMap<String, CompiledEntity>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub statistical_datasets: &'a BTreeMap<String, CompiledStatisticalDataset>,
@@ -166,7 +169,7 @@ pub(crate) fn generate_artifacts(
 
     let mut schemas = BTreeMap::new();
     for entity in entities.values() {
-        let schema = entity_schema(entity, entities);
+        let schema = entity_schema(entity);
         let path = format!("generated/schemas/{}.schema.json", entity.id);
         insert_json_value(&mut artifacts, &path, &schema)?;
         schemas.insert(entity.id.clone(), schema);
@@ -247,90 +250,37 @@ pub(crate) fn generate_artifacts(
             projected.dcat,
         );
     }
+    let mut review_contexts = BTreeMap::new();
+    for action in &actions.actions {
+        if let Some(context) = crate::compiler::review_context::compile_schema_from_parts(
+            registry_id,
+            entities,
+            action,
+        )? {
+            let path = format!("generated/review-context-schemas/{}.schema.json", action.id);
+            review_contexts.insert(action.id.clone(),json!({"id":context.id,"revision":context.revision,"digest":context.digest,"path":path}));
+            insert_bytes(
+                &mut artifacts,
+                &path,
+                "application/schema+json",
+                context.bytes,
+            );
+        }
+    }
+    if !review_contexts.is_empty() {
+        insert_json(
+            &mut artifacts,
+            "generated/review-context-schemas/index.json",
+            &review_contexts,
+        )?;
+    }
+    project_sdk::generate(&mut artifacts, registry_id, entities, actions)?;
     Ok(GeneratedArtifacts { artifacts })
 }
 
-/// The effective model is a generated operator artifact, not planner runtime
-/// input. Planner executable bytes and relative storage location remain inside
-/// the sealed package capture. The artifact retains a source-safe digest and
-/// coarse declaring origin for operator explanation.
+/// Compiled function assets already exclude executable bytes and local paths.
 fn sanitized_effective_model(model: &EffectiveModel<'_>) -> Result<Value, Diagnostic> {
-    let mut value = serde_json::to_value(model).map_err(|_| canonicalization_error())?;
-    sanitize_effective_model_planners(&mut value);
-    Ok(value)
-}
-
-fn sanitize_effective_model_planners(value: &mut Value) {
-    let Some(entities) = value
-        .as_object_mut()
-        .and_then(|model| model.get_mut("entities"))
-        .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
-    for entity in entities.values_mut() {
-        let Some(planner) = entity
-            .as_object_mut()
-            .and_then(|entity| entity.get_mut("changeRequest"))
-            .and_then(Value::as_object_mut)
-            .and_then(|request| request.get_mut("planner"))
-            .and_then(Value::as_object_mut)
-        else {
-            continue;
-        };
-        planner.remove("scriptBytes");
-        planner.remove("scriptPath");
-        let declaring_origin = match planner.remove("sourceModule") {
-            Some(Value::String(identifier)) => json!({"kind": "module", "id": identifier}),
-            Some(Value::Null) | None => json!({"kind": "project"}),
-            Some(_) => return,
-        };
-        planner.insert("declaringOrigin".to_owned(), declaring_origin);
-    }
-}
-
-/// Restore the compiled `sourceModule` member from the `declaringOrigin` the
-/// packaged effective model carries in its place, so an entity read back from
-/// that artifact deserializes as the compiled entity it was written from. The
-/// exact inverse of [`sanitize_effective_model_planners`]: a planner without
-/// `declaringOrigin`, any other origin shape, or a planner that carries both
-/// members is refused with `None`. The compiled planner reads a missing
-/// `sourceModule` as project origin, so a planner that omits its origin would
-/// otherwise be accepted as a project planner.
-#[cfg(any(test, feature = "runtime"))]
-pub(crate) fn restore_effective_model_planner_origins(entities: &mut Value) -> Option<()> {
-    let Some(entities) = entities.as_object_mut() else {
-        return Some(());
-    };
-    for entity in entities.values_mut() {
-        let Some(planner) = entity
-            .as_object_mut()
-            .and_then(|entity| entity.get_mut("changeRequest"))
-            .and_then(Value::as_object_mut)
-            .and_then(|request| request.get_mut("planner"))
-            .and_then(Value::as_object_mut)
-        else {
-            continue;
-        };
-        let declaring_origin = planner.remove("declaringOrigin")?;
-        if planner.contains_key("sourceModule") {
-            return None;
-        }
-        let mut origin = match declaring_origin {
-            Value::Object(origin) => origin,
-            _ => return None,
-        };
-        let source_module = match (origin.remove("kind")?.as_str()?, origin.remove("id")) {
-            ("project", None) => Value::Null,
-            ("module", Some(Value::String(identifier))) => Value::String(identifier),
-            _ => return None,
-        };
-        if !origin.is_empty() {
-            return None;
-        }
-        planner.insert("sourceModule".to_owned(), source_module);
-    }
-    Some(())
+    serde_json::to_value(model).map_err(|_| canonicalization_error())
 }
 
 pub(crate) fn event_data_schema_binding(
@@ -356,10 +306,9 @@ pub(crate) fn event_data_schema_binding(
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
-        EventTrigger::RequestLifecycle => "request-lifecycle",
     };
     let mut properties = Map::new();
-    properties.insert("entity".to_owned(), json!({"const": entity.id}));
+    properties.insert("recordType".to_owned(), json!({"const": entity.id}));
     properties.insert(
         "recordId".to_owned(),
         json!({"type": "string", "format": "uuid"}),
@@ -370,9 +319,6 @@ pub(crate) fn event_data_schema_binding(
     );
     properties.insert("trigger".to_owned(), json!({"const": trigger}));
     properties.insert("packageRevision".to_owned(), json!({"type": "string"}));
-    if event.trigger == EventTrigger::RequestLifecycle {
-        properties.insert("request".to_owned(), request_lifecycle_event_schema(event));
-    }
     properties.insert(
         "values".to_owned(),
         json!({
@@ -382,32 +328,12 @@ pub(crate) fn event_data_schema_binding(
             "required": event.projection,
         }),
     );
-    let required = if event.trigger == EventTrigger::RequestLifecycle {
-        vec![
-            "entity",
-            "recordId",
-            "revision",
-            "trigger",
-            "packageRevision",
-            "request",
-            "values",
-        ]
-    } else {
-        vec![
-            "entity",
-            "recordId",
-            "revision",
-            "trigger",
-            "packageRevision",
-            "values",
-        ]
-    };
     let schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": false,
         "properties": properties,
-        "required": required
+        "required": ["recordType", "recordId", "revision", "trigger", "packageRevision", "values"]
     });
     let bytes = canonicalize_json(&schema).map_err(|_| canonicalization_error())?;
     let digest = Sha256::digest(&bytes);
@@ -428,151 +354,7 @@ pub(crate) fn event_data_schema_binding(
     })
 }
 
-/// Engine-owned slot values share ordinary field projection but have no JSON mutation input.
-pub(crate) fn attachment_metadata_schema(slot: &crate::model::CompiledAttachmentSlot) -> Value {
-    let common = json!({
-        "slotId": {"const": slot.id},
-        "proposalVersion": {"type": "integer", "minimum": 1, "maximum": u32::MAX},
-        "filled": {"const": true},
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "byteSize": {"type": "integer", "minimum": 1, "maximum": crate::contract::MAX_ATTACHMENT_BYTES},
-    });
-    let mut live = common.clone();
-    live["erased"] = json!({"const": false});
-    // A retained proposal may predate a narrower current upload policy.
-    live["contentType"] = json!({"type": "string", "maxLength": 255,
-        "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$"});
-    live["verificationStatus"] =
-        json!({"type": "string", "enum": ["notRequired", "pending", "approved", "rejected"]});
-    live["uploadedAt"] = json!({"type": "string", "format": "date-time"});
-    live["uploadedBy"] = json!({"type": "string"});
-    let mut erased = common;
-    erased["erased"] = json!({"const": true});
-    json!({
-        "anyOf": [
-            {"type": "null"},
-            {"type": "object", "additionalProperties": false, "properties": live,
-             "required": ["slotId", "proposalVersion", "filled", "sha256", "byteSize", "erased", "contentType", "uploadedAt", "uploadedBy", "verificationStatus"]},
-            {"type": "object", "additionalProperties": false, "properties": erased,
-             "required": ["slotId", "proposalVersion", "filled", "sha256", "byteSize", "erased"]}
-        ],
-        "readOnly": true,
-        "x-registry-fieldKind": "attachment",
-        "x-registry-attachment": {
-            "requiredForSubmit": slot.required,
-            "maximumBytes": slot.maximum_bytes,
-            "contentTypes": slot.content_types,
-            "classification": slot.classification,
-            "verification": {
-                "statusField": "verificationStatus",
-                "allowedStatuses": ["notRequired", "approved"],
-                "pendingOrRejectedBlocks": ["download", "submit"]
-            }
-        }
-    })
-}
-
-pub(crate) fn attachment_path(entity: &CompiledEntity, slot_id: &str) -> String {
-    format!(
-        "/v1/records/{}/{{record_id}}/attachments/{slot_id}",
-        entity.route
-    )
-}
-
-/// An attachment operation inherits the admitted GET or PATCH surface and its response projection.
-pub(crate) fn openapi_attachment_operation(
-    spec: OpenApiOperationSpec<'_>,
-    slot: &crate::model::CompiledAttachmentSlot,
-    method: &str,
-) -> Value {
-    let mut operation = openapi_operation(spec);
-    // Binary slot routes do not inherit the record GET's query or GeoJSON representations.
-    for key in [
-        "x-registry-responseShapes",
-        "x-registry-geojsonProfiles",
-        "x-registry-queryProfile",
-    ] {
-        operation.as_object_mut().unwrap().remove(key);
-    }
-    operation["operationId"] = json!(crate::attachment::operation_id(
-        &spec.route.id,
-        &slot.id,
-        match method {
-            "get" => HttpMethod::Get,
-            "patch" => HttpMethod::Patch,
-            "delete" => HttpMethod::Delete,
-            _ => unreachable!("attachment operations have a closed method set"),
-        },
-    ));
-    operation["x-registry-operation"] = json!(format!("attachment_{method}"));
-    operation["x-registry-attachmentSlot"] = json!(slot.id);
-    operation["description"] = json!(if method == "get" {
-        "Download exact proposal content using current request GET authority and slot visibility."
-    } else {
-        "Mutate one draft slot using request PATCH authority, slot writableFields, owner and row boundaries. Refetch the record after mutation."
-    });
-    operation["security"] = json!([{"bearerAuth": []}]);
-    let mut parameters = vec![
-        json!({"name": "record_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}),
-        json!({"name": "accessProfile", "in": "query", "required": false, "schema": {"type": "string"}}),
-    ];
-    operation.as_object_mut().unwrap().remove("requestBody");
-    if method == "get" {
-        parameters.push(
-            json!({"name": "proposalVersion", "in": "query", "required": true,
-            "schema": {"type": "integer", "minimum": 1, "maximum": u32::MAX}}),
-        );
-        operation
-            .as_object_mut()
-            .unwrap()
-            .remove("x-registry-responseProfile");
-        operation["x-registry-responseShape"] = json!("binary");
-        operation["responses"]
-            .as_object_mut()
-            .unwrap()
-            .remove("304");
-        let content = json!({"*/*": {"schema": {"type": "string", "format": "binary"}}});
-        operation["responses"]["200"] = json!({"description": "Complete integrity-checked attachment content permitted by its verification policy", "content": content,
-        "headers": {
-            "Cache-Control": no_store_header(),
-            "Content-Disposition": {"schema": {"const": crate::attachment::DOWNLOAD_CONTENT_DISPOSITION}, "description": "Attachment disposition with no filename; no slot metadata holds one."},
-            "X-Content-Type-Options": {"schema": {"const": "nosniff"}}
-        }});
-    } else {
-        operation["x-registry-requiredRequestState"] = json!("draft");
-        parameters.push(header_parameter(
-            "If-Match",
-            true,
-            json!({"type": "string"}),
-            "Fresh request record ETag.",
-        ));
-        parameters.push(header_parameter(
-            "Idempotency-Key",
-            true,
-            json!({"type": "string"}),
-            "Caller-selected mutation replay key.",
-        ));
-        if method == "patch" {
-            operation["x-registry-maximumBytes"] = json!(slot.maximum_bytes);
-            let content = slot
-                .content_types
-                .iter()
-                .map(|content_type| {
-                    (
-                        content_type.clone(),
-                        json!({"schema": {"type": "string", "format": "binary"}}),
-                    )
-                })
-                .collect::<Map<_, _>>();
-            operation["requestBody"] = json!({"required": true, "content": content,
-                "description": format!("Raw nonempty bytes, at most {} bytes; actual length and SHA-256 are computed by the server.", slot.maximum_bytes)});
-        }
-    }
-    operation["parameters"] = json!(parameters);
-    operation
-}
-
-fn entity_schema(entity: &CompiledEntity, entities: &BTreeMap<String, CompiledEntity>) -> Value {
+fn entity_schema(entity: &CompiledEntity) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
     for field in &entity.stored_fields {
@@ -592,9 +374,7 @@ fn entity_schema(entity: &CompiledEntity, entities: &BTreeMap<String, CompiledEn
             .insert("readOnly".to_owned(), Value::Bool(true));
         properties.insert(field.logical.api_name.clone(), schema);
     }
-    for slot in entity.attachments.values() {
-        properties.insert(slot.id.clone(), attachment_metadata_schema(slot));
-    }
+
     let mut schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": format!("urn:breg:entity:{}", entity.id),
@@ -610,14 +390,8 @@ fn entity_schema(entity: &CompiledEntity, entities: &BTreeMap<String, CompiledEn
     let object = schema.as_object_mut().expect("entity schema is an object");
     if entity.change_control.is_some() {
         object.insert(
-            "x-registry-changeControl".to_owned(),
-            render_change_control(entity, entities),
-        );
-    }
-    if entity.change_request.is_some() {
-        object.insert(
-            "x-registry-changeRequest".to_owned(),
-            render_change_request(entity, entities),
+            "x-registry-mutationPolicy".to_owned(),
+            render_mutation_policy(entity),
         );
     }
     schema
@@ -659,436 +433,60 @@ pub(crate) fn openapi_entity_input_schema(
     })
 }
 
-fn request_lifecycle_event_schema(event: &HookSource) -> Value {
-    let mut transition =
-        json!({"type": "string", "enum": crate::compiler::REQUEST_LIFECYCLE_TRANSITIONS});
-    let mut to_state = request_state_schema();
-    if let Some(EventConditionSource::RequestLifecycle {
-        transitions,
-        to_states,
-        ..
-    }) = &event.when
-    {
-        if !transitions.is_empty() {
-            transition = json!({"type": "string", "enum": transitions});
-        }
-        if !to_states.is_empty() {
-            to_state = json!({"type": "string", "enum": to_states});
-        }
-    }
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-            "proposalVersion": {"type": "integer", "minimum": 1},
-            "workflowRevision": {"type": "integer", "minimum": 1},
-            "transition": transition,
-            "fromState": request_state_schema(),
-            "toState": to_state,
-            "reasonPresent": {"type": "boolean"},
-            "reason": application_reason_schema(),
-            "effectDigest": {"type": ["string", "null"]},
-            "deduplicationKey": {"type": "string"}
-        },
-        "required": [
-            "proposalVersion", "workflowRevision", "transition", "fromState", "toState",
-            "reasonPresent", "effectDigest", "deduplicationKey"
-        ],
-        "if": {"properties": {"reasonPresent": {"const": true}}},
-        "then": {
-            "required": ["reason"],
-            "properties": {
-                "transition": {"const": "apply"},
-                "toState": {"const": "applied"}
-            }
-        },
-        "else": {"not": {"required": ["reason"]}}
-    })
-}
-
 fn application_reason_schema() -> Value {
     json!({
         "type": "string",
-        "maxLength": crate::request_workflow::MAX_APPLICATION_REASON_CHARS,
+        "maxLength": crate::proposal_workflow::MAX_APPLICATION_REASON_CHARS,
         "pattern": "^[^\\u0000]*$",
         "description": "Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."
     })
 }
 
-pub(crate) fn openapi_request_action_input_schema(operation: Operation) -> Value {
-    let mut proposal_binding = json!({
-        "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
-        "effectDigest": {
-            "type": "string",
-            "pattern": "^sha256:[0-9a-f]{64}$",
-            "description": "Digest of the immutable proposal effects displayed to the actor."
+fn render_mutation_policy(entity: &CompiledEntity) -> Value {
+    let mut policy = Map::new();
+    if let Some(control) = &entity.change_control {
+        for operation in &control.required_for {
+            policy.insert(
+                operation_name(*operation).to_owned(),
+                json!("proposal-required"),
+            );
         }
-    });
-    if operation == Operation::ApplyRequest {
-        proposal_binding["reason"] = application_reason_schema();
     }
-    match operation {
-        Operation::ApplyRequest => json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["proposalVersion", "effectDigest"],
-            "properties": proposal_binding,
-        }),
-        Operation::ReviseRequest => json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["rebase"],
-            "properties": {
-                "rebase": {"type": "boolean"}
-            }
-        }),
-        _ => json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {}
-        }),
-    }
+    Value::Object(policy)
 }
 
-fn render_change_control(
-    entity: &CompiledEntity,
-    entities: &BTreeMap<String, CompiledEntity>,
-) -> Value {
-    let controlled_operations = entity
-        .change_control
-        .as_ref()
-        .map(|control| {
-            control
-                .required_for
-                .iter()
-                .map(|operation| operation_name(*operation))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let eligible_request_types = entities
-        .values()
-        .filter_map(|request_entity| {
-            let request = request_entity.change_request.as_ref()?;
-            let operations = request
-                .effects
-                .iter()
-                .filter(|effect| effect.target.entity_id == entity.id)
-                .map(|effect| operation_name(effect.operation))
-                .chain(
-                    request
-                        .planner
-                        .iter()
-                        .flat_map(|planner| planner.writes.iter())
-                        .filter(|write| write.target_entity_id == entity.id)
-                        .map(|write| operation_name(write.operation)),
-                )
-                .collect::<BTreeSet<_>>();
-            (!operations.is_empty()).then(|| {
-                json!({
-                    "requestEntity": request_entity.id,
-                    "requestRoute": request_entity.route,
-                    "operations": operations.into_iter().collect::<Vec<_>>(),
-                    "contractFingerprint": request.contract_fingerprint,
-                })
-            })
-        })
-        .collect::<Vec<_>>();
+/// The source-free definition inspector shared by tooling and caller metadata.
+/// Caller projections must additionally apply their disclosure authority.
+pub fn inspect_action(action: &CompiledAction) -> Value {
     json!({
-        "requiredFor": controlled_operations,
-        "directWriteRestriction": "controlled_operations_require_compiled_change_request_application",
-        "eligibleRequestTypes": eligible_request_types,
+        "id": action.id, "apiName": action.api_name,
+        "revision": action.definition_revision, "display": action.display,
+        "execution": action.execution,
+        "inputs": action.inputs.iter().map(|input| action_input_metadata(input, action.handler.is_some())).collect::<Vec<_>>(),
+        "plan": {"effects": action.effects, "function": action.handler,
+            "order": action.effects.iter().map(|effect| &effect.id).collect::<Vec<_>>()},
+        "commitGuards": action.requires,
+        "dependencies": {"evidence": action.evidence},
+        "bounds": {"maximumTargets": action.maximum_targets,
+            "maximumFieldMutations": action.maximum_field_mutations,
+            "maximumSnapshotBytes": action.maximum_snapshot_bytes},
     })
 }
 
-fn render_change_request(
-    entity: &CompiledEntity,
-    entities: &BTreeMap<String, CompiledEntity>,
-) -> Value {
-    let request = entity
-        .change_request
-        .as_ref()
-        .expect("caller checked change request presence");
-    json!({
-        "requestEntity": request.request_entity_id,
-        "contractFingerprint": request.contract_fingerprint,
-        "planner": render_request_planner(request.planner.as_ref(), request),
-        "review": request.review,
-        "onApproved": request.on_approved,
-        "application": request.application,
-        "retention": render_request_retention(request.retention_mode),
-        "bounds": {
-            "maximumTargets": request.maximum_targets,
-            "maximumFieldMutations": request.maximum_field_mutations,
-            "maximumSnapshotBytes": request.maximum_snapshot_bytes,
-        },
-        "stateEnvelope": {
-            "states": ["draft", "submitted", "cancelled", "applied"],
-            "proposalBinding": ["proposalVersion", "effectDigest", "contractFingerprint"],
-            "actionAvailability": "advisory_rechecked_on_use",
-        },
-        "effects": request.effects.iter().map(|effect| {
-            let target = entities.get(&effect.target.entity_id);
-            json!({
-                "id": effect.id,
-                "operation": operation_name(effect.operation),
-                "target": {
-                    "entity": effect.target.entity_id,
-                    "binding": render_target_binding(&effect.target.binding),
-                },
-                "mutations": effect.mutations.iter().map(|mutation| {
-                    render_request_mutation(mutation, target)
-                }).collect::<Vec<_>>(),
-                "dependsOn": effect.depends_on.iter().collect::<Vec<_>>(),
-            })
-        }).collect::<Vec<_>>(),
-        "actions": request.actions.iter().map(|action| json!({
-            "operation": operation_name(action.operation.access_operation()),
-            "method": "POST",
-            "requiresIdempotencyKey": true,
-            "requiresRecordPrecondition": true,
-            "inputSchema": openapi_input_schema_id(&entity.id, action.operation.access_operation()),
-            "responseSchema": "ChangeRequestActionResponse",
+/// Author inspection uses exactly the normalized definitions used by execution.
+pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
+    json!({"registryId": registry.registry_id(), "revision": registry.revision(),
+        "recordTypes": registry.entities().values().map(|record_type| json!({
+            "id": record_type.id, "apiName": record_type.api_name,
+            "revision": record_type.definition_revision, "display": record_type.display,
+            "relationships": record_type.relationships,
+            "fields": record_type.stored_fields.iter().map(|field| json!({
+                "id": field.logical.id, "apiName": field.logical.api_name,
+                "schema": field_value_schema(&field.logical.field_type, !field.required),
+                "required": field.required,
+            })).collect::<Vec<_>>()
         })).collect::<Vec<_>>(),
-        "applyPermissions": request.apply_permissions,
-        "presencePermissions": request.presence_permissions,
-        "targetEntities": request.target_entities,
-    })
-}
-
-/// Source-free change-request capability projection for caller-filtered
-/// Registry metadata. It omits permissions and all planner provenance, so this
-/// descriptive surface cannot manufacture action authority. Effects and
-/// planner writes are described only through what the caller may read:
-/// `readable_by_entity` holds the caller's readable fields per entity, an
-/// effect on an entity the caller cannot read is left out, and a target or
-/// request field the caller cannot read is never named.
-#[allow(dead_code)] // Called by the production /v1/registry metadata route.
-pub(crate) fn request_capability_metadata(
-    request: &crate::model::CompiledChangeRequest,
-    readable_by_entity: &BTreeMap<String, BTreeSet<String>>,
-) -> Value {
-    let empty = BTreeSet::new();
-    let request_fields = readable_by_entity
-        .get(&request.request_entity_id)
-        .unwrap_or(&empty);
-    let readable_target = |entity: &str| readable_by_entity.get(entity);
-    let visible_target = |entity: &str, from_field: Option<&String>| {
-        let mut target = json!({"entity": entity});
-        if let Some(field) = from_field.filter(|field| request_fields.contains(*field)) {
-            target["fromField"] = json!(field);
-        }
-        target
-    };
-    let planner = match request.planner.as_ref() {
-        None => json!({"kind": "declarative"}),
-        Some(planner) => {
-            let operations = planner
-                .writes
-                .iter()
-                .map(|write| operation_name(write.operation))
-                .collect::<BTreeSet<_>>();
-            let writes = planner
-                .writes
-                .iter()
-                .filter_map(|write| {
-                    let readable = readable_target(&write.target_entity_id)?;
-                    Some(json!({
-                        "target": visible_target(
-                            &write.target_entity_id,
-                            write.target_from_field.as_ref(),
-                        ),
-                        "operation": operation_name(write.operation),
-                        "fields": write.fields.intersection(readable).collect::<Vec<_>>(),
-                    }))
-                })
-                .collect::<Vec<_>>();
-            json!({
-                "kind": "rhai",
-                "abi": planner.abi,
-                "limits": render_request_planner(Some(planner), request)["limits"],
-                "possibleWriteCount": planner.writes.len(),
-                "possibleWriteOperations": operations,
-                "writes": writes,
-            })
-        }
-    };
-    // An effect on an entity the caller cannot read is left out, and so is
-    // every reference to it from an effect the caller can see.
-    let visible_effects = request
-        .effects
-        .iter()
-        .filter(|effect| readable_target(&effect.target.entity_id).is_some())
-        .map(|effect| effect.id.as_str())
-        .collect::<BTreeSet<_>>();
-    let effects = request
-        .effects
-        .iter()
-        .filter_map(|effect| {
-            let readable = readable_target(&effect.target.entity_id)?;
-            let target = match &effect.target.binding {
-                CompiledChangeRequestTargetBinding::Existing { from_field } => {
-                    visible_target(&effect.target.entity_id, Some(from_field))
-                }
-                CompiledChangeRequestTargetBinding::ReservedCreate { effect: reserved } => {
-                    let mut target = json!({"entity": effect.target.entity_id});
-                    if visible_effects.contains(reserved.as_str()) {
-                        target["fromEffect"] = json!(reserved);
-                    }
-                    target
-                }
-            };
-            let mut set = Vec::new();
-            let mut clear = Vec::new();
-            for mutation in &effect.mutations {
-                match mutation {
-                    CompiledChangeRequestMutation::Set { field, value }
-                        if readable.contains(field) =>
-                    {
-                        let mut entry = json!({"field": field});
-                        match value {
-                            CompiledChangeRequestValue::FromField { field }
-                                if request_fields.contains(field) =>
-                            {
-                                entry["fromField"] = json!(field);
-                            }
-                            CompiledChangeRequestValue::FromEffect { effect, .. }
-                                if visible_effects.contains(effect.as_str()) =>
-                            {
-                                entry["fromEffect"] = json!(effect);
-                            }
-                            CompiledChangeRequestValue::FromField { .. }
-                            | CompiledChangeRequestValue::FromEffect { .. } => {}
-                        }
-                        set.push(entry);
-                    }
-                    CompiledChangeRequestMutation::Clear { field } if readable.contains(field) => {
-                        clear.push(field);
-                    }
-                    CompiledChangeRequestMutation::Set { .. }
-                    | CompiledChangeRequestMutation::Clear { .. } => {}
-                }
-            }
-            Some(json!({
-                "id": effect.id,
-                "operation": operation_name(effect.operation),
-                "target": target,
-                "set": set,
-                "clear": clear,
-            }))
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "planner": planner,
-        "effects": effects,
-        "review": request.review,
-        "onApproved": request.on_approved,
-        "application": request.application,
-    })
-}
-
-fn render_request_planner(
-    planner: Option<&CompiledChangeRequestPlanner>,
-    request: &crate::model::CompiledChangeRequest,
-) -> Value {
-    match planner {
-        None => json!({"kind": "declarative"}),
-        Some(planner) => json!({
-            "kind": "rhai",
-            "abi": planner.abi,
-            "limits": {
-                "maximumTargets": request.maximum_targets,
-                "maximumFieldMutations": request.maximum_field_mutations,
-                "maximumSnapshotBytes": request.maximum_snapshot_bytes,
-                "maximumSourceBytes": planner.limits.maximum_source_bytes,
-                "maximumOperations": planner.limits.maximum_operations,
-                "maximumCallDepth": planner.limits.maximum_call_depth,
-                "maximumExpressionDepth": planner.limits.maximum_expression_depth,
-                "maximumStringBytes": planner.limits.maximum_string_bytes,
-                "maximumArrayItems": planner.limits.maximum_array_items,
-                "maximumMapEntries": planner.limits.maximum_map_entries,
-                "maximumModules": planner.limits.maximum_modules,
-            },
-            "possibleWrites": planner.writes.iter().map(|write| {
-                let target = match &write.target_from_field {
-                    Some(field) => json!({"fromField": field}),
-                    None => json!({"entity": write.target_entity_id}),
-                };
-                json!({
-                    "target": target,
-                    "operation": operation_name(write.operation),
-                    "fields": write.fields,
-                })
-            }).collect::<Vec<_>>(),
-        }),
-    }
-}
-
-fn render_request_retention(mode: CompiledChangeRequestRetentionMode) -> Value {
-    let mode = match mode {
-        CompiledChangeRequestRetentionMode::Retain => "retain",
-        CompiledChangeRequestRetentionMode::OperatorErase => "operator-erase",
-    };
-    json!({
-        "mode": mode,
-        "effectivePolicy": {
-            "payloadSnapshots": match mode {
-                "retain" => "retained_until_package_or_operator_policy_changes",
-                "operator-erase" => "operator_erasable_after_terminal_state",
-                _ => unreachable!("closed retention mode"),
-            },
-            "provenanceStub": "retained_while_target_revisions_reference_request",
-            "erasedDetailMarker": "request.detailErased",
-        }
-    })
-}
-
-fn render_target_binding(binding: &CompiledChangeRequestTargetBinding) -> Value {
-    match binding {
-        CompiledChangeRequestTargetBinding::Existing { from_field } => {
-            json!({"kind": "existing", "fromField": from_field})
-        }
-        CompiledChangeRequestTargetBinding::ReservedCreate { effect } => {
-            json!({"kind": "reserved-create", "effect": effect})
-        }
-    }
-}
-
-fn render_request_mutation(
-    mutation: &CompiledChangeRequestMutation,
-    target: Option<&CompiledEntity>,
-) -> Value {
-    match mutation {
-        CompiledChangeRequestMutation::Set { field, value } => json!({
-            "kind": "set",
-            "field": field,
-            "apiName": target.and_then(|entity| api_field_name(entity, field)),
-            "value": render_request_value(value),
-        }),
-        CompiledChangeRequestMutation::Clear { field } => json!({
-            "kind": "clear",
-            "field": field,
-            "apiName": target.and_then(|entity| api_field_name(entity, field)),
-        }),
-    }
-}
-
-fn render_request_value(value: &CompiledChangeRequestValue) -> Value {
-    match value {
-        CompiledChangeRequestValue::FromField { field } => {
-            json!({"kind": "from-field", "field": field})
-        }
-        CompiledChangeRequestValue::FromEffect {
-            effect,
-            target_entity_id,
-        } => json!({
-            "kind": "from-effect",
-            "effect": effect,
-            "targetEntity": target_entity_id,
-        }),
-    }
+        "actions": registry.actions().actions.iter().map(inspect_action).collect::<Vec<_>>()})
 }
 
 pub(crate) fn openapi_action_input_schema_id(action_id: &str) -> String {
@@ -1178,6 +576,9 @@ pub(crate) fn openapi_action_response_schema(
     action: &CompiledAction,
     selected_result_effects: Option<&BTreeSet<String>>,
 ) -> Value {
+    if action.execution.is_proposal() {
+        return proposal_schema();
+    }
     let result_shapes = action_response_result_shapes(action, selected_result_effects);
     let results_schema = match result_shapes.as_slice() {
         [shape] => action_results_schema(action, shape),
@@ -1251,9 +652,9 @@ fn action_results_schema(action: &CompiledAction, effect_ids: &BTreeSet<String>)
                 json!({
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["entity", "recordId", "revision"],
+                    "required": ["recordType", "recordId", "revision"],
                     "properties": {
-                        "entity": {"const": effect.target.entity_id},
+                        "recordType": {"const": effect.target.entity_id},
                         "recordId": {"type": "string", "format": "uuid"},
                         "revision": {"type": "integer", "format": "int64", "minimum": 1}
                     }
@@ -1387,20 +788,24 @@ pub(crate) fn public_action_metadata_entry(
     action: &CompiledAction,
     selected_profile: Option<&str>,
 ) -> Value {
+    let inspection = inspect_action(action);
     let condition_inputs = action_condition_inputs(action);
     let selected_result_effects = action_selected_result_effects(action, selected_profile);
     let access = match selected_profile {
         Some(profile) => json!({"selectedProfile": profile}),
         None => json!({"accessProfiles": action_profile_ids(action)}),
     };
-    json!({
-        "id": action.id,
+    let mut metadata = json!({
+        "id": inspection["id"],
+        "apiName": inspection["apiName"],
+        "revision": inspection["revision"],
+        "display": inspection["display"],
+        "execution": {"mode": if action.execution.is_proposal() { "proposal" } else { "immediate" }},
         "route": action.route,
         "conditionRoute": action.condition_route,
-        "contractFingerprint": action.contract_fingerprint,
         "inputMode": if action.handler.is_some() { "handler" } else { "fixed" },
         "maximumInputStringBytes": action.handler.as_ref().map(|_| crate::rhai_planner::MAXIMUM_STRING_BYTES),
-        "inputs": action.inputs.iter().map(|input| action_input_metadata(input, action.handler.is_some())).collect::<Vec<_>>(),
+        "inputs": inspection["inputs"],
         "referenceInputs": action.inputs.iter().filter_map(reference_input_metadata).collect::<Vec<_>>(),
         "requiredConditionKeys": condition_inputs
             .iter()
@@ -1410,7 +815,7 @@ pub(crate) fn public_action_metadata_entry(
             .filter(|effect| selected_result_effects.contains(&effect.id))
             .map(|effect| json!({
                 "effect": effect.id,
-                "entity": effect.target.entity_id,
+                "recordType": effect.target.entity_id,
                 "operation": operation_name(effect.operation),
             }))
             .collect::<Vec<_>>(),
@@ -1438,18 +843,114 @@ pub(crate) fn public_action_metadata_entry(
             "maximumFieldMutations": action.maximum_field_mutations,
             "maximumSnapshotBytes": action.maximum_snapshot_bytes,
         }
-    })
+    });
+    if action.execution.is_proposal() {
+        metadata
+            .as_object_mut()
+            .expect("action metadata object")
+            .remove("conditionRoute");
+        metadata["routes"]
+            .as_object_mut()
+            .expect("route object")
+            .remove("targetConditions");
+        metadata["requiredConditionKeys"] = json!([]);
+        let mut start = metadata["routes"]["invoke"].take();
+        start["operationId"] = json!(format!("actions.{}.start", action.id));
+        metadata["routes"]
+            .as_object_mut()
+            .expect("route object")
+            .remove("invoke");
+        metadata["routes"]["start"] = start;
+    }
+    metadata
+}
+
+/// Shared schema for the distinct Proposal resource, never a Record envelope.
+pub fn proposal_apply_input_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,
+        "required":["submissionVersion","effectDigest"],
+        "properties":{"submissionVersion":{"type":"integer","minimum":1,"maximum":u32::MAX},
+            "effectDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+            "reason":application_reason_schema()}})
+}
+
+pub fn proposal_schema() -> Value {
+    json!({"type":"object", "additionalProperties":false,
+    "required":["id","actionId","actionRevision","submissionVersion","revision","state","links"],
+    "properties": {
+        "id":{"type":"string","format":"uuid"},
+        "actionId":{"type":"string"},"actionRevision":{"type":"string"},
+        "submissionVersion":{"type":"integer","minimum":0},"revision":{"type":"integer","minimum":1},
+        "state":{"enum":["draft","submitted","applied","cancelled"]},
+        "title":{"type":"string","maxLength":1024},
+        "input":{"type":"object"},
+        "application":proposal_application_schema(),
+        "blockedReason":{"enum":["package-changed"]},"effectDigest":{"type":"string"},
+        "attachments":{"type":"object","maxProperties":8,"additionalProperties":proposal_attachment_schema()},
+        "links":{"type":"object","additionalProperties":{
+            "type":"object","additionalProperties":false,
+            "required":["method","path","accessProfile","operation"],
+            "properties":{"method":{"enum":["GET","POST"]},"path":{"type":"string"},
+                "accessProfile":{"type":"string"},"operation":{"type":"string"},
+                "ifMatch":{"type":"string"},"availability":availability_schema()}
+        }}
+    }})
+}
+
+fn proposal_application_schema() -> Value {
+    let reference = json!({"type":"object","additionalProperties":false,"required":["recordType","recordId","revision"],
+        "properties":{"recordType":{"type":"string"},"recordId":{"type":"string","format":"uuid"},"revision":{"type":"integer","minimum":1}}});
+    json!({"type":"object","additionalProperties":false,
+        "required":["applicationId","submissionVersion","effectDigest","resultLinks"],
+        "properties":{"applicationId":{"type":"string","format":"uuid"},"submissionVersion":{"type":"integer","minimum":1},
+            "effectDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+            "resultLinks":{"type":"array","maxItems":16,"items":reference}}})
+}
+
+fn proposal_attachment_schema() -> Value {
+    let value = json!({"type":"object","additionalProperties":false,
+        "required":["submissionVersion","sha256","contentType","byteSize","verificationStatus"],
+        "properties":{"submissionVersion":{"type":"integer","minimum":0},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
+            "contentType":{"type":"string"},"byteSize":{"type":"integer","minimum":1},
+            "uploadedAt":{"type":"string"},"uploadedBy":{"type":"string"},
+            "verificationStatus":{"enum":["notRequired","pending","approved","rejected"]}}});
+    let link = json!({"type":"object","additionalProperties":false,
+        "required":["method","path","accessProfile","operation"],
+        "properties":{"method":{"enum":["GET","PATCH","DELETE"]},"path":{"type":"string"},
+            "accessProfile":{"type":"string"},"operation":{"enum":["download","upload","remove"]},
+            "ifMatch":{"type":"string"},"availability":availability_schema()}});
+    json!({"type":"object","additionalProperties":false,
+        "required":["id","required","maximumBytes","contentTypes","classification","links"],
+        "properties":{"id":{"type":"string"},"required":{"type":"boolean"},
+            "maximumBytes":{"type":"integer","minimum":1,"maximum":16777216},
+            "contentTypes":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string"}},
+            "classification":{"enum":["public","internal","restricted"]},
+            "links":{"type":"object","additionalProperties":link},"value":value}})
+}
+
+pub fn availability_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["available","observedRevision"],
+        "properties":{"available":{"type":"boolean"},"observedRevision":{"type":"integer","minimum":1},
+            "reason":{"enum":["pending-review","stale-revision","contract-changed","dependency-outage","invalid-input","already-applied"]},
+            "recovery":{"enum":["refresh","retry","correct-input","terminal","receipt-only"]}},
+        "if":{"properties":{"available":{"const":false}}},"then":{"required":["reason","recovery"]}})
 }
 
 fn action_input_metadata(input: &CompiledActionInput, handler: bool) -> Value {
-    json!({
+    let mut metadata = json!({
         "id": input.id,
         "apiName": input.api_name,
+        "label": input.display.label.as_deref().unwrap_or(&input.api_name),
+        "schema": field_value_schema(&input.field_type, handler && !input.required),
         "fieldType": input.field_type,
         "required": input.required,
         "nullable": handler && !input.required,
         "classification": input.classification,
-    })
+    });
+    if let Some(description) = &input.display.description {
+        metadata["description"] = json!(description);
+    }
+    metadata
 }
 
 fn selected_profile_from_access_profiles(
@@ -1493,7 +994,7 @@ fn reference_input_metadata(input: &CompiledActionInput) -> Option<Value> {
     Some(json!({
         "input": input.id,
         "apiName": input.api_name,
-        "targetEntity": target,
+        "targetRecordType": target,
     }))
 }
 
@@ -1574,15 +1075,10 @@ fn action_preconditions_schema<'a>(
 }
 
 fn action_condition_inputs(action: &CompiledAction) -> Vec<&CompiledActionInput> {
-    let condition_input_ids = action
-        .target_uses
-        .iter()
-        .filter(|use_| use_.condition_required)
-        .filter_map(|use_| match &use_.source {
-            CompiledActionTargetUseSource::Input { input } => Some(input.as_str()),
-            CompiledActionTargetUseSource::Effect { .. } => None,
-        })
-        .collect::<BTreeSet<_>>();
+    if action.execution.is_proposal() {
+        return Vec::new();
+    }
+    let condition_input_ids = crate::plan::condition_inputs(action);
     action
         .inputs
         .iter()
@@ -1605,9 +1101,9 @@ fn immediate_action_result_reference_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["entity", "recordId", "revision"],
+        "required": ["recordType", "recordId", "revision"],
         "properties": {
-            "entity": {"type": "string"},
+            "recordType": {"type": "string"},
             "recordId": {"type": "string", "format": "uuid"},
             "revision": {"type": "integer", "format": "int64", "minimum": 1}
         }
@@ -1953,11 +1449,6 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
                 request_schema_ref.clone(),
                 openapi_entity_input_schema(entity, Some(&writable_fields)),
             );
-        } else if is_request_action(route.operation) {
-            input_schemas.insert(
-                request_schema_ref.clone(),
-                openapi_request_action_input_schema(route.operation),
-            );
         }
         operations.insert(
             method_name(route.method).to_owned(),
@@ -1989,58 +1480,7 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
             has_access_log = true;
         }
     }
-    for route in &routes.routes {
-        if !matches!(route.operation, Operation::Get | Operation::Patch)
-            || read_path_for_route(route, &entities[&route.entity_id]).is_some()
-        {
-            continue;
-        }
-        let entity = &entities[&route.entity_id];
-        for slot in entity.attachments.values() {
-            let profiles = route
-                .access_profiles
-                .iter()
-                .filter(|id| {
-                    let profile = &entity.access_profiles[*id];
-                    if route.operation == Operation::Get {
-                        profile.readable_fields.contains(&slot.id)
-                    } else {
-                        profile.writable_fields.contains(&slot.id)
-                    }
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            if profiles.is_empty() {
-                continue;
-            }
-            let path = paths
-                .entry(attachment_path(entity, &slot.id))
-                .or_insert_with(|| json!({}));
-            for method in if route.operation == Operation::Get {
-                &["get"][..]
-            } else {
-                &["patch", "delete"][..]
-            } {
-                let mut operation = openapi_attachment_operation(
-                    OpenApiOperationSpec {
-                        registry_identifier: registry_id,
-                        route,
-                        entity,
-                        response_entity: entity,
-                        query,
-                        schema_ref: &entity.id,
-                        request_schema_ref: &entity.id,
-                        readable_fields: None,
-                        access_profiles: OpenApiAccessProfiles::All,
-                    },
-                    slot,
-                    method,
-                );
-                operation["x-registry-accessProfiles"] = json!(profiles);
-                path[*method] = operation;
-            }
-        }
-    }
+
     let mut has_immediate_actions = false;
     for action in &actions.actions {
         has_immediate_actions = true;
@@ -2080,6 +1520,7 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
             openapi_action_operation(route, action, OpenApiAccessProfiles::All),
         );
     }
+    append_proposal_openapi(&mut paths, actions, None);
     let mut component_schemas: Map<String, Value> = schemas
         .iter()
         .map(|(id, schema)| (id.clone(), schema.clone()))
@@ -2099,15 +1540,11 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
         statistical_datasets,
         false,
     );
-    let has_request_actions = routes
-        .routes
-        .iter()
-        .any(|route| is_request_action(route.operation));
     json!({
         "openapi": "3.1.0",
         "info": {"title": registry_id, "version": version},
         "paths": paths,
-        "components": openapi_components(component_schemas, has_request_actions, has_immediate_actions)
+        "components": openapi_components(component_schemas, has_immediate_actions)
     })
 }
 
@@ -2137,7 +1574,9 @@ pub(crate) fn openapi_access_log_operation(
         ),
         (
             "description".to_owned(),
-            json!("Return the subject-facing access history for this record. The selected profile must currently grant get, and the record's configured subject field must exactly match the verified principal. Other records are concealed as 404."),
+            json!(
+                "Return the subject-facing access history for this record. The selected profile must currently grant get, and the record's configured subject field must exactly match the verified principal. Other records are concealed as 404."
+            ),
         ),
         ("security".to_owned(), json!([{"bearerAuth": []}])),
     ]);
@@ -2341,16 +1780,9 @@ const OPENAPI_EXAMPLE_TRACEPARENT: &str = "00-11111111111111111111111111111111-2
 
 pub(crate) fn openapi_components(
     mut schemas: Map<String, Value>,
-    has_request_actions: bool,
     has_immediate_actions: bool,
 ) -> Value {
     schemas.insert("Problem".to_owned(), problem_schema());
-    if has_request_actions {
-        schemas.insert(
-            "ChangeRequestActionResponse".to_owned(),
-            request_action_response_schema(),
-        );
-    }
     if has_immediate_actions {
         schemas.insert(
             "ImmediateActionResultReference".to_owned(),
@@ -2451,21 +1883,10 @@ pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
             json!(batch.maximum_bytes),
         );
     }
-    if is_request_action(spec.route.operation) {
-        operation.insert(
-            "x-registry-requestAction".to_owned(),
-            render_request_action(spec),
-        );
-    }
     if let Some(query_profile) = query_profile_extension(spec) {
         operation.insert(query_profile.0, query_profile.1);
     }
-    let mut parameters = operation_parameters(
-        spec.route,
-        spec.response_entity,
-        spec.query,
-        spec.access_profiles,
-    );
+    let mut parameters = operation_parameters(spec.route, spec.query, spec.access_profiles);
     if !geojson_profiles.is_empty() {
         if let Some(select) = parameters
             .iter_mut()
@@ -2532,14 +1953,11 @@ fn operation_response_shape(spec: OpenApiOperationSpec<'_>) -> &'static str {
         }
         Operation::Revisions => "BRegRevisionCollectionV1",
         Operation::Batch => "BRegAtomicBatchMutationResponseV1",
-        Operation::Invoke => "BRegImmediateActionResponseV1",
+        Operation::Invoke => "BRegActionReceiptV1",
+        Operation::Start => "BRegProposalV1",
         Operation::Import => {
             unreachable!("import routes are served only by the ingestion-run surface")
         }
-        Operation::SubmitRequest
-        | Operation::ReviseRequest
-        | Operation::CancelRequest
-        | Operation::ApplyRequest => "BRegChangeRequestActionResponseV1",
     }
 }
 
@@ -2551,80 +1969,8 @@ fn geojson_operation_response_shape(spec: OpenApiOperationSpec<'_>) -> &'static 
     }
 }
 
-fn render_request_action(spec: OpenApiOperationSpec<'_>) -> Value {
-    json!({
-        "operation": operation_name(spec.route.operation),
-        "method": method_name(spec.route.method),
-        "path": spec.route.path,
-        "requestEntity": spec.route.entity_id,
-        "requiredPreconditions": request_action_preconditions(spec.route.operation),
-        "inputSchema": openapi_input_schema_id(&spec.entity.id, spec.route.operation),
-        "responseSchema": "ChangeRequestActionResponse",
-        "proposalBinding": {
-            "versionField": "proposalVersion",
-            "digestField": "effectDigest",
-            "recordPrecondition": "If-Match",
-            "idempotencyHeader": "Idempotency-Key",
-        },
-        "targetEntities": request_action_target_entities(spec),
-    })
-}
-
-fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String> {
-    let Some(request) = spec.entity.change_request.as_ref() else {
-        return Vec::new();
-    };
-    match spec.access_profiles {
-        OpenApiAccessProfiles::All => match spec.route.operation {
-            Operation::ApplyRequest => request.application_target_entities().into_iter().collect(),
-            _ => request.target_entities.iter().cloned().collect(),
-        },
-        OpenApiAccessProfiles::Selected(profile) => {
-            let mut targets = BTreeSet::new();
-            match spec.route.operation {
-                Operation::ApplyRequest => {
-                    targets.extend(
-                        request
-                            .apply_permissions
-                            .iter()
-                            .filter(|grant| grant.profile_id == profile)
-                            .map(|grant| grant.target_entity_id.clone()),
-                    );
-                }
-                Operation::SubmitRequest
-                | Operation::ReviseRequest
-                | Operation::CancelRequest
-                | Operation::Create
-                | Operation::Get
-                | Operation::List
-                | Operation::Patch
-                | Operation::Tombstone
-                | Operation::Batch
-                | Operation::Lookup
-                | Operation::Revisions
-                | Operation::Snapshot => {}
-                Operation::Invoke => {}
-                Operation::Import => {
-                    unreachable!("import routes are served only by the ingestion-run surface")
-                }
-            }
-            targets.into_iter().collect()
-        }
-    }
-}
-
-fn request_action_preconditions(operation: Operation) -> Vec<&'static str> {
-    let mut preconditions = vec!["Idempotency-Key", "If-Match"];
-    if operation == Operation::ApplyRequest {
-        preconditions.push("proposalVersion");
-        preconditions.push("effectDigest");
-    }
-    preconditions
-}
-
 fn operation_parameters(
     route: &CompiledRoute,
-    entity: &CompiledEntity,
     query: &CompiledQueryInventory,
     access_profiles: OpenApiAccessProfiles<'_>,
 ) -> Vec<Value> {
@@ -2661,15 +2007,6 @@ fn operation_parameters(
                 json!({"type": "string", "maxLength": crate::query::MAX_QUERY_PAYLOAD_BYTES}),
                 "Comma-separated subset of readable API property names.",
             ));
-            if entity.change_request.is_some() && route.query_kind.is_none() {
-                parameters.push(query_parameter(
-                    "requestHistoryAfterProposalVersion",
-                    false,
-                    false,
-                    json!({"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX}),
-                    "Positive proposal-version cursor for the request history page returned with this request record.",
-                ));
-            }
         }
         Operation::List => {
             parameters.extend(read_query_parameters(route, query, access_profiles));
@@ -2717,26 +2054,9 @@ fn operation_parameters(
             }
         }
         Operation::Revisions => {}
-        Operation::Invoke => {}
+        Operation::Invoke | Operation::Start => {}
         Operation::Import => {
             unreachable!("import routes are served only by the ingestion-run surface")
-        }
-        Operation::SubmitRequest
-        | Operation::ReviseRequest
-        | Operation::CancelRequest
-        | Operation::ApplyRequest => {
-            parameters.push(header_parameter(
-                "Idempotency-Key",
-                true,
-                json!({"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[\\x21-\\x2B\\x2D-\\x3A\\x3C-\\x7E]+$"}),
-                "Idempotency key bound to method, route, caller, request record, package revision, action body, and response field set.",
-            ));
-            parameters.push(header_parameter(
-                "If-Match",
-                true,
-                json!({"type": "string", "minLength": 6, "maxLength": 256, "pattern": "^\\\"breg-[\\x21\\x23-\\x7E]+\\\"$"}),
-                "Strong Registry ETag for the currently visible request record representation.",
-            ));
         }
     }
     parameters
@@ -2939,16 +2259,10 @@ fn operation_request_body(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
         | Operation::Tombstone
         | Operation::Revisions
         | Operation::Snapshot => None,
-        Operation::Invoke => None,
+        Operation::Invoke | Operation::Start => None,
         Operation::Import => {
             unreachable!("import routes are served only by the ingestion-run surface")
         }
-        Operation::SubmitRequest
-        | Operation::ReviseRequest
-        | Operation::CancelRequest
-        | Operation::ApplyRequest => Some(json_request_body(json!({
-            "$ref": format!("#/components/schemas/{}", spec.request_schema_ref)
-        }))),
     }
 }
 
@@ -3201,18 +2515,10 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
         Operation::Import => {
             unreachable!("import routes are served only by the ingestion-run surface")
         }
-        Operation::Invoke => success_response(
+        Operation::Invoke | Operation::Start => success_response(
             "Action accepted",
             StatusResponseHeaders::ActionMutation,
             json!({"type": "object"}),
-        ),
-        Operation::SubmitRequest
-        | Operation::ReviseRequest
-        | Operation::CancelRequest
-        | Operation::ApplyRequest => success_response(
-            "Request action accepted",
-            StatusResponseHeaders::ActionMutation,
-            json!({"$ref": "#/components/schemas/ChangeRequestActionResponse"}),
         ),
     };
     if let Some(schema) = geojson_response_schema(spec) {
@@ -3370,75 +2676,48 @@ fn traceparent_schema() -> Value {
 }
 
 fn record_member_schema(spec: OpenApiOperationSpec<'_>) -> Value {
-    let entity = spec.response_entity;
-    let schema_ref = spec.schema_ref;
-    let mut properties = Map::from_iter([
-        (
-            "recordIdentifier".to_owned(),
-            json!({"type": "string", "format": "uuid"}),
-        ),
-        (
-            "revisionIdentifier".to_owned(),
-            json!({"type": "string", "pattern": "^[1-9][0-9]*$"}),
-        ),
-        ("domainData".to_owned(), json!({"type": "object"})),
-    ]);
-    if entity.change_request.is_some() {
-        properties.insert("request".to_owned(), request_record_metadata_schema());
-    }
-    if entity
-        .access_profiles
-        .values()
-        .any(|profile| !profile.request_presence.is_empty())
-    {
-        properties.insert(
-            "requestPresence".to_owned(),
-            request_presence_metadata_schema(),
-        );
-    }
-    let mut schema = json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["recordIdentifier", "revisionIdentifier", "domainData"],
-        "properties": properties,
-        "allOf": [{
-            "if": {
-                "required": ["request"],
-                "properties": {
-                    "request": {
-                        "type": "object",
-                        "required": ["detailErased"],
-                        "properties": {
-                            "detailErased": {"const": true}
-                        }
-                    }
-                }
-            },
-            "then": {
-                "properties": {
-                    "domainData": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "maxProperties": 0
-                    }
-                }
-            },
-            "else": {
-                "properties": {
-                    "domainData": {"$ref": format!("#/components/schemas/{schema_ref}")}
-                }
-            }
-        }]
-    });
-    if entity.change_request.is_none() {
-        schema
-            .as_object_mut()
-            .expect("record schema is object")
-            .remove("allOf");
-        schema["properties"]["domainData"] =
-            json!({"$ref": format!("#/components/schemas/{schema_ref}")});
-    }
-    schema
+    let profiles = match spec.access_profiles {
+        OpenApiAccessProfiles::All => spec
+            .route
+            .access_profiles
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        OpenApiAccessProfiles::Selected(profile) => vec![profile],
+    };
+    let readable = profiles
+        .into_iter()
+        .flat_map(|profile| selectable_fields_for_profile(spec, profile))
+        .collect::<BTreeSet<_>>();
+    let properties = spec
+        .response_entity
+        .stored_fields
+        .iter()
+        .filter(|field| readable.contains(&field.logical.id))
+        .map(|field| {
+            (
+                field.logical.api_name.clone(),
+                field_value_schema(&field.logical.field_type, !field.required),
+            )
+        })
+        .chain(
+            spec.response_entity
+                .derived_fields
+                .values()
+                .filter(|field| readable.contains(&field.logical.id))
+                .map(|field| {
+                    (
+                        field.logical.api_name.clone(),
+                        field_value_schema(&field.logical.field_type, true),
+                    )
+                }),
+        )
+        .collect::<Map<_, _>>();
+    json!({"type":"object","additionalProperties":false,
+        "required":["recordIdentifier","revisionIdentifier","domainData"],
+        "properties":{"recordIdentifier":{"type":"string","format":"uuid"},
+            "revisionIdentifier":{"type":"string","pattern":"^[1-9][0-9]*$"},
+            "domainData":{"type":"object","additionalProperties":false,"properties":properties}}})
 }
 
 fn mutation_record_member_schema(schema_ref: &str) -> Value {
@@ -3548,258 +2827,6 @@ fn list_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Value 
         &[],
         json_ld,
     )
-}
-
-fn request_record_metadata_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["bregState", "proposalVersion", "editable"],
-        "properties": {
-            "bregState": request_state_schema(),
-            "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
-            "submitterReference": {"type": "string", "minLength": 1, "maxLength": 512},
-            "applierReference": {"type": "string", "minLength": 1, "maxLength": 512},
-            "effectDigest": nullable_effect_digest_schema(),
-            "proposal": request_proposal_schema(),
-            "editable": {"type": "boolean"},
-            "detailErased": {"const": true},
-            "actions": {
-                "type": "array",
-                "maxItems": 64,
-                "items": request_action_link_schema(),
-            },
-            "application": request_application_metadata_schema(false),
-            "review": request_review_metadata_schema(),
-            "history": retained_request_history_schema(),
-        }
-    })
-}
-
-fn request_review_metadata_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["submission", "result", "delivery", "application", "recovery"],
-        "properties": {
-            "submission": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["state", "authority"],
-                "properties": {
-                    "state": {"type": "string", "enum": ["pending", "accepted", "uncertain", "cancelling", "cancelled", "failed"]},
-                    "authority": {"type": "string", "minLength": 1, "maxLength": 128},
-                    "requestId": {"type": "string", "format": "uuid"},
-                    "submissionDigest": effect_digest_schema(),
-                    "recoveryDeadline": {"type": "string", "format": "date-time", "maxLength": 128},
-                    "policy": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["id", "version", "digest"],
-                        "properties": {
-                            "id": {"type": "string", "minLength": 1, "maxLength": 128},
-                            "version": {"type": "string", "minLength": 1, "maxLength": 128},
-                            "digest": effect_digest_schema()
-                        }
-                    }
-                }
-            },
-            "result": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["state"],
-                "properties": {
-                    "state": {"type": "string", "enum": ["pending", "approved", "rejected", "changesRequested", "answered", "cancelled", "superseded"]},
-                    "resultId": {"type": "string", "format": "uuid"},
-                    "completedAt": {"type": "string", "format": "date-time", "maxLength": 128},
-                    "availableUntil": {"type": "string", "format": "date-time", "maxLength": 128}
-                }
-            },
-            "delivery": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["state"],
-                "properties": {
-                    "state": {"type": "string", "enum": ["polling", "received", "reconciled", "unmatched", "exhausted"]},
-                    "eventId": {"type": "string", "format": "uuid"},
-                    "receivedAt": {"type": "string", "format": "date-time", "maxLength": 128}
-                }
-            },
-            "application": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["mode", "state"],
-                "allOf": [{
-                    "if": {"required": ["receiptRecovered"]},
-                    "then": {
-                        "properties": {
-                            "mode": {"const": "automatic"},
-                            "state": {"const": "applied"}
-                        },
-                        "required": ["applicationId"]
-                    }
-                }],
-                "properties": {
-                    "mode": {"type": "string", "enum": ["manual", "automatic"]},
-                    "state": {"type": "string", "enum": ["awaitingReview", "ready", "queued", "applying", "applied", "blocked", "expired"]},
-                    "executor": {"type": "string", "minLength": 1, "maxLength": 128},
-                    "applicationId": {"type": "string", "format": "uuid"},
-                    "attempts": {"type": "integer", "minimum": 0, "maximum": 1000},
-                    "nextAttemptAt": {"type": "string", "format": "date-time", "maxLength": 128},
-                    "receiptRecovered": {"const": true}
-                }
-            },
-            "recovery": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["state"],
-                "properties": {
-                    "state": {"type": "string", "enum": ["none", "operatorAttention"]},
-                    "code": {"type": "string", "minLength": 1, "maxLength": 128}
-                }
-            }
-        }
-    })
-}
-
-fn request_action_link_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["operation", "method", "href", "ifMatch"],
-        "properties": {
-            "operation": {
-                "type": "string",
-                "enum": ["submit-request", "revise-request", "cancel-request", "apply-request"]
-            },
-            "method": {"const": "POST"},
-            "href": {"type": "string", "maxLength": 2048},
-            "ifMatch": {"type": "string", "pattern": "^\\\"breg-[\\x21\\x23-\\x7E]+\\\"$"},
-            "rebase": {"type": "boolean"},
-            "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
-            "effectDigest": effect_digest_schema()
-        }
-    })
-}
-
-fn request_application_metadata_schema(require_receipt_fields: bool) -> Value {
-    // The read model's application object carries reason presence; an action
-    // receipt describes only the application the caller just executed.
-    let required = if require_receipt_fields {
-        json!([
-            "applicationId",
-            "proposalVersion",
-            "effectDigest",
-            "appliedAt"
-        ])
-    } else {
-        json!(["applicationId", "proposalVersion", "reasonPresent"])
-    };
-    json!({
-        "type": ["object", "null"],
-        "additionalProperties": false,
-        "required": required,
-        "properties": {
-            "applicationId": {"type": "string", "format": "uuid"},
-            "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
-            "effectDigest": effect_digest_schema(),
-            "appliedAt": {"type": "string", "format": "date-time"},
-            "reasonPresent": {"type": "boolean"},
-            "reason": application_reason_schema()
-        }
-    })
-}
-
-fn retained_request_history_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["proposals", "nextAfterProposalVersion"],
-        "properties": {
-            "proposals": {
-                "type": "array",
-                "maxItems": 50,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "requestEntityId",
-                        "requestId",
-                        "proposalVersion",
-                        "bregState",
-                        "current",
-                        "contractFingerprint",
-                        "detailErased",
-                        "applicationId",
-                        "resultLinkCount",
-                        "resultLinks"
-                    ],
-                    "properties": {
-                        "requestEntityId": {"type": "string"},
-                        "requestId": {"type": "string", "format": "uuid"},
-                        "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
-                        "bregState": request_state_schema(),
-                        "current": {"type": "boolean"},
-                        "contractFingerprint": {"type": "string"},
-                        "detailErased": {"type": "boolean"},
-                        "applicationId": {"type": ["string", "null"], "format": "uuid"},
-                        "resultLinkCount": {"type": "integer", "minimum": 0, "maximum": 16},
-                        "resultLinks": {
-                            "type": "array",
-                            "maxItems": 16,
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["targetEntityId", "targetRecordId", "targetRevision"],
-                                "properties": {
-                                    "targetEntityId": {"type": "string"},
-                                    "targetRecordId": {"type": "string", "format": "uuid"},
-                                    "targetRevision": {"type": "integer", "format": "int64", "minimum": 1}
-                                }
-                            }
-                        },
-                        "effectDigest": effect_digest_schema()
-                    }
-                }
-            },
-            "nextAfterProposalVersion": {"type": ["integer", "null"], "format": "int64", "minimum": 1, "maximum": u32::MAX}
-        }
-    })
-}
-
-fn request_presence_metadata_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["requests"],
-        "properties": {
-            "requests": {
-                "type": "array",
-                "maxItems": 64,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["requestType", "pending"],
-                    "properties": {
-                        "requestType": {"type": "string"},
-                        "pending": {"type": "boolean"}
-                    }
-                }
-            }
-        }
-    })
-}
-
-fn request_state_schema() -> Value {
-    json!({"type": "string", "enum": ["draft", "submitted", "cancelled", "applied"]})
-}
-
-fn effect_digest_schema() -> Value {
-    json!({"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"})
-}
-
-fn nullable_effect_digest_schema() -> Value {
-    json!({"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"})
 }
 
 fn snapshot_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Value {
@@ -4075,67 +3102,6 @@ fn revision_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Va
     }
 }
 
-fn request_action_response_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "revision", "snapshot", "actorReference", "request"],
-        "properties": {
-            "id": {"type": "string", "format": "uuid"},
-            "revision": {"type": "integer", "format": "int64", "minimum": 1},
-            "snapshot": snapshot_reference_schema(),
-            "actorReference": {"type": "string", "minLength": 1, "maxLength": 512},
-            "request": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["bregState", "proposalVersion", "effectDigest", "application"],
-                "properties": {
-                    "bregState": request_state_schema(),
-                    "proposalVersion": {"type": ["integer", "null"], "format": "int64", "minimum": 1, "maximum": u32::MAX},
-                    "effectDigest": nullable_effect_digest_schema(),
-                    "proposal": request_proposal_schema(),
-                    "application": request_application_metadata_schema(true)
-                }
-            }
-        }
-    })
-}
-
-fn request_proposal_schema() -> Value {
-    json!({
-        "oneOf": [
-            {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["review"],
-                "properties": {
-                    "review": {
-                        "oneOf": [
-                            {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["type", "authority", "policyId"],
-                                "properties": {
-                                    "type": {"const": "required"},
-                                    "authority": {"type": "string", "minLength": 1, "maxLength": 512},
-                                    "policyId": {"type": "string", "minLength": 1, "maxLength": 512}
-                                }
-                            },
-                            {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["type"],
-                                "properties": {"type": {"const": "none"}}
-                            }
-                        ]
-                    }
-                }
-            },
-            {"type": "null"}
-        ]
-    })
-}
-
 fn revision_change_context_schema(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
     let mut fields = Vec::new();
     match spec.access_profiles {
@@ -4347,65 +3313,6 @@ fn problem_responses(
             vec![ProblemExample {
                 code: "precondition.failed",
                 detail: "The mutation precondition failed.",
-            }],
-        );
-        responses.insert(
-            "428",
-            vec![ProblemExample {
-                code: "precondition.required",
-                detail: "The mutation precondition is required.",
-            }],
-        );
-    }
-    if is_request_action(operation) {
-        if operation == Operation::SubmitRequest {
-            // The bounded planner runs at submit, so submit is the only action
-            // that can refuse for a plan the planner would not produce.
-            responses.entry("400").or_default().push(ProblemExample {
-                code: "request.plan_refused",
-                detail:
-                    "The change-request planner refused the submission: change_request.planner.execution.",
-            });
-        }
-        responses.insert(
-            "503",
-            vec![ProblemExample {
-                code: "service.unavailable",
-                detail: "The Registry mutation service is unavailable.",
-            }],
-        );
-        responses.insert(
-            "409",
-            vec![
-                ProblemExample {
-                    code: "mutation.conflict",
-                    detail: "The mutation conflicts with current state.",
-                },
-                ProblemExample {
-                    code: "idempotency.conflict",
-                    detail: "The idempotency key is bound to another request.",
-                },
-            ],
-        );
-        responses.insert(
-            "410",
-            vec![ProblemExample {
-                code: "idempotency.expired",
-                detail: "The held response of the idempotency key expired; the key stays spent.",
-            }],
-        );
-        responses.insert(
-            "412",
-            vec![ProblemExample {
-                code: "precondition.failed",
-                detail: "The mutation precondition failed.",
-            }],
-        );
-        responses.insert(
-            "415",
-            vec![ProblemExample {
-                code: "unsupported.media_type",
-                detail: "The request media type is not supported.",
             }],
         );
         responses.insert(
@@ -4724,9 +3631,6 @@ fn api_field_names<'a>(
 }
 
 fn api_field_name<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a str> {
-    if let Some(slot) = entity.attachments.get(field_id) {
-        return Some(slot.id.as_str());
-    }
     entity
         .stored_fields
         .iter()
@@ -4818,23 +3722,10 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
         Operation::Snapshot => "snapshot",
-        Operation::SubmitRequest => "submit-request",
-        Operation::ReviseRequest => "revise-request",
-        Operation::CancelRequest => "cancel-request",
-        Operation::ApplyRequest => "apply-request",
         Operation::Invoke => "invoke",
+        Operation::Start => "start",
         Operation::Import => "import",
     }
-}
-
-fn is_request_action(operation: Operation) -> bool {
-    matches!(
-        operation,
-        Operation::SubmitRequest
-            | Operation::ReviseRequest
-            | Operation::CancelRequest
-            | Operation::ApplyRequest
-    )
 }
 
 fn insert_json<T: Serialize>(
@@ -4888,14 +3779,13 @@ mod problem_contract_tests {
 
     #[test]
     fn application_reason_contract_is_optional_bounded_and_closed() {
-        for operation in [Operation::ApplyRequest] {
-            let schema = openapi_request_action_input_schema(operation);
+        {
+            let schema = proposal_apply_input_schema();
             let validator = jsonschema::JSONSchema::options()
                 .with_draft(jsonschema::Draft::Draft202012)
                 .compile(&schema)
                 .unwrap();
-            let mut body =
-                json!({"proposalVersion": 1, "effectDigest": format!("sha256:{}", "a".repeat(64))});
+            let mut body = json!({"submissionVersion": 1, "effectDigest": format!("sha256:{}", "a".repeat(64))});
             assert!(validator.is_valid(&body));
             for reason in [json!(""), json!(" สาเหตุ\n🙂 "), json!("🙂".repeat(4096))]
             {
@@ -4921,24 +3811,20 @@ mod problem_contract_tests {
     }
 
     #[test]
-    fn proposal_schema_exposes_only_the_frozen_review_binding() {
-        let schema = request_proposal_schema();
+    fn proposal_schema_is_a_distinct_closed_resource() {
+        let schema = proposal_schema();
         let validator = jsonschema::JSONSchema::options()
             .with_draft(jsonschema::Draft::Draft202012)
             .compile(&schema)
             .unwrap();
-        assert!(validator.is_valid(&json!({
-            "review": {"type": "required", "authority": "casework-main", "policyId": "request-review"}
-        })));
-        assert!(validator.is_valid(&json!({"review": {"type": "none"}})));
-        assert!(validator.is_valid(&Value::Null));
-        assert!(!validator.is_valid(&json!({
-            "review": {"type": "required", "authority": "casework-main"}
-        })));
-        assert!(!validator.is_valid(&json!({
-            "review": {"type": "none"},
-            "unexpected": "value"
-        })));
+        let mut proposal = json!({"id":"00000000-0000-4000-8000-000000000001","actionId":"correct-address", "actionRevision":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "submissionVersion":1,"revision":2,"state":"submitted","links":{}});
+        assert!(validator.is_valid(&proposal));
+        proposal["request"] = json!({});
+        assert!(!validator.is_valid(&proposal));
+        proposal.as_object_mut().unwrap().remove("request");
+        proposal["state"] = json!("approved");
+        assert!(!validator.is_valid(&proposal));
     }
 
     #[test]
@@ -5067,7 +3953,7 @@ mod problem_contract_tests {
 #[cfg(test)]
 mod spatial_tests {
     use super::*;
-    use crate::compiler::{compile_project, CompileProfile};
+    use crate::compiler::{CompileProfile, compile_project};
     use crate::contract::parse_project_json;
     use crate::model::CompiledRegistry;
 
@@ -5076,7 +3962,7 @@ mod spatial_tests {
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
             "kind":"BRegProject",
             "project":{"id":"spatial-artifacts","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-artifacts.example.test"},
-            "entities":[{
+            "datasets":[{"id":"test-dataset"}],"recordTypes":[{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
                 "geojson":{"geometryField":"location"},
                 "fields":[
@@ -5086,9 +3972,9 @@ mod spatial_tests {
                 ]
             }],
             "accessProfiles":[
-                {"id":"map","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}, "rowBoundaries": "unrestricted"}]}},
-                {"id":"plain","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"site","operations":["get","list"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}},
-                {"id":"geometry-only","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"site","operations":["get","list"],"readableFields":["location"], "rowBoundaries": "unrestricted"}]}}
+                {"id":"map","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}, "rowBoundaries": "unrestricted"}]}},
+                {"id":"plain","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}},
+                {"id":"geometry-only","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["location"], "rowBoundaries": "unrestricted"}]}}
             ]
         }"#).expect("spatial artifact fixture parses");
         compile_project(&project, &[], CompileProfile::Authoring)
@@ -5117,76 +4003,16 @@ mod spatial_tests {
     }
 
     #[test]
-    fn attachment_downloads_do_not_inherit_record_query_or_geojson_contracts() {
-        let registry = registry();
-        assert!(operation(&registry, Operation::Get, "map")
-            .get("x-registry-responseShapes")
-            .is_some());
-        let entity = &registry.entities()["site"];
-        let route = registry
-            .routes()
-            .routes
-            .iter()
-            .find(|route| route.operation == Operation::Get)
-            .unwrap();
-        let slot = crate::model::CompiledAttachmentSlot {
-            id: "supporting-file".to_owned(),
-            required: true,
-            maximum_bytes: 1024,
-            content_types: vec!["application/pdf".to_owned()],
-            classification: crate::contract::Classification::Restricted,
-        };
-        let download = openapi_attachment_operation(
-            OpenApiOperationSpec {
-                registry_identifier: registry.registry_id(),
-                route,
-                entity,
-                response_entity: entity,
-                query: registry.queries(),
-                schema_ref: "site",
-                request_schema_ref: "site",
-                readable_fields: None,
-                access_profiles: OpenApiAccessProfiles::Selected("map"),
-            },
-            &slot,
-            "get",
-        );
-        assert_eq!(download["x-registry-responseShape"], "binary");
-        assert!(download.get("x-registry-responseShapes").is_none());
-        assert!(download.get("x-registry-geojsonProfiles").is_none());
-        assert!(download["responses"].get("304").is_none());
-        assert_eq!(
-            download["responses"]["200"]["content"]
-                .as_object()
-                .unwrap()
-                .keys()
-                .collect::<Vec<_>>(),
-            ["*/*"]
-        );
-        let parameters = download["parameters"].as_array().unwrap();
-        assert!(!parameters.iter().any(|parameter| matches!(
-            parameter["name"].as_str(),
-            Some("$select" | "bbox" | "Accept")
-        )));
-        assert!(parameters.iter().any(
-            |parameter| parameter["name"] == "proposalVersion" && parameter["required"] == true
-        ));
-        assert_eq!(
-            download["responses"]["200"]["headers"]["Content-Disposition"]["schema"]["const"],
-            crate::attachment::DOWNLOAD_CONTENT_DISPOSITION,
-            "the served disposition is the exact literal the download route sends"
-        );
-    }
-
-    #[test]
     fn selected_profile_controls_bbox_and_geojson_advertisement() {
         let registry = registry();
         let map = operation(&registry, Operation::List, "map");
-        assert!(map["parameters"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|p| p["name"] == "bbox"));
+        assert!(
+            map["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["name"] == "bbox")
+        );
         assert_eq!(
             map["x-registry-queryProfile"]["spatialQueries"]["bbox"]["geometryProperty"],
             "position"
@@ -5208,12 +4034,14 @@ mod spatial_tests {
             map["x-registry-responseProfile"], PROFILE_IDENTIFIER,
             "the stable profile marker governs only the JSON and JSON-LD shapes in the media map"
         );
-        let feature = &map["responses"]["200"]["content"]["application/geo+json"]["schema"]
-            ["properties"]["features"]["items"];
+        let feature = &map["responses"]["200"]["content"]["application/geo+json"]["schema"]["properties"]
+            ["features"]["items"];
         assert!(feature["properties"]["properties"]["properties"]["code"].is_object());
-        assert!(feature["properties"]["properties"]["properties"]
-            .get("position")
-            .is_none());
+        assert!(
+            feature["properties"]["properties"]["properties"]
+                .get("position")
+                .is_none()
+        );
         assert_eq!(
             feature["properties"]["geometry"]["anyOf"][1]["type"],
             "null"
@@ -5223,10 +4051,12 @@ mod spatial_tests {
             json!(["revision"])
         );
         let collection = &map["responses"]["200"]["content"]["application/geo+json"]["schema"];
-        assert!(collection["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("numberReturned")));
+        assert!(
+            collection["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("numberReturned"))
+        );
         assert_eq!(
             collection["properties"]["numberReturned"],
             json!({"type": "integer", "minimum": 0})
@@ -5244,14 +4074,18 @@ mod spatial_tests {
         );
 
         let plain = operation(&registry, Operation::List, "plain");
-        assert!(!plain["parameters"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|p| p["name"] == "bbox"));
-        assert!(plain["responses"]["200"]["content"]
-            .get("application/geo+json")
-            .is_none());
+        assert!(
+            !plain["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["name"] == "bbox")
+        );
+        assert!(
+            plain["responses"]["200"]["content"]
+                .get("application/geo+json")
+                .is_none()
+        );
         assert_eq!(
             plain["x-registry-responseShape"],
             "RegistryRecordCollectionV1"
@@ -5259,9 +4093,11 @@ mod spatial_tests {
         assert_eq!(plain["x-registry-responseProfile"], PROFILE_IDENTIFIER);
         assert!(plain.get("x-registry-responseShapes").is_none());
         assert!(plain.get("x-registry-geojsonProfiles").is_none());
-        assert!(plain["x-registry-queryProfile"]
-            .get("spatialQueries")
-            .is_none());
+        assert!(
+            plain["x-registry-queryProfile"]
+                .get("spatialQueries")
+                .is_none()
+        );
     }
 
     #[test]
@@ -5281,171 +4117,33 @@ mod spatial_tests {
         let schema = &content["application/geo+json"]["schema"];
         assert_eq!(schema["properties"]["type"]["const"], "Feature");
         assert_eq!(schema["properties"]["properties"]["properties"], json!({}));
-        assert!(!get["parameters"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|p| p["name"] == "bbox"));
-    }
-
-    #[test]
-    fn effective_model_keeps_only_safe_planner_provenance() {
-        let mut value = json!({
-            "entities": {
-                "request": {
-                    "changeRequest": {
-                        "planner": {
-                            "sourceModule": null,
-                            "scriptPath": "modules/private/plan.rhai",
-                            "scriptBytes": [1, 2, 3],
-                            "scriptSha256": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                            "limits": {"maximumOperations": 100}
-                        }
-                    }
-                },
-                "module-request": {
-                    "changeRequest": {
-                        "planner": {
-                            "sourceModule": "request-module",
-                            "scriptPath": "private.rhai",
-                            "scriptBytes": [4],
-                            "scriptSha256": "sha256:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
-                            "limits": {"maximumOperations": 200}
-                        }
-                    }
-                }
-            }
-        });
-        sanitize_effective_model_planners(&mut value);
-
-        let project = &value["entities"]["request"]["changeRequest"]["planner"];
-        assert_eq!(project["declaringOrigin"], json!({"kind": "project"}));
-        assert!(project.get("scriptPath").is_none());
-        assert!(project.get("scriptBytes").is_none());
-        assert!(project["scriptSha256"].is_string());
-        assert_eq!(project["limits"]["maximumOperations"], 100);
-
-        let module = &value["entities"]["module-request"]["changeRequest"]["planner"];
-        assert_eq!(
-            module["declaringOrigin"],
-            json!({"kind": "module", "id": "request-module"})
+        assert!(
+            !get["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["name"] == "bbox")
         );
-        assert!(module.get("scriptPath").is_none());
-        assert!(module.get("scriptBytes").is_none());
-    }
-
-    #[test]
-    fn effective_model_planner_origin_restores_the_compiled_source_module() {
-        let compiled = json!({
-            "request": {
-                "changeRequest": {
-                    "planner": {"sourceModule": null, "scriptSha256": "sha256:01"}
-                }
-            },
-            "module-request": {
-                "changeRequest": {
-                    "planner": {"sourceModule": "request-module", "scriptSha256": "sha256:02"}
-                }
-            },
-            "plain": {"changeRequest": null},
-            "effects-only": {"changeRequest": {"planner": null}}
-        });
-        let mut model = json!({"entities": compiled.clone()});
-        sanitize_effective_model_planners(&mut model);
-        let mut entities = model["entities"].take();
-        assert_ne!(entities, compiled);
-
-        assert_eq!(
-            restore_effective_model_planner_origins(&mut entities),
-            Some(())
-        );
-        assert_eq!(entities, compiled);
-    }
-
-    #[test]
-    fn effective_model_planner_origin_refuses_any_other_shape() {
-        for planner in [
-            json!({"declaringOrigin": "project"}),
-            json!({"declaringOrigin": {}}),
-            json!({"declaringOrigin": {"kind": "registry"}}),
-            json!({"declaringOrigin": {"kind": "project", "id": "request-module"}}),
-            json!({"declaringOrigin": {"kind": "module"}}),
-            json!({"declaringOrigin": {"kind": "module", "id": 7}}),
-            json!({"declaringOrigin": {"kind": "module", "id": "core", "path": "plan.rhai"}}),
-            json!({"declaringOrigin": {"kind": "project"}, "sourceModule": "core"}),
-            json!({}),
-            json!({"sourceModule": null}),
-            json!({"sourceModule": "core"}),
-        ] {
-            let mut entities = json!({"request": {"changeRequest": {"planner": planner}}});
-            assert_eq!(
-                restore_effective_model_planner_origins(&mut entities),
-                None,
-                "{planner}"
-            );
-        }
     }
 }
 
 #[cfg(test)]
 mod attachment_tests {
     use super::*;
-
     #[test]
-    fn attachment_schema_distinguishes_empty_live_and_erased_metadata() {
-        let slot = crate::model::CompiledAttachmentSlot {
-            id: "supporting-file".to_owned(),
-            required: true,
-            maximum_bytes: 1024,
-            content_types: vec!["application/pdf".to_owned()],
-            classification: crate::contract::Classification::Restricted,
-        };
-        let schema = attachment_metadata_schema(&slot);
-        assert_eq!(schema["readOnly"], true);
-        assert_eq!(schema["x-registry-fieldKind"], "attachment");
-        assert_eq!(schema["x-registry-attachment"]["requiredForSubmit"], true);
-        assert_eq!(schema["anyOf"][0]["type"], "null");
-        assert_eq!(
-            schema["anyOf"][1]["properties"]["byteSize"]["maximum"],
-            crate::contract::MAX_ATTACHMENT_BYTES
-        );
-        assert_eq!(schema["anyOf"][1]["properties"]["erased"]["const"], false);
-        let erased = &schema["anyOf"][2];
-        assert_eq!(erased["properties"]["erased"]["const"], true);
-        assert!(erased["properties"].get("uploadedBy").is_none());
-        assert!(erased["properties"].get("contentType").is_none());
-        assert!(erased["properties"].get("uploadedAt").is_none());
-        assert!(erased["properties"].get("verificationStatus").is_none());
-        assert_eq!(schema["x-registry-attachment"]["maximumBytes"], 1024);
-        assert_eq!(
-            schema["x-registry-attachment"]["contentTypes"],
-            json!(["application/pdf"])
-        );
-        assert_eq!(
-            schema["x-registry-attachment"]["classification"], "restricted",
-            "the authored slot classification is discoverable next to the other slot facts"
-        );
+    fn proposal_attachment_metadata_has_closed_verification_and_bounded_content() {
+        let schema = proposal_attachment_schema();
         let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
-        let mut retained = json!({
-            "slotId": "supporting-file", "proposalVersion": 1, "filled": true, "erased": false,
-            "sha256": "a".repeat(64), "byteSize": 2048, "contentType": "text/plain",
-            "uploadedAt": "2026-09-09T00:00:00Z", "uploadedBy": "actor-reference", "verificationStatus": "approved"
-        });
-        assert!(
-            validator.is_valid(&retained),
-            "retained metadata can predate current upload policy"
-        );
+        let mut value = json!({"id":"support","required":false,"maximumBytes":1024,"contentTypes":["application/pdf"],"classification":"restricted","links":{},"value":{"submissionVersion":1,"sha256":"a".repeat(64),"contentType":"application/pdf","byteSize":512,"verificationStatus":"approved"}});
+        assert!(validator.is_valid(&value));
         for status in ["notRequired", "pending", "approved", "rejected"] {
-            retained["verificationStatus"] = json!(status);
-            assert!(validator.is_valid(&retained));
+            value["value"]["verificationStatus"] = json!(status);
+            assert!(validator.is_valid(&value));
         }
-        retained["verificationStatus"] = json!("unknown");
-        assert!(!validator.is_valid(&retained));
-        retained["verificationStatus"] = json!("approved");
-        retained["byteSize"] = json!(u64::from(crate::contract::MAX_ATTACHMENT_BYTES) + 1);
-        assert!(
-            !validator.is_valid(&retained),
-            "historical metadata retains the global bound"
-        );
+        value["value"]["verificationStatus"] = json!("unknown");
+        assert!(!validator.is_valid(&value));
+        value["value"]["verificationStatus"] = json!("approved");
+        value["value"]["legacyRecordProjection"] = json!(true);
+        assert!(!validator.is_valid(&value));
     }
 }

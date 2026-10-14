@@ -9,16 +9,16 @@ mod postgres_harness;
 use std::time::Duration;
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_json, parse_project_yaml, ModuleAssetSource};
+use registry_breg::compiler::{CompileProfile, compile_project, compile_project_with_assets};
+use registry_breg::contract::{ModuleAssetSource, parse_project_json, parse_project_yaml};
 use registry_breg::package::{
-    change_set_to_applicable_migration_plan, compiled_registry_change_set,
     CompiledRegistryChangeClass, CompiledRegistryChangeCode,
+    change_set_to_applicable_migration_plan, compiled_registry_change_set,
 };
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
-    managed_schema_fingerprint, verify_catalog_identity_for_catalog, ClaimContext,
-    ExpectedManagedCatalog, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    ClaimContext, ExpectedManagedCatalog, RegistryLockKey, RegistryStateTestIdentity,
+    RowBoundaryContext, begin_record_transaction, initialize_registry_state_for_catalog_test,
+    install_compiled_schema, managed_schema_fingerprint, verify_catalog_identity_for_catalog,
 };
 
 const RECORD_ALPHA: &str = "00000000-0000-0000-0000-000000000201";
@@ -99,16 +99,18 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
         .expect("missing context is an empty RLS view")
         .get(0);
     assert_eq!(missing, 0);
-    assert!(runtime
-        .execute(
-            &format!(
-                "INSERT INTO registry_data.{table} (record_id, {tenant}, {region}, {label})
+    assert!(
+        runtime
+            .execute(
+                &format!(
+                    "INSERT INTO registry_data.{table} (record_id, {tenant}, {region}, {label})
                  VALUES ($1::text::uuid, $2, $3, $4)"
-            ),
-            &[&RECORD_ALPHA, &"tenant-a", &"north", &"forbidden"],
-        )
-        .await
-        .is_err());
+                ),
+                &[&RECORD_ALPHA, &"tenant-a", &"north", &"forbidden"],
+            )
+            .await
+            .is_err()
+    );
     let update_allowed: bool = runtime
         .query_one(
             "SELECT has_table_privilege(current_user, $1, 'UPDATE')",
@@ -130,15 +132,17 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
     );
     let beta = context(&registry, "writer", "operations", "tenant-b", &["north"]);
     let reviewer = context(&registry, "reviewer", "review", "tenant-b", &["north"]);
-    assert!(ClaimContext::for_compiled(
-        &registry,
-        "entry",
-        Some("principal".to_owned()),
-        "writer",
-        Some("wrong-purpose".to_owned()),
-        boundaries("tenant-a", &["north"]),
-    )
-    .is_err());
+    assert!(
+        ClaimContext::for_compiled(
+            &registry,
+            "entry",
+            Some("principal".to_owned()),
+            "writer",
+            Some("wrong-purpose".to_owned()),
+            boundaries("tenant-a", &["north"]),
+        )
+        .is_err()
+    );
 
     let mut client = pool
         .get_for_test()
@@ -186,17 +190,19 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
         .map(|row| row.get(0))
         .collect();
     assert_eq!(visible, [RECORD_ALPHA]);
-    assert!(transaction
-        .transaction_for_test()
-        .execute(
-            &format!(
-                "INSERT INTO registry_data.{table} (record_id, {tenant}, {region}, {label})
+    assert!(
+        transaction
+            .transaction_for_test()
+            .execute(
+                &format!(
+                    "INSERT INTO registry_data.{table} (record_id, {tenant}, {region}, {label})
                  VALUES ('00000000-0000-0000-0000-000000000203', 'tenant-b', 'north', 'denied')"
-            ),
-            &[],
-        )
-        .await
-        .is_err());
+                ),
+                &[],
+            )
+            .await
+            .is_err()
+    );
     transaction
         .rollback()
         .await
@@ -235,17 +241,19 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
     )
     .await
     .expect("read-only profile context starts");
-    assert!(transaction
-        .transaction_for_test()
-        .execute(
-            &format!(
-                "INSERT INTO registry_data.{table} (record_id, {tenant}, {region}, {label})
+    assert!(
+        transaction
+            .transaction_for_test()
+            .execute(
+                &format!(
+                    "INSERT INTO registry_data.{table} (record_id, {tenant}, {region}, {label})
                  VALUES ('00000000-0000-0000-0000-000000000204', 'tenant-b', 'north', 'denied')"
-            ),
-            &[],
-        )
-        .await
-        .is_err());
+                ),
+                &[],
+            )
+            .await
+            .is_err()
+    );
     transaction
         .rollback()
         .await
@@ -302,10 +310,12 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
         )
         .await
         .expect("malformed context can be seeded only by the database credential holder");
-    assert!(client
-        .query_one(&format!("SELECT count(*) FROM registry_data.{table}"), &[])
-        .await
-        .is_err());
+    assert!(
+        client
+            .query_one(&format!("SELECT count(*) FROM registry_data.{table}"), &[])
+            .await
+            .is_err()
+    );
     client
         .batch_execute("ROLLBACK")
         .await
@@ -1232,14 +1242,16 @@ async fn install_derived_view_fixture() {
         .expect("source view remains RLS confined")
         .get(0);
     assert_eq!(source_visible, 1);
-    assert!(transaction
-        .transaction_for_test()
-        .execute(
-            &format!("UPDATE registry_derived.{derived_view} SET child_count = 5"),
-            &[],
-        )
-        .await
-        .is_err());
+    assert!(
+        transaction
+            .transaction_for_test()
+            .execute(
+                &format!("UPDATE registry_derived.{derived_view} SET child_count = 5"),
+                &[],
+            )
+            .await
+            .is_err()
+    );
     transaction.rollback().await.expect("proof rolls back");
 
     let null_key_transaction = begin_record_transaction(
@@ -1270,14 +1282,16 @@ async fn install_derived_view_fixture() {
         )
         .await
         .expect("null-key proof installs explicit evaluation date");
-    assert!(null_key_transaction
-        .transaction_for_test()
-        .query(
-            &format!("SELECT * FROM registry_derived.{derived_view}"),
-            &[]
-        )
-        .await
-        .is_err());
+    assert!(
+        null_key_transaction
+            .transaction_for_test()
+            .query(
+                &format!("SELECT * FROM registry_derived.{derived_view}"),
+                &[]
+            )
+            .await
+            .is_err()
+    );
     null_key_transaction
         .rollback()
         .await
@@ -1325,14 +1339,16 @@ async fn install_derived_view_fixture() {
         )
         .await
         .expect("duplicate-key proof installs explicit evaluation date");
-    assert!(duplicate_read
-        .transaction_for_test()
-        .query(
-            &format!("SELECT * FROM registry_derived.{derived_view}"),
-            &[]
-        )
-        .await
-        .is_err());
+    assert!(
+        duplicate_read
+            .transaction_for_test()
+            .query(
+                &format!("SELECT * FROM registry_derived.{derived_view}"),
+                &[]
+            )
+            .await
+            .is_err()
+    );
     duplicate_read
         .rollback()
         .await
@@ -1438,15 +1454,17 @@ async fn assert_catalog_drift_is_rejected(
         .batch_execute(&format!("GRANT SELECT ON registry_data.{table} TO PUBLIC"))
         .await
         .expect("test administrator introduces PUBLIC grant drift");
-    assert!(verify_catalog_identity_for_catalog(
-        &migration,
-        identity,
-        catalog,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .is_err());
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            identity,
+            catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err()
+    );
     database
         .admin
         .batch_execute(&format!(
@@ -1455,15 +1473,17 @@ async fn assert_catalog_drift_is_rejected(
         ))
         .await
         .expect("test administrator introduces policy drift");
-    assert!(verify_catalog_identity_for_catalog(
-        &migration,
-        identity,
-        catalog,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .is_err());
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            identity,
+            catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err()
+    );
     database
         .admin
         .batch_execute(&format!(
@@ -1472,15 +1492,17 @@ async fn assert_catalog_drift_is_rejected(
         ))
         .await
         .expect("test administrator introduces table drift");
-    assert!(verify_catalog_identity_for_catalog(
-        &migration,
-        identity,
-        catalog,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .is_err());
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            identity,
+            catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err()
+    );
     database
         .admin
         .batch_execute(&format!(
@@ -1490,15 +1512,17 @@ async fn assert_catalog_drift_is_rejected(
         ))
         .await
         .expect("test administrator introduces owner drift");
-    assert!(verify_catalog_identity_for_catalog(
-        &migration,
-        identity,
-        catalog,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .is_err());
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            identity,
+            catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err()
+    );
     database
         .admin
         .batch_execute(&format!(
@@ -1519,15 +1543,17 @@ async fn assert_catalog_drift_is_rejected(
         ))
         .await
         .expect("test administrator introduces trigger and routine drift");
-    assert!(verify_catalog_identity_for_catalog(
-        &migration,
-        identity,
-        catalog,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .is_err());
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            identity,
+            catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err()
+    );
     database
         .admin
         .batch_execute(&format!(
@@ -1535,15 +1561,17 @@ async fn assert_catalog_drift_is_rejected(
         ))
         .await
         .expect("test administrator removes trigger drift");
-    assert!(verify_catalog_identity_for_catalog(
-        &migration,
-        identity,
-        catalog,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .is_err());
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            identity,
+            catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err()
+    );
     database
         .admin
         .batch_execute("DROP FUNCTION registry_internal.registry_unexpected_trigger()")
@@ -1558,15 +1586,17 @@ async fn assert_catalog_drift_is_rejected(
         ))
         .await
         .expect("test administrator introduces rewrite-rule drift");
-    assert!(verify_catalog_identity_for_catalog(
-        &migration,
-        identity,
-        catalog,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .is_err());
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            identity,
+            catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err()
+    );
     database
         .admin
         .batch_execute(&format!(
@@ -1580,15 +1610,17 @@ async fn assert_catalog_drift_is_rejected(
         .batch_execute("CREATE VIEW registry_data.registry_unexpected_view AS SELECT 1 AS value")
         .await
         .expect("test administrator introduces unsupported relation drift");
-    assert!(verify_catalog_identity_for_catalog(
-        &migration,
-        identity,
-        catalog,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .is_err());
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            identity,
+            catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err()
+    );
     database
         .admin
         .batch_execute("DROP VIEW registry_data.registry_unexpected_view")
@@ -1602,15 +1634,17 @@ async fn assert_catalog_drift_is_rejected(
         ))
         .await
         .expect("test PostgreSQL supports table publication drift");
-    assert!(verify_catalog_identity_for_catalog(
-        &migration,
-        identity,
-        catalog,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .is_err());
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            identity,
+            catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err()
+    );
     database
         .admin
         .batch_execute("DROP PUBLICATION registry_unexpected_publication")
@@ -1625,15 +1659,17 @@ async fn assert_catalog_drift_is_rejected(
         ))
         .await
         .expect("test administrator introduces hidden outbox column grant drift");
-    assert!(verify_catalog_identity_for_catalog(
-        &migration,
-        identity,
-        catalog,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .is_err());
+    assert!(
+        verify_catalog_identity_for_catalog(
+            &migration,
+            identity,
+            catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .is_err()
+    );
     assert!(
         managed_schema_fingerprint(&migration, &database.runtime_role, catalog)
             .await
@@ -1834,7 +1870,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
         }));
     }
     let writable_fields = vec!["alpha", "omega"];
-    let project = serde_json::json!({
+    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -1842,7 +1878,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "entry",
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -1854,8 +1890,8 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "entry",
+            "permissions": {"records": [{
+                "recordType": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": writable_fields,
                 "writableFields": writable_fields,
@@ -1873,7 +1909,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
 /// vocabulary varies, so a migration that touched `kind` would show.
 /// One required `text` field with a pattern, bounded by `max_length`.
 fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
-    let project = serde_json::json!({
+    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -1881,7 +1917,7 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "entry",
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -1896,8 +1932,8 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "entry",
+            "permissions": {"records": [{
+                "recordType": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["note"],
                 "writableFields": ["note"],
@@ -1912,7 +1948,7 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
 }
 
 fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledRegistry {
-    let project = serde_json::json!({
+    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -1920,7 +1956,7 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
             "version": "1",
             "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "entry",
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -1935,8 +1971,8 @@ fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledReg
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "entry",
+            "permissions": {"records": [{
+                "recordType": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["note"],
                 "writableFields": ["note"],
@@ -1959,7 +1995,7 @@ fn vocabulary_catalog_registry_with_constraints(
     status_values: &[&str],
     constraints: serde_json::Value,
 ) -> registry_breg::CompiledRegistry {
-    let project = serde_json::json!({
+    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -1971,7 +2007,7 @@ fn vocabulary_catalog_registry_with_constraints(
             {"id": "status", "values": status_values},
             {"id": "kind", "values": ["minor", "major"]}
         ],
-        "entities": [{
+        "recordTypes": [{
             "id": "entry",
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -1989,8 +2025,8 @@ fn vocabulary_catalog_registry_with_constraints(
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "entry",
+            "permissions": {"records": [{
+                "recordType": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["status", "kind"],
                 "writableFields": ["status", "kind"],
@@ -2006,11 +2042,11 @@ fn vocabulary_catalog_registry_with_constraints(
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"compiled-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[
+          "recordTypes":[
             {
               "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
               "fields":[
@@ -2031,9 +2067,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["operations"],
               "permissions":{
-                "entities":[
+                "records":[
                   {
-                    "entity":"entry","operations":["create","get","list","patch"],
+                    "recordType":"entry","operations":["create","get","list","patch"],
                     "readableFields":["tenant","region","label"],
                     "writableFields":["tenant","region","label"],
                     "rowBoundaries":[
@@ -2042,7 +2078,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                     ]
                   },
                   {
-                    "entity":"event","operations":["create","get","list"],
+                    "recordType":"event","operations":["create","get","list"],
                     "readableFields":["tenant"],"writableFields":["tenant"],
                     "rowBoundaries": "unrestricted"
                   }
@@ -2052,8 +2088,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             {
               "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "requiredPurposes":["review"],
-              "permissions":{"entities":[{
-                "entity":"entry","operations":["get","list"],
+              "permissions":{"records":[{
+                "recordType":"entry","operations":["get","list"],
                 "readableFields":["tenant","region","label"],
                 "rowBoundaries":[
                   {"field":"tenant","claim":"tenant_claim","operator":"equals"},
@@ -2071,11 +2107,11 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 
 fn derived_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"derived-postgres","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
               {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
@@ -2090,8 +2126,8 @@ fn derived_registry() -> registry_breg::CompiledRegistry {
             }]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"household","operations":["create","get","list"],
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"household","operations":["create","get","list"],
               "readableFields":["tenant","size","child-count","observed-on"],
               "writableFields":["tenant","size"],
               "filterableFields":["child-count"],

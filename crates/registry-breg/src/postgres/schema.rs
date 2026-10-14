@@ -9,7 +9,7 @@ use tokio_postgres::NoTls;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use tokio_postgres::{Client, GenericClient};
 
-use crate::generated_ddl::{policy_sql, DdlObjectOwner, DdlPolicyRole, DdlStatementKind};
+use crate::generated_ddl::{DdlObjectOwner, DdlPolicyRole, DdlStatementKind, policy_sql};
 #[cfg(any(feature = "tooling", feature = "postgres-test"))]
 use crate::history_commit::install_empty_history_baseline;
 use crate::history_store::install_history_schema_store;
@@ -18,17 +18,18 @@ use crate::mutation::{install_mutation_schema, reconcile_action_result_target_in
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use super::config::ConnectionTls;
-use super::{
-    catalog::install_registry_state_schema, spatial_bbox_role, verify_btree_gist, verify_postgis,
-    PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
-};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use super::{
+    ConnectionConfig, RegistryLockKey, RuntimePool,
     catalog::{
-        managed_schema_fingerprint, verify_catalog_identity_for_catalog, ExpectedManagedCatalog,
-        ExpectedRegistryIdentity,
+        ExpectedManagedCatalog, ExpectedRegistryIdentity, managed_schema_fingerprint,
+        verify_catalog_identity_for_catalog,
     },
-    verify_migration_role, ConnectionConfig, RegistryLockKey, RuntimePool,
+    verify_migration_role,
+};
+use super::{
+    PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
+    catalog::install_registry_state_schema, spatial_bbox_role, verify_btree_gist, verify_postgis,
 };
 #[cfg(any(feature = "tooling", feature = "postgres-test"))]
 use crate::history_store::retain_descriptor;
@@ -130,7 +131,7 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
         let table_name = quote_compiled_identifier(&table.physical_name);
         client
             .batch_execute(&format!(
-                "REVOKE ALL ON TABLE registry_data.{table_name} FROM {revoke_grantees}{bbox_revoke};",
+                "REVOKE ALL ON TABLE registry_data.{table_name} FROM {revoke_grantees}{bbox_revoke}; REVOKE UPDATE (record_id) ON TABLE registry_data.{table_name} FROM {revoke_grantees}{bbox_revoke};",
             ))
             .await?;
         if !table.runtime_privileges.is_empty() {
@@ -143,6 +144,14 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
             client
                 .batch_execute(&format!(
                     "GRANT {privileges} ON TABLE registry_data.{table_name} TO {};",
+                    runtime_role.quoted(),
+                ))
+                .await?;
+        }
+        if table.runtime_lock_column {
+            client
+                .batch_execute(&format!(
+                    "GRANT UPDATE (record_id) ON TABLE registry_data.{table_name} TO {};",
                     runtime_role.quoted(),
                 ))
                 .await?;

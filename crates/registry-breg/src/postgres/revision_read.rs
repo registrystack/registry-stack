@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime};
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde::Serialize;
-use serde_json::{json, Map, Value};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use serde_json::{Map, Value, json};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio_postgres::types::ToSql;
 use uuid::Uuid;
 
@@ -19,8 +19,9 @@ use crate::api::{
     RevisionReadService, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
 };
 use crate::audit::{
-    begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
-    PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
+    PreIoAudit, PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit,
+    TerminalAuditOutcome, begin_pre_io_audit, profile_is_keyed, read_terminal_entry,
+    record_pre_io_audit,
 };
 use crate::contract::{FieldTypeSource, Operation, ProvenanceFieldSource};
 use crate::cursor::CursorRepresentation;
@@ -42,8 +43,8 @@ use super::cancellation::QueryCancellationGuard;
 use super::history_read::HISTORY_STATEMENT_TIMEOUT;
 use super::read::{load_retained_plaintext_fields, open_history_row_members};
 use super::{
-    begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
-    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
+    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
+    begin_record_transaction, snapshot_read_error, validate_field_value,
 };
 
 const MAX_JOURNAL_TEXT_BYTES: usize = 512;
@@ -563,17 +564,7 @@ fn revision_sql(
             "SELECT revision.record_id, revision.record_revision, revision.predecessor_revision,
                     revision.record_lifecycle, revision.package_revision, revision.operation_id,
                     revision.mutation_kind, revision.principal_reference,
-                    revision.request_reference, revision.snapshot, revision.created_at,
-                    EXISTS (
-                        SELECT 1
-                          FROM registry_internal.registry_request_revision_links l
-                         WHERE l.entity_id = revision.entity_id
-                           AND l.record_id = revision.record_id
-                           AND l.record_revision = revision.record_revision
-                           AND l.request_entity_id = revision.entity_id
-                           AND l.request_id = revision.record_id
-                           AND l.link_kind = 'request-lifecycle'
-                    ) AS request_lifecycle_revision{context_select}
+                    revision.request_reference, revision.snapshot, revision.created_at{context_select}
                FROM registry_internal.registry_revisions AS revision
                {context_join}
               WHERE {}
@@ -630,9 +621,11 @@ fn canonical_boundary_value(
     validate_field_value(value, field_type).map_err(|_| ReadServiceError::Unavailable)?;
     let value = match field_type {
         FieldTypeSource::Boolean => Value::Bool(value == "true"),
-        FieldTypeSource::Int64 => json!(value
-            .parse::<i64>()
-            .map_err(|_| ReadServiceError::Unavailable)?),
+        FieldTypeSource::Int64 => json!(
+            value
+                .parse::<i64>()
+                .map_err(|_| ReadServiceError::Unavailable)?
+        ),
         FieldTypeSource::String { .. }
         | FieldTypeSource::Text { .. }
         | FieldTypeSource::Decimal { .. }
@@ -772,9 +765,6 @@ async fn revision_from_row(
     let created_at = row
         .try_get::<_, SystemTime>(10)
         .map_err(|_| ReadServiceError::Unavailable)?;
-    let request_lifecycle_revision = row
-        .try_get::<_, bool>(11)
-        .map_err(|_| ReadServiceError::Unavailable)?;
     if revision <= 0
         || predecessor.is_some_and(|value| value <= 0 || value >= revision)
         || !matches!(lifecycle.as_str(), "active" | "tombstoned")
@@ -786,7 +776,6 @@ async fn revision_from_row(
             &mutation_kind,
             &actor_reference,
             &request_reference,
-            request_lifecycle_revision,
         )
     {
         return Err(ReadServiceError::Unavailable);
@@ -967,7 +956,7 @@ async fn revision_change_context(
         return Err(ReadServiceError::Unavailable);
     }
     let Some(commit_position) = row
-        .try_get::<_, Option<i64>>(12)
+        .try_get::<_, Option<i64>>(11)
         .map_err(|_| ReadServiceError::Unavailable)?
     else {
         return Ok(None);
@@ -976,7 +965,7 @@ async fn revision_change_context(
         return Err(ReadServiceError::Unavailable);
     }
     let Some(change_context) = row
-        .try_get::<_, Option<Vec<u8>>>(13)
+        .try_get::<_, Option<Vec<u8>>>(12)
         .map_err(|_| ReadServiceError::Unavailable)?
     else {
         return Ok(None);
@@ -1126,14 +1115,6 @@ fn project_change_context(
     Ok((!projected.is_empty()).then_some(projected))
 }
 
-fn valid_request_journal_operation(entity_id: &str, operation_id: &str) -> bool {
-    let prefix = format!("records.{entity_id}.request.");
-    let Some(action) = operation_id.strip_prefix(&prefix) else {
-        return false;
-    };
-    matches!(action, "submit" | "revise" | "cancel" | "apply")
-}
-
 fn bounded_text(row: &tokio_postgres::Row, index: usize) -> Result<String, ReadServiceError> {
     let value = row
         .try_get::<_, String>(index)
@@ -1153,15 +1134,10 @@ fn valid_revision_provenance(
     mutation_kind: &str,
     actor_reference: &str,
     request_reference: &str,
-    request_lifecycle_revision: bool,
 ) -> bool {
     match mutation_kind {
         "create" | "patch" | "tombstone" => {
-            (operation_id == format!("records.{}.{}", entity.id, mutation_kind)
-                || (request_lifecycle_revision
-                    && entity.change_request.is_some()
-                    && mutation_kind == "patch"
-                    && valid_request_journal_operation(&entity.id, operation_id)))
+            operation_id == format!("records.{}.{}", entity.id, mutation_kind)
                 && valid_hmac_reference(actor_reference)
                 && valid_hmac_reference(request_reference)
         }
@@ -1297,7 +1273,6 @@ fn strict_claim_context(
         row_boundaries,
     )
     .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
-    .and_then(|claims| claims.with_api_submitter_targets(registry, context))
     .and_then(|claims| claims.with_recipients(context.recipients().clone()))
     .map_err(|_| ReadServiceError::Unavailable)
 }
@@ -1322,15 +1297,17 @@ fn row_boundary_reference(
     package_revision: &str,
     claims: &ClaimContext,
 ) -> Result<String, crate::audit::RegistryAuditError> {
-    let canonical = canonicalize_json(&json!(claims
-        .row_boundaries()
-        .iter()
-        .map(|boundary| json!({
-            "field": boundary.field(),
-            "operator": boundary.operator().as_str(),
-            "values": boundary.values(),
-        }))
-        .collect::<Vec<_>>()))
+    let canonical = canonicalize_json(&json!(
+        claims
+            .row_boundaries()
+            .iter()
+            .map(|boundary| json!({
+                "field": boundary.field(),
+                "operator": boundary.operator().as_str(),
+                "values": boundary.values(),
+            }))
+            .collect::<Vec<_>>()
+    ))
     .map_err(|_| crate::audit::RegistryAuditError::InvalidContext)?;
     let canonical = std::str::from_utf8(&canonical)
         .map_err(|_| crate::audit::RegistryAuditError::InvalidContext)?;
@@ -1373,10 +1350,10 @@ impl RevisionReadFaultControl {
 
 #[cfg(all(test, feature = "postgres-test"))]
 mod tests {
-    use crate::postgres::stored_bytes_probe::{expression_error, UNREADABLE};
+    use crate::postgres::stored_bytes_probe::{UNREADABLE, expression_error};
 
     use super::{
-        snapshot_boundary_expression, snapshot_read_error, stored_bytes, ReadServiceError,
+        ReadServiceError, snapshot_boundary_expression, snapshot_read_error, stored_bytes,
     };
 
     /// A stored snapshot the JSON reader will not accept must refuse the

@@ -227,10 +227,10 @@ pub(crate) async fn install_history_commit_schema(
                      CHECK (scrubbed_outbox_payload_count >= 0),
                  scrubbed_cached_response_count bigint NOT NULL DEFAULT 0
                      CHECK (scrubbed_cached_response_count >= 0),
-                 scrubbed_request_target_count bigint NOT NULL DEFAULT 0
-                     CHECK (scrubbed_request_target_count >= 0),
-                 scrubbed_request_proposal_count bigint NOT NULL DEFAULT 0
-                     CHECK (scrubbed_request_proposal_count >= 0),
+                 scrubbed_proposal_target_count bigint NOT NULL DEFAULT 0
+                     CHECK (scrubbed_proposal_target_count >= 0),
+                 scrubbed_proposal_submission_count bigint NOT NULL DEFAULT 0
+                     CHECK (scrubbed_proposal_submission_count >= 0),
                  removed_descriptor_count bigint NOT NULL DEFAULT 0
                      CHECK (removed_descriptor_count >= 0),
                  recorded_at timestamptz NOT NULL DEFAULT transaction_timestamp(),

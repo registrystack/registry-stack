@@ -9,8 +9,8 @@ mod pilot_acceptance_harness;
 mod postgres_harness;
 
 use axum::http::{Method, StatusCode};
-use pilot_acceptance_harness::{response_bytes, response_json as raw_response_json, PilotHarness};
-use serde_json::{json, Value};
+use pilot_acceptance_harness::{PilotHarness, response_bytes, response_json as raw_response_json};
+use serde_json::{Value, json};
 
 const FOREIGN_UUID: &str = "00000000-0000-4000-8000-000000000999";
 
@@ -43,12 +43,16 @@ async fn asset_site_placement_journey(harness: &PilotHarness) {
     let planner_token = harness.token("site-planning", &[]);
     let planner_openapi =
         assert_fixture_surface(harness, "site-planner", &planner_token, "asset").await;
-    assert!(planner_openapi["paths"]
-        .get("/v1/records/inspections")
-        .is_none());
-    assert!(planner_openapi["paths"]["/v1/records/assets"]
-        .get("post")
-        .is_none());
+    assert!(
+        planner_openapi["paths"]
+            .get("/v1/records/inspections")
+            .is_none()
+    );
+    assert!(
+        planner_openapi["paths"]["/v1/records/assets"]
+            .get("post")
+            .is_none()
+    );
     assert!(
         planner_openapi["components"]["schemas"]["asset-item"]["properties"]
             .get("assetClass")
@@ -208,13 +212,12 @@ async fn establishments_journey(harness: &PilotHarness) {
     let openapi =
         assert_fixture_surface(harness, "business-operator", &token, "establishments").await;
     assert_eq!(
-        openapi["components"]["schemas"]["establishment"]["properties"]["operatingStatus"]
-            ["x-registry-vocabulary"],
+        openapi["components"]["schemas"]["establishment"]["properties"]["operatingStatus"]["x-registry-vocabulary"],
         "operating-status"
     );
     assert_eq!(
-        openapi["components"]["schemas"]["establishment"]["properties"]["preferredLanguage"]
-            ["anyOf"][0]["x-registry-vocabulary"],
+        openapi["components"]["schemas"]["establishment"]["properties"]["preferredLanguage"]["anyOf"]
+            [0]["x-registry-vocabulary"],
         "preferred-language"
     );
 
@@ -372,8 +375,8 @@ async fn inspection_journey(harness: &PilotHarness) {
     let openapi =
         assert_fixture_surface(harness, "inspection-inspector", &token, "inspection").await;
     assert_eq!(
-        openapi["components"]["schemas"]["inspection-observation"]["properties"]
-            ["observationSchemaMetadata"]["additionalProperties"],
+        openapi["components"]["schemas"]["inspection-observation"]["properties"]["observationSchemaMetadata"]
+            ["additionalProperties"],
         false
     );
     let unauthenticated_schema = harness

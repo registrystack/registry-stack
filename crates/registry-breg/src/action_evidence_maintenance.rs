@@ -4,16 +4,16 @@
 use std::{path::Path, time::Duration};
 
 use registry_platform_audit::AuditEntry;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::audit::RegistryAudit;
-use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
-use crate::mutation::{erase_expired_action_evidence, MutationError};
+use crate::history_maintenance::{HistoryMaintenanceError, lock_registry};
+use crate::mutation::{MutationError, erase_expired_action_evidence};
 use crate::package::PackageError;
 use crate::postgres::{
-    verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
+    ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
+    SqlIdentifier, verify_catalog_identity_for_catalog, verify_migration_role,
 };
 use crate::runtime_config::load_runtime_config;
 
@@ -202,7 +202,7 @@ impl ActionEvidenceRetentionOperatorService {
             .query_one(
                 "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_action_evidence_uses
                                  WHERE expires_at <= $1)
-                     OR EXISTS (SELECT 1 FROM registry_internal.registry_request_evidence_uses
+                     OR EXISTS (SELECT 1 FROM registry_internal.registry_proposal_evidence_uses
                                  WHERE expires_at <= $1)",
                 &[&cutoff],
             )

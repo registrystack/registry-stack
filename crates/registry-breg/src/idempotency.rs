@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
@@ -18,8 +18,7 @@ use crate::stored_bytes;
 
 // Every compiled effect mutates at least one field, so this also bounds the
 // number of separately named references in an immediate-action receipt.
-pub(crate) const MAX_IMMEDIATE_ACTION_RESULTS: u16 =
-    crate::change_request::MAX_CHANGE_REQUEST_FIELD_MUTATIONS;
+pub(crate) const MAX_IMMEDIATE_ACTION_RESULTS: u16 = crate::plan::MAX_PLAN_FIELD_MUTATIONS;
 
 pub(crate) const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
@@ -291,10 +290,10 @@ pub(crate) enum StoredResultMetadata {
     Batch {
         result_count: u16,
     },
-    Application {
+    Proposal {
         record_reference: String,
         record_revision: i64,
-        proposal_version: i64,
+        submission_version: i64,
         result_count: u16,
     },
     ImmediateAction {
@@ -629,21 +628,13 @@ fn audit_reference(
 /// binding reference digests together with the canonical request digest.
 pub(crate) fn binding_claim_context(context: &ClaimContext) -> Result<Value, IdempotencyError> {
     let principal = context.principal().ok_or(IdempotencyError::InvalidInput)?;
-    let mut value = json!({
+    let value = json!({
         "entityId": context.entity_id(),
         "principal": principal,
         "selectedAccessProfile": context.access_profile(),
         "verifiedPurpose": context.purpose(),
         "rowBoundaries": binding_boundaries(context.row_boundaries()),
     });
-    if !context.submitter_targets().is_empty() {
-        value["submitterTargets"] = context
-            .submitter_targets()
-            .iter()
-            .map(|(id, target)| Ok((id.clone(), binding_claim_context(target)?)))
-            .collect::<Result<serde_json::Map<String, Value>, IdempotencyError>>()?
-            .into();
-    }
     Ok(value)
 }
 
@@ -653,6 +644,7 @@ fn binding_action_context(context: &ActionClaimContext) -> Value {
         "principal": context.principal(),
         "selectedAccessProfile": context.access_profile(),
         "verifiedPurpose": context.purpose(),
+        "taskGrant": context.task_grant(),
     })
 }
 
@@ -709,26 +701,13 @@ pub(crate) fn canonical_claim_context(
             }))
         })
         .collect::<Result<Vec<_>, IdempotencyError>>()?;
-    let mut value = json!({
+    let value = json!({
         "entityId": context.entity_id(),
         "principalReference": principal_reference,
         "selectedAccessProfile": context.access_profile(),
         "verifiedPurpose": context.purpose(),
         "rowBoundaries": row_boundaries,
     });
-    if !context.submitter_targets().is_empty() {
-        value["submitterTargets"] = context
-            .submitter_targets()
-            .iter()
-            .map(|(id, target)| {
-                Ok((
-                    id.clone(),
-                    canonical_claim_context(profile, target, package_revision)?,
-                ))
-            })
-            .collect::<Result<serde_json::Map<String, Value>, IdempotencyError>>()?
-            .into();
-    }
     Ok(value)
 }
 
@@ -799,7 +778,7 @@ pub(crate) async fn lock_and_load(
         .query_opt(
             "SELECT binding_reference, result_kind, record_revision, response_status,
                     response_body, response_headers, record_reference, result_count,
-                    proposal_version, erased_at,
+                    submission_version, erased_at,
                     receipt_dropped_at IS NOT NULL
                         OR receipt_expires_at <= transaction_timestamp()
              FROM registry_internal.registry_idempotency
@@ -864,7 +843,7 @@ pub(crate) async fn lock_and_load(
                 .ok_or(IdempotencyError::Unavailable)?;
             StoredResultMetadata::Batch { result_count }
         }
-        "application" => {
+        "proposal" => {
             let record_revision = row
                 .get::<_, Option<i64>>(2)
                 .filter(|revision| *revision > 0)
@@ -876,16 +855,16 @@ pub(crate) async fn lock_and_load(
             let result_count = row
                 .get::<_, Option<i16>>(7)
                 .and_then(|count| u16::try_from(count).ok())
-                .filter(|count| (1..=16).contains(count))
+                .filter(|count| (0..=16).contains(count))
                 .ok_or(IdempotencyError::Unavailable)?;
-            let proposal_version = row
+            let submission_version = row
                 .get::<_, Option<i64>>(8)
                 .filter(|version| *version > 0)
                 .ok_or(IdempotencyError::Unavailable)?;
-            StoredResultMetadata::Application {
+            StoredResultMetadata::Proposal {
                 record_reference,
                 record_revision,
-                proposal_version,
+                submission_version,
                 result_count,
             }
         }
@@ -952,7 +931,7 @@ pub(crate) async fn insert_result(
 ) -> Result<(), IdempotencyError> {
     let status = i16::try_from(response.status).map_err(|_| IdempotencyError::InvalidInput)?;
     let headers = encode_headers(&response.headers)?;
-    let (result_kind, record_revision, record_reference, result_count, proposal_version) =
+    let (result_kind, record_revision, record_reference, result_count, submission_version) =
         match metadata {
             StoredResultMetadata::Record {
                 record_reference,
@@ -971,22 +950,22 @@ pub(crate) async fn insert_result(
                 Some(i16::try_from(*result_count).map_err(|_| IdempotencyError::InvalidInput)?),
                 None,
             ),
-            StoredResultMetadata::Application {
+            StoredResultMetadata::Proposal {
                 record_reference,
                 record_revision,
-                proposal_version,
+                submission_version,
                 result_count,
             } if !record_reference.is_empty()
                 && *record_revision > 0
-                && *proposal_version > 0
-                && (1..=16).contains(result_count) =>
+                && *submission_version > 0
+                && (0..=16).contains(result_count) =>
             {
                 (
-                    "application",
+                    "proposal",
                     Some(*record_revision),
                     Some(record_reference.as_str()),
                     Some(i16::try_from(*result_count).map_err(|_| IdempotencyError::InvalidInput)?),
-                    Some(*proposal_version),
+                    Some(*submission_version),
                 )
             }
             StoredResultMetadata::ImmediateAction { result_count }
@@ -1019,7 +998,7 @@ pub(crate) async fn insert_result(
             "INSERT INTO registry_internal.registry_idempotency
                  (key_reference, binding_reference, result_kind, record_revision,
                   response_status, response_body, response_headers, record_reference, result_count,
-                  proposal_version, caller_issuer, caller_subject, key_scope, idempotency_key,
+                  submission_version, caller_issuer, caller_subject, key_scope, idempotency_key,
                   receipt_expires_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                      transaction_timestamp() + pg_catalog.make_interval(days => $15))",
@@ -1033,7 +1012,7 @@ pub(crate) async fn insert_result(
                 &headers,
                 &record_reference,
                 &result_count,
-                &proposal_version,
+                &submission_version,
                 &caller.issuer,
                 &caller.subject,
                 &caller.scope,
@@ -1339,11 +1318,13 @@ mod tests {
                 "{reserved}"
             );
         }
-        assert!(IdempotencyPolicy::new(
-            "https://issuer.example.test",
-            DEFAULT_RECEIPT_RETENTION_DAYS
-        )
-        .is_ok());
+        assert!(
+            IdempotencyPolicy::new(
+                "https://issuer.example.test",
+                DEFAULT_RECEIPT_RETENTION_DAYS
+            )
+            .is_ok()
+        );
         assert_eq!(
             IdempotencyPolicy::default().caller_issuer(),
             EMBEDDED_CALLER_ISSUER,

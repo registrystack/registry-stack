@@ -11,41 +11,42 @@ use std::path::{Component, Path, PathBuf};
 
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_config::package::{
-    plan_package, write_sum_file, PackageLimits as SharedPackageLimits,
-    VerifiedPackage as SharedVerifiedPackage, REVISION_FILE, SUM_FILE,
+    PackageLimits as SharedPackageLimits, REVISION_FILE, SUM_FILE,
+    VerifiedPackage as SharedVerifiedPackage, plan_package, write_sum_file,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::artifacts::{restore_effective_model_planner_origins, REGISTRY_METADATA_ARTIFACT_PATH};
-use crate::compiler::{compile_project_with_assets, CompileProfile};
+use crate::CompiledRegistry;
+use crate::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
+use crate::compiler::{CompileProfile, compile_project_with_assets};
 use crate::contract::{
-    parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource, RegistryModule,
-    RegistryProject,
+    FieldTypeSource, ModuleAssetSource, RegistryModule, RegistryProject, parse_module_yaml,
+    parse_project_yaml,
 };
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::generated_ddl::{
+    DdlInventory, DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind, DdlTable,
     add_blind_index_column_statement, add_column_statement, drop_spatial_bbox_function_statement,
     drop_spatial_candidate_view_statement, generate_ddl_with_actions, quote_identifier,
     replace_length_check_statement, replace_vocabulary_check_statement,
     set_column_not_null_statement, spatial_bbox_function_statement, spatial_projection_fields,
-    spatial_projection_statements, DdlInventory, DdlPolicy, DdlPolicyRole, DdlStatement,
-    DdlStatementKind, DdlTable,
+    spatial_projection_statements,
 };
 use crate::history_schema::{
-    serialize_descriptor, HistoryEntityDescriptor, HistoryLifecycleDescriptor,
-    HistoryLifecycleSource, HistorySchemaDescriptor, HISTORY_SCHEMA_ENCODING_VERSION,
+    HISTORY_SCHEMA_ENCODING_VERSION, HistoryEntityDescriptor, HistoryLifecycleDescriptor,
+    HistoryLifecycleSource, HistorySchemaDescriptor, serialize_descriptor,
 };
 #[cfg(feature = "tooling")]
 use crate::migration_plan::{
-    prepare_reviewed_migration_plan, validate_reviewed_migration_plan,
     PreparedReviewedMigrationPlan, ReviewedMigrationError, ReviewedMigrationRecovery,
     ReviewedMigrationSource, ReviewedMigrationStepDescriptor, ReviewedPlanBindings,
+    prepare_reviewed_migration_plan, validate_reviewed_migration_plan,
 };
 use crate::migration_plan::{
-    reviewed_artifact_kind, ReviewedArtifactKind, ValidatedReviewedMigrationPlan,
+    ReviewedArtifactKind, ValidatedReviewedMigrationPlan, reviewed_artifact_kind,
 };
 use crate::model::CompiledStatisticalDataset;
 use crate::model::{
@@ -54,7 +55,6 @@ use crate::model::{
     CompiledRouteInventory, REFERENCE_INDEX_PREFIX,
 };
 use crate::physical_names::PhysicalNameInventory;
-use crate::CompiledRegistry;
 
 pub const PACKAGE_API_VERSION: &str = "id.registrystack.org/formats/breg/package/v2";
 pub const PACKAGE_KIND: &str = "BRegPackage";
@@ -65,8 +65,7 @@ pub const RETIRED_PACKAGE_API_VERSION: &str = "registry.registrystack.org/packag
 pub const COMPILER_ID: &str = "breg";
 pub const FIXTURE_JOURNEYS_PATH: &str = "tests/journeys.yaml";
 pub const MAX_PACKAGE_SOURCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
-pub const MAX_RHAI_PLANNER_SOURCE_BYTES: u64 =
-    crate::change_request::MAX_CHANGE_REQUEST_PLANNER_SOURCE_BYTES as u64;
+pub const MAX_RHAI_PLANNER_SOURCE_BYTES: u64 = crate::plan::MAX_PLAN_SOURCE_BYTES as u64;
 pub const MAX_RHAI_PLANNER_PATH_BYTES: usize = 256;
 
 const MANIFEST_PATH: &str = "package.json";
@@ -304,7 +303,6 @@ pub enum CompiledRegistryChangeCode {
     EntityAccessLogChanged,
     EntityGeoJsonChanged,
     EntityTemporalChanged,
-    ChangeRequestContractChanged,
     FieldAddedOptional,
     FieldAddedRequired,
     FieldRemoved,
@@ -343,8 +341,6 @@ pub enum CompiledRegistryChangeCode {
     ActionAdded,
     ActionRemoved,
     ActionChanged,
-    ActionVocabularyCodesAdded,
-    ActionTargetFieldsWidened,
     ConsentRecordChanged,
     RecipientOrganizationAdded,
     RecipientOrganizationRemoved,
@@ -374,7 +370,6 @@ pub struct CompiledRegistryChangeTarget {
 pub enum CompiledRegistryChangeTargetKind {
     Registry,
     Entity,
-    ChangeRequest,
     Field,
     DerivedRelation,
     Constraint,
@@ -1234,26 +1229,6 @@ fn compare_entities(
                 ),
             );
         }
-        if previous_entity
-            .change_request
-            .as_ref()
-            .map(|request| request.contract_fingerprint.as_str())
-            != candidate_entity
-                .change_request
-                .as_ref()
-                .map(|request| request.contract_fingerprint.as_str())
-        {
-            push_change(
-                changes,
-                CompiledRegistryChangeClass::AccessOrDisclosureChange,
-                CompiledRegistryChangeCode::ChangeRequestContractChanged,
-                target(
-                    CompiledRegistryChangeTargetKind::ChangeRequest,
-                    Some(entity_id.as_str()),
-                    None,
-                ),
-            );
-        }
         compare_fields(entity_id, previous_entity, candidate_entity, changes);
         compare_derived_relations(entity_id, previous_entity, candidate_entity, changes);
         compare_map(
@@ -1707,38 +1682,11 @@ fn compare_actions(
         .collect::<BTreeMap<_, _>>();
     for (id, before) in &previous_actions {
         let (class, code) = match candidate_actions.get(id) {
-            Some(after) if before.contract_fingerprint == after.contract_fingerprint => continue,
-            // Every request the previous contract accepted keeps its meaning;
-            // the action only accepts codes new to its vocabularies.
             Some(after)
-                if crate::immediate_actions::contract_only_widens(
-                    (before, &previous.actions.input_vocabularies),
-                    &previous.entities,
-                    (after, &candidate.actions.input_vocabularies),
-                    &candidate.entities,
-                    FieldTypeSource::keeps_vocabulary_codes_of,
-                ) =>
+                if serde_json::to_value(before).expect("compiled Action serializes")
+                    == serde_json::to_value(after).expect("compiled Action serializes") =>
             {
-                (
-                    CompiledRegistryChangeClass::CompatibleAdditive,
-                    CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
-                )
-            }
-            // A target field also raised its `text` length limit, which every
-            // stored and requested value already meets.
-            Some(after)
-                if crate::immediate_actions::contract_only_widens(
-                    (before, &previous.actions.input_vocabularies),
-                    &previous.entities,
-                    (after, &candidate.actions.input_vocabularies),
-                    &candidate.entities,
-                    FieldTypeSource::admits_every_value_of,
-                ) =>
-            {
-                (
-                    CompiledRegistryChangeClass::CompatibleAdditive,
-                    CompiledRegistryChangeCode::ActionTargetFieldsWidened,
-                )
+                continue;
             }
             Some(_) => (
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
@@ -2702,9 +2650,7 @@ fn reviewed_successor_created_policies(table: &DdlTable) -> BTreeMap<&str, &DdlP
         .filter(|policy| {
             policy.name.starts_with("registry_action_rls_")
                 || policy.name.starts_with("registry_action_link_rls_")
-                || policy.name.starts_with("registry_cr_rls_")
-                || policy.name.starts_with("registry_cr_presence_rls_")
-                || policy.name.starts_with("registry_cr_action_rls_")
+                || policy.name.starts_with("registry_proposal_")
         })
         .map(|policy| (policy.name.as_str(), policy))
         .collect()
@@ -3134,13 +3080,6 @@ fn package_compiler_assets(
     Ok(assets)
 }
 
-/// The owned asset path a handler declares: its script for Rhai, its module
-/// for WASM. None means the handler declares no owned asset, a kind the
-/// compiler refuses before this package is rederived.
-fn handler_source_path(handler: &crate::contract::ActionHandlerSource) -> Option<&str> {
-    handler.script().or_else(|| handler.module())
-}
-
 /// The owned asset path a local hook handler declares: its script for `rhai`,
 /// its module for `wasm`. A `url` handler holds no program and so owns no
 /// asset.
@@ -3159,21 +3098,9 @@ fn validate_declared_package_assets(
     module_sources: &[PackageModuleSource],
 ) -> Result<()> {
     let declared_project = project
-        .entities
+        .functions
         .iter()
-        .filter_map(|entity| {
-            entity
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.as_str())
-        })
-        .chain(
-            project
-                .actions
-                .iter()
-                .filter_map(|action| action.handler.as_ref().and_then(handler_source_path)),
-        )
+        .map(|function| function.source.as_str())
         .chain(
             project
                 .evidence_providers
@@ -3205,33 +3132,17 @@ fn validate_declared_package_assets(
             .get(module.id.as_str())
             .ok_or(PackageError::Derivation)?;
         let mut declared = module
-            .actions
+            .functions
             .iter()
-            .filter_map(|action| action.handler.as_ref().and_then(handler_source_path))
+            .map(|function| function.source.as_str())
             .collect::<BTreeSet<_>>();
         for entity in &module.entities {
             declared.extend(entity.derived.iter().map(|derived| derived.sql.as_str()));
             declared.extend(entity.hooks.iter().filter_map(hook_handler_source_path));
-            if let Some(script) = entity
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.as_str())
-            {
-                declared.insert(script);
-            }
         }
         for extension in &module.extend_entities {
             declared.extend(extension.derived.iter().map(|derived| derived.sql.as_str()));
             declared.extend(extension.hooks.iter().filter_map(hook_handler_source_path));
-            if let Some(script) = extension
-                .change_request
-                .as_ref()
-                .and_then(|request| request.planner.as_ref())
-                .map(|planner| planner.script.as_str())
-            {
-                declared.insert(script);
-            }
         }
         let supplied = source
             .assets
@@ -4130,11 +4041,10 @@ fn package_predecessor_governed_model(
 
     let registry_id = required_str(&value, "registryId")?.to_owned();
     let version = required_str(&value, "version")?.to_owned();
-    let mut entities = value
-        .get("entities")
+    let entities = value
+        .get("recordTypes")
         .cloned()
         .ok_or(PackageError::Derivation)?;
-    restore_effective_model_planner_origins(&mut entities).ok_or(PackageError::Derivation)?;
     let entities: BTreeMap<String, CompiledEntity> =
         serde_json::from_value(entities).map_err(|_| PackageError::Derivation)?;
     let statistical_datasets: BTreeMap<String, CompiledStatisticalDataset> = value

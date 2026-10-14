@@ -2,16 +2,16 @@
 //! Input-only immediate action evaluation inside the shared bounded Rhai kernel.
 
 use crate::{
-    contract::{FieldTypeSource, ACTION_HANDLER_ABI_V1},
-    data::{validate_field_value, FieldValue},
+    contract::{ACTION_PLAN_ABI_V1, FieldTypeSource},
+    data::{FieldValue, validate_field_value},
     model::*,
-    rhai_planner::{self, ChangeRequestPlannerError},
+    rhai_planner::{self, PlanError},
 };
 #[cfg(feature = "postgres-test")]
 use std::collections::BTreeMap;
 
 use registry_platform_script::rhai as platform;
-use rhai::{Dynamic, Map, AST};
+use rhai::{AST, Dynamic, Map};
 use serde_json::{Map as JsonMap, Value};
 use std::{collections::BTreeSet, time::Instant};
 
@@ -61,15 +61,15 @@ impl std::fmt::Display for ActionHandlerError {
     }
 }
 impl std::error::Error for ActionHandlerError {}
-impl From<ChangeRequestPlannerError> for ActionHandlerError {
-    fn from(error: ChangeRequestPlannerError) -> Self {
+impl From<PlanError> for ActionHandlerError {
+    fn from(error: PlanError) -> Self {
         match error {
-            ChangeRequestPlannerError::Source => Self::Source,
-            ChangeRequestPlannerError::Entrypoint => Self::Entrypoint,
-            ChangeRequestPlannerError::Execution => Self::Execution,
-            ChangeRequestPlannerError::Ceiling => Self::Ceiling,
-            ChangeRequestPlannerError::Resource => Self::Resource,
-            ChangeRequestPlannerError::Deadline => Self::Deadline,
+            PlanError::Source => Self::Source,
+            PlanError::Entrypoint => Self::Entrypoint,
+            PlanError::Execution => Self::Execution,
+            PlanError::Ceiling => Self::Ceiling,
+            PlanError::Resource => Self::Resource,
+            PlanError::Deadline => Self::Deadline,
             _ => Self::Result,
         }
     }
@@ -99,7 +99,7 @@ impl ActionHandlerDiagnostic {
         }
     }
 
-    pub(crate) fn at_slot(mut self, slot: &CompiledActionHandlerWrite) -> Self {
+    pub(crate) fn at_slot(mut self, slot: &CompiledPlanFunctionWrite) -> Self {
         self.slot = Some(slot.id.clone());
         self
     }
@@ -117,15 +117,15 @@ impl From<ActionHandlerError> for ActionHandlerDiagnostic {
     }
 }
 
-impl From<ChangeRequestPlannerError> for ActionHandlerDiagnostic {
-    fn from(kind: ChangeRequestPlannerError) -> Self {
+impl From<PlanError> for ActionHandlerDiagnostic {
+    fn from(kind: PlanError) -> Self {
         ActionHandlerError::from(kind).into()
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ActionHandlerOutcome {
-    Effects(Vec<CompiledActionEffect>),
+    Effects(Vec<CompiledPlanEffect>),
     Refusal(ActionHandlerRefusal),
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,18 +138,16 @@ pub struct ActionHandlerRefusal {
 /// Compile handler source as an action that declares Evidence would: a
 /// well-formed `evidence::resolve` call is admitted.
 pub fn compile_source(source: &str) -> Result<AST, ActionHandlerError> {
-    compile_source_for_action(source, true)
+    compile_source_for_function(source, "plan", true)
 }
 
-/// Compile handler source for an action. `evidence_declared` states whether
-/// the action declares Evidence capabilities, which is what exposes the
-/// `evidence` module to its handler.
-pub(crate) fn compile_source_for_action(
+pub(crate) fn compile_source_for_function(
     source: &str,
+    entrypoint: &str,
     evidence_declared: bool,
 ) -> Result<AST, ActionHandlerError> {
     let ast =
-        rhai_planner::compile_entrypoint(source, "handle").map_err(ActionHandlerError::from)?;
+        rhai_planner::compile_entrypoint(source, entrypoint).map_err(ActionHandlerError::from)?;
     // An invalid helper arity would otherwise be a catchable language dispatch
     // error before the host can poison the evaluation. Reject it at compilation,
     // along with every Evidence call in an action that declares no Evidence.
@@ -283,7 +281,7 @@ fn validate_inputs(
                     slot: None,
                     field: Some(input.id.clone()),
                     message: "Supply a non-null value for this required input.",
-                })
+                });
             }
             Some(value) if !value.is_null() => {
                 if let Err(message) = validate_input_value(value, &input.field_type) {
@@ -309,6 +307,26 @@ pub(crate) fn evaluate_admitted_action_detailed(
     inputs: &JsonMap<String, Value>,
     deadline: Instant,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    evaluate_with_engine(action, inputs, deadline, None, None)
+}
+
+/// Both Action modes evaluate the same plan. Fixed plans never run a function;
+/// Proposal submission freezes this exact result and application never replans.
+#[cfg(feature = "runtime")]
+pub(crate) fn evaluate_plan_detailed(
+    action: &CompiledAction,
+    inputs: &JsonMap<String, Value>,
+    deadline: Instant,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    validate_inputs(action, inputs)?;
+    if Instant::now() >= deadline {
+        return Err(ActionHandlerError::Deadline.into());
+    }
+    if action.handler.is_none() {
+        return crate::plan::order_plan_effects(action.effects.clone())
+            .map(ActionHandlerOutcome::Effects)
+            .map_err(|_| ActionHandlerError::Result.into());
+    }
     evaluate_with_engine(action, inputs, deadline, None, None)
 }
 
@@ -349,12 +367,13 @@ pub(crate) fn evaluate_with_engine(
     // through the platform executor in builds that carry the `wasm`
     // feature (a build without it refuses the handler at admission above).
     #[cfg(feature = "wasm")]
-    if handler.kind == crate::model::CompiledActionHandlerKind::Wasm {
+    if handler.kind == crate::model::CompiledPlanFunctionKind::Wasm {
         return crate::wasm_runtime::evaluate_wasm_handler(action, handler, inputs, deadline);
     }
     let source =
         std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
-    let ast = compile_source_for_action(source, !action.evidence.is_empty())?;
+    let ast =
+        compile_source_for_function(source, &handler.entrypoint, !action.evidence.is_empty())?;
     execute_compiled_handler(
         action,
         handler,
@@ -373,7 +392,7 @@ fn admit_handler<'a>(
     inputs: &JsonMap<String, Value>,
     deadline: Instant,
     resolver: Option<&EvidenceResolver>,
-) -> Result<&'a CompiledActionHandler, ActionHandlerDiagnostic> {
+) -> Result<&'a CompiledPlanFunction, ActionHandlerDiagnostic> {
     if Instant::now() >= deadline {
         return Err(ActionHandlerError::Deadline.into());
     }
@@ -391,10 +410,10 @@ fn admit_handler<'a>(
         ));
     };
     match handler.kind {
-        crate::model::CompiledActionHandlerKind::Rhai => {
+        crate::model::CompiledPlanFunctionKind::Rhai => {
             // An action that declares Evidence is evaluated only with a
             // resolver, so its handler never runs on the input-only path.
-            if handler.abi != ACTION_HANDLER_ABI_V1
+            if handler.abi != ACTION_PLAN_ABI_V1
                 || (!action.evidence.is_empty() && resolver.is_none())
             {
                 return Err(ActionHandlerError::Source.into());
@@ -404,8 +423,8 @@ fn admit_handler<'a>(
         // handlers. Evidence stays Rhai-only in this release, and a
         // resolver never reaches a WASM handler.
         #[cfg(feature = "wasm")]
-        crate::model::CompiledActionHandlerKind::Wasm
-            if handler.abi == ACTION_HANDLER_ABI_V1 && resolver.is_none() => {}
+        crate::model::CompiledPlanFunctionKind::Wasm
+            if handler.abi == ACTION_PLAN_ABI_V1 && resolver.is_none() => {}
         _ => {
             // A handler tagged with a backend this runtime does not execute
             // is never interpreted as another backend's source.
@@ -414,6 +433,13 @@ fn admit_handler<'a>(
                 "Evaluate a compiled Rhai handler; this runtime does not execute the declared handler backend.",
             ));
         }
+    }
+    if handler
+        .limits
+        .as_ref()
+        .is_some_and(|limits| handler.script_bytes.len() > limits.maximum_source_bytes as usize)
+    {
+        return Err(ActionHandlerError::Source.into());
     }
     Ok(handler)
 }
@@ -424,17 +450,22 @@ fn admit_handler<'a>(
 /// benchmark variant.
 fn execute_compiled_handler(
     action: &CompiledAction,
-    handler: &CompiledActionHandler,
+    handler: &CompiledPlanFunction,
     ast: &AST,
     inputs: &JsonMap<String, Value>,
     deadline: Instant,
     resolver: Option<EvidenceResolver>,
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    let selected_inputs = handler
+        .bound_inputs
+        .iter()
+        .filter_map(|id| inputs.get(id).map(|value| (id.clone(), value.clone())))
+        .collect::<JsonMap<String, Value>>();
     let mut ctx = Map::new();
     ctx.insert(
         "inputs".into(),
-        rhai_planner::json_to_dynamic(&Value::Object(inputs.clone()), 0)?,
+        rhai_planner::json_to_dynamic(&Value::Object(selected_inputs), 0)?,
     );
     #[cfg(feature = "postgres-test")]
     let expire_during_execution = {
@@ -446,7 +477,7 @@ fn execute_compiled_handler(
         }
         std::mem::take(&mut entry.2)
     };
-    let mut engine = rhai_planner::engine(Some(deadline));
+    let mut engine = rhai_planner::function_engine(deadline, handler.limits.as_ref());
     let poisoned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let failed_capability = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
     let dependency_diagnostic = || {
@@ -544,8 +575,9 @@ fn execute_compiled_handler(
             (Instant::now() >= deadline).then_some(Dynamic::UNIT)
         });
     }
-    let result = platform::call_with_fresh_scope(&engine, ast, "handle", (Dynamic::from(ctx),))
-        .map_err(|error| {
+    let result =
+        platform::call_with_fresh_scope(&engine, ast, &handler.entrypoint, (Dynamic::from(ctx),))
+            .map_err(|error| {
             let kind = if Instant::now() >= deadline
                 || cancellation
                     .as_ref()
@@ -582,9 +614,17 @@ fn execute_compiled_handler(
     // The decode recurses to build the document, so the result is bounded
     // while it is still a Rhai value; the decoded document then passes the
     // shared bound every backend's outcome passes.
-    crate::action_outcome::bound_rhai_result(&result, action.maximum_snapshot_bytes)?;
+    let output_budget = handler
+        .limits
+        .as_ref()
+        .map_or(action.maximum_snapshot_bytes, |limits| {
+            action
+                .maximum_snapshot_bytes
+                .min(limits.maximum_output_bytes)
+        });
+    crate::action_outcome::bound_rhai_result(&result, output_budget)?;
     let document = crate::action_outcome::rhai_document(result);
-    crate::action_outcome::bound_document(&document, action.maximum_snapshot_bytes)?;
+    crate::action_outcome::bound_document(&document, output_budget)?;
     let proposed = crate::action_outcome::decode_document(document)?;
     let outcome = crate::action_outcome::validate_proposed_outcome(action, handler, proposed)?;
     if Instant::now() >= deadline {
@@ -608,6 +648,7 @@ fn execute_compiled_handler(
 #[cfg(test)]
 pub(crate) struct CachedActionHandlerProgram {
     abi: String,
+    entrypoint: String,
     evidence_declared: bool,
     script_bytes: Vec<u8>,
     ast: AST,
@@ -620,15 +661,16 @@ impl CachedActionHandlerProgram {
         let Some(handler) = &action.handler else {
             return Err(ActionHandlerError::Source);
         };
-        if handler.abi != ACTION_HANDLER_ABI_V1 {
+        if handler.abi != ACTION_PLAN_ABI_V1 {
             return Err(ActionHandlerError::Source);
         }
         let evidence_declared = !action.evidence.is_empty();
         let source =
             std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
-        let ast = compile_source_for_action(source, evidence_declared)?;
+        let ast = compile_source_for_function(source, &handler.entrypoint, evidence_declared)?;
         Ok(Self {
             abi: handler.abi.clone(),
+            entrypoint: handler.entrypoint.clone(),
             evidence_declared,
             script_bytes: handler.script_bytes.clone(),
             ast,
@@ -641,9 +683,10 @@ impl CachedActionHandlerProgram {
     fn bound_ast(
         &self,
         action: &CompiledAction,
-        handler: &CompiledActionHandler,
+        handler: &CompiledPlanFunction,
     ) -> Result<&AST, ActionHandlerError> {
         if self.abi != handler.abi
+            || self.entrypoint != handler.entrypoint
             || self.evidence_declared == action.evidence.is_empty()
             || self.script_bytes != handler.script_bytes
         {

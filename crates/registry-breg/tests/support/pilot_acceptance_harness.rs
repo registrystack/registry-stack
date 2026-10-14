@@ -3,31 +3,31 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderName, HeaderValue, Method, Request, Response};
-use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
+use registry_breg::CompiledRegistry;
+use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
 use registry_breg::contract::{
-    parse_module_yaml, parse_project_yaml, ModuleAssetSource, Operation, RegistryProject,
+    ModuleAssetSource, Operation, RegistryProject, parse_module_yaml, parse_project_yaml,
 };
 use registry_breg::package::{
-    load_package, prepare_package_with_project_assets, PackageBuildRequest, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
+    PackageSourceFile, load_package, prepare_package_with_project_assets,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
-    managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
+    ExpectedManagedCatalog, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema, managed_schema_fingerprint,
 };
-use registry_breg::startup::{prepare_with_connection_and_key_source_for_test, PreparedServer};
-use registry_breg::CompiledRegistry;
+use registry_breg::startup::{PreparedServer, prepare_with_connection_and_key_source_for_test};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::MockIdp;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tower::ServiceExt as _;
@@ -373,15 +373,9 @@ impl FixtureSources {
         let mut parsed_modules = Vec::new();
         let mut module_assets = Vec::new();
         let project_planners = project
-            .entities
+            .functions
             .iter()
-            .filter_map(|entity| {
-                entity
-                    .change_request
-                    .as_ref()
-                    .and_then(|request| request.planner.as_ref())
-                    .map(|planner| planner.script.clone())
-            })
+            .map(|function| function.source.clone())
             .collect::<BTreeSet<_>>();
         for asset_path in project_planners {
             module_assets.push(ModuleAssetSource {
@@ -593,14 +587,19 @@ fn write_runtime_config(
     write_secret(&secrets.join("audit-key"), &[0x6b; 32]);
     write_secret(&secrets.join("cursor-key"), &[0x43; 32]);
     let review_authorities = registry
-        .entities()
-        .values()
-        .filter_map(|entity| entity.change_request.as_ref())
-        .filter_map(|request| match &request.review {
-            registry_breg::model::CompiledChangeRequestReview::Required(requirement) => {
-                Some(requirement.authority.as_str())
+        .actions()
+        .actions
+        .iter()
+        .filter_map(|action| match &action.execution {
+            registry_breg::model::CompiledActionExecution::Proposal { proposal } => {
+                match &proposal.review {
+                    registry_breg::model::CompiledProposalReview::Required {
+                        authority, ..
+                    } => Some(authority.as_str()),
+                    registry_breg::model::CompiledProposalReview::None => None,
+                }
             }
-            registry_breg::model::CompiledChangeRequestReview::None => None,
+            registry_breg::model::CompiledActionExecution::Immediate => None,
         })
         .collect::<BTreeSet<_>>();
     let review_authority_config = if review_authorities.is_empty() {

@@ -360,6 +360,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -2750,6 +2751,7 @@ dependencies = [
  "registry-platform-hooks",
  "registry-platform-script",
  "registry-platform-yaml",
+ "registry-review-protocol",
  "rhai",
  "serde",
  "serde_json",
@@ -2970,6 +2972,19 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "registry-review-protocol"
+version = "0.42.0"
+dependencies = [
+ "chrono",
+ "registry-platform-canonical-json",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
@@ -4003,6 +4018,7 @@ checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

@@ -13,24 +13,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, Response, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
     ClaimContext, ExpectedManagedCatalog, PostgresRecordReadService, ReadFaultPoint,
-    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext, begin_record_transaction,
+    initialize_registry_state_for_catalog_test, install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_postgres::Transaction;
 use tower::Service as _;
 use zeroize::Zeroizing;
@@ -370,9 +370,11 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
         governed_names["data"]["domainData"]["jurisdiction"],
         "zone-a"
     );
-    assert!(governed_names["data"]["domainData"]
-        .get("internal-code")
-        .is_none());
+    assert!(
+        governed_names["data"]["domainData"]
+            .get("internal-code")
+            .is_none()
+    );
 
     let decimal = send(
         &app,
@@ -582,10 +584,12 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     )
     .await;
     assert_eq!(tombstoned.status(), StatusCode::NOT_FOUND);
-    assert!(!body_json(tombstoned)
-        .await
-        .to_string()
-        .contains("tombstoned-label"));
+    assert!(
+        !body_json(tombstoned)
+            .await
+            .to_string()
+            .contains("tombstoned-label")
+    );
 
     let uppercase = send(
         &app,
@@ -643,10 +647,12 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     )
     .await;
     assert_eq!(etag_faulted.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(!body_json(etag_faulted)
-        .await
-        .to_string()
-        .contains("label-001"));
+    assert!(
+        !body_json(etag_faulted)
+            .await
+            .to_string()
+            .contains("label-001")
+    );
     assert_eq!(audit_count(&database).await, before_etag_fault + 2);
 
     assert_read_audit_is_ordered_paired_and_minimized(&database, &compiled);
@@ -774,9 +780,11 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     assert_eq!(current["items"][0]["domainData"]["label"], "lease-a");
     assert!(current["items"][0]["domainData"]["validFrom"].is_string());
     assert_eq!(current["items"][0]["domainData"]["validTo"], Value::Null);
-    assert!(current["items"][0]["domainData"]
-        .get("valid-from")
-        .is_none());
+    assert!(
+        current["items"][0]["domainData"]
+            .get("valid-from")
+            .is_none()
+    );
     assert!(current["items"][0]["domainData"].get("valid-to").is_none());
     assert!(!current.to_string().contains(TEMPORAL_OTHER_BOUNDARY_RECORD));
 
@@ -1850,11 +1858,11 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 
 fn compiled_registry_with_composite_lookup() -> registry_breg::CompiledRegistry {
     let mut source: Value = serde_json::from_str(&registry_source()).expect("read fixture is JSON");
-    source["entities"][0]["selectorProfiles"]
+    source["recordTypes"][0]["selectorProfiles"]
         .as_array_mut()
         .expect("widget has selector profiles")
         .push(json!({"id": "by-amount-and-label", "fields": ["amount", "label"]}));
-    source["accessProfiles"][0]["permissions"]["entities"][0]["lookups"]
+    source["accessProfiles"][0]["permissions"]["records"][0]["lookups"]
         .as_array_mut()
         .expect("operator has widget lookups")
         .push(json!({"selector": "by-amount-and-label", "valueOrigin": "request"}));
@@ -1895,11 +1903,11 @@ fn compile_registry_source(source: &str) -> registry_breg::CompiledRegistry {
 }
 
 fn registry_source() -> String {
-    r#"{
+    r#"{"datasets":[{"id": "test-dataset"}],
 	          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
 	          "kind":"BRegProject",
 	          "project":{"id":"read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"widget",
             "primaryDataset":"test-dataset",
             "route":"widgets",
@@ -1947,8 +1955,8 @@ fn registry_source() -> String {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],
             "requiredPurposes":["case-management","audit-review"],
-            "permissions":{"entities":[{
-              "entity":"widget",
+            "permissions":{"records":[{
+              "recordType":"widget",
               "operations":["create","get","lookup","list","tombstone"],
               "readableFields":["label","secret","amount","jurisdiction","ordinal","rank","internal-code"],
               "writableFields":["label","secret","amount","jurisdiction","ordinal","rank"],
@@ -1958,7 +1966,7 @@ fn registry_source() -> String {
               "allowCount":true,
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             },{
-              "entity":"assignment",
+              "recordType":"assignment",
               "operations":["create","get","list"],
               "readableFields":["label","jurisdiction","valid-from","valid-to"],
               "writableFields":["label","jurisdiction","valid-from","valid-to"],
@@ -1971,8 +1979,8 @@ fn registry_source() -> String {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"widget",
+            "permissions":{"records":[{
+              "recordType":"widget",
               "operations":["get","list"],
               "readableFields":["label","jurisdiction","internal-code"],
               "filterableFields":["label"],

@@ -24,14 +24,14 @@ impl ReviewFixture {
         let inspected =
             registry_breg::package::inspect_package_integrity(&baseline.package).unwrap();
         let mut module: Value = serde_json::from_slice(&package_module_bytes()).unwrap();
-        module["entities"][0]["fields"]
+        module["recordTypes"][0]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({
                 "id":"label", "type":"string", "maximumLength":32, "classification":"internal"
             }));
-        module["entities"][0]["accessProfiles"][0]["readableFields"] = json!(["code", "label"]);
-        module["entities"][0]["accessProfiles"][0]["filterableFields"] = json!(["label"]);
+        module["recordTypes"][0]["accessProfiles"][0]["readableFields"] = json!(["code", "label"]);
+        module["recordTypes"][0]["accessProfiles"][0]["filterableFields"] = json!(["label"]);
         let module_bytes = canonicalize_json(&module).unwrap();
         let module = parse_module_json(&module_bytes).unwrap();
         let project_bytes = package_project_bytes(&module_digest(&module));
@@ -761,7 +761,7 @@ fn package_successor(baseline: &RuntimePackageFixture, project: &TestProject) ->
 fn a_successor_needing_review_names_every_change_and_its_target() {
     let (baseline, project) = successor_project(
         |module| {
-            module["entities"][0]["fields"]
+            module["recordTypes"][0]["fields"]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({

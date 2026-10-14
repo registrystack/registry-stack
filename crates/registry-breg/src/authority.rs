@@ -98,35 +98,6 @@ pub fn authority_inventory(
                     )?;
                 }
             }
-            for id in &profile.submitter_targets {
-                let target = target_entity(registry, id)?;
-                let grant = target
-                    .access_profiles
-                    .get(&profile.id)
-                    .ok_or(AuthorityInventoryError::TargetEntityNotCompiled)?;
-                inventory.boundaries(
-                    target,
-                    &profile.id,
-                    &format!("{surface}/submitterTargets/{id}"),
-                    &grant.row_boundaries,
-                )?;
-            }
-            for target in &profile.apply_targets {
-                inventory.boundaries(
-                    target_entity(registry, &target.entity)?,
-                    &profile.id,
-                    &format!("{surface}/applyTargets/{}", target.entity),
-                    &target.row_boundaries,
-                )?;
-            }
-            for presence in &profile.request_presence {
-                inventory.boundaries(
-                    target_entity(registry, &presence.request_type)?,
-                    &profile.id,
-                    &format!("{surface}/requestPresence/{}", presence.request_type),
-                    &presence.row_boundaries,
-                )?;
-            }
         }
     }
     for action in &registry.actions().actions {
@@ -142,6 +113,22 @@ pub fn authority_inventory(
                     ),
                     &target.row_boundaries,
                 )?;
+            }
+        }
+        if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+            for grant in &proposal.permissions {
+                inventory.profile(grant.principal_claim.as_deref(), &grant.required_purposes)?;
+                for target in &grant.targets {
+                    inventory.boundaries(
+                        target_entity(registry, &target.entity_id)?,
+                        &grant.profile_id,
+                        &format!(
+                            "actions/{}/proposals/profiles/{}/targets/{}",
+                            action.id, grant.profile_id, target.entity_id
+                        ),
+                        &target.row_boundaries,
+                    )?;
+                }
             }
         }
     }

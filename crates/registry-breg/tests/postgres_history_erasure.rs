@@ -12,8 +12,8 @@ mod history_schema {
 mod model {
     pub use registry_breg::model::*;
 }
-mod change_request {
-    pub use registry_breg::change_request::MAX_CHANGE_REQUEST_FIELD_MUTATIONS;
+mod plan {
+    pub use registry_breg::plan::MAX_PLAN_FIELD_MUTATIONS;
 }
 #[path = "../src/history_store.rs"]
 #[allow(dead_code)]
@@ -32,6 +32,9 @@ mod postgres {
     }
 
     impl ActionClaimContext {
+        pub(crate) fn task_grant(&self) -> Option<&registry_breg::task_grant::TaskGrantBinding> {
+            None
+        }
         pub(crate) fn action_id(&self) -> &str {
             &self.action_id
         }
@@ -72,32 +75,32 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::instrument::WithSubscriber;
 use uuid::Uuid;
 
 use history_commit::{
-    allocate_revision_commit, install_empty_history_baseline, resolve_snapshot_reference,
-    CommitAllocation, HistoryCommitError, RevisionCommitMember,
+    CommitAllocation, HistoryCommitError, RevisionCommitMember, allocate_revision_commit,
+    install_empty_history_baseline, resolve_snapshot_reference,
 };
 use history_context::{ChangeContext, CommitOrigin};
 use history_reference::SnapshotReference;
 use history_store::retain_descriptor;
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_project_json, FieldTypeSource};
+use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::contract::{FieldTypeSource, parse_project_json};
 use registry_breg::field_encryption_backfill::{
-    erase_field_encryption_history, FieldEncryptionHistoryErasureError,
-    FieldEncryptionHistoryErasureRequest, FIELD_ENCRYPTION_AUDIT_SCHEMA,
+    FIELD_ENCRYPTION_AUDIT_SCHEMA, FieldEncryptionHistoryErasureError,
+    FieldEncryptionHistoryErasureRequest, erase_field_encryption_history,
 };
 use registry_breg::history_erasure::{
-    erase_record_history, HistoryErasureError, HistoryErasureRequest, HistoryErasureTimeouts,
-    RecordHistoryErasureTarget, HISTORY_ERASURE_AUDIT_SCHEMA,
+    HISTORY_ERASURE_AUDIT_SCHEMA, HistoryErasureError, HistoryErasureRequest,
+    HistoryErasureTimeouts, RecordHistoryErasureTarget, erase_record_history,
 };
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
-    install_compiled_schema, managed_schema_fingerprint, test_package_digest,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, install_compiled_schema,
+    managed_schema_fingerprint, test_package_digest,
 };
 use registry_breg_client::{BRegProblemCode, BRegRecordOptions, BRegSnapshotListRequest};
 
@@ -542,7 +545,7 @@ async fn erasure_preserves_change_request_target_and_proposal_payloads() {
                 ],
             )
             .await
-            .expect("change request proposal inserts");
+            .expect("change Proposal inserts");
         transaction
             .execute(
                 "INSERT INTO registry_internal.registry_request_targets
@@ -584,8 +587,8 @@ async fn erasure_preserves_change_request_target_and_proposal_payloads() {
     .expect("targeted erasure succeeds");
 
     assert_eq!(outcome.erased_revision_count, 1);
-    assert_eq!(outcome.scrubbed_request_target_count, 0);
-    assert_eq!(outcome.scrubbed_request_proposal_count, 0);
+    assert_eq!(outcome.scrubbed_proposal_target_count, 0);
+    assert_eq!(outcome.scrubbed_proposal_submission_count, 0);
 
     let state = migration
         .query_one(
@@ -990,8 +993,8 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
     .await
     .expect("field-encryption erasure handles a request with no created revision");
     assert_eq!(outcome.erased_record_count, 0);
-    assert_eq!(outcome.scrubbed_request_target_count, 1);
-    assert_eq!(outcome.scrubbed_request_proposal_count, 2);
+    assert_eq!(outcome.scrubbed_proposal_target_count, 1);
+    assert_eq!(outcome.scrubbed_proposal_submission_count, 2);
 
     let erased = migration
         .query_one(
@@ -1462,10 +1465,10 @@ async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
                  COALESCE(sum(erased_revision_count) FILTER (
                      WHERE progress_kind = 'record-erasure'
                  ), 0)::bigint,
-                 COALESCE(sum(scrubbed_request_target_count) FILTER (
+                 COALESCE(sum(scrubbed_proposal_target_count) FILTER (
                      WHERE progress_kind = 'request-scrub'
                  ), 0)::bigint,
-                 COALESCE(sum(scrubbed_request_proposal_count) FILTER (
+                 COALESCE(sum(scrubbed_proposal_submission_count) FILTER (
                      WHERE progress_kind = 'request-scrub'
                  ), 0)::bigint,
                  count(*) FILTER (WHERE progress_kind = 'terminal')::bigint
@@ -2359,8 +2362,8 @@ async fn insert_erase_field_flip(transaction: &tokio_postgres::Transaction<'_>, 
                   history_commit_position,
                   sealed_row_count, sealed_journal_row_count,
                   accepted_plaintext_journal_row_count,
-                  accepted_request_target_row_count,
-                  accepted_request_proposal_row_count,
+                  accepted_proposal_target_row_count,
+                  accepted_proposal_submission_row_count,
                   accepted_idempotency_row_count, accepted_outbox_row_count)
              VALUES ($1, $2, $3, 'erase-and-rebaseline', $4, 0, 0, 0, 0, 0, 0, 0)",
             &[
@@ -2638,11 +2641,11 @@ impl registry_breg::api::ReadinessProbe for SnapshotReady {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"history-erasure-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"membership",
             "primaryDataset":"test-dataset",
             "route":"memberships",
@@ -2664,8 +2667,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
             "requiredPurposes":["operations"],
-            "permissions":{"entities":[{
-              "entity":"membership",
+            "permissions":{"records":[{
+              "recordType":"membership",
               "operations":["create","get","list","patch","snapshot"],
               "readableFields":["person","household","details","valid-from","valid-to"],
               "writableFields":["person","household","details","valid-from","valid-to"],

@@ -39,11 +39,11 @@ fn review_recovery_commands_share_one_value_free_refusal() {
             OsStr::new(operation),
             OsStr::new("--runtime-config"),
             relative.as_os_str(),
-            OsStr::new("--request-entity"),
+            OsStr::new("--action-id"),
             OsStr::new(REQUEST_VALUE_CANARY),
-            OsStr::new("--request-id"),
+            OsStr::new("--proposal-id"),
             OsStr::new("00000000-0000-4000-8000-000000000001"),
-            OsStr::new("--proposal-version"),
+            OsStr::new("--submission-version"),
             OsStr::new("1"),
         ]);
         assert_eq!(status, 1);
@@ -76,8 +76,8 @@ fn review_recovery_help_describes_the_exact_operator_contract() {
         assert_eq!(status, 0);
         assert!(stderr.is_empty());
         assert!(stdout.contains("--runtime-config <ABSOLUTE_FILE>"));
-        assert!(stdout.contains("--request-entity <ENTITY>"));
-        assert!(stdout.contains("--request-id <UUID>"));
-        assert!(stdout.contains("--proposal-version <VERSION>"));
+        assert!(stdout.contains("--action-id <ACTION>"));
+        assert!(stdout.contains("--proposal-id <UUID>"));
+        assert!(stdout.contains("--submission-version <VERSION>"));
     }
 }

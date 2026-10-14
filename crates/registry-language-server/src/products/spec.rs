@@ -48,6 +48,12 @@ pub(super) enum Scope {
         field: &'static str,
     },
     Composite(&'static [(usize, &'static str)]),
+    /// Action-local inputs, effects, attachments, and review context fields.
+    BregAction,
+    /// The record type targeted by a fixed effect or function write ceiling.
+    BregTarget,
+    /// The record type referenced by an Action input named by this field.
+    BregInputTarget(&'static str),
     /// Scope declarations and references to the same authored document.
     Document,
 }

@@ -1,0 +1,73 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/module/v1alpha1",
+  "kind": "BRegModule",
+  "id": "business-establishment-summary",
+  "version": "0.1.0",
+  "dependencies": [
+    "business-establishments-core"
+  ],
+  "extendRecordTypes": [
+    {
+      "fields": [
+        {
+          "id": "operating-status",
+          "type": "vocabulary-code",
+          "vocabulary": "operating-status",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "preferred-language",
+          "type": "vocabulary-code",
+          "vocabulary": "preferred-language",
+          "required": false,
+          "classification": "restricted"
+        }
+      ],
+      "recordType": "establishment"
+    },
+    {
+      "derived": [
+        {
+          "id": "establishment-summary",
+          "sql": "sql/establishment-summary.sql",
+          "key": "id",
+          "execution": "live",
+          "fields": [
+            {
+              "id": "head-office-count",
+              "type": "int64",
+              "classification": "restricted"
+            },
+            {
+              "id": "branch-count",
+              "type": "int64",
+              "classification": "restricted"
+            },
+            {
+              "id": "production-site-count",
+              "type": "int64",
+              "classification": "restricted"
+            },
+            {
+              "id": "suspended-site-count",
+              "type": "int64",
+              "classification": "restricted"
+            },
+            {
+              "id": "has-head-office",
+              "type": "boolean",
+              "classification": "restricted"
+            },
+            {
+              "id": "has-production-site",
+              "type": "boolean",
+              "classification": "restricted"
+            }
+          ]
+        }
+      ],
+      "recordType": "business"
+    }
+  ]
+}

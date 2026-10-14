@@ -4,7 +4,7 @@ journeys:
   - id: widget-lifecycle
     steps:
       - id: create-widget
-        entity: widget
+        recordType: widget
         accessProfile: operator
         claims:
           principal: fixture-operator
@@ -19,7 +19,7 @@ journeys:
           fields: {jurisdiction: zone-a, label: first, note: initial, quantity: 1}
         capture: first-widget
       - id: get-widget
-        entity: widget
+        recordType: widget
         accessProfile: operator
         claims:
           principal: fixture-operator
@@ -31,7 +31,7 @@ journeys:
           status: 200
           fields: {jurisdiction: zone-a, label: first, note: initial, quantity: 1}
       - id: list-widgets
-        entity: widget
+        recordType: widget
         accessProfile: operator
         claims:
           principal: fixture-operator
@@ -40,7 +40,7 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
       - id: patch-widget
-        entity: widget
+        recordType: widget
         accessProfile: operator
         claims:
           principal: fixture-operator
@@ -58,7 +58,7 @@ journeys:
           fields: {jurisdiction: zone-a, label: first, note: revised, quantity: 1}
         capture: revised-widget
       - id: batch-create-widgets
-        entity: widget
+        recordType: widget
         accessProfile: operator
         claims:
           principal: fixture-operator
@@ -71,7 +71,7 @@ journeys:
             - {type: create, data: {jurisdiction: zone-a, label: third, quantity: 3}}
         expect: {outcome: success, status: 200, count: 2}
       - id: concealed-without-purpose
-        entity: widget
+        recordType: widget
         accessProfile: operator
         claims:
           principal: fixture-operator

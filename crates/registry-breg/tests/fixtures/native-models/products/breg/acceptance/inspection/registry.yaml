@@ -1,0 +1,465 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind": "BRegProject",
+  "project": {
+    "id": "inspection",
+    "canonicalBaseIri": "https://inspection-registry.example.gov",
+    "version": "0.1.0",
+    "defaultLanguage": "en"
+  },
+  "package": {
+    "sourceRevision": "inspection-acceptance-0.1.0"
+  },
+  "manifestProjection": {
+    "accessProfile": "inspection-inspector",
+    "classificationCeiling": "restricted",
+    "catalog": {
+      "baseUrl": "https://inspection-registry.example.gov",
+      "title": "Facility Inspection and Permit Registry Catalog",
+      "description": "Protected facility inspection observations and permit records.",
+      "publisher": {
+        "id": "inspection-authority",
+        "name": "Environmental Authority",
+        "iri": "https://inspection-registry.example.gov/authority"
+      }
+    },
+    "datasets": [
+      {
+        "id": "inspection",
+        "title": "Facility Inspection and Permit Registry",
+        "description": "Inspection findings, measurement metadata, and permit validity records.",
+        "owner": "Environmental Authority",
+        "status": "active"
+      }
+    ],
+    "dataServices": [
+      {
+        "id": "inspection-data-service",
+        "title": "Facility Inspection and Permit Registry Catalog",
+        "endpointUrl": "https://inspection-registry.example.gov",
+        "servesDatasets": [
+          "inspection"
+        ]
+      }
+    ],
+    "publicService": {
+      "id": "inspection-service",
+      "title": "Facility Inspection and Permit Registry Catalog"
+    },
+    "distributions": []
+  },
+  "modules": [
+    {
+      "id": "inspection-core",
+      "version": "0.1.0",
+      "digest": "sha256:70614bcc8c0667f0bd326a7166c3448337e77e9fa71e304859a37599efc951f4"
+    }
+  ],
+  "recordTypes": [
+    {
+      "id": "inspection",
+      "primaryDataset": "inspection",
+      "route": "inspections",
+      "mutationMode": "mutable",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "inspection-code",
+          "type": "string",
+          "required": true,
+          "maximumLength": 64,
+          "classification": "restricted"
+        },
+        {
+          "id": "facility-code",
+          "type": "string",
+          "required": true,
+          "maximumLength": 64,
+          "classification": "restricted"
+        },
+        {
+          "id": "opened-on",
+          "type": "date",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "closed-on",
+          "type": "date",
+          "required": false,
+          "classification": "restricted"
+        },
+        {
+          "id": "inspection-authority",
+          "type": "string",
+          "required": true,
+          "maximumLength": 80,
+          "classification": "restricted"
+        }
+      ],
+      "constraints": [
+        {
+          "type": "unique",
+          "fields": [
+            "inspection-code"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "id": "by-facility-code",
+          "fields": [
+            "facility-code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "inspection-observation",
+      "primaryDataset": "inspection",
+      "route": "inspection-observations",
+      "mutationMode": "create-only",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "inspection",
+          "type": "reference",
+          "target": "inspection",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "observed-at",
+          "type": "timestamp",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "inspection-domain",
+          "type": "vocabulary-code",
+          "vocabulary": "inspection-domain",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "finding-grade",
+          "type": "int64",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "observation-schema-metadata",
+          "type": "structured",
+          "required": true,
+          "maximumBytes": 2048,
+          "classification": "restricted",
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schemaVersion",
+              "vocabularyRelease",
+              "scoringScale"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "vocabularyRelease": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "scoringScale": {
+                "type": "string",
+                "enum": [
+                  "zero-to-four"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "observation-note",
+          "type": "text",
+          "required": false,
+          "maximumLength": 4000,
+          "classification": "restricted"
+        }
+      ],
+      "constraints": [
+        {
+          "type": "int-range",
+          "field": "finding-grade",
+          "minimum": 0,
+          "maximum": 4
+        }
+      ],
+      "indexes": [
+        {
+          "id": "by-inspection-domain",
+          "fields": [
+            "inspection-domain"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "permit",
+      "primaryDataset": "inspection",
+      "route": "permits",
+      "mutationMode": "create-only",
+      "classification": "restricted",
+      "fields": [
+        {
+          "id": "permit-code",
+          "type": "string",
+          "required": true,
+          "maximumLength": 64,
+          "classification": "restricted"
+        },
+        {
+          "id": "inspection",
+          "type": "reference",
+          "target": "inspection",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "permit-status",
+          "type": "vocabulary-code",
+          "vocabulary": "permit-status",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "valid-from",
+          "type": "date",
+          "required": true,
+          "classification": "restricted"
+        },
+        {
+          "id": "valid-to",
+          "type": "date",
+          "required": false,
+          "classification": "restricted"
+        },
+        {
+          "id": "corrected-permit",
+          "type": "reference",
+          "target": "permit",
+          "required": false,
+          "classification": "restricted"
+        },
+        {
+          "id": "correction-reason",
+          "type": "text",
+          "required": false,
+          "maximumLength": 2000,
+          "classification": "restricted"
+        },
+        {
+          "id": "validity-source",
+          "type": "string",
+          "required": true,
+          "maximumLength": 120,
+          "classification": "restricted"
+        },
+        {
+          "id": "provenance-note",
+          "type": "text",
+          "required": false,
+          "maximumLength": 4000,
+          "classification": "restricted"
+        },
+        {
+          "id": "issuing-authority",
+          "type": "reference",
+          "target": "public-authority",
+          "required": true,
+          "classification": "restricted"
+        }
+      ],
+      "constraints": [
+        {
+          "type": "unique",
+          "fields": [
+            "permit-code"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "id": "by-permit-status",
+          "fields": [
+            "permit-status"
+          ]
+        },
+        {
+          "id": "by-valid-from",
+          "fields": [
+            "valid-from"
+          ]
+        }
+      ]
+    }
+  ],
+  "accessProfiles": [
+    {
+      "id": "inspection-inspector",
+      "principalClaim": "registry_principal",
+      "requiredScopes": "unrestricted",
+      "requiredPurposes": [
+        "facility-inspection"
+      ],
+      "permissions": {
+        "records": [
+          {
+            "recordType": "inspection",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create",
+              "get",
+              "list",
+              "patch"
+            ],
+            "readableFields": [
+              "inspection-code",
+              "facility-code",
+              "opened-on",
+              "closed-on",
+              "inspection-authority"
+            ],
+            "writableFields": [
+              "inspection-code",
+              "facility-code",
+              "opened-on",
+              "closed-on",
+              "inspection-authority"
+            ],
+            "filterableFields": [
+              "inspection-code",
+              "facility-code"
+            ]
+          },
+          {
+            "recordType": "inspection-observation",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create",
+              "get",
+              "list"
+            ],
+            "readableFields": [
+              "inspection",
+              "observed-at",
+              "inspection-domain",
+              "finding-grade",
+              "observation-schema-metadata",
+              "observation-note"
+            ],
+            "writableFields": [
+              "inspection",
+              "observed-at",
+              "inspection-domain",
+              "finding-grade",
+              "observation-schema-metadata",
+              "observation-note"
+            ],
+            "filterableFields": [
+              "inspection",
+              "inspection-domain"
+            ]
+          },
+          {
+            "recordType": "permit",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create",
+              "get",
+              "list"
+            ],
+            "readableFields": [
+              "permit-code",
+              "inspection",
+              "permit-status",
+              "valid-from",
+              "valid-to",
+              "corrected-permit",
+              "correction-reason",
+              "validity-source",
+              "provenance-note",
+              "issuing-authority"
+            ],
+            "writableFields": [
+              "permit-code",
+              "inspection",
+              "permit-status",
+              "valid-from",
+              "valid-to",
+              "corrected-permit",
+              "correction-reason",
+              "validity-source",
+              "provenance-note",
+              "issuing-authority"
+            ],
+            "filterableFields": [
+              "inspection",
+              "permit-status",
+              "valid-from"
+            ]
+          },
+          {
+            "recordType": "public-authority",
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create",
+              "get",
+              "list"
+            ],
+            "readableFields": [
+              "authority-code",
+              "name",
+              "jurisdiction"
+            ],
+            "writableFields": [
+              "authority-code",
+              "name",
+              "jurisdiction"
+            ],
+            "filterableFields": [
+              "authority-code"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "vocabularies": [
+    {
+      "id": "inspection-domain",
+      "values": [
+        "air",
+        "water",
+        "waste",
+        "noise"
+      ]
+    },
+    {
+      "id": "permit-status",
+      "values": [
+        "draft",
+        "active",
+        "corrected",
+        "withdrawn"
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "id": "inspection"
+    }
+  ]
+}

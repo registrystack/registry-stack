@@ -25,7 +25,7 @@ journeys:
     captureResults:
       landholding: registered-landholding
   - id: read-canonical-fields
-    entity: landholding
+    recordType: landholding
     accessProfile: landholding-reader
     claims:
       principal: synthetic-landholding-reader

@@ -4,8 +4,6 @@
 
 #[path = "access_log.rs"]
 mod access_log;
-#[path = "request_read.rs"]
-mod request_read;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -14,64 +12,46 @@ use std::time::Duration;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tokio_postgres::types::Type;
 use uuid::Uuid;
 
 use crate::api::{
-    valid_text_search_term, AuthorizedRequestContext, HeldReadResponse, LookupSelectorValue,
-    ReadFilterExpr, ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause,
-    ReadProjectionField, ReadServiceError, ReadSpatialQuery, RecordReadKind, RecordReadRequest,
-    RecordReadService, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
+    AuthorizedRequestContext, HeldReadResponse, LookupSelectorValue, ReadFilterExpr,
+    ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField,
+    ReadServiceError, ReadSpatialQuery, RecordReadKind, RecordReadRequest, RecordReadService,
+    RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture, valid_text_search_term,
 };
 use crate::audit::{
-    begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
-    PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
+    PreIoAudit, PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit,
+    TerminalAuditOutcome, begin_pre_io_audit, profile_is_keyed, read_terminal_entry,
+    record_pre_io_audit,
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::cursor::{
-    now_unix_seconds, CursorAdapter, CursorBboxQuery, CursorCodec, CursorContinuation,
-    CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
-    CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
+    CursorAdapter, CursorBboxQuery, CursorCodec, CursorContinuation, CursorFilterExpr,
+    CursorFilterOperator, CursorLogicalOp, CursorOrderClause, CursorProjectionField,
+    CursorQueryScope, CursorRepresentation, CursorSpatialQuery, now_unix_seconds,
 };
-use crate::field_encryption::{open_member_value, FieldEncryptionService};
+use crate::field_encryption::{FieldEncryptionService, open_member_value};
 use crate::history_schema::HistorySchemaCompatibility;
 use crate::model::{
-    request_query_field_api_name, request_query_field_type, CompiledEntity, CompiledQueryKind,
-    CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRegistry,
-    REQUEST_BREG_STATE_QUERY_FIELD, REQUEST_EFFECT_DIGEST_QUERY_FIELD,
-    REQUEST_PROPOSAL_VERSION_QUERY_FIELD, REQUEST_REVIEW_OUTCOME_QUERY_FIELD,
+    CompiledEntity, CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection,
+    CompiledReadPath, CompiledRegistry,
 };
-use crate::mutation::{strong_record_etag_for_representation, BoundValue};
+use crate::mutation::{BoundValue, strong_record_etag_for_representation};
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
 
 use super::cancellation::QueryCancellationGuard;
 use super::{
-    begin_record_transaction, install_spatial_bbox_context, validate_field_value, ClaimContext,
-    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool, SpatialBboxContext,
+    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
+    SpatialBboxContext, begin_record_transaction, install_spatial_bbox_context,
+    validate_field_value,
 };
 
 const MAX_SQL_LIMIT: usize = 1000;
 const MAX_SPATIAL_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-/// The settled review outcome of the current proposal, spelled as the read
-/// projection spells it: `pending` while a submission awaits its result,
-/// `approvedExpired` once an approval is past its availability, and NULL when
-/// the current proposal was never submitted for review. It describes the
-/// review only; combine it with `bregState` to select unapplied requests.
-const REQUEST_REVIEW_OUTCOME_SQL: &str = "(SELECT CASE
-        WHEN review_result.status IS NULL THEN 'pending'
-        WHEN review_result.status = 'approved'
-         AND review_result.available_until <= transaction_timestamp() THEN 'approvedExpired'
-        WHEN review_result.status = 'changes-requested' THEN 'changesRequested'
-        ELSE review_result.status END
-   FROM registry_internal.registry_request_review_submissions AS review_submission
-   LEFT JOIN registry_internal.registry_request_review_results AS review_result
-     USING (request_entity_id, request_id, proposal_version)
-  WHERE review_submission.request_entity_id = request_state.request_entity_id
-    AND review_submission.request_id = request_state.request_id
-    AND review_submission.proposal_version = request_state.proposal_version)";
-
 /// Runtime PostgreSQL implementation of the read-only record surface.
 #[derive(Clone)]
 pub struct PostgresRecordReadService {
@@ -83,11 +63,7 @@ pub struct PostgresRecordReadService {
     audit: RegistryAudit,
     cursors: Arc<CursorCodec>,
     fault: ReadFaultControl,
-    attachment_storage: crate::attachment_storage::AttachmentStorage,
-    attachment_verification: crate::attachment_verification::AttachmentVerification,
     field_encryption: Option<Arc<FieldEncryptionService>>,
-    #[cfg(feature = "postgres-test")]
-    metadata_pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     #[cfg(feature = "postgres-test")]
     query_plan: Option<Arc<std::sync::Mutex<Vec<Value>>>>,
 }
@@ -112,12 +88,7 @@ impl PostgresRecordReadService {
             audit,
             cursors,
             fault: ReadFaultControl::Disabled,
-            attachment_storage: crate::attachment_storage::AttachmentStorage::Database,
-            attachment_verification:
-                crate::attachment_verification::AttachmentVerification::Disabled,
             field_encryption: None,
-            #[cfg(feature = "postgres-test")]
-            metadata_pause: None,
             #[cfg(feature = "postgres-test")]
             query_plan: None,
         }
@@ -129,36 +100,6 @@ impl PostgresRecordReadService {
     #[must_use]
     pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
         self.field_encryption = Some(service);
-        self
-    }
-
-    #[must_use]
-    pub fn with_attachment_storage(
-        mut self,
-        storage: crate::attachment_storage::AttachmentStorage,
-    ) -> Self {
-        self.attachment_storage = storage;
-        self
-    }
-
-    #[must_use]
-    pub fn with_attachment_verification(
-        mut self,
-        verification: crate::attachment_verification::AttachmentVerification,
-    ) -> Self {
-        self.attachment_verification = verification;
-        self
-    }
-
-    #[cfg(feature = "postgres-test")]
-    #[must_use]
-    #[doc(hidden)]
-    pub fn with_attachment_metadata_pause_for_test(
-        mut self,
-        entered: Arc<tokio::sync::Notify>,
-        resume: Arc<tokio::sync::Notify>,
-    ) -> Self {
-        self.metadata_pause = Some((entered, resume));
         self
     }
 
@@ -270,9 +211,6 @@ impl PostgresRecordReadService {
             Ok(materialized) => materialized,
             Err(error) => return Err(self.refused_read(&request, &claims, &plan, error).await),
         };
-        let attachment_verification = materialized.rows.first().and_then(|record| {
-            crate::mutation::attachment_verification_etag_fields(&plan.entity, &record.data)
-        });
         let mut held = match ReadResult::from_materialized(
             &self.registry,
             &request,
@@ -289,13 +227,8 @@ impl PostgresRecordReadService {
             && request.representation != CursorRepresentation::GeoJson
             && held.response.is_some()
         {
-            if let Err(error) = self.attach_strong_etag(
-                &mut held,
-                &request,
-                &claims,
-                target_record,
-                attachment_verification.as_ref(),
-            ) {
+            if let Err(error) = self.attach_strong_etag(&mut held, &request, &claims, target_record)
+            {
                 return Err(self.refused_read(&request, &claims, &plan, error).await);
             }
         }
@@ -321,244 +254,6 @@ impl PostgresRecordReadService {
         Ok(held)
     }
 
-    async fn execute_attachment(
-        &self,
-        request: RecordReadRequest,
-        slot_id: String,
-        proposal_version: u32,
-    ) -> Result<Option<HeldReadResponse>, ReadServiceError> {
-        if !profile_is_keyed(self.audit.profile()) {
-            return Err(ReadServiceError::Unavailable);
-        }
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|_| ReadServiceError::Unavailable)?;
-        let claims = strict_claim_context(&self.registry, &request.context, &request.entity_id)?;
-        let plan = ReadPlan::from_request(&self.registry, &self.expected, &self.cursors, &request);
-        let valid = plan.as_ref().is_ok_and(|plan| {
-            plan.operation == Operation::Get
-                && plan.entity.change_request.is_some()
-                && plan.entity.attachments.contains_key(&slot_id)
-                && request.selected_fields.contains(&slot_id)
-                && claims.principal().is_some()
-                && plan
-                    .entity
-                    .access_profiles
-                    .contains_key(claims.access_profile())
-                && proposal_version > 0
-                && request.request_history_after_proposal_version.is_none()
-                && request.adapter == CursorAdapter::Native
-                && request.representation == CursorRepresentation::Json
-        });
-        // Validate against the compiled base GET before assigning the binary
-        // route's distinct audit identity.
-        let mut request = request;
-        request.operation_id =
-            crate::attachment::operation_id(&request.operation_id, &slot_id, request.method);
-        let event = PreIoAudit {
-            kind: if valid {
-                PreIoAuditKind::Attempt
-            } else {
-                PreIoAuditKind::Refusal
-            },
-            method: request.method,
-            operation_id: &request.operation_id,
-            target_record: target_record(&request.kind),
-            refusal_reason: None,
-            correlation: &request.correlation,
-        };
-        if !valid {
-            record_pre_io_audit(&self.audit, &self.expected, &claims, event)
-                .await
-                .map_err(|_| ReadServiceError::Unavailable)?;
-            return Ok(None);
-        }
-        let _attempt = begin_pre_io_audit(&self.audit, &self.expected, &claims, event)
-            .await
-            .map_err(|_| ReadServiceError::Unavailable)?;
-        let plan = plan.map_err(|_| ReadServiceError::Unavailable)?;
-        // A read abandoned at its deadline stops its statement and gives up
-        // the session rather than leaving the backend running. The guard is
-        // armed only once the read reaches its I/O: a read refused or failed
-        // before then hands its idle session back to the pool.
-        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
-        let read = async {
-            let transaction = begin_record_transaction(
-                session.client(),
-                self.lock_key,
-                self.lock_timeout,
-                &self.expected,
-                &claims,
-            )
-            .await
-            .map_err(|_| ReadServiceError::Unavailable)?;
-            let loaded = self
-                .load_authorized_attachment(
-                    transaction.transaction(),
-                    &request,
-                    &claims,
-                    &plan,
-                    &slot_id,
-                    proposal_version,
-                )
-                .await;
-            let (outcome, count, revision) = match &loaded {
-                Ok(Some((_, revision))) => (TerminalAuditOutcome::Returned, 1, Some(*revision)),
-                Ok(None) => (TerminalAuditOutcome::Empty, 0, None),
-                Err(_) => (TerminalAuditOutcome::Refused, 0, None),
-            };
-            if count > 0 {
-                let record_id = target_record(&request.kind)
-                    .ok_or(ReadServiceError::Unavailable)?
-                    .to_owned();
-                crate::subject_access_log::record_reads(
-                    transaction.transaction(),
-                    &plan.entity,
-                    &request.entity_id,
-                    &request.context,
-                    &[record_id],
-                    &request.operation_id,
-                    &self.expected,
-                    &request.correlation,
-                    &self.audit,
-                )
-                .await?;
-            }
-            let terminal = self.terminal(&request, &claims, &plan, outcome, count, revision)?;
-            let entry = crate::audit::attachment_terminal_entry(
-                self.audit.profile(),
-                terminal,
-                &slot_id,
-                i64::from(proposal_version),
-            )
-            .map_err(|_| ReadServiceError::Unavailable)?;
-            transaction
-                .commit()
-                .await
-                .map_err(|_| ReadServiceError::Unavailable)?;
-            Ok::<_, ReadServiceError>((loaded, entry))
-        }
-        .await;
-        session.disarm();
-        let (loaded, entry) = read?;
-        self.fault.fail_at(ReadFaultPoint::BeforeTerminalAudit)?;
-        self.audit
-            .append(entry)
-            .await
-            .map_err(|_| ReadServiceError::Unavailable)?;
-        loaded.map(|response| response.map(|(response, _)| response))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn load_authorized_attachment(
-        &self,
-        transaction: &tokio_postgres::Transaction<'_>,
-        request: &RecordReadRequest,
-        claims: &ClaimContext,
-        plan: &ReadPlan,
-        slot_id: &str,
-        proposal_version: u32,
-    ) -> Result<Option<(HeldReadResponse, i64)>, ReadServiceError> {
-        crate::mutation::install_request_visibility_context(
-            transaction,
-            &plan.entity,
-            claims,
-            self.audit.profile(),
-            &self.expected.database_id,
-        )
-        .await
-        .map_err(|_| ReadServiceError::Unavailable)?;
-        let record_id = target_record(&request.kind).ok_or(ReadServiceError::Unavailable)?;
-        let record_uuid = Uuid::parse_str(record_id).map_err(|_| ReadServiceError::Unavailable)?;
-        // Stabilize request state without imposing a typed UPDATE policy on
-        // readers. The following plain SELECT remains the authoritative GET RLS.
-        if !lock_attachment_request_states(transaction, &plan.entity.id, &[record_uuid]).await? {
-            return Ok(None);
-        }
-        let sql = format!("SELECT record_revision FROM registry_data.{} WHERE record_id=$1 AND record_lifecycle='active'",
-            quote_identifier(&plan.entity.physical_table));
-        let Some(row) = transaction
-            .query_opt(&sql, &[&record_uuid])
-            .await
-            .map_err(|_| ReadServiceError::Unavailable)?
-        else {
-            return Ok(None);
-        };
-        let revision: i64 = row.try_get(0).map_err(|_| ReadServiceError::Unavailable)?;
-        if !request_read::attachment_version_is_authorized(
-            transaction,
-            &self.registry,
-            &self.expected,
-            self.audit.profile(),
-            request,
-            claims,
-            &plan.entity,
-            self.field_encryption.as_deref(),
-            record_uuid,
-            i64::from(proposal_version),
-            slot_id,
-        )
-        .await?
-        {
-            return Ok(None);
-        }
-        crate::attachment_store::verify_backend_binding(
-            transaction,
-            &self.attachment_storage.binding_digest(),
-            &self.attachment_verification.binding_digest(),
-        )
-        .await
-        .map_err(|_| ReadServiceError::Unavailable)?;
-        let Some(stored) = crate::attachment_store::load(
-            transaction,
-            &plan.entity.id,
-            record_uuid,
-            i64::from(proposal_version),
-            slot_id,
-        )
-        .await
-        .map_err(|_| ReadServiceError::Unavailable)?
-        else {
-            return Ok(None);
-        };
-        // Retained proposal bytes keep their accepted size and MIME after a
-        // successor narrows its upload policy. Current slot/read authority,
-        // quarantine and exact stored integrity still gate this download.
-        if stored.metadata.byte_size > u64::from(crate::contract::MAX_ATTACHMENT_BYTES) {
-            return Err(ReadServiceError::Unavailable);
-        }
-        let bytes = match (
-            &self.attachment_storage,
-            stored.backend_id.as_str(),
-            stored.content,
-        ) {
-            (crate::attachment_storage::AttachmentStorage::Database, "database", Some(bytes)) => {
-                bytes
-            }
-            (crate::attachment_storage::AttachmentStorage::S3(store), backend, None)
-                if backend == self.attachment_storage.binding_digest() =>
-            {
-                store
-                    .get(&stored.metadata.sha256, stored.metadata.byte_size)
-                    .await
-                    .map_err(|_| ReadServiceError::Unavailable)?
-            }
-            _ => return Err(ReadServiceError::Unavailable),
-        };
-        use sha2::{Digest, Sha256};
-        if u64::try_from(bytes.len()).ok() != Some(stored.metadata.byte_size)
-            || hex::encode(Sha256::digest(&bytes)) != stored.metadata.sha256
-        {
-            return Err(ReadServiceError::Unavailable);
-        }
-        let response = HeldReadResponse::from_attachment(bytes, stored.metadata.content_type)?;
-        Ok(Some((response, revision)))
-    }
-
-    /// Hold the read transaction's backend in one statement far longer than
-    /// any request deadline, when the test asked for it.
     #[cfg(feature = "postgres-test")]
     async fn outrun_request_deadline_for_test(
         &self,
@@ -641,7 +336,6 @@ impl PostgresRecordReadService {
         request: &RecordReadRequest,
         claims: &ClaimContext,
         target_record: Option<&str>,
-        attachment_verification: Option<&Value>,
     ) -> Result<(), ReadServiceError> {
         self.fault.fail_at(ReadFaultPoint::StrongEtag)?;
         let response = held.response.take().ok_or(ReadServiceError::Unavailable)?;
@@ -660,7 +354,6 @@ impl PostgresRecordReadService {
             record_revision,
             &request.selected_fields,
             representation,
-            attachment_verification,
         )
         .map_err(|_| ReadServiceError::Unavailable)?;
         held.response = Some(response.with_strong_etag(etag));
@@ -706,15 +399,6 @@ impl PostgresRecordReadService {
         #[cfg(feature = "postgres-test")]
         self.outrun_request_deadline_for_test(transaction.transaction())
             .await?;
-        crate::mutation::install_request_visibility_context(
-            transaction.transaction(),
-            &plan.entity,
-            claims,
-            self.audit.profile(),
-            &self.expected.database_id,
-        )
-        .await
-        .map_err(|_| ReadServiceError::Unavailable)?;
         let query = request_query(&request.kind);
         install_evaluation_date(transaction.transaction(), query).await?;
         install_spatial_query_context(transaction.transaction(), query).await?;
@@ -731,12 +415,7 @@ impl PostgresRecordReadService {
                 .map(|field| field.field_id.clone())
                 .collect::<Vec<_>>()
         } else {
-            request
-                .selected_fields
-                .iter()
-                .filter(|field| !plan.entity.attachments.contains_key(*field))
-                .cloned()
-                .collect::<Vec<_>>()
+            request.selected_fields.iter().cloned().collect::<Vec<_>>()
         };
         let relations = if let Some(path) = &plan.read_path {
             let root_id = match &request.kind {
@@ -860,20 +539,6 @@ impl PostgresRecordReadService {
         } else {
             rows.as_slice()
         };
-        if request
-            .selected_fields
-            .iter()
-            .any(|id| plan.entity.attachments.contains_key(id))
-        {
-            stabilize_attachment_read_rows(transaction.transaction(), &plan.entity, rows).await?;
-        }
-        #[cfg(feature = "postgres-test")]
-        if !plan.entity.attachments.is_empty() {
-            if let Some((entered, resume)) = &self.metadata_pause {
-                entered.notify_one();
-                resume.notified().await;
-            }
-        }
         let next_cursor = if has_more {
             let query = query.ok_or(ReadServiceError::Unavailable)?;
             rows.last()
@@ -886,59 +551,6 @@ impl PostgresRecordReadService {
             .iter()
             .map(|row| row_to_record(row, &plan.entity, &selected_fields))
             .collect::<Result<Vec<_>, _>>()?;
-        let mut rows = rows;
-        request_read::annotate_records(
-            transaction.transaction(),
-            &self.registry,
-            self.audit.profile(),
-            &self.expected,
-            request,
-            claims,
-            &plan.entity,
-            self.field_encryption.as_deref(),
-            &mut rows,
-        )
-        .await?;
-        if rows.is_empty()
-            && plan.operation == Operation::Get
-            && plan.entity.change_request.is_some()
-        {
-            // Source views intentionally exclude tombstones. Before consulting
-            // retained request provenance, reauthorize this exact erased row
-            // through the generated typed-table GET policy and its row bounds.
-            let record_id = target_record(&request.kind).ok_or(ReadServiceError::Unavailable)?;
-            let sql = format!(
-                "SELECT record_revision FROM registry_data.{}
-                 WHERE record_id = $1::text::uuid
-                   AND record_lifecycle = 'tombstoned'",
-                quote_identifier(&plan.entity.physical_table),
-            );
-            if let Some(row) = transaction
-                .transaction()
-                .query_opt(&sql, &[&record_id])
-                .await
-                .map_err(|_| ReadServiceError::Unavailable)?
-            {
-                let revision: i64 = row.try_get(0).map_err(|_| ReadServiceError::Unavailable)?;
-                if revision <= 0 {
-                    return Err(ReadServiceError::Unavailable);
-                }
-                if let Some(record) = request_read::erased_terminal_request_record(
-                    transaction.transaction(),
-                    &self.registry,
-                    &self.expected,
-                    request,
-                    claims,
-                    &plan.entity,
-                    record_id,
-                    revision,
-                )
-                .await?
-                {
-                    rows.push(record);
-                }
-            }
-        }
         crate::subject_access_log::record_reads(
             transaction.transaction(),
             &plan.entity,
@@ -1090,15 +702,6 @@ impl RecordReadService for PostgresRecordReadService {
             let result = self.execute(request).await?;
             Ok(result.response)
         })
-    }
-
-    fn attachment(
-        &self,
-        request: RecordReadRequest,
-        slot_id: String,
-        proposal_version: u32,
-    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
-        Box::pin(self.execute_attachment(request, slot_id, proposal_version))
     }
 
     fn list(
@@ -1426,20 +1029,6 @@ pub(super) fn open_row_members(
     open_members(entity, record_id, data, field_encryption, true)
 }
 
-/// Open every encrypted member of one retained-snapshot member map.
-///
-/// Retained snapshot members key by field id, like the request target and
-/// guard snapshots the change-request surfaces authorize against. The opening
-/// rules match [`open_row_members`].
-pub(super) fn open_snapshot_members(
-    entity: &CompiledEntity,
-    record_id: &str,
-    data: &mut Map<String, Value>,
-    field_encryption: Option<&FieldEncryptionService>,
-) -> Result<(), ReadServiceError> {
-    open_members(entity, record_id, data, field_encryption, false)
-}
-
 /// Load the fields of one entity whose field-encryption flip declared
 /// retain-plaintext-history. A database bootstrapped before the flips table
 /// existed has no rows to read, which reads as the empty set; a Registry that
@@ -1554,22 +1143,11 @@ pub(super) struct RecordEnvelope {
     pub(super) id: String,
     pub(super) revision: u64,
     pub(super) data: Map<String, Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) request: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) request_presence: Option<Value>,
 }
 
 impl RecordEnvelope {
     fn into_record_member(self) -> Result<Value, ReadServiceError> {
-        let mut extensions = Map::new();
-        if let Some(request) = self.request {
-            extensions.insert("request".to_owned(), request);
-        }
-        if let Some(request_presence) = self.request_presence {
-            extensions.insert("requestPresence".to_owned(), request_presence);
-        }
-        record_profile::record_member(self.id, self.revision.to_string(), self.data, extensions)
+        record_profile::record_member(self.id, self.revision.to_string(), self.data, Map::new())
             .map_err(|_| ReadServiceError::Unavailable)
     }
 }
@@ -1703,17 +1281,6 @@ impl ReadPlan {
             .find(|route| route.id == request.operation_id)
             .ok_or(())?;
         let source_entity = registry.entities().get(&request.entity_id).ok_or(())?;
-        if request
-            .request_history_after_proposal_version
-            .is_some_and(|version| {
-                version <= 0
-                    || version > i64::from(u32::MAX)
-                    || operation != Operation::Get
-                    || source_entity.change_request.is_none()
-            })
-        {
-            return Err(());
-        }
         let profile = source_entity
             .access_profiles
             .get(request.context.selected_profile())
@@ -1868,10 +1435,10 @@ impl ReadPlan {
             || !valid_entity_inventory(registry, source_entity)
             || !valid_entity_inventory(registry, entity)
             || (read_path.is_none() && !request.selected_fields.is_subset(&profile.readable_fields))
-            || request.selected_fields.iter().any(|field| {
-                compiled_field_type(entity, field).is_none()
-                    && !entity.attachments.contains_key(field)
-            })
+            || request
+                .selected_fields
+                .iter()
+                .any(|field| compiled_field_type(entity, field).is_none())
         {
             return Err(());
         }
@@ -1972,15 +1539,10 @@ fn validate_compiled_query_request(
         || !valid_cursor_reference(&query.cursor_binding.sort_reference)
         || !valid_cursor_reference(&query.cursor_binding.scope_reference)
         || !valid_optional_cursor_reference(query.cursor_binding.spatial_reference.as_deref())
-        || !request.selected_fields.iter().all(|field| {
-            operation.projection_fields.contains(field)
-                || (query.kind == CompiledQueryKind::List
-                    && entity.attachments.contains_key(field)
-                    && entity
-                        .access_profiles
-                        .get(request.context.selected_profile())
-                        .is_some_and(|profile| profile.readable_fields.contains(field)))
-        })
+        || !request
+            .selected_fields
+            .iter()
+            .all(|field| operation.projection_fields.contains(field))
         || !operation
             .projection_fields
             .iter()
@@ -2010,7 +1572,6 @@ fn validate_compiled_query_request(
     let scalar_fields = request
         .selected_fields
         .iter()
-        .filter(|field| !entity.attachments.contains_key(*field))
         .cloned()
         .collect::<BTreeSet<_>>();
     if query
@@ -2319,7 +1880,6 @@ pub(crate) fn strict_claim_context(
         row_boundaries,
     )
     .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
-    .and_then(|claims| claims.with_api_submitter_targets(registry, context))
     .and_then(|claims| claims.with_recipients(context.recipients().clone()))
     .map_err(|_| ReadServiceError::Unavailable)
 }
@@ -2488,21 +2048,6 @@ impl ReadRelations {
             quote_identifier(&entity.source_relation.sql_name),
             quote_identifier(&entity.physical_table),
         );
-        if entity.change_request.is_some() {
-            from_sql.push_str(
-                " LEFT JOIN registry_internal.registry_request_state AS request_state
-                    ON request_state.request_entity_id = ",
-            );
-            from_sql.push_str(&sql_quote_literal(&entity.id));
-            from_sql.push_str(
-                "
-                   AND request_state.request_id = source_record.id
-                  LEFT JOIN registry_internal.registry_request_proposals AS request_proposal
-                    ON request_proposal.request_entity_id = request_state.request_entity_id
-                   AND request_proposal.request_id = request_state.request_id
-                   AND request_proposal.proposal_version = request_state.proposal_version",
-            );
-        }
         if spatial_query {
             let candidate_view = crate::physical_names::spatial_candidate_view_name(&entity.id);
             if !valid_physical_identifier(&candidate_view) {
@@ -2624,7 +2169,9 @@ impl ReadRelations {
             id_expression: target_id,
             from_sql,
             base_predicates: vec![
-                format!("{source_id} = NULLIF(current_setting('registry.read_path_root_id', true), '')::uuid"),
+                format!(
+                    "{source_id} = NULLIF(current_setting('registry.read_path_root_id', true), '')::uuid"
+                ),
                 format!(
                     "NULLIF(current_setting('registry.read_path_id', true), '') = {}",
                     sql_quote_literal(&path.id)
@@ -2639,23 +2186,6 @@ impl ReadRelations {
         entity: &CompiledEntity,
         field_id: &str,
     ) -> Result<FieldExpression, ReadServiceError> {
-        if entity.change_request.is_some() {
-            if let Some(field_type) = request_query_field_type(field_id) {
-                let sql = match field_id {
-                    REQUEST_BREG_STATE_QUERY_FIELD => "request_state.state",
-                    REQUEST_PROPOSAL_VERSION_QUERY_FIELD => "request_state.proposal_version",
-                    REQUEST_EFFECT_DIGEST_QUERY_FIELD => "request_proposal.effect_digest",
-                    REQUEST_REVIEW_OUTCOME_QUERY_FIELD => REQUEST_REVIEW_OUTCOME_SQL,
-                    _ => return Err(ReadServiceError::Unavailable),
-                };
-                return Ok(FieldExpression {
-                    sql: sql.to_owned(),
-                    field_type,
-                    encrypted: false,
-                    never_null: false,
-                });
-            }
-        }
         if field_id == "id" {
             return Ok(FieldExpression {
                 sql: self.id_expression.clone(),
@@ -2790,23 +2320,13 @@ fn query_field_type(
             .iter()
             .any(|field| field.field == field_id)
     {
-        compiled_field_type(entity, field_id).cloned().or_else(|| {
-            entity
-                .change_request
-                .as_ref()
-                .and_then(|_| request_query_field_type(field_id))
-        })
+        compiled_field_type(entity, field_id).cloned()
     } else {
         None
     }
 }
 
 pub(super) fn compiled_api_name<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a str> {
-    if entity.change_request.is_some() {
-        if let Some(api_name) = request_query_field_api_name(field_id) {
-            return Some(api_name);
-        }
-    }
     entity
         .stored_fields
         .iter()
@@ -3130,62 +2650,6 @@ fn list_sql(
     })
 }
 
-async fn lock_attachment_request_states(
-    transaction: &tokio_postgres::Transaction<'_>,
-    entity_id: &str,
-    ids: &[Uuid],
-) -> Result<bool, ReadServiceError> {
-    let rows = transaction.query(
-        "SELECT request_id FROM registry_internal.registry_request_state WHERE request_entity_id=$1 AND request_id=ANY($2) ORDER BY request_id FOR SHARE",
-        &[&entity_id, &ids],
-    ).await.map_err(|_| ReadServiceError::Unavailable)?;
-    Ok(rows.len() == ids.len())
-}
-
-async fn stabilize_attachment_read_rows(
-    transaction: &tokio_postgres::Transaction<'_>,
-    entity: &CompiledEntity,
-    rows: &[tokio_postgres::Row],
-) -> Result<(), ReadServiceError> {
-    if entity.attachments.is_empty() || rows.is_empty() {
-        return Ok(());
-    }
-    let expected = rows
-        .iter()
-        .map(|row| {
-            let id: String = row.try_get(0).map_err(|_| ReadServiceError::Unavailable)?;
-            let revision: i64 = row.try_get(1).map_err(|_| ReadServiceError::Unavailable)?;
-            Ok((
-                Uuid::parse_str(&id).map_err(|_| ReadServiceError::Unavailable)?,
-                revision,
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>, ReadServiceError>>()?;
-    let ids = expected.keys().copied().collect::<Vec<_>>();
-    if !lock_attachment_request_states(transaction, &entity.id, &ids).await? {
-        return Err(ReadServiceError::Unavailable);
-    }
-    // An upload may commit between the source SELECT and these state locks.
-    // Refuse that read rather than combine its old scalar revision with new
-    // metadata. Plain SELECT preserves exactly the reader's typed GET policy.
-    let sql = format!(
-        "SELECT record_id, record_revision FROM registry_data.{} WHERE record_id=ANY($1)",
-        quote_identifier(&entity.physical_table)
-    );
-    let current = transaction
-        .query(&sql, &[&ids])
-        .await
-        .map_err(|_| ReadServiceError::Unavailable)?;
-    if current.len() != expected.len()
-        || current
-            .iter()
-            .any(|row| expected.get(&row.get::<_, Uuid>(0)) != Some(&row.get::<_, i64>(1)))
-    {
-        return Err(ReadServiceError::Unavailable);
-    }
-    Ok(())
-}
-
 fn where_clause(predicates: &[String]) -> String {
     if predicates.is_empty() {
         "TRUE".to_owned()
@@ -3479,13 +2943,7 @@ fn row_to_record(
             return Err(ReadServiceError::Unavailable);
         }
     }
-    Ok(RecordEnvelope {
-        id,
-        revision,
-        data,
-        request: None,
-        request_presence: None,
-    })
+    Ok(RecordEnvelope { id, revision, data })
 }
 
 fn field_set_reference(
@@ -3536,15 +2994,15 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
-    use serde_json::{json, Map};
+    use serde_json::{Map, json};
 
     use crate::api::{
         AuthorizedRequestContext, CompiledReadQuery, ReadBboxQuery, ReadFilterExpr,
         ReadFilterOperator, ReadFilterPredicate, ReadOrderClause, ReadProjectionField,
         ReadSpatialQuery, RecordReadKind, RecordReadRequest,
     };
-    use crate::compiler::{compile_project, CompileProfile};
-    use crate::contract::{parse_project_json, FieldTypeSource};
+    use crate::compiler::{CompileProfile, compile_project};
+    use crate::contract::{FieldTypeSource, parse_project_json};
     use crate::cursor::{
         CursorAdapter, CursorBboxQuery, CursorBinding, CursorCodec, CursorContinuation,
         CursorFilterExpr, CursorFilterOperator, CursorFilterPredicate, CursorOrderClause,
@@ -3559,9 +3017,9 @@ mod tests {
     use zeroize::Zeroizing;
 
     use super::{
+        ExpectedRegistryIdentity, ReadPlan, ReadRelations, ReadServiceError, RecordEnvelope,
         cursor_binding_references, feature_value, list_sql, open_history_row_members, projection,
-        quote_identifier, temporal_instant_expression, ExpectedRegistryIdentity, ReadPlan,
-        ReadRelations, ReadServiceError, RecordEnvelope,
+        quote_identifier, temporal_instant_expression,
     };
 
     #[test]
@@ -3572,11 +3030,11 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"retained-plaintext-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "entities":[{
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
                     "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
                     "fields":[{"id":"details","type":"structured","maximumBytes":256,"classification":"restricted","encrypted":true,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}]
                   }],
-                  "accessProfiles":[{"id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":"unrestricted"}]}}]
+                  "accessProfiles":[{"id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":"unrestricted"}]}}]
                 }"#,
             )
             .expect("fixture parses"),
@@ -3657,7 +3115,7 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"geojson-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "entities":[{
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
                     "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
@@ -3667,7 +3125,7 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                    "permissions":{"entities":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": "unrestricted"}]}
+                    "permissions":{"records":[{"recordType":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": "unrestricted"}]}
                   }]
                 }"#,
             )
@@ -3690,8 +3148,6 @@ mod tests {
             id: "00000000-0000-4000-8000-000000000001".to_owned(),
             revision: 1,
             data,
-            request: None,
-            request_presence: None,
         };
         assert!(matches!(
             feature_value(entity, record),
@@ -3707,7 +3163,7 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"spatial-span-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "entities":[{
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
                     "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
@@ -3717,8 +3173,8 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                    "permissions":{"entities":[{
-                      "entity":"site",
+                    "permissions":{"records":[{
+                      "recordType":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],
                       "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.3,"maximumLatitudeSpanDegrees":0.2}},
@@ -3791,7 +3247,7 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"plan-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "entities":[{
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
                     "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"label","type":"string","required":true,"maximumLength":32,"classification":"public"},
@@ -3800,8 +3256,8 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                    "permissions":{"entities":[{
-                      "entity":"case","operations":["list"],
+                    "permissions":{"records":[{
+                      "recordType":"case","operations":["list"],
                       "readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],
                       "rowBoundaries": "unrestricted"
                     }]}
@@ -3916,7 +3372,6 @@ mod tests {
                 },
             },
             maximum_records: 11,
-            request_history_after_proposal_version: None,
             representation: CursorRepresentation::Json,
             adapter: CursorAdapter::Native,
             adapter_origin: None,
@@ -4056,7 +3511,7 @@ mod tests {
                   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
                   "kind":"BRegProject",
                   "project":{"id":"spatial-relation-guard","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-                  "entities":[{
+                  "datasets":[{"id":"test-dataset"}],"recordTypes":[{
                     "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
                     "fields":[
                       {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"public"},
@@ -4066,8 +3521,8 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                    "permissions":{"entities":[{
-                      "entity":"site",
+                    "permissions":{"records":[{
+                      "recordType":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],
                       "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
@@ -4171,9 +3626,11 @@ mod tests {
             "JOIN registry_context.{} AS candidate_record",
             quote_identifier(&candidate_view)
         )));
-        assert!(relations
-            .from_sql
-            .contains("ON candidate_record.id = source_record.\"id\""));
+        assert!(
+            relations
+                .from_sql
+                .contains("ON candidate_record.id = source_record.\"id\"")
+        );
         assert!(relations.base_predicates.is_empty());
 
         let code = entity

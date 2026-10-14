@@ -10,27 +10,27 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{HeaderName, Method, Request, Response, StatusCode};
 use chrono::{Datelike, Days, NaiveDate, Utc};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, set_request_deadline_for_test, HttpService, ReadRuntimeIdentity, ReadinessProbe,
-    ServiceFuture, VerifiedClaimValue, VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router, set_request_deadline_for_test,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
+    ClaimContext, ExpectedManagedCatalog, PostgresRecordReadService, PostgresStatisticsService,
+    RegistryLockKey, RegistryStateTestIdentity, StatisticsPublishPause, StatisticsWithdrawalPause,
     begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
-    verify_catalog_identity_for_catalog, ClaimContext, ExpectedManagedCatalog,
-    PostgresRecordReadService, PostgresStatisticsService, RegistryLockKey,
-    RegistryStateTestIdentity, StatisticsPublishPause, StatisticsWithdrawalPause,
+    verify_catalog_identity_for_catalog,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::Service as _;
 use zeroize::Zeroizing;
 
@@ -377,18 +377,22 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
     .await;
     assert_eq!(reader_metadata.status(), StatusCode::OK);
     let reader_metadata = body_json(reader_metadata).await;
-    assert!(reader_metadata["entities"]
-        .as_array()
-        .is_some_and(Vec::is_empty));
+    assert!(
+        reader_metadata["recordTypes"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
     assert_eq!(
         reader_metadata["statisticalDatasets"][0]["id"],
         "records-by-category"
     );
-    assert!(reader_metadata["statisticalDatasets"][0]["operations"]
-        .as_array()
-        .is_some_and(|operations| operations
-            .iter()
-            .all(|operation| operation != "read-live" && operation != "publish-release")));
+    assert!(
+        reader_metadata["statisticalDatasets"][0]["operations"]
+            .as_array()
+            .is_some_and(|operations| operations
+                .iter()
+                .all(|operation| operation != "read-live" && operation != "publish-release"))
+    );
     let reader_openapi = send(
         &app,
         Method::GET,
@@ -400,16 +404,21 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
     .await;
     assert_eq!(reader_openapi.status(), StatusCode::OK);
     let reader_openapi = body_json(reader_openapi).await;
-    assert!(reader_openapi["paths"]
-        .get("/v1/statistics/records-by-category:live")
-        .is_none());
-    assert!(reader_openapi["paths"]
-        .get("/v1/statistics/records-by-category/releases")
-        .is_some());
-    assert!(reader_openapi["paths"]
-        ["/v1/statistics/records-by-category/releases/{period}/versions"]
-        .get("post")
-        .is_none());
+    assert!(
+        reader_openapi["paths"]
+            .get("/v1/statistics/records-by-category:live")
+            .is_none()
+    );
+    assert!(
+        reader_openapi["paths"]
+            .get("/v1/statistics/records-by-category/releases")
+            .is_some()
+    );
+    assert!(
+        reader_openapi["paths"]["/v1/statistics/records-by-category/releases/{period}/versions"]
+            .get("post")
+            .is_none()
+    );
     let neither = send(
         &app,
         Method::GET,
@@ -594,14 +603,15 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
                 "/v1/statistics/records-by-category/releases:series?from={prior_period}&to={prior_period}"
             ),
             format!("/v1/statistics/records-by-category/releases/{prior_period}"),
-            format!(
-                "/v1/statistics/records-by-category/releases/{prior_period}/versions/1"
-            ),
+            format!("/v1/statistics/records-by-category/releases/{prior_period}/versions/1"),
         ] {
             let visible = send(
                 &app,
                 Method::GET,
-                &format!("{uri}{}accessProfile={profile}", if uri.contains('?') { "&" } else { "?" }),
+                &format!(
+                    "{uri}{}accessProfile={profile}",
+                    if uri.contains('?') { "&" } else { "?" }
+                ),
                 Some(claims(profile, profile == "analyst")),
                 &[],
                 Vec::new(),
@@ -3388,9 +3398,11 @@ async fn caller_filtered_openapi_hides_an_inaccessible_statistical_default() {
     assert_eq!(operation["x-registry-accessProfile"], "analyst-wide");
     assert!(operation.get("x-registry-accessProfiles").is_none());
     assert!(operation.get("x-registry-defaultAccessProfile").is_none());
-    assert!(!serde_json::to_string(operation)
-        .unwrap()
-        .contains("\"analyst\""));
+    assert!(
+        !serde_json::to_string(operation)
+            .unwrap()
+            .contains("\"analyst\"")
+    );
     let period = month_code(Utc::now().date_naive());
 
     let omitted = send(
@@ -4041,12 +4053,12 @@ async fn insert_other_definition_release(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn changing_population_through_package_apply_starts_a_new_release_series() {
     use registry_breg::migration::{
-        apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-        ApplyVerifiedPackageRequest,
+        ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+        ApplyVerifiedPackageRequest, apply_verified_package,
     };
     use registry_breg::package::{
-        load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
-        PackageMigrationPlanInput, PackageSourceFile,
+        PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile,
+        load_package, prepare_package,
     };
     use registry_breg::postgres::managed_schema_fingerprint;
     let database = TestDatabase::create(4).await;
@@ -4254,11 +4266,11 @@ fn quarterly_registry() -> registry_breg::CompiledRegistry {
 }
 
 fn statistics_registry_source() -> Value {
-    json!({
+    json!({"datasets":[{"id": "statistics-http"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"statistics-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test"},
-        "entities":[{
+        "recordTypes":[{
             "id":"record","primaryDataset":"statistics-http","route":"records","mutationMode":"mutable",
             "accessLog":{"subjectField":"subject"},
             "fields":[
@@ -4270,24 +4282,24 @@ fn statistics_registry_source() -> Value {
             ]
         }],
         "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                "entity":"record","operations":["list"],
+            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                "recordType":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,
                 "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
             }],"datasets":[{"dataset":"records-by-category","operations":["read-live","read-releases"]}]}},
-            {"id":"analyst-wide","principalClaim":"principal","requiredScopes":["statistics.wide"],"permissions":{"entities":[{
-                "entity":"record","operations":["list"],
+            {"id":"analyst-wide","principalClaim":"principal","requiredScopes":["statistics.wide"],"permissions":{"records":[{
+                "recordType":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"records-by-category","operations":["read-live","read-releases"]}]}},
-            {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":{"entities":[{
-                "entity":"record","operations":["list"],
+            {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":{"records":[{
+                "recordType":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"records-by-category","operations":["publish","read-releases"]}]}},
-            {"id":"seed","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                "entity":"record","operations":["create"],
+            {"id":"seed","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                "recordType":"record","operations":["create"],
                 "writableFields":["subject","active","category","event-date","jurisdiction"],"rowBoundaries":"unrestricted"
             }]}},
             {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
@@ -4318,11 +4330,11 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
     let codes = (0..50)
         .map(|value| format!("c{value:02}"))
         .collect::<Vec<_>>();
-    let source = json!({
+    let source = json!({"datasets":[{"id": "statistics-caps"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"statistics-cap-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics-caps.example.test"},
-        "entities":[{
+        "recordTypes":[{
             "id":"record","primaryDataset":"statistics-caps","route":"records","mutationMode":"mutable",
             "fields":[
                 {"id":"active","type":"boolean","required":true,"classification":"internal"},
@@ -4331,12 +4343,12 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
             ]
         }],
         "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                "entity":"record","operations":["list"],"readableFields":["active","category","event-date"],
+            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                "recordType":"record","operations":["list"],"readableFields":["active","category","event-date"],
                 "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"daily-by-category","operations":["read-live","read-releases"]}]}},
-            {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":{"entities":[{
-                "entity":"record","operations":["list"],"readableFields":["active","category","event-date"],
+            {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":{"records":[{
+                "recordType":"record","operations":["list"],"readableFields":["active","category","event-date"],
                 "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":"unrestricted"
             }],"datasets":[{"dataset":"daily-by-category","operations":["publish","read-releases"]}]}},
             {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
