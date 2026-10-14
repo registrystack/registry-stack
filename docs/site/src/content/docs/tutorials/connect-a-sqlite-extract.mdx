@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-14"
+last_reviewed: "2026-08-09"
 doc_type: how-to
 persona:
   - assertion provider
@@ -175,7 +175,7 @@ evidence check \
 
 The target-host check opens the read-only extract, validates its metadata and fixed statement,
 checks its age, initializes the signer and audit destination, resolves configured secrets, and
-checks the token issuer. A stale extract, missing binding, changed statement result, writable input,
+checks the token issuer. A stale extract, missing binding, statement shape or extract metadata mismatch, writable input,
 or unavailable dependency refuses the deployment.
 
 ## Next
