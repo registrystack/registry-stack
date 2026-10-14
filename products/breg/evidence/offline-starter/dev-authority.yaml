@@ -1,0 +1,21 @@
+apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+kind: EvidenceTargetAuthority
+target: local
+project: registry-evidence
+accessProfiles:
+  local-service:
+    authority: organizational
+    actorKind: service
+    requesterTags:
+    - local-service
+    grants:
+    - definition: extract-record-active
+      purpose: record-verification
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: subject
+        selectorProfile: record-by-code-v1
+        valueOrigin: request

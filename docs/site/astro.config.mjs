@@ -146,7 +146,7 @@ const disabledSitemap = {
 };
 const caseworkOpenApiSchema = {
   base: 'reference/apis/casework',
-  schema: './openapi/registry-casework.openapi.json',
+  schema: './openapi/registry-casework.render.openapi.json',
   sidebar: {
     label: 'API operations',
     collapsed: true,
@@ -155,7 +155,7 @@ const caseworkOpenApiSchema = {
 };
 const schedulingOpenApiSchema = {
   base: 'reference/apis/scheduling',
-  schema: './openapi/registry-scheduling.openapi.json',
+  schema: './openapi/registry-scheduling.render.openapi.json',
   sidebar: {
     label: 'API operations',
     collapsed: true,
@@ -178,7 +178,7 @@ export function schedulingRedirects(hasScheduling, currentDocsetRedirect) {
 }
 const messagingOpenApiSchema = {
   base: 'reference/apis/messaging',
-  schema: './openapi/registry-messaging.openapi.json',
+  schema: './openapi/registry-messaging.render.openapi.json',
   sidebar: {
     label: 'API operations',
     collapsed: true,
@@ -208,7 +208,7 @@ export function messagingRedirects(hasMessaging, currentHasMessaging, currentDoc
 }
 const coordinatorOpenApiSchema = {
   base: 'reference/apis/coordinator',
-  schema: './openapi/registry-coordinator.openapi.json',
+  schema: './openapi/registry-coordinator.render.openapi.json',
   sidebar: {
     label: 'API operations',
     collapsed: true,
@@ -316,7 +316,7 @@ export default defineConfig({
     // Retired lab tutorials land on the homepage or the Relay retirement record.
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/'),
     '/tutorials/query-a-spatial-registry-from-qgis/': internalRedirect('/start/breg-quickstart/'),
-    '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/issue-immunization-evidence-from-dhis2/'),
+    '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/connect-an-institution-source/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
@@ -395,7 +395,7 @@ export default defineConfig({
         starlightOpenAPI([
           {
             base: 'reference/apis/evidence',
-            schema: './openapi/registry-evidence.openapi.json',
+            schema: './openapi/registry-evidence.render.openapi.json',
             sidebar: {
               label: 'API operations',
               collapsed: true,
@@ -492,9 +492,6 @@ export default defineConfig({
               label: 'Source examples',
               collapsed: true,
               items: [
-                { label: 'OpenCRVS: registered parent', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
-                { label: 'OpenCRVS: birth certificate', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
-                { label: 'DHIS2: immunization summary', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
                 { label: 'FHIR R4: patient coverage', slug: 'tutorials/issue-fhir-evidence-as-vcs' },
               ],
             },

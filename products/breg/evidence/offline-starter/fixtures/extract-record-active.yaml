@@ -183,7 +183,7 @@ cases:
 # strings are unrelated source values, present so that a leak of the whole row
 # fails a case instead of passing quietly.
 privacyExpectation:
-  evidenceContains: [urn:example:concept:record-active:active]
+  evidenceContains: [urn:example:concept:extract-record-active:active]
   evidenceExcludes:
     - status
     - code

@@ -479,8 +479,9 @@ relevant product pages on this site rather than duplicating release notes.
   `authenticated-context` bindings for a borrowed BReg issuer. A retained local session keeps the
   mode it started in: stop and clean it before you start it in the other mode.
 
-{/* Evidence: crates/registry-evidencectl/src/dev.rs, preserve_target_authenticated_context;
-    products/evidence/CHANGELOG.md. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-evidencectl/src/dev.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidencectl/src/dev.rs);
+    [products/evidence/CHANGELOG.md](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/evidence/CHANGELOG.md). */}
 
 - The BReg, Registry Casework, Registry Scheduling, and Registry Messaging clients report an
   unknown mutation outcome and resend a keyed mutation under the same key, with the same
@@ -981,10 +982,10 @@ relevant product pages on this site rather than duplicating release notes.
   400 `source-profile.required`. See
   [Revisions, actions, and recovery](../reference/client-api/#revisions-actions-and-recovery).
 
-{/* Evidence: crates/registry-casework-core/src/http.rs, DecideRequest and RecoverAttemptRequest;
-    crates/registry-caseworkctl/src/dev/mod.rs, header_file();
-    crates/registry-casework/tests/review_http.rs,
-    an_inbox_emptied_only_by_the_missing_source_profile_says_so. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework-core/src/http.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework-core/src/http.rs);
+    [crates/registry-caseworkctl/src/dev/mod.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-caseworkctl/src/dev/mod.rs);
+    [crates/registry-casework/tests/review_http.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/tests/review_http.rs). */}
 
 - BREAKING: every Casework mutating route parses its JSON body strictly: a duplicate object member at
   any depth, or a raw integer IEEE 754 binary64 cannot represent exactly, is refused with 422
@@ -998,13 +999,13 @@ relevant product pages on this site rather than duplicating release notes.
   `request.limit-out-of-range`, and `ReviewTaskPage` carries a required `status`. A plain item,
   history, or clocks read across a moved source binding returns the retained item without actions
   instead of 409 `work-item.proposal-changed`. A source binding or policy field an adapter refuses
-  is named by its key path. See [Problem codes](../reference/apis/registry-casework/#problem-codes).
+  is named by its key path. See [Problem codes](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/docs/site/src/content/docs/reference/apis/registry-casework.mdx#problem-codes).
 
-{/* Evidence: crates/registry-casework-core/src/http.rs, REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM;
-    crates/registry-casework-core/src/review.rs, ReviewTaskPage;
-    crates/registry-casework/src/service.rs, retained_without_actions();
-    crates/registry-casework-breg/src/config.rs, validate_binding_input() and
-    check_description_input(). */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework-core/src/http.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework-core/src/http.rs);
+    [crates/registry-casework-core/src/review.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework-core/src/review.rs);
+    [crates/registry-casework/src/service.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/service.rs);
+    [crates/registry-casework-breg/src/config.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework-breg/src/config.rs). */}
 
 - Registry Scheduling starts a hold's time to live once its capacity transaction takes its locks,
   so a hold created under contention keeps its whole `holdPolicy.ttlMinutes`, and answers
@@ -1093,10 +1094,11 @@ relevant product pages on this site rather than duplicating release notes.
   blocks startup until it is dropped. See
   [plan, apply, and serve](../operate/casework/#plan-apply-and-serve).
 
-{/* Evidence: crates/registry-casework/src/activation.rs, plan_activation() and
-    apply_activation(); crates/registry-casework/src/runtime.rs,
-    check_source_revisions(); crates/registry-caseworkctl/src/breg_package.rs,
-    compare(); crates/registry-casework/tests/activation_postgres.rs. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework/src/activation.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/activation.rs);
+    [crates/registry-casework/src/runtime.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/runtime.rs);
+    [crates/registry-caseworkctl/src/breg_package.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-caseworkctl/src/breg_package.rs);
+    [crates/registry-casework/tests/activation_postgres.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/tests/activation_postgres.rs). */}
 
 - BREAKING: Registry Scheduling activates a package with `schedulingctl plan`
   and `schedulingctl apply`, recorded in an activation ledger, and
@@ -1137,7 +1139,7 @@ relevant product pages on this site rather than duplicating release notes.
   overriding the entrypoint, or from a Kubernetes Job `command:`. The Scheduling runtime stays an
   image-only artifact and has no installer. See
   [Activate from the image](../operate/breg/#activate-from-the-image) and
-  [Run plan, apply, and status from the image](../operate/casework/#run-plan-apply-and-status-from-the-image).
+  [Run plan, apply, and status from the image](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/docs/site/src/content/docs/operate/casework.mdx#run-plan-apply-and-status-from-the-image).
 
 {/* Evidence: release/docker/Dockerfile.breg; release/docker/Dockerfile.casework;
     release/docker/Dockerfile.scheduling; release/scripts/release_candidate.py,
@@ -1266,7 +1268,7 @@ relevant product pages on this site rather than duplicating release notes.
   HTTP `jwksUri` cannot name a profile. A profile bound on one side only is
   refused, and `evidence check --require-runtime-dependencies` fetches the key
   set through it before the listener binds. See
-  [an issuer behind a private CA](../configure/evidence/#an-issuer-behind-a-private-ca).
+  [an issuer behind a private CA](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/docs/site/src/content/docs/configure/evidence.mdx#an-issuer-behind-a-private-ca).
 
 {/* Evidence: crates/registry-evidence/src/runtime.rs, issuer_trust_roots();
     crates/registry-evidence/src/bundle.rs, the_issuer_trust_profile_is_bound_exactly_like_a_source_profile;
@@ -1309,11 +1311,12 @@ relevant product pages on this site rather than duplicating release notes.
   between names passes when any of them is declared. See
   [evidencectl](../reference/evidencectl/#project-workflow).
 
-{/* Evidence: crates/registry-evidence-authoring/src/derivation.rs, validate_answer_fact_reads();
-    crates/registry-evidencectl/src/authoring.rs, declared_fact_names() and read_inputs();
-    crates/registry-evidence-authoring/tests/derivation_fact_reads.rs;
-    crates/registry-evidencectl/src/source_cli.rs, diff_and_apply_refuse_a_next_fact_schema_that_drops_a_fact_a_derivation_reads;
-    products/breg/evidence/tests/verify-composition.py, verify(). */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-evidence-authoring/src/derivation.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidence-authoring/src/derivation.rs);
+    [crates/registry-evidencectl/src/authoring.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidencectl/src/authoring.rs);
+    [crates/registry-evidence-authoring/tests/derivation_fact_reads.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidence-authoring/tests/derivation_fact_reads.rs);
+    [crates/registry-evidencectl/src/source_cli.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidencectl/src/source_cli.rs);
+    [products/breg/evidence/tests/verify-composition.py](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/products/breg/evidence/tests/verify-composition.py). */}
 
 - BREAKING: `bregctl test --baseline-runtime-config` rehearses the successor
   migration before it writes a receipt. It rebuilds the active package's
@@ -1473,7 +1476,7 @@ relevant product pages on this site rather than duplicating release notes.
   `runtime.yaml` with the new keys, rebuild the candidate with the matching
   `evidencectl`, and replace `--runtime FILE` with
   `<subcommand> --runtime-config FILE` in service definitions. See
-  [configure Evidence Gateway](../configure/evidence/#the-runtime-file).
+  [configure Evidence Gateway](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/docs/site/src/content/docs/configure/evidence.mdx#the-runtime-file).
 
 {/* Evidence: crates/registry-evidence/src/config.rs, EVIDENCE_RUNTIME_REMOVED_KEYS,
     every_removed_runtime_key_is_refused_with_its_replacement_named,
@@ -1507,13 +1510,9 @@ relevant product pages on this site rather than duplicating release notes.
   `casework.yaml`. See
   [configure the runtime](../operate/casework/).
 
-{/* Evidence: crates/registry-casework/src/config.rs, the_runtime_configuration_is_read_through_the_shared_loader,
-    a_removed_jwks_uri_names_its_replacement, the_oidc_issuer_and_clients_are_the_shared_blocks,
-    production_names_its_allowed_clients_while_loopback_may_leave_them_empty,
-    environment_expressions_substitute_values_but_never_secret_references and
-    an_authored_project_carrying_an_environment_expression_is_refused;
-    crates/registry-caseworkctl/src/lib.rs, removed_runtime_keys_name_the_replacement_path_and_action and
-    check_refuses_an_environment_expression_in_the_authored_project. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework/src/config.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/config.rs);
+    [crates/registry-caseworkctl/src/lib.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-caseworkctl/src/lib.rs). */}
 
 - BREAKING: Base Registry Engine reads `runtime.yaml` through the shared
   runtime configuration loader and declares its OpenID Connect issuer, audit
@@ -1780,8 +1779,9 @@ relevant product pages on this site rather than duplicating release notes.
   from the BReg `registry.yaml`, then repeat `caseworkctl source add --apply`.
   See [deploy Registry Casework](../operate/casework/#write-the-runtime-file).
 
-{/* Evidence: crates/registry-casework-breg/src/lib.rs, LIFECYCLE_EVENT_TYPE_PREFIX;
-    crates/registry-caseworkctl/src/source_add.rs, apply_breg_candidate(). */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework-breg/src/lib.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework-breg/src/lib.rs);
+    [crates/registry-caseworkctl/src/source_add.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-caseworkctl/src/source_add.rs). */}
 
 - BREAKING: Base Registry Engine (BReg) drops the `superseded` change-request
   state, which no transition ever wrote. A request is `draft`, `submitted`, `cancelled`, or
@@ -1938,9 +1938,10 @@ relevant product pages on this site rather than duplicating release notes.
   hosted tables without carrying their data forward. See
   [review BReg changes in Casework](../tutorials/review-breg-changes-in-casework/).
 
-{/* Evidence: crates/registry-casework/migrations/0015_unified_reviews.sql;
-    crates/registry-casework/src/review.rs;
-    crates/registry-breg/src/review_store.rs. */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework/migrations/0015_unified_reviews.sql](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/migrations/0015_unified_reviews.sql);
+    [crates/registry-casework/src/review.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/review.rs);
+    [crates/registry-breg/src/review_store.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-breg/src/review_store.rs). */}
 
 - BREAKING: BReg entity `events` are now shared `hooks`, and deliveries carry a
   signed hook envelope instead of the earlier bare body. Rewrite each entity
@@ -2055,9 +2056,10 @@ relevant product pages on this site rather than duplicating release notes.
   `registry_grant_source_issuer`; ThunderID derives the source issuer from the
   verified `iss`.
 
-{/* Evidence: crates/registry-casework/src/task_grants.rs, task_assertion_pseudonymizes_approver_and_keeps_evidence_context_explicit();
-    crates/registry-thunderid-tooling/src/description.rs, GRANT_ATTRIBUTES;
-    crates/registry-thunderid-tooling/src/render.rs, render(). */}
+{/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
+    [crates/registry-casework/src/task_grants.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-casework/src/task_grants.rs);
+    [crates/registry-thunderid-tooling/src/description.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-thunderid-tooling/src/description.rs);
+    [crates/registry-thunderid-tooling/src/render.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-thunderid-tooling/src/render.rs). */}
 
 - Local dev databases holding grants or drafts from before #1044 no longer load;
   reset local dev state.
@@ -2519,7 +2521,7 @@ Relay identities:
   tooling, operational posture, security, and terminology against the V2
   contracts.
 - Recorded the [Relay V1 and registryctl retirement
-  decision](../decisions/relay-v1-and-registryctl-retirement-2026-08-11/) and
+  decision](https://github.com/registrystack/registry-stack/blob/24ea41203343f8d24b0a0a19d4902f21dfb62479/docs/site/src/content/docs/decisions/relay-v1-and-registryctl-retirement-2026-08-11.mdx) and
   redirected the retired routes.
 - Documented the Relay installer and the `ghcr.io/registrystack/relay:v0.19.0`
   image. `relayctl` has no installer; it is taken from the release assets or
@@ -2585,7 +2587,7 @@ Adopter-facing breaking change:
 - Required affected deployments to re-approve their baseline from the current
   lane bundles, because the removed cross-lane interface digests are no longer
   verified and the old approval's integrity claim is no longer enforced. See
-  [Approve the initial product baseline](../operate/approve-initial-baseline/).
+  [Approve the initial product baseline](https://github.com/registrystack/registry-stack/blob/f688b4f2580e1feea409cd561647d9ad42770d6b/docs/site/src/content/docs/operate/approve-initial-baseline.mdx).
 
 ## 2026-08-01
 
@@ -2930,7 +2932,7 @@ Documentation updates published:
 ## 2026-06-13
 
 Documentation set: the Latest docset published from the main branch, tracking main snapshots of
-[Registry Relay](../products/registry-relay/), [Registry Notary](../products/registry-notary/),
+[Registry Relay (retired)](../decisions/registry-relay-retirement-2026-10-03/), [Registry Notary](https://github.com/registrystack/registry-stack/blob/b8ed78f80562842d7de2c6e3eb388b85e334c8a9/products/notary/README.md),
 and [Registry Manifest](../products/registry-manifest/).
 
 ## 2026-06-12

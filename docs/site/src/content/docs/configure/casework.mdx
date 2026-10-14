@@ -12,6 +12,8 @@ standards_referenced:
   - json-schema
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 If you are preparing a Registry Casework deployment for a review team, start with a submitted-context policy, check its stages and outcomes, then add current-source context when reviewers need a fresh authorized view. Casework returns a review result; the producer remains responsible for the subject and any later business mutation.
 
 {/* Evidence: products/casework/README.md; crates/registry-review-protocol/src/lib.rs, ReviewResult. */}
@@ -309,6 +311,8 @@ An Administrator publishes immutable holiday-set revisions. Missing holiday fact
     clock_recompute_uses_pinned_calendar_and_fences_changed_holiday_inputs(). */}
 
 ## The verification loop
+
+<ConfigurationFormatChecks product="casework" />
 
 Check the authored policy, inspect the closure, exercise its synthetic fixtures, and generate client types:
 

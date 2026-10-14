@@ -1,0 +1,91 @@
+functions:
+- id: record-active
+  interface: assertion-derive/v1
+  source: functions/record-active.rhai
+- id: record-status-pair
+  interface: assertion-derive/v1
+  source: functions/record-status-pair.rhai
+assertionDefinitions:
+  record-active:
+    question: Is the registered record active?
+    semantics:
+      requirement: urn:example:requirement:record-active:v1
+      kind: criterion
+      evidenceType: urn:example:evidence:record-active
+      referenceFrameworks:
+      - urn:example:framework:record-state:v1
+    purpose: record-verification
+    grantCeiling:
+      authorities:
+      - organizational
+      actorKinds:
+      - service
+      valueOrigins:
+      - request
+      audiences:
+      - urn:example:audience:local-evidence
+    subjects:
+    - role: subject
+      selectors:
+      - breg-8-registry-6-record-7-by-code
+      - breg-8-registry-6-record-22-by-registration-number
+    acquisition:
+      type: single
+      source: registry-status
+    derive:
+      function: record-active
+    outputs:
+      active:
+        concept: urn:example:concept:record-active:active
+        type: boolean
+    validitySeconds: 300
+    subjectBinding: audience-scoped
+    representations:
+    - signed-jws
+    fixtures: fixtures/record-active.yaml
+    disclosureGuard:
+      families:
+      - urn:example:disclosure-family:record-active
+  record-status-pair:
+    question: Which of the two reviewed record states applies?
+    semantics:
+      requirement: urn:example:requirement:record-status-pair:v1
+      kind: criterion
+      evidenceType: urn:example:evidence:record-status-pair
+      referenceFrameworks:
+      - urn:example:framework:record-state:v1
+    purpose: record-verification
+    grantCeiling:
+      authorities:
+      - organizational
+      actorKinds:
+      - service
+      valueOrigins:
+      - request
+      audiences:
+      - urn:example:audience:local-evidence
+    subjects:
+    - role: subject
+      selectors:
+      - breg-8-registry-6-record-22-by-registration-number
+      - breg-8-registry-6-record-7-by-code
+    acquisition:
+      type: single
+      source: registry-status
+    derive:
+      function: record-status-pair
+    outputs:
+      currently_active:
+        concept: urn:example:concept:record-status-pair:currently_active
+        type: boolean
+      retired:
+        concept: urn:example:concept:record-status-pair:retired
+        type: boolean
+    validitySeconds: 300
+    subjectBinding: audience-scoped
+    representations:
+    - signed-jws
+    fixtures: fixtures/record-status-pair.yaml
+    disclosureGuard:
+      families:
+      - urn:example:disclosure-family:record-status-pair

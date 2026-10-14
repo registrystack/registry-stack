@@ -22,8 +22,13 @@ Evidencectl is outside the frozen Evidence Gateway Version 1 runtime contract. I
 change before a compatibility promise covers it. Evidencectl compiles editable authoring input into
 a closed bundle. The `evidence` runtime remains the authority for bundle validation and semantic
 acceptance, fixture evaluation, secret validation, and startup acceptance.
-The canonical adopter commands do not change the numeric Evidence Gateway Version 1
-`runtime.yaml` grammar or the existing `evidence-project.yaml` marker.
+Author one normalized `EvidenceProject` in `evidence.yaml`. A separate `EvidenceTarget`
+binds connections and process configuration, and its `EvidenceTargetAuthority` supplies complete
+access profiles. The former split question/source/selector documents are refused.
+
+{/* Evidence: crates/registry-evidence-authoring/src/project.rs, EvidenceProject;
+    crates/registry-evidence-authoring/src/target.rs, EvidenceTarget and EvidenceTargetAuthority;
+    crates/registry-evidencectl/src/authored.rs. */}
 
 ## Project workflow
 
@@ -34,8 +39,8 @@ The canonical adopter commands do not change the numeric Evidence Gateway Versio
 | `evidencectl check <project> --target <target> --production` | Editable project and one explicit production or evidence-grade target | Refuses incomplete deployment closure under that target's own assurance profile | Select a target, upgrade its profile, or prove live readiness |
 | `evidencectl check --file <file>` | One tooling file: a client profile, reviewed contracts, development state, a source-import baseline or journal, a source resolution file, or a source export manifest | Reads the file with its format's reader, named by the file's `kind`, and reports field-addressed diagnostics; exits 0 when it passes, 1 when it is refused, 3 when the file cannot be read | Check a project, resolve secrets, write the file, or contact a dependency |
 | `evidencectl explain <project> [--target <target>]` | Editable project and optional explicit target | Applies the same offline authoring validation, then reports status, diagnostics, revision, and the authored inventory; includes target governance only when selected | Contact sources or expose secret and subject values |
-| `evidencectl package <project> --target <target> --output <new-package>` | Editable project and one explicit production target | Creates one closed package with `SHA256SUMS`; runtime remains in the target | Overwrite output, contact source services or OIDC, create production secrets, or start a listener |
-| `evidencectl test <editable-project> [--target <deployment-target>]` | An editable project with `questions/`, `sources/`, and referenced synthetic fixtures; an optional target supplies complete deployment governance | Privately compiles the project, then uses runtime `bundle-check` and `bundle-evaluate` | Start HTTP, call a source, or write a production audit entry |
+| `evidencectl package <project> --target <target> --output <new-package>` | Editable project and one explicit target | Creates a candidate with `bundle/`, `runtime.yaml`, `compiled-authority.yaml`, and `SHA256SUMS` | Overwrite output, contact source services or OIDC, create production secrets, or start a listener |
+| `evidencectl test <editable-project> [--target <deployment-target>]` | An editable `evidence.yaml` project with referenced synthetic fixtures; an optional target supplies complete deployment governance | Privately compiles the project, then uses runtime `bundle-check` and `bundle-evaluate` | Start HTTP, call a source, or write a production audit entry |
 | `evidencectl test <editable-project> --target <deployment-target> --explain` | The same, and asks each evaluation to explain itself | Relays each fixture's stage trace beside its step, or as that fixture's `trace` field under `--format json` | Print a response, fact, derived, or selector value, or explain a served request |
 | `evidencectl doctor --runtime-config <absolute-file>` | Runtime file on its target host | Runs the runtime-owned startup dependency preflight without opening the public listener | Send an Evidence request or establish that a fixture passed |
 | `evidencectl artifact inspect <target>` | Deployment target whose runtime names the installed package | Inspects artifact custody without contacting dependencies | Establish live dependency readiness |
@@ -53,20 +58,17 @@ production HTTP sources, source transports with no stated production conditions,
 metadata or fixtures, unresolved review markers, unknown fields, symlink traversal, and references
 outside the allowed project directories. A failed package publishes no candidate.
 
-`check`, `test`, `package`, `source diff`, and `source update`, plus the compatibility spelling
-`fixtures run`, refuse a derivation whose `answer` reads a fact its question's source
-does not declare, with `evidence.derivation.fact-undeclared` against the derivation
-file. A source declares an inline operation's `source.facts[].name`, or the properties of a
-referenced source's closed `factSchema`. A registry field rename that a derivation still reads
-under its old name therefore fails before `source update` installs anything. The check reads the
-project, not the running registry: a candidate already deployed against a registry whose field is
-then renamed still fails every request that reads it while `/ready` reports ready. Only literal
-reads on the first `answer` parameter, such as `facts["status"]` and `facts.status`, are checked.
-The operands of one `??` fallback are read together, so `facts.new ?? facts.old` passes while
-either name is declared. A computed key such as `facts[key]` is not a literal read and is how a
-derivation reads a fact the check should not see. It, a read inside a helper function, an
-`answer` that rebinds or writes its first parameter, and an open fact schema are left to the
-fixtures.
+Compilation checks literal reads in a named `assertion-derive/v1` Function against the private
+facts its definition's acquisition supplies. A read of an undeclared fact is refused as
+`evidence.project.derivation-fact-undeclared`. Literal `facts["status"]` and `facts.status` reads on the first
+`derive` parameter are checked; a `facts.new ?? facts.old` fallback passes when either name is
+declared. Computed keys, helper-function reads, and a rebound first parameter remain fixture
+responsibilities. After a source change, check and test the project before packaging a replacement.
+
+{/* Evidence: crates/registry-evidence-authoring/src/derivation.rs, validate_derive_fact_reads();
+    crates/registry-evidence-authoring/src/compile.rs, validate_derive_fact_reads;
+    crates/registry-evidencectl/src/normalized.rs;
+    crates/registry-evidencectl/src/authored.rs, file_findings_report(). */}
 
 An ordinary `check` can succeed with `status: incomplete` and visible warnings. Add
 `--deny-warnings` to exit 1 when the check reports any warning. Every diagnostic carries
@@ -109,53 +111,42 @@ usage error.
     crates/registry-evidencectl/src/junit.rs, render();
     crates/registry-evidencectl/src/check.rs, check() and explain();
     crates/registry-evidencectl/src/runtime.rs, DoctorArgs and run();
-    crates/registry-evidencectl/src/authoring.rs, read_inputs() and declared_fact_names();
-    crates/registry-evidence-authoring/src/derivation.rs, validate_answer_fact_reads(). */}
+    crates/registry-evidencectl/src/authoring.rs, read_inputs();
+    crates/registry-evidence-authoring/src/derivation.rs, validate_derive_fact_reads(). */}
 
-## Compatibility spellings
+## Command selection
 
-The released `new` and `fixtures run` spellings remain available during the command
-transition.
-New projects, examples, and current procedures use `init`, `test`, and `package`.
-The `doctor --project <target>` compatibility form retains artifact inspection;
-use `artifact inspect <target>` for that operation and reserve `doctor --runtime-config` for
-live startup dependency checks. Every command that reads one project names it as a positional
-`<project>` argument, defaulting to the current directory where the command allows it. The former
-`--project <project>` spelling is refused on commands whose project is positional. Only `source import`, `source diff`, and `source update`, whose positional argument is
-the export, and `target new`, whose positional argument is the target, document `--project`.
-`doctor` keeps its visible `--project <target>` option, and the `access` commands and
-`audit show` act on the current directory; none of these takes a positional project. Do
-pass `--project` to a command whose project is positional; clap refuses it as an unexpected argument.
-Request preparation uses `--response-format signed-jws|sd-jwt-vc` so the
-response choice cannot collide with global report formatting. The released
-`request prepare --format` spelling remains accepted only for those two legacy
-response values. Supplying both response selectors is a usage error.
+Use `init`, `test`, and `package` for the authored project lifecycle. Commands whose project is
+positional take `<project>`; `source import`, `source diff`, `source update`, and `target new`
+use `--project` because their positional argument selects a different input or destination.
+Reserve `doctor --runtime-config` for startup dependency checks and `artifact inspect` for
+artifact custody. The generated CLI reference supplies the complete accepted syntax.
+
+{/* Evidence: crates/registry-evidencectl/src/lib.rs, Command;
+    crates/registry-evidencectl/src/source_cli.rs; crates/registry-evidencectl/src/target.rs;
+    crates/registry-evidencectl/src/runtime.rs. */}
 
 ## Production input reference
 
-An editable project becomes a production build input only after it has:
+Package a reviewed `evidence.yaml` project with one explicit normalized target and its referenced
+authority document. The target binds the project, source connections, authentication, signer,
+secret providers, audit, and operator limits. Its complete grants must fit each definition's
+`grantCeiling`; a target can narrow the project ceilings, never widen them.
 
-- A `fixtures/` regular file referenced by every production question.
-- Stable concept identifiers and production `governance` metadata in every question.
-- `<target>/governance.yaml` with bundle-owned fields for one environment.
-- `<target>/runtime.yaml` with one environment's runtime bindings.
-- Public JWK files beneath `<target>/` for every active and published service key referenced there.
+The target may be a YAML file or a directory containing `target.yaml`. Use
+`evidencectl target new <directory> --local --project <project>` for a local target specimen.
+Review its connections and authority before treating it as deployment configuration. Production
+closure is checked with `evidencectl check <project> --target <target> --production`; only final
+runtime-host dependency checks establish that its paths, credentials, and services are available.
 
-`governance.yaml` is strict. It must carry version `1`, an `assuranceProfile` of `production` or
-`evidence-grade`, service, issuer, authentication, audit, subject binding, rate limits, signing,
-optional response formats, and authority profiles. It cannot supply selector profiles, sources, or
-requirements. It accepts logical `secret:file/<name>` references, not values or absolute secret
-paths.
+Keep synthetic fixtures with the project and public keys with the target. Git must contain no
+private JWKs, HMAC keys, provider tokens, access tokens, live responses, or real identifiers.
+The [configuration reference](../evidence-configuration/) describes the exact authored formats.
 
-The output runtime document is copied byte-for-byte. Its paths and secret posture are accepted only
-by the final target-host `evidence check --require-runtime-dependencies`.
-
-The maintained reference layout keeps the editable project under `shared/evidence-project/` and each
-complete deployment target under `environments/<target>/evidence/`. That layout is a repository
-convention, not part of the `--target` path grammar. Do not use overlays, environment branches,
-symlinks, or runtime substitutions. Git contains public keys and nonsecret provider configuration,
-but no private JWKs, HMAC keys, provider tokens, auto-auth credentials, access tokens, live
-responses, or real identifiers.
+{/* Evidence: crates/registry-evidence-authoring/src/target.rs, EvidenceTarget, EvidenceTargetAuthority,
+    validate_authority(); crates/registry-evidencectl/src/target.rs, target_path();
+    crates/registry-evidencectl/src/build.rs, compile_with_target();
+    crates/registry-evidencectl/src/check.rs. */}
 
 ## Local-only commands
 
@@ -164,12 +155,15 @@ responses, or real identifiers.
 ```sh
 evidencectl init <directory> --openapi <path-or-https-url> --profile local
 evidencectl init <directory> --transport sqlite-extract --profile local
+evidencectl init <directory> --starter <reviewed-directory> --profile local
 ```
 
-OpenAPI mode creates an authoring workspace whose source, question, and fixture directories remain
-empty. SQLite mode creates a synthetic source, question, query, adapters, schemas, derivation, and
-fixture. Both create disposable, unbound Evidence Gateway key material in the ignored owner-only
-`secrets/` directory. Neither creates a production target, issuer configuration, or deployable bundle.
+OpenAPI mode retains an API description for subsequent source authoring. SQLite mode creates a
+normalized synthetic project with named Functions, a query, and fixtures. Starter mode copies
+reviewed local authoring inputs. Disposable private material stays outside the authored contract;
+these modes do not establish production authority or live readiness.
+
+{/* Evidence: crates/registry-evidencectl/src/scaffold.rs, NewArgs and STARTER_TOP_LEVEL_FILES. */}
 
 `evidencectl dev start [<project>]` starts Evidence Gateway and the pinned local issuer on loopback.
 When borrowing a shared issuer, pass `--issuer-project <owner>` and an exact `--resource <URI>`
@@ -186,9 +180,9 @@ For a nondefault resource, the compiler also derives distinct governed provider,
 service identifiers from that resource, so multiple local Evidence services remain separate in
 Discovery.
 {/* Evidence: crates/registry-evidencectl/src/dev.rs, DevArgs, select_resource, StartArgs, issuer_label;
-    crates/registry-evidencectl/src/authoring.rs, render_local_bundle, local_compilation_keeps_two_exact_evidence_resources_separate */}
-It creates a session-scoped P-256 pair for an SD-JWT VC holder and an implicit caller pair only when the project has no explicit access
-policy; explicit local clients use their keys under `.evidence/clients/`. Nothing under
+    crates/registry-evidencectl/src/authoring.rs, render_local_bundle, local_resource_identity */}
+It creates a session-scoped P-256 pair for an SD-JWT VC holder. Explicit local clients use
+their keys under `.evidence/clients/`. Nothing under
 `.evidence/dev` or `.evidence/clients` enters a production target.
 
 `evidencectl dev token <client> [<project>]` obtains a fresh service token and writes an owner-only
@@ -196,49 +190,42 @@ policy; explicit local clients use their keys under `.evidence/clients/`. Nothin
 prints the token. Task grants come from the configured Casework authority and are not static local
 client attributes.
 
-`evidencectl access` manages caller access for one local project:
+`evidencectl access` reads complete access profiles from the authority referenced by the local
+target. It registers client membership separately from those grants:
 
-| Command | State | Result |
-| --- | --- | --- |
-| `evidencectl access policy add <policy> --question <question>` | Creates `access/policies/<policy>.yaml` | Defines one or more repeated `--question` values for the next Evidence Gateway generation |
-| `evidencectl access policy list` | Reads `access/policies/` | Lists the governed local policies and their questions |
-| `evidencectl access client add <client> --policy <policy> --generate-local-key` | Creates `access/clients/<client>.yaml` and `.evidence/clients/<client>/private.jwk` | Registers a local client for repeated `--policy` values with non-overlapping question sets |
-| `evidencectl access client list` | Reads `access/clients/` | Lists local client status and policy membership |
-| `evidencectl access client revoke <client>` | Updates `access/clients/<client>.yaml` | Revokes the local client for the next issuer generation and removes `.evidence/clients/<client>/`, the client's local private key |
+| Command | Result |
+| --- | --- |
+| `evidencectl access profile list` | Lists target access profiles |
+| `evidencectl access client add <client> --access-profile <profile> --generate-local-key` | Registers a local client and writes its owner-only private key |
+| `evidencectl access client list` | Lists client status and access-profile membership |
+| `evidencectl access client revoke <client>` | Revokes membership and removes that client's local private-key directory |
 
-For an institutional task exchange, author an optional `taskGrant` on the policy with its
-`kind`, exact `sourceIssuer`, active `requesterClients`, and one `bindings` entry for each
-question, subject role, and selector alternative. Each binding maps the selector's complete field
-set to verified access-token `valueClaims`. The compiler emits authenticated-grant origins and
-binds the policy tag to the full grant semantics; it refuses revoked, unassigned, or incomplete
-requester bindings. Create the requester with
-`evidencectl access client add <client> --policy <policy> --generate-local-key --grant-bootstrap-scope <scope>`.
-Use `--grant-bootstrap-resource <URI>` only if its issuer bootstrap resource differs from the
-shared issuer owner's default. The borrowed issuer must register that same key and bootstrap
-binding for institutional exchange. A direct client omits both bootstrap flags.
-For a portal that signs first-party context, create an active policy client with
-`--first-party-bootstrap-scope evidence:invoke --first-party-bootstrap-resource <Evidence resource> --first-party-issuer <issuer>`.
-The borrowed owner must register the same client key and bootstrap permission, and an exact
-`first-party` exchange issuer. Its bootstrap registration carries no static Evidence requester
-tags or audience; the signed context supplies those attributes for each request. The client
-still needs an active Evidence policy assignment and cannot use a task-grant policy.
-{/* Evidence: crates/registry-evidence-authoring/src/model.rs, AccessTaskGrant, AccessTaskBinding;
-    crates/registry-evidencectl/src/authoring.rs, render_policy_authority_profile;
-    crates/registry-evidencectl/src/access.rs, ClientAddArgs, ActiveClientExchange;
-    crates/registry-evidencectl/src/dev.rs, verify_borrowed_registrations */}
+Repeat `--access-profile` for disjoint grants. `--evidence-audience` and `--actor-kind` select
+values within the chosen definition ceilings when they cannot be inferred uniquely. Profiles
+and grants live in `EvidenceTargetAuthority`, including their authority kind, requester tags,
+permitted definitions, purpose, representations, subject binding, and selector value origins.
 
-Public, reviewable local access configuration lives under `access/`. Owner-only private client keys
+Institutional task exchange uses `--grant-bootstrap-scope` and, when needed,
+`--grant-bootstrap-resource`. The selected profiles must already declare matching task-grant
+authority. First-party exchange instead uses `--first-party-bootstrap-scope`,
+`--first-party-bootstrap-resource`, and `--first-party-issuer`. Register the exact corresponding
+client key and bootstrap permission with the borrowed issuer before starting the session.
+
+{/* Evidence: crates/registry-evidence-authoring/src/target.rs, AccessProfile, AccessGrant and GrantedSubject;
+    crates/registry-evidencectl/src/access.rs, AccessCommand, ClientAddArgs, ActiveClientExchange,
+    load_access_profiles(); crates/registry-evidencectl/src/dev.rs, verify_borrowed_registrations(). */}
+
+Public local client registrations live under `access/`; grants remain in the target authority. Owner-only private client keys
 live only under `.evidence/clients/`. Generated issuer resources under `.evidence/dev/generated/issuer/`
 are disposable.
 
 Stop the local development session before adding or revoking a client. The next start validates the
-complete client and policy registry, then provisions it as one issuer generation. A policy change also
+complete client and access-profile registry, then provisions it as one issuer generation. An access-profile change also
 requires a new Evidence Gateway generation.
 
 The local access commands do not define production authority or production clients. Production
-authority profiles remain in the deployment target's governed `governance.yaml`. Production client
-registrations remain in the deployment's governed OAuth issuer. Files under `access/` and
-`.evidence/` do not become production candidate inputs.
+access profiles remain in the deployment target's `EvidenceTargetAuthority`. Production client
+registrations remain in the deployment's governed OAuth issuer. Local client registration and private `.evidence/` state do not become production caller authority.
 
 Use `keygen`, `source suggest`, `request`, `verify`, and `audit` for their documented authoring or
 local inspection roles. Do not use a local request, local audit record, or disposable key as a
@@ -250,47 +237,25 @@ production candidate input.
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
-| `evidencectl tooling editor [<project>]` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all thirteen managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
+| `evidencectl tooling editor [<project>]` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports its managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
 | `evidencectl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Evidence Gateway authoring diagnostics for every document it indexes in the project, not only the open one | Open a socket, contact a source, read source values, or observe SQLite |
 
-`tooling editor` writes thirteen files into the project:
-
-```text
-.evidence-editor/manifest.json
-.evidence-editor/schemas/access-client.schema.json
-.evidence-editor/schemas/access-policy.schema.json
-.evidence-editor/schemas/fixture.schema.json
-.evidence-editor/schemas/mock-plan.schema.json
-.evidence-editor/schemas/project-marker.schema.json
-.evidence-editor/schemas/question.schema.json
-.evidence-editor/schemas/selector.schema.json
-.evidence-editor/schemas/source.schema.json
-.evidence-editor/schemas/target-settings.schema.json
-.vscode/extensions.json
-.vscode/settings.json
-.zed/settings.json
-```
-
-Commit all thirteen with the rest of the project. They are generated, nonsecret configuration matched to
-the schemas the checks apply, and the `.gitignore` that `evidencectl init` writes excludes `secrets/`
-and `.evidence/` only. A later run refreshes exactly what an earlier run recorded writing. A managed
-file someone has edited by hand stops the command, which names that file and changes nothing.
-
-The mappings cover `evidence-project.yaml`, `questions/*.yaml`, `sources/*.yaml`,
-`selectors/*.yaml`, `fixtures/*.yaml`, `access/clients/*.yaml`, `access/policies/*.yaml`,
-`mocks/source.yaml`, and `targets/*/settings.yaml`, the document kinds a Rust type stands behind.
-Derivations and answer schemas carry no static schema; the language server checks those.
+`tooling editor` writes a managed manifest and six schemas under `.evidence-editor/`, plus
+VS Code and Zed settings. The mappings cover `evidence.yaml`, `*-target.yaml`,
+`*-authority.yaml`, `access/clients/*.yaml`, `fixtures/*.yaml`, and `mocks/source.yaml`.
+Commit this generated, nonsecret editor configuration with the project. A later run refreshes
+only its managed files; an edited managed file stops publication and names the recovery action.
+Function source is checked through the shared authoring validator rather than a YAML schema.
 
 A diagnostic in your editor carries the sentence `evidencectl` reports for the same input, because
 both read one shared set of authoring checks. Fixing what the editor reports satisfies the command
 line for that rule. The editor bounds a message at 1024 characters.
 
 {/* Evidence: crates/registry-evidencectl/src/tooling.rs, ToolingCommand;
-    crates/registry-evidencectl/src/tooling_editor.rs, EDITOR_SCHEMA_CATALOG and MANAGED_FILES;
+    crates/registry-evidencectl/src/tooling_editor.rs, EDITOR_SCHEMA_CATALOG and setup_project_editor();
     crates/registry-evidencectl/src/scaffold.rs;
-    crates/registry-evidence-authoring/src/validate.rs, validate_question();
-    crates/registry-evidence-authoring/src/formats.rs, check_question();
-    crates/registry-evidencectl/src/authoring.rs, read_questions();
+    crates/registry-evidence-authoring/src/project.rs, validate_project();
+    crates/registry-evidencectl/src/authoring.rs, read_inputs();
     crates/registry-language-server/src/evidence/diagnostics.rs, bounded_message(). */}
 
 ### Base Registry Engine projects

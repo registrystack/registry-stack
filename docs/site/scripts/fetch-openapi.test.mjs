@@ -38,6 +38,7 @@ test('Casework OpenAPI follows current HEAD, excludes v0.29, and pins v0.30 arch
   const source = join(root, 'source');
   const data = join(root, 'src/data');
   const output = join(root, 'openapi/registry-casework.openapi.json');
+  const renderedOutput = join(root, 'openapi/registry-casework.render.openapi.json');
   try {
     await mkdir(join(source, 'products/casework/generated'), { recursive: true });
     await mkdir(join(source, 'products/evidence/generated'), { recursive: true });
@@ -75,6 +76,7 @@ test('Casework OpenAPI follows current HEAD, excludes v0.29, and pins v0.30 arch
         ],
       }));
       await rm(output, { force: true });
+      await rm(renderedOutput, { force: true });
       await run(process.execPath, [fetchOpenapi], {
         cwd: root,
         env: { ...process.env, DOCS_DOCSET: selected },
@@ -92,6 +94,19 @@ test('Casework OpenAPI follows current HEAD, excludes v0.29, and pins v0.30 arch
 
     await fetch('v0.30.0', 'v0.30.0', 'released');
     assert.equal(JSON.parse(await readFile(output, 'utf8')).info.version, 'archived');
+
+    const booleanSpec = '{"info":{"version":"current"},"components":{"schemas":{"Payload":{"properties":{"body":true},"additionalProperties":false}}}}\n';
+    await writeFile(join(source, caseworkPath), booleanSpec);
+    await fetch('latest', 'v0.29.0', 'candidate');
+    assert.equal(await readFile(output, 'utf8'), booleanSpec);
+    assert.deepEqual(JSON.parse(await readFile(renderedOutput, 'utf8')).components.schemas.Payload,
+      { properties: { body: {} }, additionalProperties: false });
+
+    await writeFile(join(source, caseworkPath), '{"components":{"schemas":{"Forbidden":false}}}\n');
+    await assert.rejects(fetch('latest', 'v0.29.0', 'candidate'),
+      /false schema at #\/components\/schemas\/Forbidden/);
+    await assert.rejects(readFile(output, 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readFile(renderedOutput, 'utf8'), { code: 'ENOENT' });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

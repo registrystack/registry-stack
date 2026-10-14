@@ -1,9 +1,10 @@
 # Export a lookup for Evidence
 
-BReg can export an explicitly selected lookup from its compiled registry into
-ordinary Evidence source, selector, schema and adapter files. Evidence owns the
-questions those facts answer, caller authorization, disclosure, signing and
-deployment configuration. The two services communicate over the existing HTTP
+BReg exports an explicitly selected compiled lookup as a reviewed Source contract.
+Import merges that Source, its selector profiles, and named preparation/extraction
+Functions into an existing normalized EvidenceProject. Evidence owns the
+AssertionDefinitions those facts answer, caller grants, minimum disclosure,
+signing, and deployment configuration. Live acquisition uses BReg's ordinary HTTP
 lookup API.
 
 This is an optional authoring path. Evidence's existing OpenAPI authoring,
@@ -29,8 +30,8 @@ bregctl generate evidence-source ./registry \
 Repeat `--selector` to offer alternatives in the same source. Each request
 chooses exactly one profile and makes one lookup. There is no fallback search.
 Use another export with another `--source-id` when the selected facts, authority
-or intended maintenance boundary differ. Several Evidence questions can reuse
-one source without exporting it again.
+or intended maintenance boundary differ. Several AssertionDefinitions can reuse
+one Source without exporting it again.
 
 `--fields` names logical BReg fields, as does `--record-type`. API property aliases
 are resolved by the compiler. A `registration-number` field can therefore
@@ -47,51 +48,105 @@ The output directory must be new. Generate the next version into another
 directory so that you can compare and review it before changing an Evidence
 project.
 
+## Start with the maintained composition inputs
+
+The default `bregctl init` writes the minimal contact directory. It deliberately
+supplies no Evidence lookup grant, source client, or unique business key. The
+[composition inputs](evidence/README.md) include an explicit BReg registry with
+`code` and `registration-number` selectors and a lookup-only `evidence-source`
+profile. Its readable status is separate from its private label.
+
+The complete `evidence/offline-starter/` is an independent normalized
+EvidenceProject. Initialize a new editable project, then check its 13 synthetic
+SQLite cases without starting a registry or service:
+
+```sh
+evidencectl init ./evidence --starter /path/to/offline-starter --profile local
+evidencectl check ./evidence
+evidencectl test ./evidence --target ./evidence/local-target.yaml
+```
+
+Its `evidence.yaml` owns Sources, selector profiles, named Functions, and
+AssertionDefinitions. `local-target.yaml` binds local resources;
+`dev-authority.yaml` supplies complete disposable caller authority. The tracked
+inputs contain secret references; initialization creates owner-only local keys.
+
+After exporting your selected BReg lookup, import it into that existing project:
+
+```sh
+evidencectl source import ./exports/registry-status --project ./evidence
+```
+
+Import creates no assertion meaning or caller grant. Merge the maintained
+`evidence/starter/definitions.yaml.fragment` Functions and AssertionDefinitions
+into the existing `evidence.yaml`, and copy its `functions/` and `fixtures/` files.
+The fragment is ordinary authoring input, not a complete project or an
+`init --starter` template. Keep the independent SQLite definition and imported
+Source declarations. The resulting project has three definitions and two Sources,
+with 35 synthetic fixture cases across the complete composition.
+
+Generate a fresh complete local target after adding definitions:
+
+```sh
+evidencectl target new ./configured-target --local --project ./evidence
+```
+
+Review its separate caller grants and add the named `registry` connection to
+`configured-target/target.yaml`. Then check, test, and package that exact target:
+
+```sh
+evidencectl check ./evidence --target ./configured-target
+evidencectl test ./evidence --target ./configured-target
+evidencectl package ./evidence --target ./configured-target --output ./candidate
+```
+
+Packaging writes an immutable `bundle/` and a separate target handoff; it deploys
+neither product. Recorded-source fixtures establish bounded calculation,
+identity checks, and refusals. They do not establish live HTTP authorization,
+signing, or retained-session operation.
+
 ## Add Evidence after local registry use
 
-A project derived with `init --from` can be used before it has an Evidence lookup
-or client. Stop normally, then add a source through guided local setup:
+An existing authored registry can be used before it has an Evidence lookup or
+client. Start with a complete EvidenceProject, stop the retained BReg session
+normally, then preview guided setup:
 
 ```sh
 bregctl dev stop ./registry
 evidencectl source add ./registry ./evidence
 ```
 
-Select the entity, existing required unique scalar selector, readable facts, and
-explicit row scope: all records or a fixed value on a string-valued row field.
-Use a nonsecret scope label for a fixed boundary. Its value is stored as a client
-claim in `dev-clients.yaml`, which is ordinary authored configuration. The hidden
-prompt and private input file keep the value out of command arguments and reports;
-they do not make the authored claim private.
-The command reports the proposed authority and applies nothing until it is
-re-run with `--apply`. Setup
-prepares a dedicated source client and a policy-only successor package, imports
-the generated source contract, copies its credential privately, and configures
-local endpoints and paths from the retained session. It creates no business
-question. Add your authored questions, run fixtures, and restart BReg to activate
-the successor over the retained records. The active package changes; records,
-audit history, and existing client identities remain.
+Select the Record type, an existing required unique scalar selector, readable
+facts, and explicit row scope. Evidence's `source add` uses its public `--entity`
+flag for scripted selection; its BReg subprocesses use `--record-type`. They are
+separate CLI contracts. Matching `bregctl` must be on `PATH`.
 
-The reviewed `evidence/organization-selection.yaml` and `evidence/named-starter/`
-show a custom PublicSchema selection and a matching name-present question. The
-other teaching starters preserve the plain-init and two-selector examples.
+Review the proposed authority before repeating the command with `--apply`.
+Setup prepares a dedicated lookup client and policy successor, imports the
+Source, copies credentials privately, and derives local connection bindings
+from the stopped retained session. It supplies no AssertionDefinition or Evidence
+caller grant. Restart BReg to activate the prepared successor over retained
+records. Do not use `dev stop --remove` when those records must survive.
 
-For a profile and client already prepared in the registry, the lower-level
-export/import path remains available. `bregctl dev export-client` copies an
-explicitly selected retained pair; it does not grant authority. See
-[the local lifecycle](DEV.md) for credential export and preparation limits.
+For a fixed row scope, use a nonsecret label. The selected value becomes an
+authored client claim in `dev-clients.yaml`; a private prompt or input file does
+not make that authored claim private. The [development lifecycle](DEV.md#prepare-a-source-after-using-a-registry)
+owns retained-session preparation and recovery. An already-imported Source is
+maintained through `source diff` and `source update`, rather than attached again
+under conflicting choices. A lower-level `dev export-client` copies an explicit
+retained client pair and grants no authority.
 
 ## Configure the connection in Evidence
 
 The export records a logical connection name, `registry` in this example.
 The Evidence operator supplies its fixed base URL, authentication and optional
-TLS trust profile in the target's `sourceConnections`. Credentials remain
+TLS trust profile in the normalized target's `connections` map. Credentials remain
 logical secret references resolved by that deployment. A BReg package or
 metadata response never supplies Evidence caller authority.
 
-When the exported entity declares `accessLog`, the source opts into forwarding
+When the exported Record type declares `accessLog`, the source opts into forwarding
 the Evidence requester's verified identity and purpose. The Evidence
-connection's verified OAuth client ID must also appear in that entity's
+connection's verified OAuth client ID must also appear in that Record type's
 `accessLog.trustedIntermediaries`; otherwise BReg refuses the forwarded
 request. Forwarded attribution does not grant record authority.
 
@@ -112,7 +167,7 @@ The generated extraction adapter uses Evidence's optional
 `extract(response, selectors, context)` form. It checks the returned selected
 identity's scalar type and exact value before returning matched facts. Missing,
 wrongly typed or mismatched identity fails as a source protocol error. No
-question can skip that check by replacing its derivation.
+AssertionDefinition can skip that check by replacing its derive Function.
 
 Only the explicit fact fields enter the fact set. An absent or null required
 fact produces no match and cannot become an authoritative negative answer.
@@ -165,11 +220,11 @@ their consumed meaning changes.
 
 ## Consuming Evidence during an action
 
-The separate [conditional Evidence action trial](immediate-actions.md#trial-conditional-evidence-in-rhai)
+The separate [Action plan and Evidence guide](immediate-actions.md)
 lets a governed Rhai action acquire verified assertions before finalizing its
 writes. The [farmer landholding example](acceptance/farmer-landholding-evidence/README.md)
 shows preprocessing, early refusal, conditional disclosure and exact offline
 mocks. Imported client contracts define the signed processing ceiling; operator
 configuration supplies fixed endpoints, credentials and trust. This is distinct
-from the lookup export described above, and does not grant BREG authority over
+from the lookup export described above, and does not grant BReg authority over
 Evidence source access or signing.

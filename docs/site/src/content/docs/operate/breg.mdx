@@ -30,43 +30,35 @@ Two roles take part. The author prepares a package from the project. The operato
 migration credential, activates the package and runs the server. One person may hold both roles on
 a pilot; the commands stay the same. A package carries no signature: the migration credential is
 what authorizes an activation, and the database records each one in its activation ledger, which
-`bregctl status` reads. Every command reads `--help`. Paths given to `--runtime-config`,
-`--credentials`, `--output`, and `--package` must be absolute.
+`bregctl status` reads. Every command accepts `--help`.
 
-Many operator paths are resolved through held directory descriptors rather than by name: data export output and checkpoint, data import state and checkpoint, test receipt
-output and the credentials file `bregctl test` reads, package inputs and outputs, history request
-files, the reviewed migrations tree, and authoring sources, including each
-module's SQL assets and planner scripts, which are read through the module directory the listing
-opened. `bregctl` resolves each component of these paths against the directory descriptor that
-holds it, then opens, creates, renames, and publishes through those held descriptors, so a
-directory replaced by a symbolic link after the path is validated cannot redirect the command.
-`--runtime-config` and `--package` are resolved by pathname in `registry-breg` instead, as is
-every `bregctl dev` path, and the local file `apply --backup <binding>=<path>` names, which
-`registry-breg` opens with `O_NOFOLLOW` on its final component only.
+Authoring commands accept relative or absolute project paths, including symbolic-link aliases of
+the project directory. `init` and artifact generation also accept relative output paths and
+aliases of the existing parent directory. Choose a new output directory: an existing destination,
+including a symbolic link, is refused. Governed source files and directories inside the project
+must not be symbolic links.
 
-Name the real directory rather than a symbolic link: on macOS, `/tmp`, `/var`, `/etc`, and `/home`,
-among others, are reached through symbolic links at the root, so pass `/private/tmp` and
-`/private/var` for the descriptor-resolved paths above. The descriptor-based refusal is
-fail-closed: the Linux and macOS builds resolve every descriptor-based path this way, and a build
-for a platform that offers no equivalent kernel-enforced resolution refuses each one instead of
-falling back to resolution by pathname; the diagnostic code depends on the command, since each
-surface reports the refusal under its own code rather than one shared across all of them.
+Deployment paths have stricter requirements. Give `--runtime-config`, the test command's
+`--credentials` and receipt `--output`, and the activation commands' `--package` absolute paths
+without parent-directory components or symbolic links. The runtime file's package and file-secret
+roots must also name real directories. If a path is refused, use the command's diagnostic to
+correct the named file, its parent directory, or its permissions, then retry. If a receipt does
+not match the candidate, rerun `test` for that exact candidate before packaging.
 
-{/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, resolve_write_destination();
-    crates/registry-bregctl/src/test_lifecycle.rs, preflight_output() and read_credentials();
-    crates/registry-bregctl/src/package_lifecycle.rs;
-    crates/registry-bregctl/src/history_erasure_lifecycle.rs and history_rebaseline_lifecycle.rs;
-    crates/registry-bregctl/src/reviewed_migrations.rs;
-    crates/registry-bregctl/src/lib.rs, write_project_registry(),
-    read_bounded_source_file(), read_module_directory_names(), load_module_asset_files(),
-    and path_diagnostic();
-    crates/registry-bregctl/src/safe_path.rs, SafeDir and SafeEntry;
-    crates/registry-breg/src/runtime_config.rs, load_runtime_config_with_env();
-    crates/registry-breg/src/package.rs, reject_relative_symlinks();
-    crates/registry-breg/src/migration.rs, open_bound_backup();
-    crates/registry-bregctl/src/dev/mod.rs, project();
-    crates/registry-bregctl/src/apply_lifecycle.rs, parse_backup_arguments();
-    products/breg/scripts/test-adopter-workflow.sh. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, canonicalize_project_path(),
+    write_files_with_before_publish();
+    crates/registry-bregctl/tests/authoring_paths.rs,
+    authoring_accepts_explicit_project_and_output_parent_aliases(),
+    selected_root_alias_does_not_allow_governed_source_symlinks(),
+    output_parent_alias_does_not_allow_an_existing_symlink_leaf();
+    crates/registry-bregctl/src/test_lifecycle.rs, preflight_output(), read_credentials();
+    crates/registry-bregctl/src/package_lifecycle.rs, read_test_receipt(), validate_test_receipt();
+    crates/registry-bregctl/src/apply_lifecycle.rs, execute();
+    crates/registry-breg/src/runtime_config.rs, validate_loaded_paths();
+    crates/registry-platform-config/src/loader.rs, validate_absolute_lexical_path(),
+    reject_symlink_components();
+    crates/registry-breg/tests/runtime_config.rs,
+    runtime_config_path_components_must_not_be_symlinks(), loaded_paths_must_not_be_symlinks(). */}
 
 ## Obtain the runtime
 
@@ -536,7 +528,8 @@ must equal the role named under `database.roles`, and the runtime requires TLS o
 itself, so the URL needs no `sslmode` parameter and a server without TLS refuses the connection.
 
 {/* Evidence: crates/registry-platform-config/src/secrets.rs, read_secret_file(),
-    validate_file_metadata(), and valid_file_name();
+    validate_file_metadata();
+    crates/registry-platform-yaml/src/secret.rs, valid_file_name();
     crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES;
     crates/registry-breg/src/cursor.rs, ROOT_SECRET_MIN_BYTES;
     crates/registry-breg/src/runtime_config.rs, database_connection_config_for();
@@ -751,8 +744,8 @@ package's own source, and reports the package digest, the registry id, version, 
 inventory counts. It does not say whether the database is on that package; `status` and readiness
 do, and startup refuses to serve a package the ledger does not name as active. `doctor` opens every startup dependency without binding the listener: the runtime file, the
 package, the database connection and its readiness, the audit key and destination writability, the cursor key, the OIDC
-verifier's key material, the event destination bindings, the retained review authority and
-executor bindings, the authentication profile's claim mapping, accepted algorithms, and audience
+verifier's key material, the event destination bindings, the configured review authorities and
+their producer identities for retained submissions, the authentication profile's claim mapping, accepted algorithms, and audience
 against the package this runtime serves, and the field-encryption provider and its stored key. It
 names the first dependency that refuses and stops there. A run that reaches the end lists every
 dependency it checked, then the PostgreSQL advisories from
@@ -832,7 +825,9 @@ PostgreSQL advisories:
 {/* Evidence: crates/registry-bregctl/src/lib.rs, PlanArgs, PlanSuccessReport, StatusArgs,
     StatusSuccessReport, ApplySuccessReport;
     crates/registry-breg/src/migration.rs, AlreadyActive;
-    crates/registry-breg/src/startup.rs, ActivePackageMismatch. */}
+    crates/registry-breg/src/startup.rs, ActivePackageMismatch;
+    crates/registry-bregctl/src/doctor.rs, CHECKED_DEPENDENCIES;
+    crates/registry-breg/src/review_store.rs, verify_retained_bindings(). */}
 
 Start the process and check
 `GET /ready` before admitting traffic; `GET /health` reports liveness only.
@@ -1256,8 +1251,8 @@ See [publish a statistical series](../../configure/breg-statistics/) and the [AP
 | `doctor` reports `startup.package.not-active` | The ledger names another package as active than the one at `package.root`. Run `bregctl status` to see the active digest, then set `package.root` to that package, or `plan` and `apply` the package you meant to serve. |
 | `doctor` reports `startup.runtime-role.can-write` | In split role mode the runtime role can write the activation ledger or the registry state, for example through a grant, an ownership, a membership, or a trigger no compiled migration creates. Run `bregctl plan --package DIR`: its refusal names the object and the statement that removes it, such as `DROP TRIGGER`. |
 | `doctor` reports `startup.runtime-role.grants-missing` | The runtime role lacks a grant the active package gives it, as after `REASSIGN OWNED`. Run `bregctl apply --package DIR` with the active package to reissue the grants. |
-| `doctor` reports `startup.role-mode.changed` | The ledger records a split role activation, but the runtime file names one role for both. Restore the separate runtime role, or `plan` and `apply` the active package under one role, which records a `role-change` activation. |
-| `plan` or `apply` reports `apply.successor.roles-differ` | The runtime file names other database roles than the active activation serves with, and only a role change retires the recorded runtime role. Run `plan` and `apply` with the active package under the new roles, which records a `role-change` activation, then apply the successor. |
+| `doctor` reports `startup.role-mode.changed` | The ledger records a split role activation, but the runtime file names one role for both. Restore the separate runtime role, or `plan` and `apply` the active package under one role. The role change records a metadata-only `successor` activation of the same package. |
+| `plan` or `apply` reports `apply.successor.roles-differ` | The runtime file names other database roles than the active activation serves with, and only a role change retires the recorded runtime role. Run `plan` and `apply` with the active package under the new roles, then apply the successor package. The role change records a metadata-only `successor` activation whose predecessor and target package digests are the same. |
 | `doctor` reports `startup.oidc.refused` | Check the issuer, discovery reachability or the static JWKS document, the algorithm, and the leeway bound. |
 | `doctor` reports `startup.package.refused` with `the package compiler derivation failed` after an engine upgrade | The upgraded compiler derives a different schema from the active package, for example a new reference index. Build and apply a successor package with the upgraded `bregctl` before starting the upgraded `breg`, as [Change an active registry](../breg-changes/#test-and-package-the-successor) describes. `diff --runtime-config` reads the active package, and `test` and `package` accept its directory through `--baseline-package`; `verify` refuses it until the successor is active. The successor carries the statements that bring the generated views and declared indexes up to date even when the project is unchanged; [the first successor after an engine upgrade](../breg-changes/#the-first-successor-after-an-engine-upgrade) describes what they lock. |
 | `doctor` or startup warns `postgres.connections.pool-over-half` | Lower `database.pool.maximumConnections` or raise `max_connections` until every replica, operator command, and monitoring session fits; see [Set a PostgreSQL baseline](#set-a-postgresql-baseline). |
@@ -1265,12 +1260,15 @@ See [publish a statistical series](../../configure/breg-statistics/) and the [AP
 | The runtime file is refused with `breg.runtime.invalid-metrics-listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
 | Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
-| A command refuses a path that exists | Some component of the path is a symbolic link. Name the real directory; on macOS pass `/private/tmp` rather than `/tmp`. |
+| A command refuses a path that exists | Follow the named path diagnostic. Deployment files require real absolute paths; authoring accepts aliases of the selected project and output parent, but refuses symbolic links inside the project and existing output destinations. Check the file type and permissions too. |
 
 {/* Evidence: crates/registry-breg/src/package.rs, rederive(), inspect_package_integrity(), and load_predecessor_package();
     crates/registry-bregctl/src/package_inspection.rs, inspect_runtime_package() and
     inspect_baseline_package();
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
+    crates/registry-breg/src/migration.rs, role_change_ledger_entry();
+    crates/registry-breg/tests/postgres_migration.rs,
+    real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_activation();
     crates/registry-breg/tests/postgres_reference_indexes.rs,
     a_successor_adds_reference_indexes_to_a_database_activated_without_them. */}
 

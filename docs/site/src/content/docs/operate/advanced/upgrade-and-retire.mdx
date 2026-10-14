@@ -23,8 +23,8 @@ and the Rust, Node.js, and Python clients. Run the same release on every side. T
 supported version-skew window, between two runtimes or between a client and a runtime, and a
 rolling upgrade that mixes releases is not supported:
 
-- **Casework and BReg are checked.** Casework compares BReg's `Registry-Engine-Version` header with
-  its own release on every contract read and refuses any other release; see
+- **Casework pins the BReg context contract.** The read-only provider checks the exact registry
+  revision, context contract, and Proposal identity. A changed contract requires re-pairing; see
   [Change the active Casework package](../../casework/#change-the-active-package).
 - **Adopter tooling is checked.** `evidencectl` refuses an `evidence` or `bregctl` binary of
   another version.
@@ -35,14 +35,15 @@ rolling upgrade that mixes releases is not supported:
   process still running the previous package fails readiness until it restarts onto the successor.
   Plan the restart as part of the activation, not after it.
 
-Before 1.0, a release reads only the state its immediate predecessor wrote, and there is no
-reverse path. If you run an older release, upgrade one release at a time, and finish this runbook
-for each release before you start the next. v0.40.0 is the exception: it does not upgrade state
-v0.39.0 wrote in place, and its release notes have you apply it to new databases. See
-[Upgrades and state](../../../reference/api-stability/#upgrades-and-state).
+Read the target release's state and package requirements before applying. Current BReg and
+Casework refuse their retired database models; keep the previous database and its binaries
+for accountability, and start the replacement on a fresh database. Evidence requires its
+normalized authored project and target. None of these replacements provides an in-place
+conversion of the retired contract. See [Upgrades and state](../../../reference/api-stability/#upgrades-and-state).
 
 {/* Evidence: Cargo.toml, [workspace.package] version (every crate uses version.workspace);
-    crates/registry-casework-breg/src/lib.rs, same_release() and PeerVersionMismatch;
+    crates/registry-casework-breg/src/lib.rs, BregContextProvider and ReviewContextError::ContractChanged;
+    docs/site/src/content/docs/reference/api-stability.mdx, "Upgrades and state";
     crates/registry-evidencectl/src/evidence_binary.rs and source_add.rs, check_public_bregctl();
     docs/site/src/content/docs/operate/breg-changes.mdx, "Activate the successor";
     release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR;
@@ -51,18 +52,18 @@ v0.39.0 wrote in place, and its release notes have you apply it to new databases
 
 ## Upgrade in this order
 
-BReg goes first, because Casework and Evidence both read it. Casework follows because it refuses
-a BReg of another release. Evidence and its wallet-facing front end come next. Scheduling and
+BReg goes first, because Casework and Evidence both read it. Pair Casework with the resulting
+exact BReg context contract before starting its runtime. Evidence and its wallet-facing front end come next. Scheduling and
 Messaging read none of them and upgrade independently, before the clients. Read the target
 release's notes for every deployed product. Complete their required drains and outcome
 reconciliation before that product's apply, and make the listed project and runtime-file changes
 in its upgrade step. Rehearse the whole sequence on a restored copy first, as
 [Run a disaster-recovery drill](../back-up-and-restore/#run-a-disaster-recovery-drill) describes.
 
-The v0.40.0 to v0.41.0 path upgrades the v0.40.0 databases in place. It does not restore support
-for state or package forms that v0.40.0 already refused. On native Linux, require glibc 2.34 or
-newer. The four product installers start every staged Linux binary before selecting the new
-toolset, so a binary that cannot run leaves the installed toolset selected.
+Version-specific procedures in released notes apply to that release's contracts. They do not
+establish a conversion path for a retired model. On native Linux, require glibc 2.34 or newer.
+The four product installers start every staged Linux binary before selecting the new toolset,
+so a binary that cannot run leaves the installed toolset selected.
 
 1. **Back up every database.** Take the BReg and Casework `pg_dump`s, and the Scheduling and
    Messaging ones when they run. Copy those products' packages and runtime files, and keep the
@@ -71,24 +72,12 @@ toolset, so a binary that cannot run leaves the installed toolset selected.
    [Operational limits](../../../configure/evidence-oid4vci/#operational-limits).
 3. **Pause and drain Evidence traffic** for every question that reads BReg, or pause the whole
    instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
-4. **Upgrade BReg.** A database created by a v0.40.0 apply already has canonical action-revision
-   provenance and subject access-log storage, so v0.41.0 reads it in place. The `bregctl plan`
-   command later in this step reads and validates every `taskGrantStatus` entry. An entry v0.40.0
-   activated remains valid, but a script that matched `breg.runtime.invalid-binding` for a
-   malformed entry must now match `breg.runtime.invalid-task-grant-status`. Update Casework
-   access-log rules for the
-   `registry-task-status` user agent and alert on `503 service.unavailable` when the status client
-   is misconfigured or revoked. Rebuild the deployed project with no model change using the new
-   `bregctl test` and `bregctl package --test-receipt FILE --output BUILD`; a test receipt from
-   v0.40.0 is not accepted. Point `package.root` at `BUILD/package`, and repin
-   `package.expectedDigest` when set. Run `bregctl plan --runtime-config FILE --package
-   BUILD/package`, apply with `bregctl apply --runtime-config FILE --package BUILD/package`, and
-   run `bregctl verify --runtime-config FILE`. Restart every `breg` process on v0.41.0, then use
-   `bregctl status --runtime-config FILE` to confirm the active package. A model change follows as
-   its own successor; see [Activate the successor](../../breg-changes/#activate-the-successor).
-   When an apply stops, fix the cause and rerun it with the same `database.roles`; changing roles
-   during recovery is refused. Casework reports each BReg source as unavailable until step 5
-   finishes.
+4. **Upgrade BReg.** Preserve a retired Request-based deployment with its old binaries and
+   database; activate the current native Registry project on a fresh database. For a deployment
+   already using the native model, test and package the candidate with the matched tooling,
+   then plan and apply the successor. Keep `database.roles` unchanged when resuming an
+   interrupted apply. Restart every runtime onto the exact active package and verify readiness;
+   see [Activate the successor](../../breg-changes/#activate-the-successor).
 5. **Upgrade Casework.** The current review-only model requires a fresh database when replacing
    a retired WorkItem schema. Preserve the old database, binary, package, and audit until its work
    and accountability obligations are resolved; the new runtime refuses that schema before mutation
@@ -99,13 +88,14 @@ toolset, so a binary that cannot run leaves the installed toolset selected.
    the exact contract before packaging. Stop the earlier runtime, run `caseworkctl apply`, then
    `caseworkctl doctor` with the same runtime file, package, and database. Require readiness before
    resuming staff traffic; see [plan, apply, and serve](../../casework/#plan-apply-and-serve).
-6. **Upgrade Evidence.** Replace any `evidencectl build` invocation with `evidencectl package`, and
-   remove `--generate-keys` from `evidencectl init` or `evidencectl new`. Re-import a BReg source
-   when its export changed, then package a fresh candidate with the new `evidencectl package`.
-   Run `evidence check --runtime-config FILE --require-runtime-dependencies` with the new binary,
-   adding `--without-audit-lock` while the v0.40.0 instance still runs. Stop the earlier
-   `evidence`, start v0.41.0, and verify a fresh synthetic assertion. Then start the new
-   `evidence-oid4vci`.
+6. **Upgrade Evidence.** Author the normalized `evidence.yaml`, target, and target authority
+   for the current tooling; retired split authoring documents are refused. Re-import changed
+   BReg source exports into that project, review the source changes, and run check and fixtures
+   before packaging the candidate with its explicit target. Run
+   `evidence check --runtime-config FILE --require-runtime-dependencies` on the target host,
+   adding `--without-audit-lock` while the previous instance still runs. Stop the previous
+   runtime, start the matched `evidence`, and verify a fresh synthetic assertion before
+   restarting its wallet-facing adapter.
 7. **Upgrade Scheduling**, when it runs. Add the required top-level `taskGrantStatus` before you
    run the v0.41.0 tooling. List the task authorities whenever Scheduling must check current status
    or revocation, and when it accepts deferred work. The
@@ -142,7 +132,8 @@ toolset, so a binary that cannot run leaves the installed toolset selected.
     docs/site/src/content/docs/configure/evidence-oid4vci.mdx, "Operational limits" (stop the
     adapter, restart Evidence, start the adapter);
     docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx, "Coordinate a breaking
-    update"; crates/registry-casework/src/store.rs, StoreError::AttemptPending;
+    update"; crates/registry-casework/src/activation.rs, apply_activation();
+    crates/registry-casework/src/pinned_work.rs, compare_pinned_work();
     crates/registry-breg/src/migration.rs, MigrationError::ResumeRolesDiffer;
     products/breg/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
     products/casework/CHANGELOG.md, v0.41.0 - 2026-10-13 entries and migration 0022;

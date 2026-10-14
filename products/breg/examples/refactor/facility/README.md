@@ -15,6 +15,11 @@ bregctl examples run register-facility .
 bregctl dev stop .
 ```
 
+`bregctl check` reports an intentional related-disclosure advisory. The
+`operators` related read uses the selected facility root profile, so review that
+grant alongside direct operator access. This fixture gives both reads the same
+jurisdiction boundary and readable field set.
+
 The local journey creates an operator, invokes the registration Action, reads
 both resulting records, and checks jurisdiction concealment. The example can
 resume using its retained idempotency keys. Restarting the local session retains

@@ -2051,7 +2051,7 @@ jobs:
           node docs/site/scripts/run-tutorial.mjs --gate breg
 
   casework-tutorial:
-    name: Registry Casework tutorial from source
+    name: Registry Casework native review journeys
     needs:
       - changes
       - rust-policy
@@ -2145,8 +2145,8 @@ jobs:
     # so it needs neither Docker nor the tutorial replay's writable checkout.
     # It also proves the surface of evidencectl source add without a session:
     # the review it performs by default, the matching bregctl it requires, and
-    # that a refused connection leaves both projects untouched. The preparation
-    # itself needs a retained session, so the --live proof owns that path.
+    # that a refused connection leaves both projects untouched. Successful
+    # preparation needs a retained session and is outside this offline proof.
     name: Base Registry Engine to Evidence composition
     needs:
       - changes

@@ -1,8 +1,7 @@
 ---
-title: Answer questions from Base Registry Engine (BReg)
-description: Derive a registry from your chosen model, edit a record, then connect Evidence and verify a signed answer without resetting the registry.
+title: Compose a BReg lookup with Evidence
+description: Import a native BReg lookup into a complete EvidenceProject, retain its independent SQLite proof, and package reviewed assertion definitions.
 status: draft
-draft: true
 owner: registry-docs
 source_repos:
   - registry-stack
@@ -14,329 +13,183 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: breg
-  skip: native composition uses its own Docker registry; maintained offline verifier plus independent archive-only live reader execution
+  skip: requires matching binaries and downloaded composition inputs; the product composition runner executes the offline proof
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you provide assertions from a registry, start with BReg and add Evidence when you
-need a signed answer. Derive a small organization registry from PublicSchema, edit
-a synthetic record, then add a narrow Evidence source without resetting the registry.
+If you provide assertions from Base Registry Engine (BReg), import one narrow
+lookup into a complete Evidence project, author the assertions it supports, and
+check their disclosure and refusal behavior with synthetic fixtures. This
+exercise runs offline and packages a candidate without starting either service.
 
 <QuickstartMeta
-  outcome="A verified Evidence answer from a record retained across BReg stop and restart."
-  time="About 30 minutes, plus the first PostgreSQL image download"
-  level="Local development with synthetic records"
-  prerequisites={['The breg, bregctl, evidence and evidencectl binaries from one release on PATH', 'A running Docker engine', 'A shell with curl, tar, Python 3 and awk', 'An editor']}
+  outcome="A checked Evidence candidate with two Sources, three AssertionDefinitions, and 35 synthetic fixture cases."
+  time="About 20 minutes after installing matching binaries"
+  level="Offline authoring with synthetic data"
+  prerequisites={['Matching bregctl, evidencectl, and evidence binaries on PATH', 'A shell, tar, and an editor', 'The downloaded BReg and Evidence teaching archive']}
 />
 
-Take all four binaries from one release. `evidencectl source add` drives the `bregctl` on
-`PATH` and refuses one whose version differs from its own.
+## Unpack the reviewed inputs
 
-{/* Evidence: crates/registry-evidencectl/src/source_add.rs, BregctlVersionMismatch. */}
-
-## Start with your model
-
-In an empty working directory, save this selection as `organization-selection.yaml`.
-It selects PublicSchema's Organization concept and name property. BReg adds a
-required unique code; these are registry modeling choices, with no Evidence setup.
-
-```yaml
-apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
-kind: BRegModelSelection
-model: publicschema
-modelVersion: "0.3.0"
-modelRevision: "e5cfbbc0161e4d2c802d1acd752ec193253f7820"
-registry:
-  id: organization-registry
-  title: Synthetic organization registry
-entities:
-  - concept: Organization
-    id: record
-    identifierField: code
-    properties:
-      - name: name
-```
-
-Create and start the registry:
-
-```sh
-bregctl init ./registry --from publicschema --selection ./organization-selection.yaml
-bregctl dev ./registry
-```
-
-BReg starts PostgreSQL, the pinned local issuer, and the registry. If defaults `8090`, `8091`, or `15432`
-are occupied, choose unused ports on the first start instead:
-
-```sh
-bregctl dev ./registry --breg-port 8190 --issuer-port 8191 \
-  --database-port 15532
-```
-
-Use these ports only if they are available, or substitute another unused set.
-Use your chosen BReg and issuer ports in the record requests below. Evidence setup
-will obtain those retained endpoints directly. If startup fails, correct the
-named prerequisite and retry; the error gives a private diagnostics path.
-
-The generated operator and reader clients let you use the registry immediately.
-This model declares no Evidence client, lookup grant, or selector profile.
-
-{/* Evidence: products/breg/evidence/organization-selection.yaml; crates/registry-bregctl/src/init_from_model/render.rs; crates/registry-bregctl/src/dev/mod.rs. */}
-
-## Create and edit a record
-
-:::caution[Use synthetic data and keep credentials private]
-The registry stores records in a local Docker volume. The following token header
-and response files stay on your machine. Keep them out of version control and
-support messages.
-:::
-
-Obtain an operator token:
-
-```sh
-bregctl dev token operator ./registry
-curl --silent --show-error --fail-with-body \
-  --header @registry/.breg/dev/secrets/operator.header --header 'Content-Type: application/json' \
-  --header 'Idempotency-Key: composition-create-1' \
-  --data '{"data":{"code":"SYNTHETIC-ORG-001","name":"Earlier name"}}' \
-  --output created.json \
-  'http://127.0.0.1:8090/v1/records/records?accessProfile=operator'
-```
-
-Read the new record and capture its ETag before changing its name:
-
-```sh
-record_id=$(python3 -c 'import json; print(json.load(open("created.json"))["data"]["recordIdentifier"])')
-curl --silent --show-error --fail-with-body --header @registry/.breg/dev/secrets/operator.header \
-  --dump-header record.headers --output before-edit.json \
-  "http://127.0.0.1:8090/v1/records/records/$record_id?accessProfile=operator"
-record_etag=$(awk 'tolower($1) == "etag:" {print $2}' record.headers | tr -d '\r')
-curl --silent --show-error --fail-with-body \
-  --header @registry/.breg/dev/secrets/operator.header \
-  --header 'Content-Type: application/json-patch+json' \
-  --header 'Idempotency-Key: composition-edit-1' --header "If-Match: $record_etag" \
-  --request PATCH --data '[{"op":"replace","path":"/data/name","value":"Synthetic Works"}]' \
-  --output edited.json \
-  "http://127.0.0.1:8090/v1/records/records/$record_id?accessProfile=operator"
-python3 -m json.tool edited.json
-```
-
-Check that the identifier is unchanged and the name is `Synthetic Works`. Save this response
-for comparison after setup. If a request returns `401`, repeat the token command.
-If a concurrent edit changes the ETag, read the record again before deciding whether
-to retry the edit.
-
-{/* Evidence: crates/registry-breg/tests/postgres_mutation.rs; crates/registry-bregctl/tests/dev_lifecycle.rs. */}
-
-## Connect Evidence after using the registry
-
-Stop normally so records, audit history, and existing identities remain:
-
-```sh
-bregctl dev stop ./registry
-evidencectl source add ./registry ./evidence \
-  --source-id registry-name --selector-profile by-code
-```
-
-Choose entity `record`, the unique selector field `code`, and readable fact `name`.
-Choose **All records in this entity** explicitly for these synthetic records.
-The two flags name the source and selector used by the sample question below.
-The command reports the proposed source authority and applies nothing. A supplied
-code is not a row authorization rule; for institutional data choose the required
-row boundary. When the report matches your choices, run the same command with
-`--apply` to perform the connection:
-
-```sh
-evidencectl source add ./registry ./evidence \
-  --source-id registry-name --selector-profile by-code --apply
-```
-
-This one setup operation prepares a lookup-only source client, exports its
-contract, imports it into Evidence, copies the dedicated credentials privately,
-and creates `evidence/targets/local` using the retained local endpoints. It resolves
-local paths itself. Review the resulting project files before serving the source.
-No operator credential becomes the Evidence source credential.
-
-Do not use `--remove` during setup: it discards records. The source change creates
-a successor registry package, activated when you restart. Existing record IDs,
-revisions, values, and client identities remain; the successor package carries
-the explicitly chosen source authority.
-
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs; crates/registry-evidencectl/src/source_cli.rs. */}
-
-## Add the sample question
-
-Source setup does not invent business questions. Download the
-[BReg and Evidence teaching files](../../examples/breg-evidence-starter.tar.gz)
-for a reviewed example that asks whether the organization has a nonempty name:
+Download the [BReg and Evidence teaching files](../../examples/breg-evidence-starter.tar.gz)
+into a fresh working directory as `breg-evidence-starter.tar.gz`, then unpack:
 
 ```sh
 mkdir teaching-inputs
 tar -xzf breg-evidence-starter.tar.gz -C teaching-inputs
-cp -R ./teaching-inputs/named-starter/questions \
-  ./teaching-inputs/named-starter/derivations \
-  ./teaching-inputs/named-starter/fixtures ./evidence/
-evidencectl test ./evidence --target ./evidence/targets/local --local
+cp -R teaching-inputs/registry ./registry
+bregctl check ./registry
 ```
 
-The 11 synthetic cases check the name-present answer, empty name, absent facts,
-identity mismatches, source failures, and disclosure refusals. A missing or null
-name is unavailable evidence; an empty name gives `false`. `--local` rehearses generated local caller authority with the target source
-connection. Fixtures use recorded responses, so BReg can remain stopped. If a case fails, rerun with `--explain` and
-correct the named question or source before proceeding.
+The explicit registry declares two unique selectors and a lookup-only source
+profile. Its `label` field is unavailable to that profile. The default `bregctl
+init` contact directory supplies no Evidence lookup grant or business key, so
+this exercise uses the integration's authored model.
 
-To open the common parent in VS Code or Zed, generate workspace-relative mappings:
+The archive also contains a complete `offline-starter` and an optional BReg
+assertion fragment under `starter`. Keep their boundaries: the fragment cannot
+initialize an Evidence project by itself.
+
+{/* Evidence: docs/site/scripts/generate-breg-evidence-starter.mjs;
+    products/breg/evidence/registry/registry.yaml;
+    products/breg/evidence/starter/README.md. */}
+
+## Initialize the independent Evidence project
 
 ```sh
-evidencectl tooling editor ./evidence --workspace .
+evidencectl init ./evidence --starter ./teaching-inputs/offline-starter --profile local
+evidencectl check ./evidence
+evidencectl test ./evidence --target ./evidence/local-target.yaml
 ```
 
-Customized settings are preserved with copyable mappings on conflict. Configure
-`evidencectl tooling language-server` separately for Registry navigation; schema
-mappings do not install it. Ordinary sibling YAML remains outside the mappings,
-though the YAML server's suffix matching can also match another nested
-`evidence/questions/` directory.
+Read `evidence/evidence.yaml`. Sources, selector profiles, named Functions, and
+AssertionDefinitions are declared in that one normalized project. The local
+target and its separate authority file supply complete disposable caller grants.
+Initialization creates owner-only local keys; keep `.generated/` out of version
+control and support messages.
 
-{/* Evidence: products/breg/evidence/named-starter/fixtures/record-named.yaml; crates/registry-evidencectl/src/tooling_editor.rs; crates/registry-language-server/src/workspace.rs. */}
+The 13 SQLite cases cover active and retired values, missing or ambiguous matches,
+stale extracts, bounded statements/results, and hostile selectors remaining bound
+parameters. A successful fixture run reports the evaluated cases. This proves
+recorded-source behavior, not access to a running registry or live signing.
 
-## Restart and read the retained record
+{/* Evidence: products/breg/evidence/offline-starter/evidence.yaml;
+    products/breg/evidence/offline-starter/local-target.yaml;
+    products/breg/evidence/offline-starter/dev-authority.yaml;
+    products/breg/evidence/offline-starter/fixtures/extract-record-active.yaml. */}
 
-Activate the prepared source package and resume the existing registry:
+## Export and import one BReg Source
 
 ```sh
-bregctl dev start ./registry
+bregctl generate evidence-source ./registry \
+  --access-profile evidence-source --record-type record \
+  --selector by-code --selector by-registration-number \
+  --fields status --source-id registry-status --connection registry \
+  --output ./registry-status-export
+evidencectl source import ./registry-status-export --project ./evidence
 ```
 
-Renew the operator token using the earlier command, then read your record:
+The export selects the existing profile, exact selector alternatives, and status
+fact. It creates no BReg authority. Import verifies the export inventory and
+merges its normalized Source, selector profiles, and named preparation/extraction
+Functions into the existing EvidenceProject. It adds no AssertionDefinition or
+caller grant. Keep the independent SQLite definition.
+
+An unreadable field is refused during export. A changed export artifact fails
+checksum verification before import changes authored files. Generate a fresh
+output directory when revising the contract.
+
+{/* Evidence: crates/registry-breg/src/evidence_source.rs;
+    crates/registry-evidencectl/src/source_import/mod.rs;
+    crates/registry-evidencectl/src/source_import/export.rs. */}
+
+## Add the reviewed assertion definitions
+
+Copy the fragment's programs and fixtures into the project:
 
 ```sh
-curl --silent --show-error --fail-with-body --header @authorization.header \
-  --output after-setup.json \
-  "http://127.0.0.1:8090/v1/records/records/$record_id?accessProfile=operator"
-python3 -m json.tool after-setup.json
+cp teaching-inputs/starter/functions/*.rhai evidence/functions/
+cp teaching-inputs/starter/fixtures/*.yaml evidence/fixtures/
 ```
 
-Compare the record identifier, revision identifier, and domain data with
-`edited.json`. They remain the same. The successor package adds the reviewed
-lookup permission without replacing the record.
+Open `teaching-inputs/starter/definitions.yaml.fragment` beside
+`evidence/evidence.yaml`. Append its two `functions` entries to the existing list,
+and merge its `assertionDefinitions` entries into the existing map. Preserve the
+current Sources, selector profiles, Functions, and `extract-record-active`
+definition. The fragment is ordinary authoring, not a second import format.
 
-## Start Evidence and verify an answer
+`record-active` derives one boolean. `record-status-pair` derives the reviewed
+active/retired pair. Both reuse the imported Source and exact selector contracts.
+Their 22 cases cover identity/type mismatches, absent facts, source failures,
+minimum disclosure, and refusal boundaries. An absent or null status is
+unavailable evidence and cannot become an authoritative `false`.
 
-Start the local caller rehearsal using the configured source connection:
+{/* Evidence: products/breg/evidence/starter/definitions.yaml.fragment;
+    products/breg/evidence/starter/functions/record-active.rhai;
+    products/breg/evidence/starter/functions/record-status-pair.rhai;
+    products/breg/evidence/starter/fixtures/record-active.yaml;
+    products/breg/evidence/starter/fixtures/record-status-pair.yaml. */}
+
+## Bind a separate complete local target
 
 ```sh
-cd evidence
-evidencectl dev --target ./targets/local start .
-evidencectl request prepare record-named --purpose record-verification \
-  --subject subject@breg-8-registry-6-record-7-by-code:code=SYNTHETIC-ORG-001 \
-  --name by-code
+evidencectl target new ./configured-target --local --project ./evidence
 ```
 
-Here `dev --target` uses only the local target's source connections and outbound
-TLS settings. It generates the usual disposable local Evidence caller, issuer
-and authority. It is a local integration rehearsal; it does not serve the full
-target's caller governance. Production targets are refused by this command.
+Review the generated authority for all three definitions. In
+`configured-target/target.yaml`, replace the empty `connections` map with this
+synthetic fixture binding:
 
-If Evidence's default ports `8080` and `8081` are occupied, start with
-`evidencectl dev --target ./targets/local --evidence-port 8180
---issuer-port 8181 start .` instead. Use that Evidence port in each curl command in this
-section. BReg's two ports
-are separate and stay as configured in the source connection.
+```yaml
+connections:
+  registry:
+    origin: http://127.0.0.1:8090
+    authentication:
+      type: oauth2-private-key-jwt
+      tokenEndpoint: http://127.0.0.1:8091/oauth2/token
+      clientIdRef: secret:file/registry-client-id
+      clientAssertionKeyRef: secret:file/registry-client-key
+      clientAssertionAudience: http://127.0.0.1:8091
+      scope: registry:evidence:lookup
+      maximumCacheSeconds: 60
+```
 
-Send the prepared request and verify its response against the expectations
-recorded before the request:
+These are fixed local contract specimens. Fixtures supply recorded responses and
+resolve no source credential or network endpoint. Before live use, bind the
+actual registry origin, issuer, exact audience/resource/scopes, and approved
+source-client secrets. Source credentials never authorize an Evidence caller.
 
 ```sh
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/by-code/authorization.curl \
-  --request POST --url http://127.0.0.1:8080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/by-code/request.json \
-  --output by-code.jws.json
-evidencectl verify by-code.jws.json \
-  --context .evidence/requests/by-code/verification.json --output by-code.verified.json
+evidencectl check ./evidence --target ./configured-target
+evidencectl test ./evidence --target ./configured-target
+evidencectl package ./evidence --target ./configured-target --output ./candidate
 ```
 
-A refusal exits `curl` nonzero (from `--fail-with-body`), and `by-code.jws.json`
-holds the returned Evidence problem body instead of a signed response, for
-example an `evidence/unavailable` problem for a missing record or a record
-whose name is absent or null. `evidencectl verify` fails closed on any signature, audience or nonce
-mismatch rather than accepting a partially valid response, and writes no
-output file when it refuses.
+A complete run evaluates 35 cases across three definitions. Inspect a failing
+case and its named Source, Function, or grant rather than weakening its expected
+refusal. Packaging writes `candidate/bundle/` and a separate target handoff.
+Neither product is deployed. Use a fresh candidate directory for the next build.
 
-Open `by-code.verified.json` only after verification succeeds. For this named
-synthetic record, it contains a `true` value for the `named` answer and an
-opaque subject binding. It must not disclose the code or
-organization name.
+{/* Evidence: crates/registry-evidencectl/src/target.rs;
+    products/breg/evidence/tests/verify-composition.py;
+    crates/registry-evidencectl/src/lib.rs. */}
 
-The authorization file contains a short-lived credential. Keep it private. If a
-token or verification context expires, prepare a request with a fresh name.
+## Maintain meaning and authority separately
 
-{/* Evidence: crates/registry-evidencectl/src/dev.rs; crates/registry-evidencectl/src/request.rs; crates/registry-evidencectl/src/verify.rs. */}
+Record-value changes need no new export. A consumed selector, fact, authority,
+or derived behavior change does. Export to a fresh directory, review
+`evidencectl source diff`, then apply the reviewed `source update` against the
+same project and target. Recheck fixtures and package before coordinating the
+provider and Evidence deployment. A renamed fact must be reconciled with every
+Function that reads it; an unused registry field must not alter assertion meaning.
 
-## Stop and resume without reseeding records
+No service was started in this exercise. Retain or remove the synthetic project,
+local keys, exports, and candidate under your own development retention policy.
+Keep local authority and credentials separate from the production deployment.
 
-From `evidence/`, stop both services and restart the registry:
+## Next
 
-```sh
-evidencectl dev stop
-bregctl dev stop ../registry
-bregctl dev start ../registry
-```
-
-Restart Evidence. The retained session remembers the ports selected on the
-previous start:
-
-```sh
-evidencectl dev --target ./targets/local start .
-```
-
-The command reports the actual Evidence Gateway and issuer endpoints it
-reused. After `dev clean`, select any nondefault ports again with
-`--evidence-port` and `--issuer-port`.
-
-BReg retains its database, generated identities, audit history and seed
-checkpoints. Existing record edits survive this restart. A lost checkpoint is
-replayed through the same idempotent create request, so seeding does not overwrite
-an edited record. BReg still refuses unrelated authored package or client changes against a retained
-session. Guided source preparation is a narrow reviewed addition; it is not a
-general model migration.
-
-To edit Evidence questions or imported sources between local generations, stop
-Evidence and run `evidencectl dev clean`, then start again. Clean preserves
-authored files, project secrets and retained requests. It removes only the stopped
-local generation. Review the completed audit with `evidencectl audit show
---last-operation` after stopping its writer.
-
-{/* Evidence: products/breg/DEV.md; crates/registry-bregctl/tests/dev_lifecycle.rs; crates/registry-evidencectl/src/dev.rs. */}
-
-## Keep the contract separate from record values
-
-Editing record values needs no source re-export. When you change a consumed lookup
-contract, export to a fresh directory, review `evidencectl source diff`, then run
-`evidencectl source update`, fixtures, and build. Choose a fresh candidate output
-and match its runtime path. A shared folder grants no source authority, selects
-no production target, and deploys neither component.
-
-A renamed or removed field changes the fact the export produces. When a
-derivation still reads the old fact name, `source diff`, `source update`, and
-`check` refuse with `evidence.derivation.fact-undeclared` and name
-the derivation file. Update the derivation to the new fact name in the same
-change. The check reads the project, not the running registry: a field renamed
-in a registry that already serves a deployed candidate still fails that
-candidate's requests, so change the registry contract and deploy the rebuilt
-candidate together.
-
-{/* Evidence: crates/registry-evidence-authoring/src/derivation.rs; crates/registry-evidencectl/src/authoring.rs. */}
-
-The local `dev` run rehearses the source connection with generated caller authority.
-For a complete production target and coordinated cutover, follow
-[Deploy Evidence with a BReg source](../deploy-evidence-from-breg/).
-
-Stop both owned service groups before leaving the exercise, from `evidence/`:
-
-```sh
-evidencectl dev stop
-bregctl dev stop ../registry
-```
+- [Deploy a registry](../../operate/breg/)
+- [Author a registry project](../../configure/breg/)
+- [Evidence configuration reference](../../reference/evidence-configuration/)

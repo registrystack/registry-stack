@@ -30,6 +30,7 @@ import {
   usesCheckedOutCandidate,
 } from './docsets.mjs';
 import { fetchRefWithRetry } from './git-fetch-retry.mjs';
+import { projectOpenApiForRenderer } from './openapi-renderer.mjs';
 
 const run = promisify(execFile);
 
@@ -164,14 +165,19 @@ async function main() {
     // artifact bytes. Re-serializing through JavaScript reorders response keys
     // such as `4XX` after integer-like status codes and makes the docs copy look
     // different even though it came from the same generated source.
+    let document;
     try {
-      JSON.parse(raw);
+      document = JSON.parse(raw);
     } catch (error) {
       fail(`${repoId}: spec at ${repo.ref}:${specPath} is not valid JSON: ${error.message}`);
     }
 
     const outFile = resolve(openapiDir, `${repoId}.openapi.json`);
+    // Prepare before writing either output so an unsupported renderer schema
+    // fails without emitting a misleading replacement for this product.
+    const rendered = projectOpenApiForRenderer(document);
     await writeFile(outFile, raw.endsWith('\n') ? raw : `${raw}\n`);
+    await writeFile(resolve(openapiDir, `${repoId}.render.openapi.json`), `${JSON.stringify(rendered, null, 2)}\n`);
     written += 1;
     console.log(
       `Fetched ${repoId} OpenAPI spec at ${repo.ref.slice(0, 12)} (${mode}) -> ${relative(root, outFile)}`,
