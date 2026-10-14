@@ -2293,6 +2293,91 @@ fn stage_reference_secrets(secret_root: &Path) {
     write("evidence-signing", VERIFY_PRIVATE_JWK);
 }
 
+/// Target grants are validated even when the project declares no fixtures.
+/// No runtime file, secret, signer, source or authority store is needed.
+#[test]
+fn bundle_check_validates_complete_target_authority_without_fixtures_or_effects() {
+    let deployment = Deployment::stage("adult-status");
+    let mut bundle: Value = serde_norway::from_str(
+        &fs::read_to_string(deployment.path("bundle/evidence.yaml")).unwrap(),
+    )
+    .unwrap();
+    bundle["project"] = json!("standalone-evidence");
+    for requirement in bundle["requirements"].as_array_mut().unwrap() {
+        requirement["question"] = json!("Is the subject an adult?");
+        requirement["representations"] = json!(["signed-jws"]);
+        requirement["grantCeiling"] = json!({
+            "authorities": ["statutory"], "actorKinds": ["service"],
+            "valueOrigins": ["request", "authenticated-context"],
+            "audiences": ["urn:example:audience:relying-party"]
+        });
+        requirement.as_object_mut().unwrap().remove("fixtures");
+    }
+    fs::remove_file(deployment.path("bundle/fixtures/cases.yaml"))
+        .expect("remove the now-unreferenced fixture asset");
+    fs::remove_dir(deployment.path("bundle/fixtures")).expect("remove the empty fixture directory");
+    let mut profiles = bundle["authorityProfiles"].take();
+    for profile in profiles.as_object_mut().unwrap().values_mut() {
+        profile["actorKind"] = json!("service");
+    }
+    bundle["authorityProfiles"] = json!({});
+    deployment.write(
+        "bundle/evidence.yaml",
+        &serde_norway::to_string(&bundle).unwrap(),
+    );
+    let mut authority = json!({
+        "apiVersion": registry_evidence::authority::AUTHORITY_API_VERSION,
+        "kind": registry_evidence::authority::AUTHORITY_KIND,
+        "target": "local", "project": "standalone-evidence", "accessProfiles": profiles
+    });
+    let authority_path = deployment.path("compiled-authority.yaml");
+    write_private_json(&authority_path, &authority);
+    deployment.seal();
+    let check = || {
+        Command::new(env!("CARGO_BIN_EXE_evidence"))
+            .args(["bundle-check", "--bundle"])
+            .arg(deployment.path("bundle"))
+            .arg("--authority-document")
+            .arg(&authority_path)
+            .arg("--json")
+            .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+            .output()
+            .expect("offline bundle check starts")
+    };
+    let accepted = check();
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    assert!(
+        serde_json::from_slice::<Value>(&accepted.stdout).unwrap()["packageDigest"].is_string()
+    );
+
+    for profile in authority["accessProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        profile["grants"][0]["subjects"][0]["valueOrigin"] = json!("authenticated-context");
+    }
+    write_private_json(&authority_path, &authority);
+    let refused = check();
+    assert!(
+        !refused.status.success(),
+        "missing authenticated claims must be refused"
+    );
+    assert!(refused.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&refused.stderr),
+        "evidence: compiled target authority exceeds the package ceilings\n"
+    );
+    assert_eq!(fs::read_dir(deployment.path("secrets")).unwrap().count(), 0);
+    assert!(!deployment.path("audit.jsonl").exists());
+    assert!(!deployment.path("authority-state.json").exists());
+    deployment.unseal();
+}
+
 /// One deployment failure class, with the exact operator text it must produce.
 ///
 /// The expected text is split into a prefix and a suffix so a case that

@@ -335,8 +335,39 @@ pub(crate) fn compile_with_target(
     evidence_bin: &Path,
     revision: Option<&str>,
 ) -> Result<TargetCompilation> {
+    // Every project read and copied asset comes from the same descriptor-captured
+    // snapshot, even if an editor replaces the original path during delegation.
+    let snapshot = crate::project_snapshot::capture_project(project)?;
+    let authority = if let (Some(target_model), Some(root)) =
+        (&target.normalized_target, &target.source_root)
+    {
+        let (project_model, _) = crate::normalized::read(snapshot.root())
+            .map_err(|error| crate::authored::project_refusal(error, snapshot.root(), project))?;
+        if target_model.project != project_model.id {
+            return Err(TargetDocumentDiagnostic {
+                code: "evidence.target.project",
+                path: format!(
+                    "{}:/project",
+                    target
+                        .source_path
+                        .as_deref()
+                        .unwrap_or_else(|| Path::new("target.yaml"))
+                        .display()
+                ),
+                message: "the selected target must name this EvidenceProject".to_owned(),
+            }
+            .into());
+        }
+        Some(crate::normalized::compiled_authority(
+            &project_model,
+            target_model,
+            root,
+        )?)
+    } else {
+        None
+    };
     let compiled = authoring::compile_target_project_with_revision(
-        project,
+        snapshot.root(),
         &target.root,
         staging_root,
         target.governed_bundle.clone(),
@@ -357,11 +388,9 @@ pub(crate) fn compile_with_target(
                 .into();
             }
         }
-        error
+        crate::authored::project_refusal(error, snapshot.root(), project)
     })?;
-    if let (Some(target_model), Some(root)) = (&target.normalized_target, &target.source_root) {
-        let (project_model, _) = crate::normalized::read(project)?;
-        let authority = crate::normalized::compiled_authority(&project_model, target_model, root)?;
+    if let Some(authority) = authority {
         fs::write(
             staging_root.join("compiled-authority.yaml"),
             crate::authored::to_indented_yaml(&authority)?,
@@ -460,6 +489,12 @@ fn run_bundle_check_report(
         .arg(bundle)
         .arg("--json")
         .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+    if let Some(parent) = bundle.parent() {
+        let authority = parent.join("compiled-authority.yaml");
+        if authority.is_file() {
+            command.arg("--authority-document").arg(authority);
+        }
+    }
     let output = run_evidence(command, interruption, true, true)?;
     if !output.status.success() {
         return runtime_failure(

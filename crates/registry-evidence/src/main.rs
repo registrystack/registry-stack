@@ -379,8 +379,15 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        Command::BundleCheck { bundle, json } => {
+        Command::BundleCheck {
+            bundle,
+            authority_document,
+            json,
+        } => {
             let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
+            if let Some(path) = authority_document {
+                read_bundle_authority(&path, &bundle.config)?;
+            }
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
             let _source_plans = compile_bundle_source_plans(&bundle)?;
@@ -405,23 +412,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         } => {
             let mut bundle = Bundle::load(&bundle).map_err(deployment_load_error)?;
             if let Some(path) = authority_document {
-                let mut bytes = Vec::new();
-                File::open(&path)
-                    .and_then(|file| {
-                        file.take((registry_evidence::config::MAX_CONFIG_BYTES + 1) as u64)
-                            .read_to_end(&mut bytes)
-                    })
-                    .map_err(|_| CliError("fixture target authority is unavailable"))?;
-                let document = registry_evidence::authority::AuthorityDocument::parse(
-                    &path.display().to_string(),
-                    &bytes,
-                )
-                .map_err(|_| CliError("fixture target authority document is invalid"))?;
-                document
-                    .validate_for(&document.target, &bundle.config)
-                    .map_err(|_| {
-                        CliError("fixture target authority exceeds the package ceilings")
-                    })?;
+                let document = read_bundle_authority(&path, &bundle.config)?;
                 // This copy can reach only the offline fixture kernel, never
                 // DeploymentInputs or serving initialization. No authority
                 // store, credential, source or operator signer is accessed.
@@ -597,6 +588,28 @@ const DISCOVERY_CONFIG_INVALID: CliError =
     CliError("discovery description configuration is not valid Evidence configuration");
 const DISCOVERY_OUTPUT_UNWRITABLE: CliError =
     CliError("discovery description output could not be written");
+
+/// Validate one compiled authority through the runtime's owning contract.
+/// This offline check neither activates grants nor initializes dependencies.
+fn read_bundle_authority(
+    path: &Path,
+    config: &registry_evidence::config::EvidenceConfig,
+) -> Result<registry_evidence::authority::AuthorityDocument, CliError> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| {
+            file.take((registry_evidence::config::MAX_CONFIG_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+        })
+        .map_err(|_| CliError("compiled target authority is unavailable"))?;
+    let document =
+        registry_evidence::authority::AuthorityDocument::parse(&path.display().to_string(), &bytes)
+            .map_err(|_| CliError("compiled target authority document is invalid"))?;
+    document
+        .validate_for(&document.target, config)
+        .map_err(|_| CliError("compiled target authority exceeds the package ceilings"))?;
+    Ok(document)
+}
 
 /// Report a refused discovery configuration with the cause the parser carried.
 ///

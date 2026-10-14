@@ -707,6 +707,104 @@ fn check_production_reports_the_same_review_marker_package_would_refuse() {
 }
 
 #[test]
+fn target_naming_another_project_is_refused_before_runtime_delegation() {
+    let fixture = Fixture::new();
+    edit_json(&fixture.target, |target| {
+        target["project"] = json!("another-project")
+    });
+
+    let output = fixture.build();
+
+    assert_failed(&output, "the target must bind this project");
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("evidence.target.project"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("/project"), "{diagnostic}");
+    assert!(!fixture.output.exists());
+    assert!(fixture.invocations().is_empty());
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn project_replacement_during_description_keeps_one_coherent_candidate() {
+    let fixture = Fixture::new();
+    edit_json(&fixture.project.join("evidence.yaml"), |project| {
+        project["assertionDefinitions"]["answer"]
+            .as_object_mut()
+            .unwrap()
+            .remove("fixtures");
+    });
+    let replacement = fixture.root.join("replacement-project.json");
+    let mut replaced: Value =
+        serde_json::from_slice(&fs::read(fixture.project.join("evidence.yaml")).unwrap()).unwrap();
+    replaced["assertionDefinitions"]["answer"]["semantics"]["requirement"] =
+        json!("urn:example:requirements:replacement:v2");
+    write_json(&replacement, &replaced);
+    let output = fixture
+        .command(&fixture.project, &fixture.target, &fixture.output)
+        .env(
+            "FAKE_EVIDENCE_MUTATE_PROJECT",
+            fixture.project.join("evidence.yaml"),
+        )
+        .env("FAKE_EVIDENCE_REPLACEMENT_PROJECT", replacement)
+        .output()
+        .expect("package starts");
+    assert_success(
+        &output,
+        "the captured project stays coherent through delegation",
+    );
+    let bundle: Value = serde_norway::from_str(
+        &fs::read_to_string(fixture.output.join("bundle/evidence.yaml")).unwrap(),
+    )
+    .unwrap();
+    let authority: Value = serde_norway::from_str(
+        &fs::read_to_string(fixture.output.join("compiled-authority.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        bundle["requirements"][0]["uri"],
+        "urn:example:requirements:answer:v1"
+    );
+    assert_eq!(
+        authority["accessProfiles"]["requester"]["grants"][0]["requirement"],
+        bundle["requirements"][0]["uri"]
+    );
+    let original: Value =
+        serde_json::from_slice(&fs::read(fixture.project.join("evidence.yaml")).unwrap()).unwrap();
+    assert_eq!(
+        original["assertionDefinitions"]["answer"]["semantics"]["requirement"],
+        "urn:example:requirements:replacement:v2"
+    );
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn package_without_fixtures_still_delegates_compiled_authority_validation() {
+    let fixture = Fixture::new();
+    edit_json(&fixture.project.join("evidence.yaml"), |project| {
+        project["assertionDefinitions"]["answer"]
+            .as_object_mut()
+            .unwrap()
+            .remove("fixtures");
+    });
+
+    let output = fixture.build();
+
+    assert_success(&output, "fixture-free package");
+    assert_eq!(fixture.steps(), ["check"]);
+    let invocations = fixture.invocations();
+    let checked = &invocations[0];
+    let position = checked
+        .iter()
+        .position(|argument| argument == "--authority-document")
+        .expect("offline authority validation is mandatory for a target candidate");
+    assert!(Path::new(&checked[position + 1]).ends_with("compiled-authority.yaml"));
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
 fn incomplete_target_authority_is_refused_before_runtime_delegation() {
     let fixture = Fixture::new();
     edit_json(&fixture.authority, |authority| {
@@ -1334,6 +1432,9 @@ if [ "${1:-}" = '--version' ]; then
 fi
 
 if [ "${1:-}" = 'render-discovery-description' ]; then
+  if [ -n "${FAKE_EVIDENCE_MUTATE_PROJECT:-}" ]; then
+    cp "$FAKE_EVIDENCE_REPLACEMENT_PROJECT" "$FAKE_EVIDENCE_MUTATE_PROJECT"
+  fi
   if [ "${FAKE_EVIDENCE_EMPTY_DESCRIPTION:-}" != '1' ]; then
     printf '{}\n'
   fi

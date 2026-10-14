@@ -188,6 +188,9 @@ pub enum Command {
     BundleCheck {
         #[arg(long)]
         bundle: PathBuf,
+        /// Validate compiled target grants offline, without activating them.
+        #[arg(long)]
+        authority_document: Option<PathBuf>,
         /// Return value-free bundle and requirement configuration revisions.
         #[arg(long)]
         json: bool,
