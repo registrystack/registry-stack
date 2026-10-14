@@ -101,8 +101,10 @@ pub struct CaseworkHolidaySet {
 impl CaseworkHolidaySet {
     /// Read and check one holiday-set file through the shared reader.
     pub fn read(file: &str, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
-        let decoded =
-            Reader::new(file).decode::<Self>(bytes, &Expect::one(&CASEWORK_HOLIDAY_SET_FORMAT))?;
+        let mut hook = AuthoredLiteralText;
+        let decoded = Reader::new(file)
+            .with_hook(&mut hook)
+            .decode::<Self>(bytes, &Expect::one(&CASEWORK_HOLIDAY_SET_FORMAT))?;
         let findings = decoded.value.findings();
         if findings.is_empty() {
             Ok(decoded)
@@ -192,22 +194,23 @@ pub struct CaseworkFixtureExpect {
     pub outcomes: Option<UniqueList<LocalId>>,
 }
 
-struct FixtureLiteralText;
-impl FixtureLiteralText {
+struct AuthoredLiteralText;
+impl AuthoredLiteralText {
     fn check(
         site: &registry_platform_yaml::ScalarSite<'_>,
     ) -> Result<(), registry_platform_yaml::Refusal> {
         if crate::config::contains_environment_expression(site.text) {
             return Err(registry_platform_yaml::Refusal {
                 code: "config.substitution-not-allowed".into(),
-                message: "a fixture is authored input and cannot substitute an environment value".into(),
-                suggested_action: "Write literal synthetic fixture values; bind deployment values in runtime.yaml.".into(),
+                message: "authored Casework input cannot substitute an environment value".into(),
+                suggested_action:
+                    "Write a literal authored value; bind deployment values in runtime.yaml.".into(),
             });
         }
         Ok(())
     }
 }
-impl registry_platform_yaml::ScalarHook for FixtureLiteralText {
+impl registry_platform_yaml::ScalarHook for AuthoredLiteralText {
     fn key(
         &mut self,
         site: &registry_platform_yaml::ScalarSite<'_>,
@@ -224,7 +227,7 @@ impl registry_platform_yaml::ScalarHook for FixtureLiteralText {
 
 impl CaseworkFixture {
     pub fn read(file: &str, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
-        let mut hook = FixtureLiteralText;
+        let mut hook = AuthoredLiteralText;
         let decoded = Reader::new(file)
             .with_hook(&mut hook)
             .decode::<Self>(bytes, &Expect::one(&CASEWORK_FIXTURE_FORMAT))?;

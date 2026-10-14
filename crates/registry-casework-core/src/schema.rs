@@ -248,6 +248,14 @@ fn set_const(schema: &mut Value, property: &str, expected: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn compiled(document: &Value) -> jsonschema::JSONSchema {
+        jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(document)
+            .expect("the project schema compiles")
+    }
+
     #[test]
     fn project_schema_publishes_only_canonical_review_model() {
         let documents = project_documents().unwrap();
@@ -268,5 +276,90 @@ mod tests {
             assert!(document["properties"].get(removed).is_none());
         }
         assert!(!documents[PROJECT_SCHEMA_FILE].contains("itemKinds"));
+    }
+
+    #[test]
+    fn project_schema_accepts_the_activity_clock_defaults_the_reader_accepts() {
+        let documents = project_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/multi-stage-routing-clocks/casework.yaml");
+        let authored = std::fs::read_to_string(&path).unwrap();
+        let omitted = authored.replace(
+            "    atRisk: {workingDaysBefore: 1}\n    reminders: [{id: due-soon, workingDaysBefore: 1}]\n    steps:\n      - id: supervisor-at-deadline\n        because: The review deadline passed while the review remained active.\n        at: due\n        action: {reassign: {queue: overdue-review}}\n",
+            "",
+        );
+        assert_ne!(omitted, authored);
+        let decoded = crate::CaseworkProject::read(&path.display().to_string(), omitted.as_bytes())
+            .expect("the project reader applies empty activity-clock defaults");
+        assert!(compiled(&document).is_valid(&decoded.document.to_json_value()));
+        let activity = &document["$defs"]["ClockPolicy"]["oneOf"][1];
+        for optional in ["atRisk", "reminders", "steps"] {
+            assert!(!activity["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|required| required == optional));
+        }
+    }
+
+    #[test]
+    fn context_contract_id_and_service_profile_keys_publish_the_reader_contract() {
+        let documents = project_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();
+        let contract = &document["$defs"]["ReviewContextContract"]["properties"]["id"];
+        assert_eq!(contract["$ref"], "#/$defs/ExternalId");
+        assert_eq!(contract["maxLength"], 256);
+        assert_eq!(contract["x-registry-maxBytes"], 256);
+        assert_eq!(contract["pattern"], "\\S");
+        assert!(contract["description"]
+            .as_str()
+            .unwrap()
+            .contains("256 UTF-8 bytes"));
+
+        let profiles =
+            &document["$defs"]["ReviewContextProviderPolicy"]["properties"]["serviceProfiles"];
+        assert_eq!(profiles["propertyNames"]["$ref"], "#/$defs/LocalId");
+        assert_eq!(profiles["additionalProperties"], false);
+        assert_eq!(profiles["properties"].as_object().unwrap().len(), 4);
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/canonical-review/casework.yaml");
+        let authored = std::fs::read_to_string(&path).unwrap();
+        let original_id =
+            "urn:registry:breg:review-context:facility-registry:correct-address:facility-address-context";
+        let unicode_boundary = authored.replace(original_id, &"é".repeat(128));
+        let decoded =
+            crate::CaseworkProject::read(&path.display().to_string(), unicode_boundary.as_bytes())
+                .expect("the reader accepts an external id at exactly 256 UTF-8 bytes");
+        assert!(compiled(&document).is_valid(&decoded.document.to_json_value()));
+
+        let too_long = authored.replace(
+            original_id,
+            &"a".repeat(crate::MAXIMUM_CONTEXT_CONTRACT_ID_BYTES + 1),
+        );
+        assert_ne!(too_long, authored);
+        let report = crate::CaseworkProject::read(&path.display().to_string(), too_long.as_bytes())
+            .expect_err("the project reader enforces the context-contract id byte bound");
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "casework.review-policy.context-contract"
+                && diagnostic.path == "/reviewPolicies/1/context/contract/id"
+        }));
+
+        let blank = authored.replace(original_id, "\"   \"");
+        let report = crate::CaseworkProject::read(&path.display().to_string(), blank.as_bytes())
+            .expect_err("the project reader rejects a blank context-contract id");
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "casework.review-policy.context-contract"
+                && diagnostic.path == "/reviewPolicies/1/context/contract/id"
+        }));
+
+        let mut blank = decoded.document.to_json_value();
+        blank["reviewPolicies"][1]["context"]["contract"]["id"] = Value::from("   ");
+        assert!(!compiled(&document).is_valid(&blank));
+
+        let mut control = decoded.document.to_json_value();
+        control["reviewPolicies"][1]["context"]["contract"]["id"] = Value::from("external\u{1}id");
+        assert!(!compiled(&document).is_valid(&control));
     }
 }

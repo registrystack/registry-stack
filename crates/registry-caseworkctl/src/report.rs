@@ -278,14 +278,46 @@ payload!(InitData {
 payload!(CheckData {project:PathBuf,policy_bindings:Vec<ReviewPolicyIdentity>,files_checked:usize,network_access:bool,database_access:bool,
     #[serde(default,skip_serializing_if="Option::is_none")]runtime_config:Option<PathBuf>,
     #[serde(default,skip_serializing_if="Option::is_none")]breg_package:Option<ProducerAgreementData>});
-payload!(ProducerAgreementData {package:PathBuf,package_digest:String,agreements:Vec<ProducerAgreement>,network_access:bool,database_access:bool});
+payload!(ProducerAgreementData {
+    package: PathBuf,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
+    package_digest: String,
+    agreements: Vec<ProducerAgreement>,
+    network_access: bool,
+    database_access: bool
+});
 payload!(ProducerAgreement {
     provider_id: String,
     context_contract: ReviewContextContract,
     registry_revision: String,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
     schema_digest: String
 });
-payload!(ExplainPolicy {binding:ReviewPolicyIdentity,purpose:ReviewPurpose,display_schema:Value,result_schema:Option<Value>,clocks:Vec<String>,context:ReviewContextPolicy,context_custody:String,stages:Vec<ReviewStagePolicy>,outcomes:Vec<ReviewOutcomePolicy>,routing:Vec<RoutingRule>,routing_fields:Vec<String>,dependencies:ReviewPolicyDependencies,retention:ReviewRetentionPolicy,recovery:Vec<String>,refusals:Vec<String>});
+payload!(ExplainPolicy {
+    binding: ReviewPolicyIdentity,
+    purpose: ReviewPurpose,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
+    )]
+    display_schema: Value,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
+    )]
+    result_schema: Option<Value>,
+    clocks: Vec<String>,
+    context: ReviewContextPolicy,
+    context_custody: String,
+    stages: Vec<ReviewStagePolicy>,
+    outcomes: Vec<ReviewOutcomePolicy>,
+    routing: Vec<RoutingRule>,
+    routing_fields: Vec<String>,
+    dependencies: ReviewPolicyDependencies,
+    retention: ReviewRetentionPolicy,
+    recovery: Vec<String>,
+    refusals: Vec<String>
+});
 payload!(ExplainStaffing {
     next: String,
     holdings: String,
@@ -307,7 +339,9 @@ payload!(ProviderPairData {
     next: String
 });
 payload!(LifecycleData {#[cfg_attr(feature="schema",schemars(with="Vec<registry_casework_core::LifecycleDescription>"))]lifecycles:Vec<Value>});
-payload!(PackageData {package_digest:String,
+payload!(PackageData {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
+    package_digest:String,
     #[serde(default,skip_serializing_if="Option::is_none")]dry_run:Option<bool>,
     #[serde(default,skip_serializing_if="Option::is_none")]files:Option<Vec<String>>,
     #[serde(default,skip_serializing_if="Option::is_none")]output:Option<PathBuf>,
@@ -321,6 +355,7 @@ payload!(DoctorChecks {
 });
 payload!(DoctorData {
     runtime_config: PathBuf,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
     package_digest: String,
     #[cfg_attr(
         feature = "schema",
@@ -351,6 +386,7 @@ pub(crate) enum DevState {
     Failed,
 }
 payload!(DevClient {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     id: String,
     profile: String,
     role: CaseworkRole,
@@ -361,7 +397,11 @@ payload!(DevDirectory {
     revision: i64,
     teams: usize
 });
-payload!(DevData {state:DevState,project:PathBuf,state_file:PathBuf,operator_config:PathBuf,casework_url:String,token_endpoint:String,issuer:String,client_assertion_audience:String,resource:String,audience:String,journal:PathBuf,context_providers:Vec<String>,clients:Vec<DevClient>,directory:DevDirectory,
+payload!(DevData {state:DevState,project:PathBuf,state_file:PathBuf,operator_config:PathBuf,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    casework_url:String,token_endpoint:String,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    issuer:String,client_assertion_audience:String,resource:String,audience:String,journal:PathBuf,context_providers:Vec<String>,clients:Vec<DevClient>,directory:DevDirectory,
     #[serde(default,skip_serializing_if="Option::is_none")]issuer_project:Option<PathBuf>});
 payload!(DevEventsData {project:PathBuf,journal:PathBuf,events:Vec<String>,truncated:bool});
 payload!(DevTokenData {

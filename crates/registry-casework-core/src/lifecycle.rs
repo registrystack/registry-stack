@@ -4,8 +4,10 @@ use serde::Serialize;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct LifecycleDescription {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: &'static str,
     pub label: &'static str,
     pub states: Vec<LifecycleState>,
@@ -15,8 +17,10 @@ pub struct LifecycleDescription {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct LifecycleState {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: &'static str,
     pub initial: bool,
     pub terminal: bool,
@@ -27,6 +31,7 @@ pub struct LifecycleState {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct LifecycleTransition {
     pub from: &'static str,
@@ -46,8 +51,10 @@ pub struct LifecycleTransition {
 /// that layer's description names the event and where it really runs.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct EnforcementLayer {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: &'static str,
     pub description: &'static str,
     pub events: &'static [&'static str],

@@ -68,18 +68,15 @@ impl From<WorkingWeekday> for Weekday {
 /// (CFG-SCHEMA-8). The authored file, the stored record, the digest input, and
 /// the HTTP description all carry this one spelling.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     remote = "Self",
     rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum ClockPolicy {
     Subject {
         #[serde(deserialize_with = "crate::typed::local_id")]
-        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: String,
         anchor: SubjectClockAnchor,
         complete_on: SubjectClockCompletion,
@@ -87,7 +84,6 @@ pub enum ClockPolicy {
     },
     Activity {
         #[serde(deserialize_with = "crate::typed::local_id")]
-        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: String,
         anchor: ActivityClockAnchor,
         calendar: String,
@@ -103,32 +99,38 @@ pub enum ClockPolicy {
 }
 registry_platform_yaml::tagged_union!(ClockPolicy);
 
-/// The serialized form of [`ClockPolicy`]: the shape the reader accepts.
+/// The serialized form of [`ClockPolicy`]: the shape the serializer emits.
 #[derive(Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "type",
     rename_all = "kebab-case",
-    rename_all_fields = "camelCase"
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
 )]
 enum ClockPolicyWire<'a> {
     Subject {
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: &'a str,
         anchor: SubjectClockAnchor,
         complete_on: SubjectClockCompletion,
         after: &'a ElapsedDuration,
     },
     Activity {
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: &'a str,
         anchor: ActivityClockAnchor,
         calendar: &'a str,
         after: WorkingDaysAfter,
         due_time: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "schema", schemars(default, with = "WorkingDaysBefore"))]
         at_risk: Option<WorkingDaysBefore>,
         #[serde(skip_serializing_if = "is_empty_slice")]
+        #[cfg_attr(feature = "schema", schemars(default))]
         reminders: &'a [ClockReminder],
         #[serde(skip_serializing_if = "is_empty_slice")]
+        #[cfg_attr(feature = "schema", schemars(default))]
         steps: &'a [ClockStep],
     },
 }
@@ -172,6 +174,17 @@ impl Serialize for ClockPolicy {
             },
         };
         wire.serialize(serializer)
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ClockPolicy {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ClockPolicy".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        <ClockPolicyWire<'static> as schemars::JsonSchema>::json_schema(generator)
     }
 }
 

@@ -5,14 +5,16 @@ use registry_casework::{
 };
 use registry_casework_core::{CaseworkProject, ConfigLoadError, ReviewContextPolicy};
 use registry_platform_config::{plan_package, write_package, SecretResolver};
-use registry_platform_yaml::{Decoded, Report};
+use registry_platform_yaml::{Decoded, Diagnostic, Report, Severity, Source};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read as _,
     path::{Path, PathBuf},
 };
 pub(crate) const LOCAL_PACKAGE_DIRECTORY: &str = ".casework/package";
+const MAXIMUM_HOLIDAY_SET_FILES: usize = 1024;
 pub(super) const STANDALONE_YAML: &str = r#"# yaml-language-server: $schema=.casework/schemas/project.schema.json
 apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
@@ -262,6 +264,7 @@ pub(super) fn check(project: &Path, _production: bool, _deny_warnings: bool) -> 
         }
         files_checked.insert(relative.to_owned());
     }
+    check_holiday_sets(project, &mut files_checked, &mut diagnostics)?;
     if diagnostics.has_errors() {
         return Err(diagnostics.into());
     }
@@ -296,6 +299,156 @@ pub(super) fn check(project: &Path, _production: bool, _deny_warnings: bool) -> 
     Ok(
         json!({"ok":true,"command":"check","status":"complete","project":project,"policyBindings":bindings,"filesChecked":files_checked.len()+1,"diagnostics":diagnostics.diagnostics(),"networkAccess":false,"databaseAccess":false}),
     )
+}
+
+fn check_holiday_sets(
+    project: &Path,
+    files_checked: &mut std::collections::BTreeSet<String>,
+    diagnostics: &mut Report,
+) -> Result<()> {
+    let directory = project.join("holiday-sets");
+    let directory_shown = directory.display().to_string();
+    let metadata = match fs::metadata(&directory) {
+        Ok(metadata) => metadata,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && fs::symlink_metadata(&directory).is_err() =>
+        {
+            return Ok(())
+        }
+        Err(_) => {
+            diagnostics.push(unreadable_holiday_input(&directory_shown));
+            return Ok(());
+        }
+    };
+    if !metadata.file_type().is_dir() {
+        diagnostics.push(holiday_file_diagnostic(
+            Severity::Error,
+            "casework.project.not-a-directory",
+            &directory_shown,
+            "holiday-sets/ is not a directory, so caseworkctl cannot read its authored holiday sets",
+            "Replace the file with a directory holding the holiday-set YAML files.",
+        ));
+        return Ok(());
+    }
+    let mut paths = Vec::new();
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(_) => {
+            diagnostics.push(unreadable_holiday_input(&directory_shown));
+            return Ok(());
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                diagnostics.push(unreadable_holiday_input(&directory_shown));
+                return Ok(());
+            }
+        };
+        let path = entry.path();
+        let shown = path.display().to_string();
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                diagnostics.push(unreadable_holiday_input(&shown));
+                continue;
+            }
+        };
+        if metadata.is_dir() {
+            diagnostics.push(holiday_file_diagnostic(
+                Severity::Warning,
+                "casework.project.unread-directory",
+                &shown,
+                "caseworkctl reads holiday-set files only directly under holiday-sets/, so nothing in this directory is read",
+                "Move the holiday-set files up into holiday-sets/, or move this directory out of holiday-sets/.",
+            ));
+            continue;
+        }
+        if !is_yaml_path(&path) {
+            continue;
+        }
+        paths.push((path, metadata));
+        if paths.len() > MAXIMUM_HOLIDAY_SET_FILES {
+            diagnostics.push(holiday_file_diagnostic(
+                Severity::Error,
+                "casework.project.too-many-files",
+                &directory_shown,
+                format!("holiday-sets/ holds more than the {MAXIMUM_HOLIDAY_SET_FILES} YAML files caseworkctl reads, so none of them was read"),
+                format!("Remove YAML files from holiday-sets/ until no more than {MAXIMUM_HOLIDAY_SET_FILES} remain."),
+            ));
+            return Ok(());
+        }
+    }
+    paths.sort_by(|left, right| left.0.cmp(&right.0));
+    for (path, metadata) in paths {
+        let shown = path.display().to_string();
+        if !metadata.file_type().is_file() {
+            diagnostics.push(holiday_file_diagnostic(
+                Severity::Error,
+                "casework.project.not-a-regular-file",
+                &shown,
+                "this holiday-set path is not a regular file",
+                "Replace the special file with a regular YAML file holding the holiday set.",
+            ));
+            continue;
+        }
+        let mut bytes = Vec::new();
+        let read = fs::File::open(&path).and_then(|file| {
+            file.take((registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+        });
+        if read.is_err() {
+            diagnostics.push(unreadable_holiday_input(&shown));
+            continue;
+        }
+        match registry_casework_core::CaseworkHolidaySet::read(&shown, &bytes) {
+            Ok(decoded) => diagnostics.extend(decoded.document.warnings()),
+            Err(refused) => diagnostics.extend(refused),
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default();
+        files_checked.insert(format!("holiday-sets/{name}"));
+    }
+    Ok(())
+}
+
+fn is_yaml_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| matches!(extension, "yaml" | "yml"))
+}
+
+fn unreadable_holiday_input(file: &str) -> Diagnostic {
+    holiday_file_diagnostic(
+        Severity::Error,
+        "casework.project.unreadable-file",
+        file,
+        "caseworkctl cannot read this holiday-set path",
+        "Make the path readable by the user running caseworkctl, or remove it.",
+    )
+}
+
+fn holiday_file_diagnostic(
+    severity: Severity,
+    code: &str,
+    file: &str,
+    message: impl Into<String>,
+    action: impl Into<String>,
+) -> Diagnostic {
+    let mut diagnostic = match severity {
+        Severity::Error => Diagnostic::error(code, "", message, action),
+        _ => Diagnostic::warning(code, "", message, action),
+    };
+    diagnostic.source = Some(Source {
+        file: file.to_owned(),
+        line: None,
+        column: None,
+    });
+    diagnostic
 }
 fn registry_breg_client_value(bytes: &[u8]) -> Result<Value> {
     let document = registry_platform_yaml::Reader::new("context-provider.json")

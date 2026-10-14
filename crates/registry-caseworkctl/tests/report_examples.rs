@@ -75,19 +75,25 @@ fn current_offline_reports_match_the_typed_contract_and_committed_check_example(
         .with_draft(Draft::Draft202012)
         .compile(&schema)
         .expect("generated report schema compiles");
-    let commands: [(&[&str], i32, &str); 5] = [
+    let commands: [(&[&str], i32, &str); 6] = [
         (&["check", STANDALONE], 0, "check"),
         (&["explain", ADVANCED], 0, "explain"),
         (&["test", ADVANCED], 0, "test"),
+        (&["lifecycle"], 0, "lifecycle"),
         (&["package", STANDALONE, "--dry-run"], 0, "package"),
         (&["--not-a-real-argument"], 2, "usage"),
     ];
     for (arguments, exit, command) in commands {
         let (report, bytes) = output(&root, arguments, exit);
-        assert!(
-            validator.is_valid(&report),
-            "{command} report violates schema: {report}"
-        );
+        if let Err(errors) = validator.validate(&report) {
+            panic!(
+                "{command} report violates schema: {}\n{report}",
+                errors
+                    .map(|error| format!("{} at {}", error, error.instance_path))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
         assert_eq!(report["command"], command);
         assert_eq!(report["ok"], exit == 0);
         if exit == 0 {

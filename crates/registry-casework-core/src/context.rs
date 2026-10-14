@@ -2,12 +2,22 @@ use crate::ContentDigest;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// The largest producer-issued context contract id Casework stores, in UTF-8
+/// bytes. The schema also publishes this exact writer/reader bound as an
+/// extension because JSON Schema's `maxLength` counts characters.
+pub const MAXIMUM_CONTEXT_CONTRACT_ID_BYTES: usize = 256;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewContextContract {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "context_contract_id_schema")
+    )]
     pub id: String,
     pub revision: ContentDigest,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
     pub schema_digest: ContentDigest,
 }
 
@@ -80,11 +90,50 @@ pub struct ReviewContextProviderPolicy {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::UniqueList<ReviewContextCapability>")
+    )]
     pub capabilities: Vec<ReviewContextCapability>,
     pub source_namespace: String,
     pub deployment_ref: String,
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "service_profiles_schema"))]
     pub service_profiles: BTreeMap<ReviewContextCapability, String>,
+}
+
+#[cfg(feature = "schema")]
+fn context_contract_id_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut schema = generator.subschema_for::<registry_platform_yaml::ExternalId>();
+    schema.insert(
+        "maxLength".into(),
+        serde_json::Value::from(MAXIMUM_CONTEXT_CONTRACT_ID_BYTES),
+    );
+    schema.insert("pattern".into(), serde_json::Value::from("\\S"));
+    schema.insert(
+        "x-registry-maxBytes".into(),
+        serde_json::Value::from(MAXIMUM_CONTEXT_CONTRACT_ID_BYTES),
+    );
+    schema.insert(
+        "description".into(),
+        serde_json::Value::from(
+            "The producer-issued contract id, kept exactly as written: nonblank, no control characters, and at most 256 UTF-8 bytes. The byte ceiling is enforced by the Casework reader.",
+        ),
+    );
+    schema
+}
+
+#[cfg(feature = "schema")]
+fn service_profiles_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut schema =
+        <BTreeMap<ReviewContextCapability, String> as schemars::JsonSchema>::json_schema(generator);
+    schema.insert(
+        "propertyNames".into(),
+        generator
+            .subschema_for::<registry_platform_yaml::LocalId>()
+            .to_value(),
+    );
+    schema
 }
 
 /// Complete behavioral inputs retained beside an admitted request. Live Directory

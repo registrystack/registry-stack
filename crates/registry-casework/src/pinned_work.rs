@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct StrandedWork {
     pub policy: String,

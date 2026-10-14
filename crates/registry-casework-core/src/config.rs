@@ -596,7 +596,7 @@ impl CaseworkProject {
         for (index, policy) in self.review_policies.iter().enumerate() {
             if let ReviewContextPolicy::CurrentSource { provider, contract } = &policy.context {
                 let at = format!("/reviewPolicies/{index}/context");
-                if !bounded_config_text(&contract.id, 256) {
+                if !bounded_config_text(&contract.id, crate::MAXIMUM_CONTEXT_CONTRACT_ID_BYTES) {
                     findings.push(
                         "casework.review-policy.context-contract",
                         format!("{at}/contract/id"),

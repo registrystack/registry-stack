@@ -30,6 +30,7 @@
       "type": "object"
     },
     "Activation": {
+      "additionalProperties": false,
       "description": "One append-only package activation ledger row.",
       "properties": {
         "activationId": {
@@ -42,6 +43,8 @@
         },
         "applyOrder": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         },
         "backupReferences": {
@@ -60,15 +63,19 @@
           ]
         },
         "packageDigest": {
-          "type": "string"
+          "$ref": "#/$defs/Digest"
         },
         "planKind": {
           "$ref": "#/$defs/PlanKind"
         },
         "predecessorPackageDigest": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Digest"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "roleMode": {
@@ -97,6 +104,7 @@
       "type": "object"
     },
     "ActivationEffects": {
+      "additionalProperties": false,
       "description": "The Casework-specific effects of an activation.",
       "properties": {
         "pinnedWork": {
@@ -116,6 +124,7 @@
       "type": "object"
     },
     "ActivationPlan": {
+      "additionalProperties": false,
       "description": "What `caseworkctl plan` reports. It is read in a read-only transaction.",
       "properties": {
         "active": {
@@ -129,7 +138,7 @@
           ]
         },
         "candidatePackageDigest": {
-          "type": "string"
+          "$ref": "#/$defs/Digest"
         },
         "changesPending": {
           "description": "Whether apply would record an activation.",
@@ -152,6 +161,8 @@
         "pendingSchemaVersions": {
           "items": {
             "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
             "type": "integer"
           },
           "type": "array"
@@ -179,6 +190,8 @@
         "schemaVersion": {
           "description": "The newest applied schema version, or none on an empty database.",
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": [
             "integer",
             "null"
@@ -186,6 +199,8 @@
         },
         "supportedSchemaVersion": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         }
       },
@@ -205,6 +220,7 @@
       "type": "object"
     },
     "ActivationRefusal": {
+      "additionalProperties": false,
       "description": "One reason an activation is refused, with the location the operator\ncorrects and the next command.",
       "properties": {
         "code": {
@@ -225,6 +241,7 @@
       "type": "object"
     },
     "ActivationStatus": {
+      "additionalProperties": false,
       "description": "What `caseworkctl status` reports.",
       "properties": {
         "active": {
@@ -257,6 +274,8 @@
         },
         "schemaVersion": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": [
             "integer",
             "null"
@@ -264,6 +283,8 @@
         },
         "supportedSchemaVersion": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         }
       },
@@ -297,6 +318,8 @@
         "schemaVersionsApplied": {
           "items": {
             "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
             "type": "integer"
           },
           "type": "array"
@@ -372,6 +395,7 @@
         },
         "filesChecked": {
           "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": "integer"
         },
@@ -404,7 +428,7 @@
       "type": "object"
     },
     "ClockPolicy": {
-      "description": "A named clock, chosen by its `type` member (CFG-ID-7). The shared reader's\nunion helper decodes it so every error inside a variant keeps its position\n(CFG-SCHEMA-8). The authored file, the stored record, the digest input, and\nthe HTTP description all carry this one spelling.",
+      "description": "The serialized form of [`ClockPolicy`]: the shape the serializer emits.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -445,15 +469,7 @@
               "$ref": "#/$defs/ActivityClockAnchor"
             },
             "atRisk": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/WorkingDaysBefore"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
+              "$ref": "#/$defs/WorkingDaysBefore"
             },
             "calendar": {
               "type": "string"
@@ -465,14 +481,12 @@
               "$ref": "#/$defs/LocalId"
             },
             "reminders": {
-              "default": [],
               "items": {
                 "$ref": "#/$defs/ClockReminder"
               },
               "type": "array"
             },
             "steps": {
-              "default": [],
               "items": {
                 "$ref": "#/$defs/ClockStep"
               },
@@ -489,10 +503,7 @@
             "anchor",
             "calendar",
             "after",
-            "dueTime",
-            "atRisk",
-            "reminders",
-            "steps"
+            "dueTime"
           ],
           "type": "object"
         }
@@ -596,7 +607,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "profile": {
           "type": "string"
@@ -621,7 +632,7 @@
           "type": "string"
         },
         "caseworkUrl": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         },
         "clientAssertionAudience": {
           "type": "string"
@@ -642,7 +653,7 @@
           "$ref": "#/$defs/DevDirectory"
         },
         "issuer": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         },
         "issuerProject": {
           "type": [
@@ -695,10 +706,13 @@
       "properties": {
         "revision": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         },
         "teams": {
           "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": "integer"
         }
@@ -741,6 +755,7 @@
       "properties": {
         "grantExpiresAt": {
           "format": "uint64",
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": "integer"
         },
@@ -793,6 +808,7 @@
       "type": "object"
     },
     "Diagnostic": {
+      "additionalProperties": false,
       "description": "One problem, in the shape every checking command reports (CFG-DIAG-1).\n\nA diagnostic names keys, the path, accepted values, bounds, and the\nexpected envelope. It never repeats a scalar value read from a file or the\nenvironment (CFG-SEC-3).",
       "properties": {
         "artifact": {
@@ -844,6 +860,11 @@
       ],
       "type": "object"
     },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
     "DoctorChecks": {
       "additionalProperties": false,
       "properties": {
@@ -878,7 +899,7 @@
           "$ref": "#/$defs/DoctorChecks"
         },
         "packageDigest": {
-          "type": "string"
+          "$ref": "#/$defs/Digest"
         },
         "runtimeConfig": {
           "type": "string"
@@ -905,6 +926,7 @@
       "type": "object"
     },
     "EnforcementLayer": {
+      "additionalProperties": false,
       "description": "One place the runtime can refuse an event, in execution order within\n`LifecycleDescription::enforcement`. `events` names every event the layer\nruns for; an event absent from the list passes the layer without being\nchecked there. Where an event is raised on more than one path and the layer\ngates only some of them, the description says which. One list can report one\norder, so where a layer's position is not the one a particular event meets,\nthat layer's description names the event and where it really runs.",
       "properties": {
         "description": {
@@ -917,7 +939,7 @@
           "type": "array"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
@@ -1001,7 +1023,9 @@
         "dependencies": {
           "$ref": "#/$defs/ReviewPolicyDependencies"
         },
-        "displaySchema": true,
+        "displaySchema": {
+          "x-registry-foreign": "json-schema-2020-12"
+        },
         "outcomes": {
           "items": {
             "$ref": "#/$defs/ReviewOutcomePolicy"
@@ -1023,7 +1047,9 @@
           },
           "type": "array"
         },
-        "resultSchema": true,
+        "resultSchema": {
+          "x-registry-foreign": "json-schema-2020-12"
+        },
         "retention": {
           "$ref": "#/$defs/ReviewRetentionPolicy"
         },
@@ -1092,6 +1118,13 @@
         "clockRecompute"
       ],
       "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
     },
     "InboxPolicy": {
       "additionalProperties": false,
@@ -1177,6 +1210,7 @@
       "type": "object"
     },
     "LifecycleDescription": {
+      "additionalProperties": false,
       "properties": {
         "enforcement": {
           "items": {
@@ -1185,7 +1219,7 @@
           "type": "array"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "label": {
           "type": "string"
@@ -1213,12 +1247,14 @@
       "type": "object"
     },
     "LifecycleState": {
+      "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "incomingTransitions": {
           "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": "integer"
         },
@@ -1227,6 +1263,7 @@
         },
         "outgoingTransitions": {
           "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": "integer"
         },
@@ -1248,6 +1285,7 @@
       "type": "object"
     },
     "LifecycleTransition": {
+      "additionalProperties": false,
       "properties": {
         "event": {
           "type": "string"
@@ -1301,7 +1339,7 @@
           ]
         },
         "packageDigest": {
-          "type": "string"
+          "$ref": "#/$defs/Digest"
         },
         "revision": {
           "type": [
@@ -1322,6 +1360,7 @@
       "type": "object"
     },
     "PinnedWorkEffect": {
+      "additionalProperties": false,
       "description": "The pinned-work verdict an activation reaches.",
       "properties": {
         "stranded": {
@@ -1378,7 +1417,7 @@
           "type": "string"
         },
         "schemaDigest": {
-          "type": "string"
+          "$ref": "#/$defs/Digest"
         }
       },
       "required": [
@@ -1408,7 +1447,7 @@
           "type": "string"
         },
         "packageDigest": {
-          "type": "string"
+          "$ref": "#/$defs/Digest"
         }
       },
       "required": [
@@ -1513,10 +1552,12 @@
       "type": "object"
     },
     "Related": {
+      "additionalProperties": false,
       "description": "A second place that explains a diagnostic, such as the first occurrence\nof a duplicate. Human output prints it as a `note:` line.",
       "properties": {
         "column": {
           "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": [
             "integer",
@@ -1528,6 +1569,7 @@
         },
         "line": {
           "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": [
             "integer",
@@ -1586,13 +1628,17 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/ExternalId",
+          "description": "The producer-issued contract id, kept exactly as written: nonblank, no control characters, and at most 256 UTF-8 bytes. The byte ceiling is enforced by the Casework reader.",
+          "maxLength": 256,
+          "pattern": "\\S",
+          "x-registry-maxBytes": 256
         },
         "revision": {
           "$ref": "#/$defs/ContentDigest"
         },
         "schemaDigest": {
-          "$ref": "#/$defs/ContentDigest"
+          "$ref": "#/$defs/Digest"
         }
       },
       "required": [
@@ -1647,7 +1693,8 @@
           "items": {
             "$ref": "#/$defs/ReviewContextCapability"
           },
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "deploymentRef": {
           "type": "string"
@@ -1677,6 +1724,9 @@
             "task-grant-context": {
               "type": "string"
             }
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
           },
           "type": "object"
         },
@@ -1806,10 +1856,10 @@
       "additionalProperties": false,
       "properties": {
         "digest": {
-          "$ref": "#/$defs/ContentDigest"
+          "$ref": "#/$defs/Digest"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "version": {
           "type": "string"
@@ -1984,11 +2034,11 @@
           ]
         },
         "fields": {
-          "additionalProperties": false,
-          "patternProperties": {
-            "^[^\\u0000-\\u001F\\u007F-\\u009F]+$": {
-              "$ref": "#/$defs/RoutingPredicate"
-            }
+          "additionalProperties": {
+            "$ref": "#/$defs/RoutingPredicate"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
           },
           "type": "object"
         },
@@ -2088,10 +2138,12 @@
       "type": "string"
     },
     "Source": {
+      "additionalProperties": false,
       "description": "Where a diagnostic points. `file` is the path exactly as the caller gave\nit; `line` and `column` are 1-based and absent when the problem concerns\nthe file as a whole.",
       "properties": {
         "column": {
           "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": [
             "integer",
@@ -2103,6 +2155,7 @@
         },
         "line": {
           "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": [
             "integer",
@@ -2139,6 +2192,7 @@
       "type": "object"
     },
     "StrandedWork": {
+      "additionalProperties": false,
       "properties": {
         "policy": {
           "type": "string"
@@ -2148,6 +2202,7 @@
         },
         "reviews": {
           "format": "uint64",
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": "integer"
         },
@@ -2390,12 +2445,12 @@
           "type": "string"
         },
         "subjects": {
-          "additionalProperties": false,
+          "additionalProperties": {
+            "type": "string"
+          },
           "description": "Exact token identity keys mapped to governed source logical fields.\nValues are extracted from the approving caller's disclosed source read.",
-          "patternProperties": {
-            "^[^\\u0000-\\u001F\\u007F-\\u009F]+$": {
-              "type": "string"
-            }
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
           },
           "type": "object"
         },
@@ -2422,6 +2477,7 @@
       "type": "object"
     },
     "TaskTemplateEffect": {
+      "additionalProperties": false,
       "properties": {
         "change": {
           "$ref": "#/$defs/TemplateChange"
@@ -2627,40 +2683,38 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "allOf": [
     {
-      "else": {
-        "properties": {
-          "diagnostics": {
-            "minItems": 1
+      "oneOf": [
+        {
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "status": {
+              "const": "complete"
+            }
           },
-          "status": {
-            "enum": [
-              "domain-refusal",
-              "usage-error",
-              "operational-failure"
-            ]
+          "required": [
+            "data"
+          ]
+        },
+        {
+          "properties": {
+            "diagnostics": {
+              "minItems": 1
+            },
+            "ok": {
+              "const": false
+            },
+            "status": {
+              "enum": [
+                "domain-refusal",
+                "usage-error",
+                "operational-failure"
+              ]
+            }
           }
         }
-      },
-      "if": {
-        "properties": {
-          "ok": {
-            "const": true
-          }
-        },
-        "required": [
-          "ok"
-        ]
-      },
-      "then": {
-        "properties": {
-          "status": {
-            "const": "complete"
-          }
-        },
-        "required": [
-          "data"
-        ]
-      }
+      ]
     }
   ],
   "oneOf": [
@@ -3541,5 +3595,6 @@
     "apiVersion",
     "kind"
   ],
-  "title": "Casework command report"
+  "title": "Casework command report",
+  "unevaluatedProperties": false
 }

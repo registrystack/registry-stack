@@ -13,11 +13,12 @@ caseworkctl explain products/casework/examples/multi-stage-routing-clocks
 caseworkctl test products/casework/examples/multi-stage-routing-clocks
 ```
 
+`check` also validates each `holiday-sets/*.yaml` or `*.yml` document offline.
 `test` validates the synthetic review display and policy outcome vocabulary. It
 does not start PostgreSQL or prove a runtime decision. The checkpoint runner
-also checks the compiled stage, route, and clock closure. An operator supplies
-the live `office-holidays` revision through the calendar administration API;
-`holiday-sets/office-holidays-7.yaml` is an example of that revision format.
+also checks the compiled stage, route, and clock closure. An operator separately
+publishes the live `office-holidays` revision through the calendar administration
+API; `holiday-sets/office-holidays-7.yaml` is an example of that revision format.
 
 The offline fixture uses `region: south` and checks the first stage's base queue, `triage`.
 `caseworkctl test` validates display and declared expectations without running the routing engine.

@@ -44,6 +44,8 @@ formats:
     retiredApiVersions:
       - registry.registrystack.org/casework-fixture/v1alpha1
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: fixtures/standalone-decision.yaml}
+  casework/holiday-set:
+    project: products/casework/examples/multi-stage-routing-clocks
   casework/dev-clients:
     removedKeys:
       - /version
