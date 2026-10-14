@@ -14,8 +14,10 @@ caseworkctl provider pair ./review --provider-id facility-proposal-context \
   --breg-package BREG_PACKAGE --action-id correct-address --apply
 ```
 
-Pairing imports the governed context export and pins the producer registry
-revision. Configure `runtime.yaml` with `contextProviders.facility-registry`
+Pairing imports the exact source, Action, context contract and schema bytes.
+The registry revision is diagnostic metadata; unrelated package changes do not
+change the accepted context binding. Configure `runtime.yaml` with
+`contextProviders.facility-registry`
 transport and a purpose-specific `casework-review-status` service credential.
 The human selects an authorized BReg source profile per request. Recheck and
 package Casework. A producer may select the policy by ID, or supply its compiled

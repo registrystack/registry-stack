@@ -429,8 +429,10 @@ A live run's binding includes `producer` but neither `completion` nor
 `resultCheckSeconds`, so you can change either, or rotate the completion
 token, while runs wait.
 
-Use the owning Casework project's compiled `policyBindings` report to populate the Workflow's
-expected policy ID, version, and digest. A copied synthetic digest is not a deployable binding.
+Select the Review policy by ID from the owning Casework project's compiled `policyBindings`
+report. Casework binds its current concrete policy at first acceptance. If the Workflow requires
+an exact policy, also copy both its compiled version and digest; a synthetic fixture digest is
+not a deployable pin. Preserve the original selection and idempotency key when recovering work.
 Submitted context uses `mode: submitted`; current-source context uses the owning policy's
 `mode: current-source` and configured context provider. Review policy and trusted producer
 configuration remain owned by Casework.

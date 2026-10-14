@@ -1,8 +1,8 @@
 # Standalone review project
 
-Use this source-neutral project to submit bounded context to Registry Casework under an exact
-expected review policy, wait for its result, and withdraw explicitly on timeout or operator
-cancellation. The project needs no Base Registry Engine connection and creates no registry effect.
+Use this source-neutral project to submit bounded context to Registry Casework under a selected
+review policy, wait for its result, and withdraw explicitly on timeout or operator cancellation.
+The project needs no Base Registry Engine connection and creates no registry effect.
 
 From the repository root:
 
@@ -11,10 +11,12 @@ coordinatorctl check --project products/coordinator/examples/standalone-review -
 coordinatorctl test --project products/coordinator/examples/standalone-review
 ```
 
-The workflow input uses the `casework.submit-review-request/v1` contract, including `policy`
-with its exact ID, version, and digest, the subject, requester reference, and reviewer context.
-Acceptance and completion must match that PolicyBinding, subject, and submission digest.
-Casework owns reviewer authority, policy validation, and terminal outcomes.
+The workflow input uses the `casework.submit-review-request/v1` contract: a `policy` selection,
+subject, requester reference, and reviewer context. Select a policy by ID by default; include both
+version and digest when an exact policy is required. Casework freezes a concrete PolicyBinding
+at first acceptance. Completion must match that accepted binding, subject, and submission digest.
+Retries preserve the original request and key, including its original policy selection. Casework
+owns reviewer authority, policy validation, and terminal outcomes.
 
 `submit` exposes `result`. `await-result` uses
 `completion: {step: submit, name: result}` for up to fourteen days within a thirty-day deadline.
@@ -30,10 +32,11 @@ completion wake-ups bring an eligible read forward without bypassing the durable
 providing trusted decision data. Unavailable, refused, invalid, or mismatched evidence cannot
 become a negative business outcome. Inspect held work and recover under the original deadline.
 
-Take the expected policy ID, version, and digest from the owning Casework project's
-`caseworkctl check` report under `policyBindings`, rather than reusing the offline scenario digest.
-The institution supplies that exact policy and matching trusted producer, service credentials,
-completion destination, and Coordinator caller policies. The template contains synthetic HTTPS
+Choose the policy from the owning Casework project's `caseworkctl check` report under
+`policyBindings`. Use its ID for default selection, or its complete ID, version and digest for
+strict selection. The offline scenarios exercise exact synthetic bindings; those digests are not
+deployment values. Configure the matching trusted producer, service credentials, completion
+destination, and Coordinator caller policies. The template contains synthetic HTTPS
 endpoints and secret references. Adapt it outside the package and follow the
 [deployment runbook](../../DEPLOYMENT.md).
 
