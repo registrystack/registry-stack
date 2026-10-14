@@ -14,7 +14,7 @@
       "const": "id.registrystack.org/formats/evidence/fixture/v1alpha1"
     },
     "cases": {
-      "description": "The cases, which together cover every required category.",
+      "description": "Declared synthetic cases; production and evidence-grade bundles require complete category coverage.",
       "items": {
         "additionalProperties": true,
         "properties": {

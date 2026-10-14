@@ -168,9 +168,9 @@ invariants:
     enforcement: Optional runtime metricsListener bound to a private address distinct from the evidence listener, serving only GET /metrics; request series labels are drawn from the closed registered route-template set, a fixed method set, a fixed status category, and the reviewed problem-code set, and the source shape-drift series is labeled only by a governed bundle source identifier registered at startup, never from request or response content.
     negative_test: sec-telemetry-bounded-and-operator-private
   - id: V1-I34
-    rule: Only the explicit local assurance profile may omit a requirement fixture reference; production and evidence-grade retain complete fixture validation before the bundle can load.
+    rule: Only the explicit local assurance profile may omit a requirement fixture reference or use focused fixture coverage; production and evidence-grade retain complete fixture validation before the bundle can load.
     threat: An incomplete or absent semantic fixture suite is silently treated as deployable assurance.
-    enforcement: The governed assuranceProfile is required in the closed bundle and Rust requires every production or evidence-grade requirement to reference a captured fixture that passes the existing complete coverage validator. Local changes only that fixture prerequisite.
+    enforcement: The governed assuranceProfile is required in the closed bundle and Rust requires every production or evidence-grade requirement to reference a captured fixture that passes the existing complete coverage validator. Local changes only the fixture prerequisite and category completeness; synthetic data, structural rules, evaluation and privacy checks remain required for every referenced suite.
     negative_test: sec-assurance-profile-fixture-boundary
   - id: V1-I35
     rule: Every assertion encoding, definition response, and audit event carries the governed assurance profile, and verification compares it with an independent relying-procedure expectation.

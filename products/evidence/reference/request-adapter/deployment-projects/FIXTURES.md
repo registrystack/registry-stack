@@ -15,9 +15,11 @@ deployment projects use this YAML format so an adopter can review one case
 matrix beside the requirement.
 
 A requirement may omit its fixture reference only while its immutable bundle
-declares `assuranceProfile: local`. Local serving still uses the ordinary
-authenticated, authorized, source-bounded, minimum-disclosure, signed, and
-fail-closed audit path. Production and evidence-grade bundles retain this
+declares `assuranceProfile: local`. A local bundle may also reference a focused
+synthetic suite covering only the cases its project declares. A successful
+local fixture run proves those cases, not readiness for production promotion.
+Local serving still uses the ordinary authenticated, authorized, source-bounded,
+minimum-disclosure, signed, and fail-closed audit path. Production and evidence-grade bundles retain this
 document's complete fixture-coverage requirement and fail to load when a
 reference is absent or its captured suite is incomplete.
 
@@ -65,8 +67,10 @@ privacyExpectation:
 The bundle loader reads every referenced fixture with the shared configuration
 reader. A missing or unknown envelope, the retired `fixture` identifier key, and
 a `${...}` expression are refused, and so is a fixture that is not synthetic or
-does not cover every required case category. Each refusal names the file, the
-member, its line and column, and the fix, and never repeats a value from the
+does not cover every required case category under production or evidence-grade
+assurance. Local suites retain the same envelope, synthetic-data, case-count,
+unique-ID, unresolved-outcome, evaluation, and privacy checks. Each refusal
+names the file, the member, its line and column, and the fix, and never repeats a value from the
 file. The evaluator runs a fixture that declares
 `coequal_acceptance_definition: true` as a coequal acceptance definition and
 every other fixture under this contract.
