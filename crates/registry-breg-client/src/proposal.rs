@@ -864,8 +864,7 @@ impl BaseRegistryClient {
             })
             || is_context
                 && (document.context.contract.is_none() || document.context.fields.is_none())
-            || !is_context
-                && (document.context.contract.is_some() || document.context.fields.is_some())
+            || !is_context && document.context.fields.is_some()
         {
             return Err(refusal());
         }
