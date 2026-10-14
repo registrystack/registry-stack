@@ -794,6 +794,12 @@ pub(super) fn spec(product: ProductKind) -> Option<ProductSpec> {
             "CaseworkProject",
             CASEWORK_DOCUMENTS,
         ),
+        ProductKind::Coordinator => (
+            "workflow.yaml",
+            "id.registrystack.org/formats/coordinator/project/v1alpha1",
+            "CoordinatorProject",
+            super::catalog_coordinator::DOCUMENTS,
+        ),
         ProductKind::Scheduling => (
             "scheduling.yaml",
             "id.registrystack.org/formats/scheduling/project/",

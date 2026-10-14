@@ -104,6 +104,7 @@ impl ProjectFamily {
         Self::Evidence,
         Self::Product(crate::products::ProductKind::Breg),
         Self::Product(crate::products::ProductKind::Casework),
+        Self::Product(crate::products::ProductKind::Coordinator),
         Self::Product(crate::products::ProductKind::Scheduling),
         Self::Product(crate::products::ProductKind::Messaging),
         Self::Product(crate::products::ProductKind::Discovery),

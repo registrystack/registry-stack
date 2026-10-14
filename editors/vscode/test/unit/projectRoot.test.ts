@@ -135,6 +135,7 @@ test('retired Evidence markers do not declare a project root', () => {
 
 for (const [file, content] of [
   ['casework.yaml', 'apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\n'],
+  ['workflow.yaml', 'apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1\n'],
   ['scheduling.yaml', 'apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\n'],
   ['messaging.yaml', 'kind: MessagingProject\n'],
   ['origins.yaml', 'apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\n'],
@@ -221,3 +222,15 @@ test('malformed explicit marker JSON does not declare a product root', () => {
   fs.writeFileSync(path.join(directory, '.registry-stack-editor/project.json'), '{');
   assert.strictEqual(isProjectRoot(directory), false);
 });
+
+for (const content of [
+  'kind: UnrelatedWorkflow\n',
+  'apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1-retired\n',
+  'metadata:\n  kind: CoordinatorProject\n',
+]) {
+  test(`a workflow.yaml with an unrelated discriminator does not declare a root: ${content.trim()}`, () => {
+    const directory = tempDirectory();
+    fs.writeFileSync(path.join(directory, 'workflow.yaml'), content);
+    assert.strictEqual(isProjectRoot(directory), false);
+  });
+}

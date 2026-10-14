@@ -7,8 +7,20 @@ const path = require('node:path');
 const { defineConfig } = require('@vscode/test-cli');
 const extensionVersion = require('./package.json').version;
 
-const testRunDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-stack-vscode-'));
-const trustedUserData = path.join(testRunDirectory, 'trusted-user-data');
+// VS Code's macOS watcher does not deliver external edits for projects in OS tmp.
+// Keep disposable projects in the ignored test cache so the reload assertion uses
+// the same filesystem-watching path as an ordinary contributor project.
+const testCacheDirectory = path.join(__dirname, '.vscode-test');
+fs.mkdirSync(testCacheDirectory, { recursive: true });
+const testRunDirectory = fs.mkdtempSync(path.join(testCacheDirectory, 'workspace-'));
+// Electron's IPC socket path is bounded, so user data uses a short separate path.
+const trustedUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-code-'));
+process.on('exit', (code) => {
+  if (code === 0) {
+    fs.rmSync(testRunDirectory, { recursive: true, force: true });
+    fs.rmSync(trustedUserData, { recursive: true, force: true });
+  }
+});
 const projectAlpha = path.join(testRunDirectory, 'project-alpha');
 const projectBeta = path.join(testRunDirectory, 'project-beta');
 const projectEvidence = path.join(testRunDirectory, 'project-evidence');

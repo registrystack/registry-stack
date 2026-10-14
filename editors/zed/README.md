@@ -9,7 +9,10 @@ commands where they exist. For Evidence, it runs the existing
 
 This extension attaches the shared Registry Stack language server to Zed's built-in YAML and JSON languages.
 It provides cross-file definitions, references, workspace/document symbols, and Registry Stack
-reference diagnostics for the current product authoring projects. Zed's YAML language server
+reference diagnostics for the current product authoring projects, including
+Coordinator `workflow.yaml`. The same shared server discovers and indexes each
+[product family](../README.md#product-coverage); the Zed launcher adds no product parser.
+Zed's YAML language server
 remains responsible for YAML syntax, schema validation, formatting, and ordinary hover information.
 
 ## Install and launch

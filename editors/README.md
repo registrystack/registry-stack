@@ -30,7 +30,8 @@ cannot replace unsaved content.
 
 | Product | Project entry | Semantic navigation |
 |---|---|---|
-| Base Registry Engine | `registry.yaml` declaring `BRegProject` | Entities, fields, access profiles, actions, and authored modules |
+| Base Registry Engine | `registry.yaml` declaring `BRegProject` | Record types, datasets, fields, access profiles, Actions, Proposals, named Functions, and authored modules |
+| Registry Coordinator | `workflow.yaml` declaring `CoordinatorProject` | Workflow types, named Functions, Operation aliases, Steps and graph edges, Review outcomes, event triggers, and contained assets |
 | Registry Casework | `casework.yaml` | Review policies, queues, profiles, teams, read-only context providers, routing, clocks, task templates, fixtures, and directory references |
 | Registry Scheduling | `scheduling.yaml` | Services, locations, offerings, opening patterns, holiday sets, and fixture references |
 | Registry Messaging | `messaging.yaml` | Templates and versions, access profiles, providers, and template files |
@@ -58,6 +59,7 @@ From the source checkout, use Python 3.11 or newer to prepare both editors:
 ```console
 python3 editors/configure.py breg /path/to/registry-project
 python3 editors/configure.py scheduling /path/to/scheduling-project
+python3 editors/configure.py coordinator /path/to/workflow-project
 python3 editors/configure.py manifest /path/to/metadata-project --document publication.yaml
 python3 editors/configure.py evidence-oid4vci /path/to/issuer --document config/wallet.yaml
 ```
@@ -83,6 +85,10 @@ bundle `manifest.yaml`, its `labels/*.yaml` tables, and a `runtime.yaml` beside
 them. Manifest maps the selected document to the metadata manifest schema and
 every `profile.yaml` below the project to the profile descriptor schema.
 Platform maps `task-connection.yaml` and checks it with `evidencectl dev check`.
+Coordinator maps `workflow.yaml`, its runtime files, and `scenarios.yaml`, and adds
+`coordinatorctl check --project <project>`. Its semantic index reads the authored
+workflow only; logical connections and producer event identifiers remain with
+the deployment and product validators.
 
 For multiple product directories in one workspace, pass `--workspace` with the
 ancestor directory. Schema mappings name the specific project's paths so one

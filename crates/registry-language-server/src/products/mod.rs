@@ -3,6 +3,7 @@
 //! This module does not load runtimes, resolve secrets, or contact services.
 
 mod catalog;
+mod catalog_coordinator;
 mod catalog_extra;
 mod file_candidates;
 mod spec;
@@ -149,7 +150,10 @@ pub(crate) fn declares_root(root: &Path, product: ProductKind) -> bool {
                 .value
                 .get_scalar(rules.discriminator)
                 .is_some_and(|value| {
-                    if product == ProductKind::Manifest || product == ProductKind::Breg {
+                    if matches!(
+                        product,
+                        ProductKind::Manifest | ProductKind::Breg | ProductKind::Coordinator
+                    ) {
                         value.value == rules.version_prefix
                     } else {
                         value.value.starts_with(rules.version_prefix)

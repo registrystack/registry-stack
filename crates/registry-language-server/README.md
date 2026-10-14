@@ -18,6 +18,7 @@ holding several products can be read without guessing which tool is talking.
 |---|---|---|
 | Evidence | `evidence.yaml` | `evidence` |
 | BReg | `registry.yaml`: `BRegProject` or BReg `apiVersion` | `breg` |
+| Coordinator | `workflow.yaml`: `CoordinatorProject` or its exact current `apiVersion` | `coordinator` |
 | Casework | `casework.yaml`: `CaseworkProject` or Casework `apiVersion` | `casework` |
 | Scheduling | `scheduling.yaml`: `SchedulingProject` or Scheduling `apiVersion` | `scheduling` |
 | Messaging | `messaging.yaml`: `MessagingProject` or Messaging `apiVersion` | `messaging` |
@@ -68,6 +69,7 @@ symbols, completion, and hover for their modeled local authoring edges.
 | Product | Indexed relationships |
 |---|---|
 | BReg | Authored modules, record types and extensions, value types, fields including implicit `id`, selectors, constraints, read paths, record and project access profiles, Action inputs/plans/commit guards, Proposal permissions/attachments/review context, review authorities, datasets, vocabularies, and governed function/hook/SQL files. Module assets resolve relative to the module. |
+| Coordinator | Local workflow types, named Functions and source assets, generated contract import aliases and asset paths, Operation aliases, Step names/edges and preceding-step reads, declared outcomes and Review outcome keys, event triggers, and whole-schema aliases at declared signature/input/output positions. |
 | Casework | Queues, access profiles, teams, review policies with policy-scoped stages, outcomes and inline routing fields, trusted producers, read-only context providers and runtime deployment bindings, clocks, calendars and holiday sets, task templates, current fixtures, schema files, and development directory clients. Source namespaces remain opaque external names. |
 | Scheduling | Services/offerings/openings/holiday sets, local location/pool/window records, exception reopening targets scoped to location, and fixture offering names. |
 | Messaging | Providers, sender profiles, template identities and version-specific metadata files, access profiles, runtime providers, locale and part names and their Jinja body files, provider scripts, and fixed template schema/sample file symbols. |
@@ -82,12 +84,20 @@ or the product `evidence-oid4vci`. The document must be an existing regular `.ya
 inside the project, using a relative path without traversal or symbolic links. The shared
 `python3 editors/configure.py` command writes this marker and configures both editors.
 
-Name scopes follow the owning document contract. An entity field does not complete fields from a
-different entity, and Manifest fields also retain their dataset scope. References to separately
+Name scopes follow the owning document contract. A BReg Record field does not complete fields from a
+different Record type, and Manifest fields also retain their dataset and entity scope. References to separately
 deployed records or remote identifiers do not produce invented missing-local-name errors. Product
 validation remains the owning CLI's responsibility; these new indexes report syntax and modeled
 local reference errors, rather than claiming full compiler validation. Rhai, Jinja, Typst, SQL, and
 private-key contents remain with their native tooling.
+
+Coordinator indexes `workflow.yaml`; it does not index runtime connections, scenario replies,
+Rhai contents, or generated product-contract contents. External operation catalog identifiers,
+imported Action IDs, completion names and producer event identifiers remain opaque. Nested JSON
+Schema contents remain with schema tooling, while whole-schema aliases in declared Function
+signatures, operation response schemas, workflow input/outcomes and event envelope positions
+resolve to local declarations. `coordinatorctl check` owns type resolution, graph dominance,
+completion contracts, runtime binding validation and complete project validation.
 
 For ordinary asset paths, completion can repair a missing filename using contained sibling files
 with the same extension. It checks at most 1,024 directory entries and reads no candidate contents.

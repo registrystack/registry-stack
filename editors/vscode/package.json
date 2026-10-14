@@ -29,6 +29,8 @@
     "workspaceContains:**/evidence.yaml",
     "workspaceContains:casework.yaml",
     "workspaceContains:**/casework.yaml",
+    "workspaceContains:workflow.yaml",
+    "workspaceContains:**/workflow.yaml",
     "workspaceContains:scheduling.yaml",
     "workspaceContains:**/scheduling.yaml",
     "workspaceContains:messaging.yaml",

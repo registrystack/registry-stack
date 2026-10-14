@@ -6,6 +6,7 @@ import * as path from 'node:path';
 const PRODUCT_MARKERS = [
   ['registry.yaml', 'kind', 'BRegProject', 'apiVersion', 'id.registrystack.org/formats/breg/project/v1alpha1', true],
   ['evidence.yaml', 'kind', 'EvidenceProject', 'apiVersion', 'id.registrystack.org/formats/evidence/project/v1alpha1', true],
+  ['workflow.yaml', 'kind', 'CoordinatorProject', 'apiVersion', 'id.registrystack.org/formats/coordinator/project/v1alpha1', true],
   ['casework.yaml', 'kind', 'CaseworkProject', 'apiVersion', 'id.registrystack.org/formats/casework/project/'],
   ['scheduling.yaml', 'kind', 'SchedulingProject', 'apiVersion', 'id.registrystack.org/formats/scheduling/project/'],
   ['messaging.yaml', 'kind', 'MessagingProject', 'apiVersion', 'id.registrystack.org/formats/messaging/project/'],

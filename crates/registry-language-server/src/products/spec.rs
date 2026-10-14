@@ -5,6 +5,7 @@
 pub enum ProductKind {
     Breg,
     Casework,
+    Coordinator,
     Scheduling,
     Messaging,
     Discovery,
@@ -14,9 +15,10 @@ pub enum ProductKind {
 }
 
 impl ProductKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Breg,
         Self::Casework,
+        Self::Coordinator,
         Self::Scheduling,
         Self::Messaging,
         Self::Discovery,
@@ -29,6 +31,7 @@ impl ProductKind {
         match self {
             Self::Breg => "breg",
             Self::Casework => "casework",
+            Self::Coordinator => "coordinator",
             Self::Scheduling => "scheduling",
             Self::Messaging => "messaging",
             Self::Discovery => "discovery",

@@ -26,6 +26,7 @@ suite('Registry Stack extension', () => {
       'workspaceContains:**/registry.yaml',
       'workspaceContains:**/evidence.yaml',
       'workspaceContains:**/casework.yaml',
+      'workspaceContains:**/workflow.yaml',
       'workspaceContains:**/scheduling.yaml',
       'workspaceContains:**/messaging.yaml',
       'workspaceContains:**/origins.yaml',
@@ -77,6 +78,7 @@ suite('Registry Stack extension', () => {
     ].join('\n');
     const productFixtures = [
       ['breg', 'registry.yaml', 'kind: BRegProject\nrecordTypes:\n  - id: host-person\n', 'host-person'],
+      ['coordinator', 'workflow.yaml', 'kind: CoordinatorProject\noperations:\n  host-operation: {uses: breg.read-record/v1, connection: external-registry}\n', 'host-operation'],
       ['casework', 'casework.yaml', 'kind: CaseworkProject\nqueues:\n  - id: host-queue\n', 'host-queue'],
       ['scheduling', 'scheduling.yaml', 'kind: SchedulingProject\nservices:\n  - id: host-service\n', 'host-service'],
       ['messaging', 'messaging.yaml', 'kind: MessagingProject\nproviders:\n  - id: host-provider\n', 'host-provider'],

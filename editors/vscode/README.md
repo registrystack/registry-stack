@@ -10,6 +10,7 @@ Project roots use each product's own authoring marker:
 |---|---|
 | Base Registry Engine | `registry.yaml` declaring `BRegProject` |
 | Evidence | `evidence.yaml` declaring `EvidenceProject` |
+| Registry Coordinator | `workflow.yaml` declaring `CoordinatorProject` |
 | Registry Casework | `casework.yaml` declaring `CaseworkProject` |
 | Registry Scheduling | `scheduling.yaml` declaring `SchedulingProject` |
 | Registry Messaging | `messaging.yaml` declaring `MessagingProject` |
