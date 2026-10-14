@@ -15,6 +15,8 @@ output allowlist. Private source facts stay inside Evidence.
 Use matching versions of `evidence` and `evidencectl`, Python 3, curl, and Docker.
 Start from a writable copy outside the repository. Keep the example's generated
 credentials and responses private. The commands below run in that copy.
+The tracked `access/clients/example-caller.yaml` demonstrates the public client
+format only; the commands create the private local `demo` client used below.
 
 ```sh
 umask 077

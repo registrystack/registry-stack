@@ -1,4 +1,4 @@
-// Evidence assertion workload over the synthetic adult-status question.
+// Evidence assertion workload over the synthetic adult-status definition.
 //
 // Every iteration asks for one signed assertion about one synthetic subject.
 // A small share asks about a subject the source does not hold, which exercises
@@ -6,10 +6,9 @@
 // carry no real-world identifiers.
 //
 // The stock development bundle limits each principal to 60 requests per
-// minute with a burst of 10, and `evidencectl dev` offers no way to raise that
-// limit. up.sh therefore registers a set of load clients, and this workload
-// spreads iterations over them round-robin so that each principal stays under
-// its limit while the runtime sees the full offered rate.
+// minute with a burst of 16. up.sh therefore registers a set of load clients,
+// and this workload spreads iterations over them round-robin so that each
+// principal stays under its limit while the runtime sees the full offered rate.
 
 import http from 'k6/http';
 import encoding from 'k6/encoding';
@@ -133,7 +132,9 @@ export class Workload {
       purpose,
       requestNonce: nonce(),
       requirement,
-      subjects: [{ role: 'person', selector: { profile: selectorProfile, values: { person_id: subject } } }],
+      subjects: [
+        { role: 'subject', selector: { profile: selectorProfile, values: { 'record-id': subject } } },
+      ],
     });
     return http.post(this.endpoint, body, {
       headers: {
@@ -156,7 +157,7 @@ export class Workload {
     return response;
   }
 
-  // The compact OpenAPI question treats a source 404 as a source protocol
+  // The source mock's unknown-subject 404 is a source protocol
   // failure, so an unknown subject is refused with 503 source.unavailable.
   // Only that exact problem is expected; any other 503 still fails the run.
   assertAbsent(authorization = this.authorization()) {

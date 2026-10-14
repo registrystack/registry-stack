@@ -254,6 +254,7 @@ EVIDENCE_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/run-oid4vci-interoperability-checks.mdx",
     "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
     "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
+    "products/evidence/examples/standalone/**",
     "products/evidence/fixtures/interoperability/inji-oid4vci/profile.json",
     "products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json",
     "products/evidence/scripts/compat/inji-oid4vci-upstream.sh",
@@ -329,7 +330,7 @@ MESSAGING_TUTORIAL_INPUTS = (
 EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS = (
     (
         "crates/registry-evidence-authoring/src/**",
-        "crates/registry-evidence-authoring/src/model.rs",
+        "crates/registry-evidence-authoring/src/project.rs",
     ),
     (
         "crates/registry-evidencectl/src/**",

@@ -2,10 +2,11 @@ apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1
 kind: EvidenceAccessClient
 clientId: example-caller
 status: active
-policies:
-  - record-status-readers
+accessProfiles:
+  - standalone-service
 principal: urn:registrystack:evidence:local:client:example-caller
-evidenceAudience: urn:registrystack:evidence:local:client:example-caller
+evidenceAudience: urn:example:audience:standalone-app
+actorKind: service
 keys:
   - alg: ES256
     crv: P-256

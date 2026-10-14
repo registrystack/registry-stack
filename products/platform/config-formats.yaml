@@ -3318,7 +3318,7 @@ formats:
       function: read_client_document
       type: ClientDocument
     check: evidencectl check {project}
-    example: products/evidence/reference/authoring-projects/example/access/clients/example-caller.yaml
+    example: products/evidence/examples/standalone/access/clients/example-caller.yaml
     conformance:
       requiredText: /clientId
       optionalText: none
@@ -3354,7 +3354,7 @@ formats:
       function: parse_plan
       type: MockPlan
     check: evidencectl source mock check {project}
-    example: products/evidence/reference/authoring-projects/example/mocks/source.yaml
+    example: products/evidence/examples/formats/source-mock/mocks/source.yaml
     conformance:
       requiredText: /openapi
       optionalText: none

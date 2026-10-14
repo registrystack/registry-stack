@@ -218,9 +218,9 @@ formats:
   evidence/target-authority:
     project: products/evidence/examples/standalone
   evidence/access-client:
-    project: products/evidence/reference/authoring-projects/example
+    project: products/evidence/examples/standalone
   evidence/mock-plan:
-    project: products/evidence/reference/authoring-projects/example
+    project: products/evidence/examples/formats/source-mock
 
   # The bundle is checked through its deployment project's runtime
   # configuration, pointed at the staged copy, and its SHA256SUMS is refreshed
