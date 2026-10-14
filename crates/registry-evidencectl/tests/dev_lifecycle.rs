@@ -314,17 +314,9 @@ fn dev_grant_prints_every_connection_file_finding_without_its_values() {
 fn equal_local_ports_fail_before_creating_private_state() {
     let fixture = Project::new();
     let output = evidencectl()
-        .args([
-            "dev",
-            "start",
-        ])
+        .args(["dev", "start"])
         .arg(&fixture.root)
-        .args([
-            "--evidence-port",
-            "18080",
-            "--issuer-port",
-            "18080",
-        ])
+        .args(["--evidence-port", "18080", "--issuer-port", "18080"])
         .output()
         .expect("equal-port start");
     assert!(!output.status.success());
@@ -399,10 +391,7 @@ fn public_symlink_and_stale_state_are_never_replaced() {
 
 #[test]
 fn retired_bare_dev_spellings_are_unknown_and_create_no_private_state() {
-    for arguments in [
-        vec!["dev", "--detach"],
-        vec!["dev", "--project", "project"],
-    ] {
+    for arguments in [vec!["dev", "--detach"], vec!["dev", "--project", "project"]] {
         let fixture = Project::new();
         let output = evidencectl()
             .args(arguments)

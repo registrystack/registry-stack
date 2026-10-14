@@ -315,9 +315,7 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
     let connections = target
         .connections
         .iter()
-        .map(|(id, connection)| {
-            Ok((id.to_string(), connection.governed_value()?))
-        })
+        .map(|(id, connection)| Ok((id.to_string(), connection.governed_value()?)))
         .collect::<Result<serde_json::Map<_, _>>>()?;
     governance["sourceConnections"] = json!(connections);
     governance["authorityProfiles"] = json!({});

@@ -229,21 +229,15 @@ pub(crate) fn local_dev_target_inputs(target: &Path) -> Result<(Value, Value)> {
     let bytes = crate::authored::read_authored_file(&path, "local EvidenceTarget")?;
     let target =
         registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?.value;
-    if target
-        .assurance_profile
-        .is_some_and(|profile| {
-            profile
-                != registry_evidence_authoring::target::TargetAssuranceProfile::Local
-        })
-    {
+    if target.assurance_profile.is_some_and(|profile| {
+        profile != registry_evidence_authoring::target::TargetAssuranceProfile::Local
+    }) {
         bail!("dev requires a local target");
     }
     let connections = target
         .connections
         .iter()
-        .map(|(id, value)| {
-            Ok((id.to_string(), value.governed_value()?))
-        })
+        .map(|(id, value)| Ok((id.to_string(), value.governed_value()?)))
         .collect::<Result<BTreeMap<_, _>>>()?;
     let mut outbound_tls = target
         .outbound_tls

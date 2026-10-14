@@ -528,8 +528,7 @@ fn a_missing_target_public_key_refuses_production_check_before_delegation() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("JSON refusal report");
     assert_eq!(report["status"], "domain-refusal", "{report}");
     assert_eq!(
-        report["diagnostics"][0]["code"],
-        "evidence.target.signing-key-missing",
+        report["diagnostics"][0]["code"], "evidence.target.signing-key-missing",
         "{report}"
     );
     assert!(report["diagnostics"][0]["path"]
