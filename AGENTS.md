@@ -271,6 +271,9 @@ adopter tooling, a supporting service, or a binding; its client reaches only
 runtime for the CLI reference, may. The Coordinator dependency-direction gate
 enforces both directions on the whole forward closure, and the Casework,
 Scheduling, and Messaging gates refuse the Coordinator from their side.
+Casework adopter tests may reach the Coordinator client through the unified
+client facade. The gate excludes that test-only allowance from the shipped
+`registry-caseworkctl` normal and build dependency closure.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.

@@ -50,7 +50,7 @@ The run has a thirty-day deadline and follows these checks:
 1. read-for-review reads the application from BReg. If its identifier or
    revision differs from the trusted input, the run finishes
    application-changed without creating a review.
-2. submit-review sends the expected exact PolicyBinding and bounded facts to Casework as kind
+2. submit-review sends the expected exact PolicyBinding and bounded facts to Casework under review policy
    application-review. Casework owns reviewer eligibility, policy and the
    decision.
 3. await-review waits up to fourteen days. A Casework completion event wakes
@@ -88,9 +88,9 @@ The institution supplies these independent authorities:
 
 - BReg exposes applications to the configured follow-up-reader service profile,
   including the reviewed facts, email and noticeAllowed.
-- Casework declares submitted-context review kind application-review version 1.
+- Casework declares review policy application-review version 1 with submitted context.
   Its display schema accepts applicantName, benefitProgram and requestedAmount.
-- Casework admits producer coordinator through profile coordinator-producer,
+- Casework admits trusted producer coordinator through profile coordinator-producer,
   and its completion destination uses the same bearer secret and recipient
   binding as the Coordinator connection.
 - Messaging permits sender profile transactional, template
@@ -98,6 +98,12 @@ The institution supplies these independent authorities:
 - The token endpoint registers separate BReg reader, Casework producer,
   Messaging sender and Coordinator caller identities. Starting a run grants
   none of those product permissions.
+
+Before packaging for your deployment, replace the synthetic offline PolicyBinding in
+`functions.rhai` with the exact ID, version, and digest in the owning Casework project's
+`caseworkctl check` report under `policyBindings`. Keep the Workflow and scenarios consistent with
+that reviewed policy. The local tutorial helper binds a private copy to the actual compiled policy;
+it does not deploy the offline placeholder digest.
 
 The runtime template contains HTTPS reference endpoints and secret references.
 Copy it outside the package and adapt its endpoints, database identity, client

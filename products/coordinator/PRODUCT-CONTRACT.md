@@ -36,14 +36,17 @@ principal, resource, scopes, bounds, or deadline.
 
 ## Governed Actions and Proposals
 
-`breg.invoke-action/v1` imports an exact BReg Action using `action.contract` and `action.id`.
+`breg.invoke-action/v1` imports an exact Base Registry Engine (BReg) Action using `action.contract` and `action.id`.
 Compilation pins the generated Action revision, mode, review policy, application policy, input,
 output, and declared refusals. The maintained BReg client verifies current metadata without
 silently replacing a saved command or condition. Immediate Actions return exact application
 results. Proposal Actions create a draft and return it under `proposal`.
 
 Starting a draft, submitting a Proposal, and applying a submission are separate effects.
-`breg.submit-proposal/v1` freezes the selected draft and exposes the named `application` completion.
+`breg.submit-proposal/v1` evaluates the plan, freezes the selected submission, and exposes the
+named `application` completion. Draft creation has no declared-refusal route. A known no-effect
+plan refusal stops the generic submission operation without application observation or a notice;
+Submit exposes no Action-specific typed refusal edge.
 The observer correlates the exact Proposal ID, Action ID and revision, submission version, and
 effect digest. Only authoritative application evidence settles `applied`; review approval is not
 application evidence. A closed Proposal settles `closed`. Blocked, mismatched, unknown, or
@@ -55,7 +58,7 @@ subject to the receiving BReg policy. Coordinator neither approves a Proposal no
 application policy. A notice after application is a separate `messaging.submit-message/v1` call,
 authorized by Messaging. A refused notice leaves the registry application intact.
 
-An Action call may declare `onDeclaredRefusal`. Only a validated owner-declared no-effect refusal
+An immediate Action call may declare `onDeclaredRefusal`. Only a validated owner-declared no-effect refusal
 routes there, as `{refusalCode}`. Authentication, authorization, transport, protocol, and
 preparation failures stay operational failures. A later refusal cannot settle an earlier uncertain
 attempt. Success and refusal outputs are available only on their respective routes; after a join
@@ -232,7 +235,6 @@ retaining `uncertain`, `cancelRequested`, the original request and spent start
 identity. It never resumes the cancelled run or establishes its remote outcome.
 Unknown product mutations do not qualify for this exception.
 
-
 ## Compatibility and verification
 
 Protected state schema version 3 directly replaces earlier pilot layouts. Apply and runtime access
@@ -243,8 +245,13 @@ database identity. There are no legacy authoring aliases or automatic state conv
 Offline checking and deterministic scenarios prove graph, mapping, schema, Function, and branch
 behavior. Adapter HTTP checks, PostgreSQL state checks, and native service journeys establish their
 own separately scoped assertions. Mock replies never prove human review or registry application.
-The reviewed BReg Proposal path still requires an owning Casework/BReg checkpoint integration to
-establish a complete native acceptance journey. See [contributor checks](README.md#verify-a-change).
+The native reviewed Proposal journey composes the owning BReg and Casework services, correlates
+the exact frozen submission and authoritative application, then requests a separate Messaging
+notice. Approval produces one accepted notice only after application; rejection remains held and
+cancellation closes without a notice. Its disposable clock advance checks observation semantics,
+while the separate 961-second deferred-appointment journey checks the real long-wait boundary.
+Neither establishes provider delivery or distributed rollback.
+See [contributor checks](README.md#verify-a-change).
 
 Coordinator does not provide SQL steps, dynamic fan-out, arbitrary HTTP methods, automatic
 compensation, or distributed rollback. Existing hooks and APIs remain available to external

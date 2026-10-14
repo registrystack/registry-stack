@@ -107,13 +107,15 @@ For `breg.invoke-action/v1`, `action.contract` and `action.id` select an exact A
 imported BReg-generated contract. Compilation pins its revision, mode, review policy,
 application policy, input, output, and declared refusals. Immediate Actions return their exact
 result. Proposal Actions return a draft under `proposal`. `breg.submit-proposal/v1` is a separate
-mutation that freezes the submission and exposes `application` completion.
+mutation that evaluates the plan, freezes the submission, and exposes `application` completion.
+Draft creation has no declared-refusal route. A known no-effect plan refusal stops generic Submit,
+which exposes no Action-specific typed refusal edge, before observation or a notice.
 
 Only exact authoritative evidence for the Proposal, Action revision, submission version, and
 effect digest can settle application. Approval alone is insufficient. Blocked or uncertain
 application state stays held. Apply, retry, cancel, and any later Messaging notice each need the
-receiving product's own current authority. `onDeclaredRefusal` routes only a validated declared
-no-effect refusal as `{refusalCode}`. Operational failures and previous uncertain effects cannot
+receiving product's own current authority. On an immediate Action, `onDeclaredRefusal` routes only
+a validated declared no-effect refusal as `{refusalCode}`. Operational failures and previous uncertain effects cannot
 enter that branch.
 
 {/* Evidence: crates/registry-coordinator/src/operations.rs, CATALOG;

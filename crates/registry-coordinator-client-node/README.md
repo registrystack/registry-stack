@@ -14,7 +14,7 @@ identically and under the caller's same key, at most `maxMutationRetries` times
 (default 2, at most 2, 0 disables); a 4xx refusal is never resent. A key is
 scoped to the caller and the workflow, so the same key under two workflows starts two
 runs, and an allowed workflow the deployment does not serve is refused with 404
-`workflow.not-served`, a known outcome never resent. `list`,
+`workflow.not-served`, a known outcome never resent. `workflow`, `list`,
 `status`, `inspect`, `reconcile`, `retrySame`, and `cancel` send exactly one
 request. `reconcile` reads the receipt for the original operation and updates
 recovery state; it never resubmits that operation. `retrySame` and `cancel`

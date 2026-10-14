@@ -293,7 +293,7 @@ names, and the migration role owns that schema and its tables. A namespace
 starts with `coordinator_` and is at most 60 characters. The runtime role
 needs only `CONNECT`: `apply` grants it, in that schema, `USAGE` on the
 schema, `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `runs`, `jobs`,
-`admission_lock` and `review_waits`, `SELECT` on `control`, `coordinator_activations` and
+`admission_lock` and `completion_waits`, `SELECT` on `control`, `coordinator_activations` and
 `coordinator_migrations`, and `UPDATE` on the four recovery-hold columns of
 `control`.
 
@@ -374,7 +374,7 @@ does not create a resumable approval task.
 For `casework.submit-review-request/v1` and `casework.cancel-review-request/v1`, configure a Casework
 connection as one of Casework's review producers. `profile` names the Casework
 access profile the producer's client is admitted to, `producer` names the
-producer's `id` in the Casework project's `reviewProducers`, and the ordinary
+producer's `id` in the Casework project's `trustedProducers`, and the ordinary
 service `authorization` obtains a token whose issuer and subject are the ones
 that producer declares. Do not configure `authorization.taskAuthority`: a
 review producer acts under its own identity, and check refuses a task
@@ -428,20 +428,28 @@ A live run's binding includes `producer` but neither `completion` nor
 `resultCheckSeconds`, so you can change either, or rotate the completion
 token, while runs wait.
 
+Use the owning Casework project's compiled `policyBindings` report to populate the Workflow's
+expected policy ID, version, and digest. A copied synthetic digest is not a deployable binding.
+Submitted context uses `mode: submitted`; current-source context uses the owning policy's
+`mode: current-source` and configured context provider. Review policy and trusted producer
+configuration remain owned by Casework.
+
 Configure the same producer on the Casework side. In the Casework project, the
 producer's `completion` block names a destination and the same recipient
 binding:
 
 ```yaml
-reviewProducers:
+trustedProducers:
   - id: coordinator
     profile: coordinator-producer
     issuer: https://issuer.example.org
     subject: coordinator-review-producer
     sourceNamespaces: [applications]
-    kinds: [application-review]
+    reviewPolicies: [application-review]
     recoveryDays: 7
-    completion: {destinationId: coordinator, recipientBinding: coordinator-v1}
+    completion:
+      destinationId: coordinator
+      recipientBinding: coordinator-v1
 ```
 
 In the Casework runtime file, bind that destination to the Coordinator's route
@@ -793,7 +801,7 @@ authorized requests with an empty, overlong or control-character reason, or an
 out-of-bounds retention cutoff/limit, return HTTP 400 `request.reason-invalid`
 or `request.retention-invalid`. State and recovery conflicts return HTTP 409.
 Every refusal is an RFC 9457 `application/problem+json` document whose `code`
-names the refusal; `README.md` lists the members and the full code vocabulary.
+names the refusal; the generated OpenAPI document owns the full code vocabulary.
 Recovery POSTs authenticate and authorize before
 releasing malformed-body errors. They require `application/json` or an
 application media type ending in `+json`; unsupported or absent media types return

@@ -34,7 +34,7 @@ the package directories and the author's sanitized runtime template and connecti
 - **Durable storage for the audit file**, at an absolute path the service user can write.
 - **The package directory and package digest of each workflow**, up to sixteen workflows in one deployment,
   plus its sanitized runtime template and connection requirements.
-- **Configured downstream contracts:** the Base Registry Engine (BReg) access profiles, Casework producer and review kind,
+- **Configured downstream contracts:** the Base Registry Engine (BReg) access profiles, Casework trusted producer and exact review policy,
   and Messaging templates and provider that the workflow names. Register each connection identity and
   its least-privilege scopes with the issuer and receiving product before applying the workflow.
 
@@ -317,7 +317,7 @@ connections:
 ```
 
 `profile` names the Casework access profile the producer's client is admitted to, and `producer`
-names the producer's `id` in the Casework project's `reviewProducers`. The `authorization` obtains a
+names the producer's `id` in the Casework project's `trustedProducers`. The `authorization` obtains a
 token with the issuer and subject that producer declares; a Casework connection takes no task
 authority. A waiting run reads the review result through this connection every
 `resultCheckSeconds`, from 60 to 86,400 and 900 by default. Each read is one request to Casework per
@@ -327,7 +327,7 @@ The `completion` block lets Casework wake a waiting run sooner. On the Casework 
 producer's `completion` names a destination and the same recipient binding, and that destination
 points at `https://<coordinator-host>/v1/review-completions` with Casework's own reference to the
 same token. The Coordinator accepts no custom header, so present the token as a bearer token.
-[Review kinds and producers](../../configure/casework/#review-kinds-and-producers) covers that
+[Casework policy configuration](../../configure/casework/) covers that
 side. `recipientBinding` is 1 to 256 visible ASCII characters and differs between Casework
 connections. An event brings the waiting run's next read forward and never starts a run. Without a
 `completion` block the Coordinator refuses every event and waits rely on result reads, so lower

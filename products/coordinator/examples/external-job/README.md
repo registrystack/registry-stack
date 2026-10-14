@@ -1,7 +1,7 @@
 # External job completion project
 
 Use this synthetic project to observe one previously selected external job until its status is
-terminal or the bounded wait expires. The workflow uses no Casework or BReg connection.
+terminal or the bounded wait expires. The workflow uses no Casework or Base Registry Engine connection.
 
 From the repository root:
 

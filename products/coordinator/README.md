@@ -108,7 +108,7 @@ text by default or a `CoordinatorCtlReport` with `--format json`. Exit codes are
   submits a separate Messaging notice.
 - [Deferred appointment](examples/deferred-appointment/README.md) retains explicit deferred
   Casework task authority across a wait before a Scheduling commitment.
-- [Approved record check](examples/approved-record-check/README.md) reads BReg under task authority.
+- [Approved record check](examples/approved-record-check/README.md) reads Base Registry Engine (BReg) under task authority.
 - [Governed action follow-up](examples/governed-action-follow-up/README.md) uses an exact imported
   immediate BReg Action contract, then submits a separate notice.
 - [Decision follow-up](examples/decision-follow-up/README.md) interprets a typed evaluation before
@@ -171,16 +171,21 @@ reinterpreting work. A standing BReg profile and identity authorize each call in
 
 Immediate Actions return their exact application result. Proposal Actions return a draft under
 `proposal`; creating that draft is distinct from submission and application. A later
-`breg.submit-proposal/v1` call freezes and submits the draft. Its `application` completion requires
+`breg.submit-proposal/v1` call evaluates the plan, freezes the submission, and submits the
+draft. Its `application` completion requires
 the same Proposal, Action revision, submission version, and effect digest, plus authoritative
 applied evidence. Approval alone cannot authorize a notice. Blocked or unknown application state
 stays held. `breg.apply-proposal/v1`, `breg.retry-proposal/v1`, and `breg.cancel-proposal/v1` remain
 explicit operations under BReg's current authority and application policy.
 
-`onDeclaredRefusal` routes only a validated owner-declared no-effect refusal. Its output is
-`{refusalCode}`. Operational failures stay failures, and a later refusal cannot resolve an earlier
+For an immediate Action, `onDeclaredRefusal` routes only a validated owner-declared no-effect
+refusal. Its output is `{refusalCode}`. Operational failures stay failures, and a later refusal cannot resolve an earlier
 uncertain effect. The success and refusal outputs are available only along their respective
 routes. A join reached through both has no single output shape.
+
+Proposal draft creation has no declared-refusal route. A known no-effect plan refusal occurs on
+submission and stops the run; the generic Submit operation exposes no Action-specific typed
+refusal edge. It does not begin application observation or send a notice.
 
 Standalone Casework review is independent of BReg. Its submission includes an expected
 `PolicyBinding`; the accepted request and eventual result must agree with that exact policy,
@@ -301,8 +306,22 @@ runs clean up UUID-owned fixture resources without resetting the named databases
 Assertion failures can retain diagnostic Coordinator and Messaging schemas.
 No live service credentials are required.
 
-Native checks distinguish adapter reconstruction, worker reconstruction and OS-process restart.
-They establish only the assertions their current tests execute. Offline scenarios do not prove
-human review, registry application or message delivery. In particular, the reviewed BReg Proposal
-path needs an owning Casework and BReg checkpoint integration before it can be called a complete
-native acceptance journey.
+Native checks distinguish adapter reconstruction, worker reconstruction, and OS-process restart.
+The separate native service journey composes BReg, Casework, Scheduling, and Messaging over their
+public HTTP contracts with Casework review tasks, exact policy bindings, and durable Coordinator waits.
+Its reviewed Proposal path verifies the frozen Action revision, submission version, and effect
+digest before application can release a separately authorized notice. Rejection stays held;
+cancellation closes without a notice. That Proposal observation test advances the disposable
+fixture clock by 900 seconds while preserving relative deadlines and read budgets.
+
+With the disposable databases and native binaries described earlier configured, run the native
+composition helper from the checkout:
+
+```sh
+python3 products/coordinator/scripts/test-real-services.py --wait-seconds 961
+```
+
+The real 961-second deferred-appointment wait crosses the immediate approval limit; a wait below
+901 seconds is a smoke check only. Exact original-receipt recovery, expiry and revocation checks,
+and message acceptance are distinct from recipient delivery. Offline scenarios do not establish
+these native product effects.

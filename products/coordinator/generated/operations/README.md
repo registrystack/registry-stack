@@ -640,7 +640,7 @@ Input ([`casework.submit-review-request.v1.input.schema.json`](casework.submit-r
 | `initiator` | `HumanIdentity` or null | no |
 | `policy` | `PolicyBinding` | yes |
 | `requesterReference` | string | yes |
-| `resultConstraints` | any | no |
+| `resultConstraints` | object | no |
 | `subject` | `SubjectBinding` | yes |
 
 No other members are accepted.
@@ -1091,7 +1091,7 @@ The result of a review request a `casework.submit-review-request/v1` step submit
 | `outcome` | string or null | no |
 | `policy` | `PolicyBinding` | yes |
 | `requestId` | string (uuid) | yes |
-| `result` | any | no |
+| `result` | object | no |
 | `resultId` | string (uuid) | yes |
 | `status` | `ReviewResultStatus` | yes |
 | `subject` | `SubjectBinding` | yes |

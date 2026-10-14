@@ -2,7 +2,7 @@
 
 Use this source-neutral project to submit bounded context to Registry Casework under an exact
 expected review policy, wait for its result, and withdraw explicitly on timeout or operator
-cancellation. The project needs no BReg connection and creates no registry effect.
+cancellation. The project needs no Base Registry Engine connection and creates no registry effect.
 
 From the repository root:
 
@@ -30,12 +30,14 @@ completion wake-ups bring an eligible read forward without bypassing the durable
 providing trusted decision data. Unavailable, refused, invalid, or mismatched evidence cannot
 become a negative business outcome. Inspect held work and recover under the original deadline.
 
-The institution supplies the exact expected policy and matching producer, service credentials,
+Take the expected policy ID, version, and digest from the owning Casework project's
+`caseworkctl check` report under `policyBindings`, rather than reusing the offline scenario digest.
+The institution supplies that exact policy and matching trusted producer, service credentials,
 completion destination, and Coordinator caller policies. The template contains synthetic HTTPS
 endpoints and secret references. Adapt it outside the package and follow the
 [deployment runbook](../../DEPLOYMENT.md).
 
 Offline scenarios check results, timeout, cancellation, and races with synthetic replies.
 Maintained Casework-client HTTP checks and Coordinator PostgreSQL checks cover the independent
-boundary, correlation, durable waits, and cleanup. None of these imply a BReg application or
+boundary, correlation, durable waits, and cleanup. None of these imply a Base Registry Engine application or
 Messaging delivery.
