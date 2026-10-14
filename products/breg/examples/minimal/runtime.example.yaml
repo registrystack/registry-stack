@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json
 # A runtime configuration for the minimal example project. Check it offline,
 # beside the project, with:
 #

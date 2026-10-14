@@ -11,23 +11,7 @@
 # not run. The runner fails on a failing cell missing here, and with --strict
 # on an entry that no longer holds.
 
-expectedFailures:
-- format: evidence/fixture
-  case: duplicate-id
-  reason: missing config.duplicate-id at /cases/13/id 183:9; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: d5846cd11199
-- format: evidence/fixture
-  case: extension-field
-  reason: missing config.unknown-key at /x-conformance 197:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: ea010f8469b6
-- format: evidence/fixture
-  case: too-many-problems
-  reason: missing config.unknown-key at /conformanceUnknown001 197:1; missing config.unknown-key at /conformanceUnknown002 198:1 (and 102 more problems)
-  digest: df8e54568e12
-- format: evidence/fixture
-  case: unknown-keys
-  reason: missing config.unknown-key at /conformanceFirst 197:1; missing config.unknown-key at /conformanceSecond 198:1 (and 3 more problems)
-  digest: 52183416d8f4
+expectedFailures: []
 unreachedFormats:
 - format: breg/backup-binding
   reason: syntax json; the corpus mutates YAML text

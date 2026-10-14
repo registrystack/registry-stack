@@ -93,15 +93,16 @@ formats:
       function: parse_project_yaml
       type: RegistryProject
     check: bregctl check {project}
-    example: products/breg/acceptance/asset-site-placement/registry.yaml
+    example: products/platform/conformance/projects/breg-project/registry.yaml
     conformance:
       requiredText: /project/id
-      optionalText: /manifestProjection/catalog/description
+      optionalText: /project/display/description
       integer: /recordTypes/0/fields/0/maximumLength
       boolean: /accessProfiles/0/default
       idList: /recordTypes
       set: /accessProfiles/0/requiredPurposes
       reference: /accessProfiles/0/permissions/records/0/recordType
+      operand: /recordTypes/0/constraints/0/when/0/value
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
         whenOmitted: refused
@@ -140,7 +141,7 @@ formats:
       function: parse_module_yaml
       type: RegistryModule
     check: bregctl check {project}
-    example: products/breg/fixtures/generic-operator-workflows/modules/record-notes/module.yaml
+    example: products/platform/conformance/projects/breg/modules/contact-notes/module.yaml
     conformance:
       requiredText: /id
       optionalText: none
@@ -2354,9 +2355,10 @@ formats:
       crate: registry-evidence
       file: crates/registry-evidence/src/fixture.rs
       function: read_fixture
-      type: untyped
+      # The registered example is coequal; read_fixture also decodes ReferenceFixture for reference-mode files.
+      type: CoequalFixture
     check: evidencectl test {project}
-    example: crates/registry-evidencectl/templates/sqlite-extract/fixtures/record-status.yaml
+    example: products/evidence/examples/standalone/fixtures/adult-status.yaml
     conformance:
       requiredText: none
       optionalText: none
@@ -2647,7 +2649,7 @@ formats:
       file: crates/registry-evidencectl/src/access.rs
       function: read_client_document
       type: ClientDocument
-    check: evidencectl check {project}
+    check: evidencectl check --file {file}
     example: products/evidence/examples/standalone/access/clients/example-caller.yaml
     conformance:
       requiredText: /clientId

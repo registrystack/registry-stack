@@ -4,11 +4,9 @@
 # The members are documented at the top of the runner.
 formats:
   breg/module:
-    project: products/breg/fixtures/generic-operator-workflows
+    project: products/platform/conformance/projects/breg
     prepare: ["bregctl project lock {project}"]
     removedKeys:
-      - /entities
-      - /extendEntities
       - /extendRecordTypes/0/fields/0/minLength
       - /extendRecordTypes/0/fields/0/maxLength
       - /extendRecordTypes/0/fields/0/maxBytes
@@ -194,13 +192,12 @@ formats:
       - /version
       - /clients/task-agent/assertionKeyFile
 
-  # The authoring template ships without the disposable signing key
-  # `evidencectl new` writes, so the copy gets a freshly generated key for the
-  # check to sign fixture answers with.
+  # The normalized example ships without private key material. Generate a
+  # disposable signer for the complete local target before fixture evaluation.
   evidence/fixture:
-    project: crates/registry-evidencectl/templates/sqlite-extract
+    project: products/evidence/examples/standalone
     prepare:
-      - evidencectl keygen signing --output-dir {project}/secrets
+      - evidencectl keygen signing --output-dir {project}/.generated/secrets
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: fixtures/record-status.yaml}
   evidence/project:
     project: products/evidence/examples/standalone
@@ -337,6 +334,16 @@ formats:
   # Coordinator checks the staged three-file portable project. Its init output
   # carries the same project and runtime envelopes the readers accept.
   coordinator/project:
+    # Isolate the path role: other functions keep their shared source file
+    # when the corpus moves or symlinks this one outside the project.
+    set:
+      /functions/notice-route/source: notice-route.rhai
+    write:
+      notice-route.rhai: |
+        fn notice_route(args) {
+            let record = args["record"];
+            if record.data.domainData.noticeAllowed { "send" } else { "skip" }
+        }
     init: {command: "coordinatorctl init --directory {directory}", file: workflow.yaml}
   coordinator/runtime:
     init: {command: "coordinatorctl init --directory {directory}", file: runtime.yaml}
