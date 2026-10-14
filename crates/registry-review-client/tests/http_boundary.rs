@@ -25,7 +25,11 @@ type Observations = Arc<Mutex<Vec<(Method, String, HeaderMap)>>>;
 
 fn create_request() -> ReviewCreateRequest {
     ReviewCreateRequest {
-        kind: "registry-correction".to_owned(),
+        policy: registry_review_client::PolicyBinding {
+            id: "registry-correction".to_owned(),
+            version: "1".to_owned(),
+            digest: ContentDigest::parse(DIGEST).expect("policy digest fixture"),
+        },
         subject: subject(),
         requester_reference: "proposal-7".to_owned(),
         initiator: None,
@@ -164,7 +168,57 @@ async fn capture_create(
         request.uri().to_string(),
         request.headers().clone(),
     ));
+    let bytes = axum::body::to_bytes(request.into_body(), 128 * 1024)
+        .await
+        .expect("bounded create body");
+    let sent: serde_json::Value = serde_json::from_slice(&bytes).expect("create body JSON");
+    assert_eq!(
+        sent,
+        json!(create_request()),
+        "send the complete original request"
+    );
+    assert_eq!(sent["policy"], json!(create_request().policy));
+    assert!(sent.get("kind").is_none());
     json_response(StatusCode::OK, accepted_json(Uuid::from_u128(7)))
+}
+
+#[tokio::test]
+async fn create_refuses_each_mismatched_policy_binding() {
+    for (field, changed) in [
+        ("id", json!("another-policy")),
+        ("version", json!("2")),
+        ("digest", json!(OTHER_DIGEST)),
+    ] {
+        let mut accepted = accepted_json(Uuid::from_u128(7));
+        accepted["policy"][field] = changed;
+        let app = Router::new().route(
+            "/v1/review-requests",
+            post(move || async move { json_response(StatusCode::CREATED, accepted) }),
+        );
+        let (client, server) = serve(app).await;
+        let token = BearerToken::new("one-call-secret").expect("fixture token");
+        let error = client
+            .create_or_recover_request(
+                ReviewAuth::new(&token, "producer"),
+                "submission-7",
+                &create_request(),
+                &expected_submission_digest(),
+            )
+            .await
+            .expect_err("the accepted policy must match every submitted policy field");
+        assert!(
+            matches!(
+                error,
+                ReviewClientError::Protocol {
+                    status: 201,
+                    failure: ReviewProtocolFailure::Body,
+                    ..
+                }
+            ),
+            "mismatched policy {field}"
+        );
+        server.abort();
+    }
 }
 
 #[tokio::test]

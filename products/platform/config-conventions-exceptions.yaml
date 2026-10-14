@@ -299,3 +299,99 @@ exceptions:
   class: protocol-constant
   reason: 2.0 is written as the PDF specification (ISO 32000) numbers its versions
   resolution: Permanent.
+- rule: CFG-ID-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/PolicyBindingSource/properties/id
+  class: exchange-model
+  reason: "PolicyBinding.id is issued by the review authority under the shared Review v1 exchange contract, not defined in the BReg local namespace. It is typed ExternalId and checked against the protocol's 128 UTF-8 byte bound; changing its spelling would change the exact policy binding."
+  resolution: "Permanent for the Review v1 PolicyBinding exchange model. native_source_conventions proves non-local policy IDs and the protocol byte bound."
+- rule: CFG-ID-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ProposalReviewContextSource/properties/fields
+  class: exchange-model
+  reason: "Review-context fields become member names in the published typed context schema. They use the public API camelCase grammar and reserved-name exclusions, not local identifier grammar; the generated schema states that grammar and the 64-field ceiling."
+  resolution: "Permanent for the BReg v1alpha1 review-context exchange model. native_source_conventions and refactor_contract verify public member names and exact context schema bytes."
+- rule: CFG-ID-7
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionExecutionSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 authoring exchange model fixes execution.mode and application.mode as the discriminators. The position-preserving shared tagged-union reader refuses unknown members without introducing a second type spelling."
+  resolution: "Permanent for the BReg v1alpha1 mode exchange model. native_source_conventions verifies the accepted native tags and exact nested refusal locations."
+- rule: CFG-ID-7
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionInputSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 field/input exchange model permits either an inline type or a named typeRef. The closed alternatives are mutually exclusive, and the reader resolves the local value type once and refuses use-site constraint overrides; adding a discriminator would change the authored contract."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies module schema/reader agreement; refactor_contract verifies dependency revisions and normalization."
+- rule: CFG-ID-7
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/FieldSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 field/input exchange model permits either an inline type or a named typeRef. The closed alternatives are mutually exclusive, and the reader resolves the local value type once and refuses use-site constraint overrides; adding a discriminator would change the authored contract."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies module schema/reader agreement; refactor_contract verifies dependency revisions and normalization."
+- rule: CFG-ID-7
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ProposalApplicationSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 authoring exchange model fixes execution.mode and application.mode as the discriminators. The position-preserving shared tagged-union reader refuses unknown members without introducing a second type spelling."
+  resolution: "Permanent for the BReg v1alpha1 mode exchange model. native_source_conventions verifies the accepted native tags and exact nested refusal locations."
+- rule: CFG-SEC-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionInputSource/anyOf/1/properties/typeRef
+  class: exchange-model
+  reason: "typeRef is the BReg v1alpha1 exchange model's reference to a local valueTypes declaration, typed LocalId. It never names a secret or invokes a secret provider; the named type supplies only the same typed constraints as an inline field/input."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
+- rule: CFG-SEC-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/FieldSource/anyOf/12/properties/typeRef
+  class: exchange-model
+  reason: "typeRef is the BReg v1alpha1 exchange model's reference to a local valueTypes declaration, typed LocalId. It never names a secret or invokes a secret provider; the named type supplies only the same typed constraints as an inline field/input."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
+- rule: CFG-ID-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/PolicyBindingSource/properties/id
+  class: exchange-model
+  reason: "PolicyBinding.id is issued by the review authority under the shared Review v1 exchange contract, not defined in the BReg local namespace. It is typed ExternalId and checked against the protocol's 128 UTF-8 byte bound; changing its spelling would change the exact policy binding."
+  resolution: "Permanent for the Review v1 PolicyBinding exchange model. native_source_conventions proves non-local policy IDs and the protocol byte bound."
+- rule: CFG-ID-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ProposalReviewContextSource/properties/fields
+  class: exchange-model
+  reason: "Review-context fields become member names in the published typed context schema. They use the public API camelCase grammar and reserved-name exclusions, not local identifier grammar; the generated schema states that grammar and the 64-field ceiling."
+  resolution: "Permanent for the BReg v1alpha1 review-context exchange model. native_source_conventions and refactor_contract verify public member names and exact context schema bytes."
+- rule: CFG-ID-7
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ActionExecutionSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 authoring exchange model fixes execution.mode and application.mode as the discriminators. The position-preserving shared tagged-union reader refuses unknown members without introducing a second type spelling."
+  resolution: "Permanent for the BReg v1alpha1 mode exchange model. native_source_conventions verifies the accepted native tags and exact nested refusal locations."
+- rule: CFG-ID-7
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ActionInputSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 field/input exchange model permits either an inline type or a named typeRef. The closed alternatives are mutually exclusive, and the reader resolves the local value type once and refuses use-site constraint overrides; adding a discriminator would change the authored contract."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies module schema/reader agreement; refactor_contract verifies dependency revisions and normalization."
+- rule: CFG-ID-7
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/FieldSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 field/input exchange model permits either an inline type or a named typeRef. The closed alternatives are mutually exclusive, and the reader resolves the local value type once and refuses use-site constraint overrides; adding a discriminator would change the authored contract."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies module schema/reader agreement; refactor_contract verifies dependency revisions and normalization."
+- rule: CFG-ID-7
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ProposalApplicationSource
+  class: exchange-model
+  reason: "The BReg v1alpha1 authoring exchange model fixes execution.mode and application.mode as the discriminators. The position-preserving shared tagged-union reader refuses unknown members without introducing a second type spelling."
+  resolution: "Permanent for the BReg v1alpha1 mode exchange model. native_source_conventions verifies the accepted native tags and exact nested refusal locations."
+- rule: CFG-SEC-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ActionInputSource/anyOf/1/properties/typeRef
+  class: exchange-model
+  reason: "typeRef is the BReg v1alpha1 exchange model's reference to a local valueTypes declaration, typed LocalId. It never names a secret or invokes a secret provider; the named type supplies only the same typed constraints as an inline field/input."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
+- rule: CFG-SEC-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/FieldSource/anyOf/12/properties/typeRef
+  class: exchange-model
+  reason: "typeRef is the BReg v1alpha1 exchange model's reference to a local valueTypes declaration, typed LocalId. It never names a secret or invokes a secret provider; the named type supplies only the same typed constraints as an inline field/input."
+  resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."

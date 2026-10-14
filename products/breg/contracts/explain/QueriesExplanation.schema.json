@@ -42,14 +42,14 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "id", "routeId", "profile", "entity", "kind", "apiFields", "filterable",
+          "id", "routeId", "profile", "recordType", "kind", "apiFields", "filterable",
           "sortable", "allowCount", "selectors", "readPath", "wire", "bounds"
         ],
         "properties": {
           "id": { "$ref": "#/$defs/DerivedId" },
           "routeId": { "type": "string" },
           "profile": { "type": "string" },
-          "entity": { "type": "string" },
+          "recordType": { "type": "string" },
           "kind": { "enum": ["list", "current", "as-of", "snapshot"] },
           "apiFields": { "type": "array", "items": { "$ref": "#/$defs/fieldSummary" } },
           "selectors": { "type": "array", "items": { "$ref": "#/$defs/fieldSummary" } },

@@ -26,14 +26,14 @@
 use std::time::Duration;
 
 use registry_platform_audit::{AuditEntry, AuditProfile, AuditRequest};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::audit::RegistryAudit;
 use crate::history_maintenance::profile_is_keyed;
 
 use crate::migration::{
-    ApplyRoles, MigrationError, compiler_statement_checksums, package_ledger_entry,
-    target_package_identity, verify_successor_package_binding,
+    compiler_statement_checksums, package_ledger_entry, target_package_identity,
+    verify_successor_package_binding, ApplyRoles, MigrationError,
 };
 use crate::package::VerifiedPackage;
 use crate::postgres::{
@@ -862,20 +862,16 @@ mod tests {
     fn timeouts_stay_inside_their_bounds() {
         assert!(ReconcileTimeouts::new(Duration::ZERO, Duration::from_secs(1)).is_err());
         assert!(ReconcileTimeouts::new(Duration::from_secs(1), Duration::ZERO).is_err());
-        assert!(
-            ReconcileTimeouts::new(
-                MAX_LOCK_TIMEOUT + Duration::from_secs(1),
-                MAX_STATEMENT_TIMEOUT
-            )
-            .is_err()
-        );
-        assert!(
-            ReconcileTimeouts::new(
-                MAX_LOCK_TIMEOUT,
-                MAX_STATEMENT_TIMEOUT + Duration::from_secs(1)
-            )
-            .is_err()
-        );
+        assert!(ReconcileTimeouts::new(
+            MAX_LOCK_TIMEOUT + Duration::from_secs(1),
+            MAX_STATEMENT_TIMEOUT
+        )
+        .is_err());
+        assert!(ReconcileTimeouts::new(
+            MAX_LOCK_TIMEOUT,
+            MAX_STATEMENT_TIMEOUT + Duration::from_secs(1)
+        )
+        .is_err());
         assert!(ReconcileTimeouts::new(MAX_LOCK_TIMEOUT, MAX_STATEMENT_TIMEOUT).is_ok());
     }
 }

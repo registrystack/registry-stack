@@ -8,172 +8,6 @@ import sys
 from pathlib import Path
 
 
-ASSET_SITE_PLACEMENT_PATHS = (
-    "generated/manifest/registry-manifest.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/asset-item.schema.json",
-    "generated/schemas/asset-placement.schema.json",
-    "generated/schemas/asset-site.schema.json",
-    "generated/schemas/inspection-event.schema.json",
-)
-BUSINESS_ESTABLISHMENTS_PATHS = (
-    "generated/manifest/registry-manifest.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/operator-assignment.schema.json",
-    "generated/schemas/business.schema.json",
-    "generated/schemas/establishment.schema.json",
-)
-FACILITY_PATHS = (
-    "generated/manifest/registry-manifest.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/discharge-report.schema.json",
-    "generated/schemas/facility.schema.json",
-    "generated/schemas/installation.schema.json",
-    "generated/schemas/permit.schema.json",
-)
-PUBLICSCHEMA_HOUSEHOLD_PATHS = (
-    "generated/manifest/registry-manifest.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/group-membership.schema.json",
-    "generated/schemas/household.schema.json",
-    "generated/schemas/person.schema.json",
-)
-ASSET_SITE_PLACEMENT_CHANGE_REQUEST_PATHS = ASSET_SITE_PLACEMENT_PATHS + (
-    "generated/schemas/placement-correction-request.schema.json",
-)
-PUBLICSCHEMA_HOUSEHOLD_CHANGE_REQUEST_PATHS = PUBLICSCHEMA_HOUSEHOLD_PATHS + (
-    "generated/schemas/register-household-contact-request.schema.json",
-)
-PERSON_NAME_CHANGE_RHAI_PATHS = (
-    "generated/manifest/registry-manifest.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/person.schema.json",
-    "generated/schemas/person-name-change-request.schema.json",
-)
-ASSET_REGISTRATION_ACTIONS_PATHS = (
-    "compiled/actions.json",
-    "generated/action-schemas/register-asset-with-inspection.invoke.input.schema.json",
-    "generated/action-schemas/register-asset-with-inspection.invoke.response.schema.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/manifest/registry-manifest.json",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/asset-inspection.schema.json",
-    "generated/schemas/asset.schema.json",
-)
-HOUSEHOLD_CONTACT_ACTIONS_PATHS = (
-    "compiled/actions.json",
-    "generated/action-schemas/register-household-contact.invoke.input.schema.json",
-    "generated/action-schemas/register-household-contact.invoke.response.schema.json",
-    "generated/action-schemas/register-household-contact.target-conditions.input.schema.json",
-    "generated/action-schemas/register-household-contact.target-conditions.response.schema.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/manifest/registry-manifest.json",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/group-membership.schema.json",
-    "generated/schemas/household.schema.json",
-    "generated/schemas/person.schema.json",
-    "generated/schemas/service-center.schema.json",
-)
-
-PERSON_REGISTRATION_RHAI_PATHS = (
-    "compiled/actions.json",
-    "generated/action-schemas/register-person.invoke.input.schema.json",
-    "generated/action-schemas/register-person.invoke.response.schema.json",
-    "generated/action-schemas/register-person-with-registration.invoke.input.schema.json",
-    "generated/action-schemas/register-person-with-registration.invoke.response.schema.json",
-    "generated/action-schemas/register-person-with-registration.target-conditions.input.schema.json",
-    "generated/action-schemas/register-person-with-registration.target-conditions.response.schema.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/manifest/registry-manifest.json",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/person.schema.json",
-    "generated/schemas/registration.schema.json",
-    "generated/schemas/register.schema.json",
-)
-
-REQUEST_ATTACHMENT_PATHS = (
-    "generated/manifest/registry-manifest.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/record.schema.json",
-    "generated/schemas/correction-request.schema.json",
-)
-
-CONSENT_PERSON_REGISTRY_PATHS = (
-    "compiled/actions.json",
-    "generated/action-schemas/give-person-consent.invoke.input.schema.json",
-    "generated/action-schemas/give-person-consent.invoke.response.schema.json",
-    "generated/action-schemas/import-person-consent.invoke.input.schema.json",
-    "generated/action-schemas/import-person-consent.invoke.response.schema.json",
-    "generated/action-schemas/invalidate-person-consent.invoke.input.schema.json",
-    "generated/action-schemas/invalidate-person-consent.invoke.response.schema.json",
-    "generated/action-schemas/record-person-consent-assisted.invoke.input.schema.json",
-    "generated/action-schemas/record-person-consent-assisted.invoke.response.schema.json",
-    "generated/action-schemas/refuse-person-consent.invoke.input.schema.json",
-    "generated/action-schemas/refuse-person-consent.invoke.response.schema.json",
-    "generated/action-schemas/withdraw-person-consent.invoke.input.schema.json",
-    "generated/action-schemas/withdraw-person-consent.invoke.response.schema.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/manifest/registry-manifest.json",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/person-consent-decision.schema.json",
-    "generated/schemas/person-consent-link.schema.json",
-    "generated/schemas/person-notice-clause.schema.json",
-    "generated/schemas/person-privacy-notice.schema.json",
-    "generated/schemas/person.schema.json",
-)
-CONSENT_LAND_REGISTRY_PATHS = (
-    "compiled/actions.json",
-    "generated/action-schemas/give-tenure-right-consent.invoke.input.schema.json",
-    "generated/action-schemas/give-tenure-right-consent.invoke.response.schema.json",
-    "generated/action-schemas/import-tenure-right-consent.invoke.input.schema.json",
-    "generated/action-schemas/import-tenure-right-consent.invoke.response.schema.json",
-    "generated/action-schemas/invalidate-tenure-right-consent.invoke.input.schema.json",
-    "generated/action-schemas/invalidate-tenure-right-consent.invoke.response.schema.json",
-    "generated/action-schemas/record-tenure-right-consent-assisted.invoke.input.schema.json",
-    "generated/action-schemas/record-tenure-right-consent-assisted.invoke.response.schema.json",
-    "generated/action-schemas/refuse-tenure-right-consent.invoke.input.schema.json",
-    "generated/action-schemas/refuse-tenure-right-consent.invoke.response.schema.json",
-    "generated/action-schemas/withdraw-tenure-right-consent.invoke.input.schema.json",
-    "generated/action-schemas/withdraw-tenure-right-consent.invoke.response.schema.json",
-    "generated/manifest/dcat.jsonld",
-    "generated/manifest/registry-manifest.json",
-    "generated/metadata/registry.json",
-    "generated/openapi.json",
-    "generated/postgres/schema.sql",
-    "generated/schemas/parcel.schema.json",
-    "generated/schemas/tenure-right-consent-decision.schema.json",
-    "generated/schemas/tenure-right-consent-link.schema.json",
-    "generated/schemas/tenure-right-notice-clause.schema.json",
-    "generated/schemas/tenure-right-privacy-notice.schema.json",
-    "generated/schemas/tenure-right.schema.json",
-)
-
 REFACTOR_PATHS = (
     'compiled/access.json',
     'compiled/actions.json',
@@ -221,20 +55,7 @@ REFACTOR_MINIMAL_PATHS = (
 EXPECTED_PATHS_BY_BASELINE = {
     "refactor": REFACTOR_PATHS,
     "refactor-minimal": REFACTOR_MINIMAL_PATHS,
-    "asset-site-placement": ASSET_SITE_PLACEMENT_PATHS,
-    "business-establishments": BUSINESS_ESTABLISHMENTS_PATHS,
-    "facility": FACILITY_PATHS,
-    "asset-site-placement-change-requests": ASSET_SITE_PLACEMENT_CHANGE_REQUEST_PATHS,
-    "publicschema-household-change-requests": PUBLICSCHEMA_HOUSEHOLD_CHANGE_REQUEST_PATHS,
-    "person-name-change-rhai": PERSON_NAME_CHANGE_RHAI_PATHS,
-    "person-registration-rhai": PERSON_REGISTRATION_RHAI_PATHS,
-    "request-attachments": REQUEST_ATTACHMENT_PATHS,
-    "asset-registration-actions": ASSET_REGISTRATION_ACTIONS_PATHS,
-    "household-contact-actions": HOUSEHOLD_CONTACT_ACTIONS_PATHS,
-    "consent-person-registry": CONSENT_PERSON_REGISTRY_PATHS,
-    "consent-land-registry": CONSENT_LAND_REGISTRY_PATHS,
 }
-EXPECTED_PATHS = ASSET_SITE_PLACEMENT_PATHS
 
 
 def regular_tree(root: Path) -> dict[str, bytes]:
@@ -264,11 +85,12 @@ def regular_tree(root: Path) -> dict[str, bytes]:
 
 
 def compare(baseline: Path, candidate: Path) -> list[str]:
+    try:
+        expected = set(EXPECTED_PATHS_BY_BASELINE[baseline.name])
+    except KeyError as exc:
+        raise ValueError(f"unknown generated baseline: {baseline.name}") from exc
     baseline_tree = regular_tree(baseline)
     candidate_tree = regular_tree(candidate)
-    expected = set(
-        EXPECTED_PATHS_BY_BASELINE.get(baseline.name, ASSET_SITE_PLACEMENT_PATHS)
-    )
     errors: list[str] = []
     for label, tree in (("baseline", baseline_tree), ("candidate", candidate_tree)):
         paths = set(tree)

@@ -10,15 +10,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderValue, Request, StatusCode};
-use jsonwebtoken::Algorithm;
 use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::Algorithm;
 use registry_breg::api::{
-    HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError, ReadinessProbe,
-    RecordReadRequest, RecordReadService, ServiceFuture, VerifiedClaimValue, VerifiedRequestClaims,
-    authenticated_router,
+    authenticated_router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError,
+    ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
 use registry_breg::auth::{
     AuthenticationConfigError, AuthenticationError, AuthorityClaimConfig, RegistryAuthenticator,
@@ -29,18 +29,18 @@ use registry_breg::problem::ProblemCode;
 use registry_breg::review_store::{
     ReviewAuthorityClient, ReviewAuthorityRegistry, ReviewCompletionReceiver,
 };
-use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_yaml};
+use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    ActorKind, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
-    TokenVerifierConfig, access_token_typ_set,
+    access_token_typ_set, ActorKind, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError,
+    TokenVerifier, TokenVerifierConfig,
 };
 use registry_platform_testing::{
-    MockIdp, fixtures, jwks_from_private_jwk, oidc_verifier_config, sign_ed25519_compact_jwt,
+    fixtures, jwks_from_private_jwk, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
 };
 use registry_review_client::{ReviewClient, ReviewClientConfig};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
@@ -1180,11 +1180,9 @@ async fn repeated_values_in_a_multi_valued_claim_collapse_to_one_authority() {
     assert_eq!(harness.records.calls.load(Ordering::SeqCst), 2);
 
     let mut too_many_distinct = valid_claims();
-    too_many_distinct["jurisdictions"] = json!(
-        (0..65)
-            .map(|index| format!("area-{index}-never-rendered"))
-            .collect::<Vec<_>>()
-    );
+    too_many_distinct["jurisdictions"] = json!((0..65)
+        .map(|index| format!("area-{index}-never-rendered"))
+        .collect::<Vec<_>>());
     let distinct_token = harness.signed_token(too_many_distinct, "JWT");
     assert_refused_without_record_call(&harness, &distinct_token).await;
 }
@@ -1213,15 +1211,13 @@ async fn an_array_audience_requires_exact_membership_and_well_formed_bounds() {
         json!([AUDIENCE, "  "]),
         json!([AUDIENCE, AUDIENCE]),
         json!([AUDIENCE, 4]),
-        json!(
-            (0..17)
-                .map(|index| if index == 0 {
-                    AUDIENCE.to_owned()
-                } else {
-                    format!("urn:aud:{index}")
-                })
-                .collect::<Vec<_>>()
-        ),
+        json!((0..17)
+            .map(|index| if index == 0 {
+                AUDIENCE.to_owned()
+            } else {
+                format!("urn:aud:{index}")
+            })
+            .collect::<Vec<_>>()),
     ] {
         let mut claims = valid_claims();
         claims["aud"] = audience;
@@ -1487,12 +1483,10 @@ async fn static_jwks_key_refusal_is_bounded_and_repinning_restores_authenticatio
     );
     let event: Value = serde_json::from_str(logs.trim()).expect("production-shaped JSON log");
     assert!(event.get("target").is_none());
-    assert!(
-        event["fields"]["message"]
-            .as_str()
-            .expect("message field")
-            .contains("unknown or disallowed key identifier")
-    );
+    assert!(event["fields"]["message"]
+        .as_str()
+        .expect("message field")
+        .contains("unknown or disallowed key identifier"));
     assert!(logs.contains("does not establish provider key rotation"));
     for value in [
         &rotated,
@@ -1701,12 +1695,10 @@ fn compile_action_claim_source(source: &Value) -> CompiledRegistry {
 #[tokio::test]
 async fn action_only_target_claims_are_mapped_without_crud_grants() {
     let registry = compile_action_claim_source(&action_only_claim_source());
-    assert!(
-        registry
-            .entities()
-            .values()
-            .all(|entity| entity.access_profiles.is_empty())
-    );
+    assert!(registry
+        .entities()
+        .values()
+        .all(|entity| entity.access_profiles.is_empty()));
     let idp = MockIdp::start().await;
     let authenticator = authenticator(&registry, &idp, authority_claims()).unwrap();
     let mut token_claims = valid_claims();
@@ -2151,13 +2143,12 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
         .authenticate(&idp.mint_token(json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": RECORD_ID})))
         .await
         .is_ok());
-    assert!(
-        auth.authenticate(&idp.mint_token(
+    assert!(auth
+        .authenticate(&idp.mint_token(
             json!({"aud": AUDIENCE, "registry_actor_kind": "service", "sub": RECORD_ID})
         ))
         .await
-        .is_err()
-    );
+        .is_err());
 
     // Principal reuse preserves the exact selected string. Every string-encoded
     // scalar field applies its ordinary validation, without an identifier whitelist.
@@ -2215,12 +2206,10 @@ async fn action_only_purpose_and_target_claims_are_discovered_from_signed_tokens
     let project =
         parse_project_yaml(include_bytes!("fixtures/action-authority-mapping.yaml")).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    assert!(
-        registry
-            .entities()
-            .values()
-            .all(|entity| entity.access_profiles.is_empty())
-    );
+    assert!(registry
+        .entities()
+        .values()
+        .all(|entity| entity.access_profiles.is_empty()));
     let idp = MockIdp::start().await;
     let auth = authenticator(&registry, &idp, authority_claims()).unwrap();
     let base = json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": PRINCIPAL, "scope": "case.rename", "purpose": "case-management", "regions": ["north"]});
@@ -2370,13 +2359,11 @@ async fn ambiguous_route_without_default_requires_explicit_selection_without_gue
     let source = PROJECT.replace("    default: true\n", "");
     let project = parse_project_yaml(source.as_bytes()).unwrap();
     let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
-    assert!(
-        registry
-            .access()
-            .entries
-            .iter()
-            .all(|entry| entry.default_profile_id.is_none())
-    );
+    assert!(registry
+        .access()
+        .entries
+        .iter()
+        .all(|entry| entry.default_profile_id.is_none()));
     let harness = Harness::with_registry(registry).await;
     let token = harness.valid_token();
     let path = "/v1/records/cases/00000000-0000-4000-8000-000000000001";

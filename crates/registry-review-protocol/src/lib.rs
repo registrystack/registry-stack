@@ -201,7 +201,7 @@ impl ReviewContext {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCreateRequest {
-    pub kind: String,
+    pub policy: PolicyBinding,
     pub subject: SubjectBinding,
     pub requester_reference: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,7 +226,7 @@ where
 
 impl ReviewCreateRequest {
     pub fn check(&self) -> Result<(), ProtocolError> {
-        check_bounded_text(&self.kind, MAXIMUM_IDENTIFIER_BYTES)?;
+        self.policy.check()?;
         check_bounded_text(&self.requester_reference, MAXIMUM_REFERENCE_BYTES)?;
         if let Some(initiator) = &self.initiator {
             initiator.check()?;
@@ -550,7 +550,11 @@ mod tests {
 
     fn request() -> ReviewCreateRequest {
         ReviewCreateRequest {
-            kind: "registry-correction".to_owned(),
+            policy: PolicyBinding {
+                id: "registry-correction".to_owned(),
+                version: "1".to_owned(),
+                digest: ContentDigest::for_bytes(b"policy"),
+            },
             subject: SubjectBinding {
                 source: "registry".to_owned(),
                 subject_type: "change-request".to_owned(),
@@ -570,6 +574,54 @@ mod tests {
             },
             result_constraints: None,
         }
+    }
+
+    #[test]
+    fn expected_policy_is_required_and_changes_submission_identity() {
+        let original = request();
+        let value = serde_json::to_value(&original).unwrap();
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("policy");
+        assert!(serde_json::from_value::<ReviewCreateRequest>(missing.clone()).is_err());
+        missing["kind"] = json!(original.policy.id);
+        assert!(serde_json::from_value::<ReviewCreateRequest>(missing).is_err());
+        let mut unknown = value.clone();
+        unknown["kind"] = json!(original.policy.id);
+        assert!(serde_json::from_value::<ReviewCreateRequest>(unknown).is_err());
+        let mut unknown_policy_field = value.clone();
+        unknown_policy_field["policy"]["other"] = json!(true);
+        assert!(serde_json::from_value::<ReviewCreateRequest>(unknown_policy_field).is_err());
+
+        let digest = submission_digest("producer-a", "registry", &original).unwrap();
+        for (field, changed) in [
+            ("id", json!("other-policy")),
+            ("version", json!("2")),
+            ("digest", json!(ContentDigest::for_bytes(b"changed-policy"))),
+        ] {
+            let mut changed_value = value.clone();
+            changed_value["policy"][field] = changed;
+            let changed: ReviewCreateRequest = serde_json::from_value(changed_value).unwrap();
+            assert_ne!(
+                submission_digest("producer-a", "registry", &changed).unwrap(),
+                digest,
+                "submission digest must bind policy {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_request_validates_the_complete_policy_binding() {
+        for field in ["id", "version"] {
+            for invalid in [String::new(), "x".repeat(MAXIMUM_IDENTIFIER_BYTES + 1)] {
+                let mut value = serde_json::to_value(request()).unwrap();
+                value["policy"][field] = json!(invalid);
+                let request: ReviewCreateRequest = serde_json::from_value(value).unwrap();
+                assert!(request.check().is_err(), "invalid policy {field}");
+            }
+        }
+        let mut value = serde_json::to_value(request()).unwrap();
+        value["policy"]["digest"] = json!("not-a-digest");
+        assert!(serde_json::from_value::<ReviewCreateRequest>(value).is_err());
     }
 
     #[test]
@@ -637,7 +689,11 @@ mod tests {
         assert_eq!(explicit_null.result_constraints, Some(Value::Null));
 
         let omitted: ReviewCreateRequest = serde_json::from_value(json!({
-            "kind": "registry-correction",
+            "policy": {
+                "id": "registry-correction",
+                "version": "1",
+                "digest": ContentDigest::for_bytes(b"policy").to_string()
+            },
             "subject": {
                 "source": "registry",
                 "type": "change-request",

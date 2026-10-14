@@ -10,30 +10,30 @@ use std::{
 };
 
 use registry_platform_audit::{AuditEntry, AuditRequest};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::audit::RegistryAudit;
 use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::generated_ddl::DdlStatement;
 use crate::history_schema::HistorySchemaDescriptor;
 use crate::migration_plan::{
-    ExternalBackupBinding, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
-    read_backup_binding_document,
+    read_backup_binding_document, ExternalBackupBinding, ReviewedMigrationStepDescriptor,
+    ValidatedReviewedMigrationPlan,
 };
 use crate::package::{
     CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, MigrationPlan, PackageFileRole,
     VerifiedPackage, VerifiedPredecessorPackage,
 };
 use crate::postgres::{
-    ActivationPlanKind, BackupReference, ConnectionConfig, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, MaintenanceTransition, MigrationArtifactBinding, MigrationKind,
-    MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind, PackageDdlStatement,
-    PostgresFailure, RegistryLockKey, ReviewedExecutionOutcome, ReviewedFieldEncryptionContext,
-    ReviewedPackageExecutionRequest, RoleMode, SqlIdentifier, VerifiedPackageApplyConnection,
-    statement_checksum,
+    statement_checksum, ActivationPlanKind, BackupReference, ConnectionConfig,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceTransition,
+    MigrationArtifactBinding, MigrationKind, MigrationLedgerEntry, MigrationLedgerStep,
+    MigrationLedgerStepKind, PackageDdlStatement, PostgresFailure, RegistryLockKey,
+    ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedPackageExecutionRequest,
+    RoleMode, SqlIdentifier, VerifiedPackageApplyConnection,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -100,9 +100,7 @@ pub enum MigrationError {
         "retain-plaintext-history requires clearing retained Proposal snapshots before encrypting field `{field_id}` on entity `{entity_id}`"
     )]
     FieldEncryptionRetainedProposalSnapshots { entity_id: String, field_id: String },
-    #[error(
-        "active Proposals must retain inspection and cancellation in the candidate package"
-    )]
+    #[error("active Proposals must retain inspection and cancellation in the candidate package")]
     ActiveProposalRecoveryUnavailable,
     #[error("destructive backup evidence is invalid")]
     BackupEvidence,

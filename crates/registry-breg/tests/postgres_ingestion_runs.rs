@@ -10,29 +10,29 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema,
+    RegistryStateTestIdentity,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use uuid::Uuid;
@@ -4318,8 +4318,8 @@ impl IngestionHarness {
 
     async fn erase_widget_history(&self, record_id: &str) {
         use registry_breg::history_erasure::{
-            HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
-            erase_record_history,
+            erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts,
+            RecordHistoryErasureTarget,
         };
         let (mut migration, migration_task) = self.database.connect_migration().await;
         let target = RecordHistoryErasureTarget::new(
@@ -4516,7 +4516,8 @@ const FIXTURE_HEAD: &str = r#"{
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-  "entities":[{
+  "datasets":[{"id":"test-dataset"}],
+  "recordTypes":[{
     "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "constraints":[{"type":"unique","fields":["label"]}],
@@ -4541,7 +4542,7 @@ const FIXTURE_TAIL: &str = r#"
   "accessProfiles":[{
     "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
-    "permissions":{"entities":[{
+    "permissions":{"records":[{
       "recordType":"widget","operations":["create","get","patch","batch"],
       "readableFields":["jurisdiction","label","quantity"],
       "writableFields":["jurisdiction","label","quantity"],
@@ -4550,7 +4551,7 @@ const FIXTURE_TAIL: &str = r#"
   },{
     "id":"operator-minimal","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management"],
-    "permissions":{"entities":[{
+    "permissions":{"records":[{
       "recordType":"widget","operations":["create","patch","batch"],
       "readableFields":["label"],
       "writableFields":["jurisdiction","label","quantity"],
@@ -4559,7 +4560,7 @@ const FIXTURE_TAIL: &str = r#"
   },{
     "id":"reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["public-reading"],
-    "permissions":{"entities":[{
+    "permissions":{"records":[{
       "recordType":"widget","operations":["get","list"],
       "readableFields":["label"],
       "rowBoundaries":"unrestricted"

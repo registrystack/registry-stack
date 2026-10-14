@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::compiler::{CompileProfile, compile_project};
-use registry_breg::contract::{Operation, parse_project_json};
+use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::model::{
     ActionRouteKind, CompiledActionTargetPermission, CompiledActionTargetUseSource,
     CompiledPlanTargetBinding, CompiledPlanValue,
@@ -17,7 +17,7 @@ fn compile_json(
 #[test]
 fn permission_targets_without_discriminators_are_refused() {
     let error = serde_json::from_value::<CompiledActionTargetPermission>(serde_json::json!({
-        "entityId": "person",
+        "recordType": "person",
         "rowBoundaries": []
     }))
     .expect_err("a permission target names its operation and source");
@@ -28,7 +28,7 @@ fn permission_targets_without_discriminators_are_refused() {
     );
 
     let error = serde_json::from_value::<CompiledActionTargetPermission>(serde_json::json!({
-        "entityId": "person",
+        "recordType": "person",
         "operation": "create",
         "rowBoundaries": []
     }))
@@ -82,7 +82,7 @@ fn invoke_schema_requires_fixed_patch_targets_even_when_the_input_is_optional() 
 fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_results() {
     use registry_breg::compiler::compile_project_with_assets;
     use registry_breg::contract::ModuleAssetSource;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     let mut source: Value = serde_json::from_str(&household_contact_project("")).unwrap();
     let effects = source["actions"][0]["plan"]["effects"].take();
@@ -146,8 +146,8 @@ fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_result
 #[test]
 fn the_retired_v2_abi_is_refused_and_wasm_needs_a_wasm_capable_build() {
     use registry_breg::compiler::compile_project_with_assets;
-    use registry_breg::contract::{ACTION_PLAN_ABI_V1, ModuleAssetSource, parse_project_json};
-    use serde_json::{Value, json};
+    use registry_breg::contract::{parse_project_json, ModuleAssetSource, ACTION_PLAN_ABI_V1};
+    use serde_json::{json, Value};
 
     let mut source: Value = serde_json::from_str(&household_contact_project("")).unwrap();
     let effects = source["actions"][0]["plan"]["effects"].take();
@@ -230,11 +230,9 @@ fn the_retired_v2_abi_is_refused_and_wasm_needs_a_wasm_capable_build() {
             .unwrap_or_else(|| panic!("{kind}: expected the ABI refusal, got {refused:?}"));
         assert_eq!(unsupported_abi.path, "functions[id=contact-plan].abi");
         assert!(unsupported_abi.message.contains(ACTION_PLAN_ABI_V1));
-        assert!(
-            refused
-                .iter()
-                .all(|diagnostic| diagnostic.code != "breg.action.handler-wasm-abi-unsupported")
-        );
+        assert!(refused
+            .iter()
+            .all(|diagnostic| diagnostic.code != "breg.action.handler-wasm-abi-unsupported"));
     }
 
     compile_with_handler_kind("rhai", ACTION_PLAN_ABI_V1)
@@ -527,12 +525,10 @@ fn action_grants_refuse_unused_target_locks() {
 
     let failure = compile_json(&serde_json::to_vec(&source).unwrap())
         .expect_err("a target lock without an action target use is refused");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.action.permission-targets-unused")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.permission-targets-unused"));
 }
 
 #[test]
@@ -543,12 +539,10 @@ fn immediate_actions_preserve_proposal_required_target_policy() {
     );
     let failure =
         compile_json(controlled.as_bytes()).expect_err("controlled target patches are refused");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.action.effect-controlled-target")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-controlled-target"));
 }
 
 #[test]
@@ -563,24 +557,20 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
     );
     let failure = compile_json(nullable_required.as_bytes())
         .expect_err("nullable inputs cannot populate required fields");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.action.effect-value-nullable")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-value-nullable"));
 
     let overlap = household_contact_project("").replace(
         r#""set":{"contact-person":{"fromEffect":"person"}}"#,
         r#""set":{"contact-person":{"fromEffect":"person"}},"clear":["contact-person"]"#,
     );
     let failure = compile_json(overlap.as_bytes()).expect_err("overlapping writes are refused");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.action.effect-overlapping-write")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-overlapping-write"));
 
     let cycle = br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
@@ -621,12 +611,10 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
       }]}}]
     }"#;
     let failure = compile_json(cycle).expect_err("create dependencies cannot cycle");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.action.effect-reference-not-earlier-create")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-reference-not-earlier-create"));
 }
 
 #[test]
@@ -729,17 +717,15 @@ fn action_bounds_apply_before_runtime_target_work() {
     );
 
     let failure = compile_json(source.as_bytes()).expect_err("target ceiling is enforced");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.action.bounds-targets")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.bounds-targets"));
 }
 
 #[test]
 fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
-    use serde_json::{Map, Value, json};
+    use serde_json::{json, Map, Value};
 
     for (field_count, field_type, expected_code) in [
         (
@@ -816,13 +802,11 @@ fn ambiguous_action_can_require_explicit_profile_but_cannot_have_two_defaults() 
         .iter_mut()
         .for_each(|profile| profile.default = false);
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    assert!(
-        registry
-            .actions()
-            .routes
-            .iter()
-            .all(|route| route.default_access_profile.is_none())
-    );
+    assert!(registry
+        .actions()
+        .routes
+        .iter()
+        .all(|route| route.default_access_profile.is_none()));
     let openapi: serde_json::Value = serde_json::from_slice(
         &registry
             .artifacts()
@@ -846,10 +830,8 @@ fn ambiguous_action_can_require_explicit_profile_but_cannot_have_two_defaults() 
         .iter_mut()
         .for_each(|profile| profile.default = true);
     let error = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
-    assert!(
-        error
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.action.route-access-default-multiple")
-    );
+    assert!(error
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.route-access-default-multiple"));
 }

@@ -8,14 +8,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    GeneratedArtifact,
     contract::{FieldTypeSource, LookupValueOrigin, Operation},
     diagnostics::Diagnostic,
     model::{CompiledEntity, CompiledLogicalField, CompiledRegistry},
+    GeneratedArtifact,
 };
 
 /// The `apiVersion` of an export's `source-export.json`. `evidencectl source

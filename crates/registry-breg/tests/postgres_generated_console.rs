@@ -9,8 +9,8 @@ mod client_http;
 mod postgres_harness;
 
 use registry_breg::api::{VerifiedClaimValue, VerifiedRequestClaims};
-use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
-use registry_breg::contract::{ModuleAssetSource, parse_project_yaml};
+use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_yaml, ModuleAssetSource};
 use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
     BRegRecordFormat,

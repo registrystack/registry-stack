@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::{CompileProfile, compile_project, parse_project_json};
+use crate::{compile_project, parse_project_json, CompileProfile};
 use serde_json::json;
 
 fn source() -> Value {
@@ -108,11 +108,10 @@ fn assert_complete_person_policy_drops(
     let actual_drops = actual_drop_ids.iter().cloned().collect::<BTreeSet<_>>();
     assert_eq!(actual_drop_ids.len(), actual_drops.len());
     assert_eq!(actual_drops, expected_drops);
-    assert!(
-        plan.statements
-            .iter()
-            .all(|statement| !statement.sql.starts_with("CREATE POLICY "))
-    );
+    assert!(plan
+        .statements
+        .iter()
+        .all(|statement| !statement.sql.starts_with("CREATE POLICY ")));
 }
 
 #[test]
@@ -125,11 +124,9 @@ fn compiler_successor_drops_every_policy_for_removed_read_profile() {
 
     assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileRemoved));
     assert_complete_person_policy_drops(&before, &after, &plan);
-    assert!(
-        drop_policy_sql(&plan)
-            .iter()
-            .any(|statement| statement.contains("registry_rls_select_"))
-    );
+    assert!(drop_policy_sql(&plan)
+        .iter()
+        .any(|statement| statement.contains("registry_rls_select_")));
 }
 
 #[test]
@@ -142,16 +139,12 @@ fn compiler_successor_drops_create_returning_policy_for_removed_create_profile()
 
     assert_complete_person_policy_drops(&before, &after, &plan);
     let drops = drop_policy_sql(&plan);
-    assert!(
-        drops
-            .iter()
-            .any(|statement| statement.contains("registry_rls_insert_"))
-    );
-    assert!(
-        drops
-            .iter()
-            .any(|statement| statement.contains("registry_create_returning_rls_"))
-    );
+    assert!(drops
+        .iter()
+        .any(|statement| statement.contains("registry_rls_insert_")));
+    assert!(drops
+        .iter()
+        .any(|statement| statement.contains("registry_create_returning_rls_")));
 }
 
 #[test]
@@ -165,11 +158,9 @@ fn compiler_successor_replaces_complete_policy_set_when_profile_is_narrowed() {
     assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileChanged));
     assert_complete_person_policy_drops(&before, &after, &plan);
     let drops = drop_policy_sql(&plan);
-    assert!(
-        drops
-            .iter()
-            .any(|statement| statement.contains("registry_rls_select_"))
-    );
+    assert!(drops
+        .iter()
+        .any(|statement| statement.contains("registry_rls_select_")));
     assert_eq!(create_policy_sql(&plan), Vec::<String>::new());
 }
 
@@ -406,33 +397,25 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
     let added = reviewed_plan(&before, &after);
     let removed = reviewed_plan(&after, &before);
     for name in &links {
-        assert!(
-            create_policy_sql(&added)
-                .iter()
-                .any(|sql| sql.contains(name))
-        );
-        assert!(
-            drop_policy_sql(&removed)
-                .iter()
-                .any(|sql| sql.contains(name))
-        );
+        assert!(create_policy_sql(&added)
+            .iter()
+            .any(|sql| sql.contains(name)));
+        assert!(drop_policy_sql(&removed)
+            .iter()
+            .any(|sql| sql.contains(name)));
     }
     with_action["accessProfiles"][0]["permissions"]["actions"][0]["targets"][1]["rowBoundaries"] =
         json!([{"field":"label","claim":"groupLabel","operator":"equals"}]);
     let changed = compile(&with_action);
     let replaced = reviewed_plan(&after, &changed);
     for name in links {
-        assert!(
-            drop_policy_sql(&replaced)
-                .iter()
-                .any(|sql| sql.contains(&name))
-        );
-        assert!(
-            create_policy_sql(&replaced)
-                .iter()
-                .any(|sql| sql.contains(&name)
-                    && sql.contains(&changed.actions().actions[0].definition_revision))
-        );
+        assert!(drop_policy_sql(&replaced)
+            .iter()
+            .any(|sql| sql.contains(&name)));
+        assert!(create_policy_sql(&replaced)
+            .iter()
+            .any(|sql| sql.contains(&name)
+                && sql.contains(&changed.actions().actions[0].definition_revision)));
     }
 }
 
@@ -451,11 +434,10 @@ fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
     let after = compile(&removed_entity);
     let plan = reviewed_plan(&before, &after);
 
-    assert!(
-        plan.changes
-            .iter()
-            .any(|change| change.code == CompiledRegistryChangeCode::EntityRemoved)
-    );
+    assert!(plan
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::EntityRemoved));
     assert_eq!(drop_policy_sql(&plan), Vec::<String>::new());
     assert_eq!(create_policy_sql(&plan), Vec::<String>::new());
 }

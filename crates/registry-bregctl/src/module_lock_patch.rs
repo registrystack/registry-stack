@@ -3,6 +3,62 @@
 
 use registry_breg::contract::ModuleLockSource;
 use registry_breg::parse_project_yaml;
+use registry_platform_yaml::{Position, Reader};
+
+/// Replaces a flow-style `modules` sequence using the shared reader's exact
+/// source span. JSON is valid YAML here; changing only this value keeps its
+/// enclosing mapping, punctuation, comments, and unrelated formatting intact.
+pub(crate) fn patch_flow_module_locks(bytes: &[u8], locks: &[ModuleLockSource]) -> Option<Vec<u8>> {
+    let source = std::str::from_utf8(bytes).ok()?;
+    let root = Reader::new("registry.yaml").scan(bytes).ok()??;
+    let modules = &root.get("modules")?.value;
+    let start = source_offset(source, modules.span.start)?;
+    let end = source_offset(source, modules.span.end)?;
+    let value = source.get(start..end)?;
+    if !value.starts_with('[') || !value.ends_with(']') {
+        return None;
+    }
+    let replacement = serde_json::to_vec(locks).ok()?;
+    let mut rendered = Vec::with_capacity(bytes.len() - value.len() + replacement.len());
+    rendered.extend_from_slice(&bytes[..start]);
+    rendered.extend_from_slice(&replacement);
+    rendered.extend_from_slice(&bytes[end..]);
+    let parsed = parse_project_yaml(&rendered).ok()?;
+    (parsed.modules == locks).then_some(rendered)
+}
+
+/// Reader columns count Unicode scalar values, not UTF-8 bytes, and omit a
+/// leading BOM. CR, LF, and CRLF each end one line in the shared reader.
+/// Convert those positions without reinterpreting YAML syntax.
+fn source_offset(source: &str, position: Position) -> Option<usize> {
+    let line_start = if position.line == 1 {
+        0
+    } else {
+        let bytes = source.as_bytes();
+        source
+            .char_indices()
+            .filter_map(|(index, character)| match character {
+                '\r' => Some(index + 1 + usize::from(bytes.get(index + 1) == Some(&b'\n'))),
+                '\n' if index == 0 || bytes[index - 1] != b'\r' => Some(index + 1),
+                _ => None,
+            })
+            .nth(position.line.checked_sub(2)?)?
+    };
+    let line = source.get(line_start..)?.split(['\r', '\n']).next()?;
+    let bom_bytes = if position.line == 1 && line.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    };
+    let text = &line[bom_bytes..];
+    let column = position.column.checked_sub(1)?;
+    let byte = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .nth(column)?;
+    Some(line_start + bom_bytes + byte)
+}
 
 #[derive(Clone, Copy)]
 struct Block {
@@ -187,4 +243,64 @@ fn indentation(line: &str) -> usize {
 
 fn yaml_scalar(value: &str) -> String {
     serde_json::to_string(value).expect("strings serialize")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lock(id: &str) -> ModuleLockSource {
+        ModuleLockSource {
+            id: id.to_owned(),
+            version: "1".to_owned(),
+            digest: Some(format!("sha256:{}", "a".repeat(64))),
+        }
+    }
+
+    #[test]
+    fn flow_module_locks_preserve_json_and_unicode_surroundings() {
+        let prefix = "\u{feff}{\"apiVersion\":\"id.registrystack.org/formats/breg/project/v1alpha1\",\"kind\":\"BRegProject\",\"project\":{\"id\":\"flow-lock\",\"canonicalBaseIri\":\"https://example.test/é\",\"version\":\"1\",\"defaultLanguage\":\"en\"},\"modules\":";
+        let suffix = ",\"datasets\":[{\"id\":\"records\"}]}\n";
+        let source = format!("{prefix}[{{\"id\":\"core\",\"version\":\"1\"}}]{suffix}");
+        let locks = [lock("core")];
+        let rendered =
+            patch_flow_module_locks(source.as_bytes(), &locks).expect("JSON module locks patch");
+        assert_eq!(
+            String::from_utf8(rendered).expect("UTF-8"),
+            format!("{prefix}{}{suffix}", serde_json::to_string(&locks).unwrap())
+        );
+    }
+
+    #[test]
+    fn flow_module_locks_preserve_yaml_surroundings_and_refresh_inventory() {
+        let prefix = "# retained project comment\napiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: flow-lock\n  canonicalBaseIri: https://example.test\n  version: \"1\"\n  defaultLanguage: en\nmodules: ";
+        let suffix = " # retained lock comment with ] and [\ndatasets: [{id: records}]\n";
+        let source = format!("{prefix}[{{id: retired, version: \"1\"}}]{suffix}");
+        let locks = [lock("core"), lock("extra")];
+        let rendered = patch_flow_module_locks(source.as_bytes(), &locks)
+            .expect("YAML flow module locks patch");
+        assert_eq!(
+            String::from_utf8(rendered).expect("UTF-8"),
+            format!("{prefix}{}{suffix}", serde_json::to_string(&locks).unwrap())
+        );
+    }
+
+    #[test]
+    fn flow_module_locks_preserve_cr_and_crlf_surroundings() {
+        for newline in ["\r", "\r\n"] {
+            let prefix = "# retained project comment\napiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: flow-lock\n  canonicalBaseIri: https://example.test\n  version: \"1\"\n  defaultLanguage: en\nmodules: ".replace('\n', newline);
+            let suffix = " # retained lock comment with ] and [\ndatasets: [{id: records}]\n"
+                .replace('\n', newline);
+            let source =
+                format!("{prefix}[{newline}  {{id: core, version: \"1\"}}{newline}]{suffix}");
+            let locks = [lock("core")];
+            let rendered = patch_flow_module_locks(source.as_bytes(), &locks)
+                .expect("flow locks patch across accepted line endings");
+            assert_eq!(
+                String::from_utf8(rendered).expect("UTF-8"),
+                format!("{prefix}{}{suffix}", serde_json::to_string(&locks).unwrap()),
+                "surrounding source must retain {newline:?} line endings"
+            );
+        }
+    }
 }

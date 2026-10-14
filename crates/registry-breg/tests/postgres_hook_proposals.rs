@@ -24,21 +24,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use postgres_harness::TestDatabase;
-use rcgen::{CertifiedKey, generate_simple_self_signed};
-use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
-use registry_breg::contract::{ModuleAssetSource, parse_project_json};
+use rcgen::{generate_simple_self_signed, CertifiedKey};
+use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use registry_breg::hook_handler::HookHandlerRegistry;
 use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
 use registry_breg::postgres::{
-    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity,
-    RowBoundaryContext, RuntimePool, initialize_compiled_registry_state_for_test,
-    install_compiled_schema, test_activation_id, test_package_digest,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
+    test_package_digest, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
+    RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::webhook::{
@@ -46,13 +46,13 @@ use registry_breg::webhook::{
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, oneshot};
-use tokio_rustls::TlsAcceptor;
-use tokio_rustls::rustls::ServerConfig;
+use tokio::sync::{oneshot, Mutex};
 use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::TlsAcceptor;
 use uuid::Uuid;
 
 const PACKAGE_REVISION: &str =
@@ -147,7 +147,8 @@ fn hook_project_json(
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{{"id":"hook-proposal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "entities":[{{
+          "datasets":[{{"id":"test-dataset"}}],
+          "recordTypes":[{{
             "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
             "fields":[
               {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},
@@ -164,22 +165,23 @@ fn hook_project_json(
             ],
             "hooks":{followup_hooks}
           }}],
+          "functions":[{{"id":"open-followup-plan","runtime":"rhai","source":"scripts/open-followup.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}}],
           "actions":[{{
-            "id":"open-followup",
+            "id":"open-followup","execution":{{"mode":"immediate"}},
             "inputs":[
               {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"}},
               {{"id":"origin","apiName":"origin","type":"string","maximumLength":64,"required":true,"classification":"internal"}}
             ],
-            "handler":{{
-              "type":"rhai","script":"scripts/open-followup.rhai","abi":"registry.action-handler/v1",
-              "writes":[{{"id":"followup","target":{{"entity":"followup"}},"operation":"create","fields":["jurisdiction","label","origin"]}}{extra_writes}]
+            "plan":{{
+              "type":"function","function":"open-followup-plan","inputs":["jurisdiction","origin"],
+              "writes":[{{"id":"followup","target":{{"recordType":"followup"}},"operation":"create","fields":["jurisdiction","label","origin"]}}{extra_writes}]
             }}
           }}],
           "accessProfiles":[{{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{{"entities":[{{
-              "entity":"case","operations":["create","get","list"],
+            "permissions":{{"records":[{{
+              "recordType":"case","operations":["create","get","list"],
               "readableFields":["jurisdiction","label","restricted_note"],
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
@@ -416,7 +418,7 @@ fn tally_proposal_registry() -> CompiledRegistry {
         "[]",
         &format!(r#""results":["followup","{TALLY_EFFECT}"]"#),
         &format!(
-            r#",{{"id":"{TALLY_EFFECT}","target":{{"fromField":"tally"}},"operation":"patch","fields":["label"]}}"#
+            r#",{{"id":"{TALLY_EFFECT}","target":{{"fromInput":"tally"}},"operation":"patch","fields":["label"]}}"#
         ),
     ))
     .expect("hook proposal fixture is JSON");
@@ -445,6 +447,10 @@ fn tally_proposal_registry() -> CompiledRegistry {
             "id": "tally", "apiName": "tally", "type": "reference", "target": "tally",
             "required": true, "classification": "internal"
         }));
+    project["actions"][0]["plan"]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("tally"));
     let operator = &mut project["accessProfiles"][0]["permissions"]["records"];
     for field in ["tally", "tally-condition"] {
         operator[0]["readableFields"]
@@ -457,7 +463,7 @@ fn tally_proposal_registry() -> CompiledRegistry {
             .push(json!(field));
     }
     operator.as_array_mut().unwrap().push(json!({
-        "entity": "tally", "operations": ["create", "get"],
+        "recordType": "tally", "operations": ["create", "get"],
         "readableFields": ["jurisdiction", "label"],
         "writableFields": ["jurisdiction", "label"],
         "rowBoundaries": [{"field": "jurisdiction", "claim": "jurisdiction", "operator": "equals"}]
@@ -2233,12 +2239,10 @@ async fn real_postgres_hook_delivery_rows_record_every_proposal_disposition() {
         Some("hook.proposal.no_principal"),
         "the row names the deployment defect a principal-less proposal is"
     );
-    assert!(
-        dead_row
-            .summary
-            .as_deref()
-            .is_some_and(|summary| !summary.is_empty())
-    );
+    assert!(dead_row
+        .summary
+        .as_deref()
+        .is_some_and(|summary| !summary.is_empty()));
 
     assert_eq!(record_count(&setup, "followup").await, 1);
     assert_eq!(record_count(&setup, "case").await, 1);
@@ -2514,11 +2518,10 @@ async fn real_postgres_a_proposal_failing_outcome_validation_is_refused_not_appl
         Some("hook.proposal.outcome_refused"),
         "the refusal names the validation that refused it"
     );
-    assert!(
-        row.summary
-            .as_deref()
-            .is_some_and(|summary| !summary.is_empty())
-    );
+    assert!(row
+        .summary
+        .as_deref()
+        .is_some_and(|summary| !summary.is_empty()));
     assert_eq!(
         record_count(&setup, "followup").await,
         0,
@@ -2692,7 +2695,7 @@ fn tally_condition_token(record_id: &Uuid, revision: i64) -> String {
         "registry": "hook-proposal-registry",
         "action": "open-followup",
         "input": "tally",
-        "entity": "tally",
+        "recordType": "tally",
         "record": record_id.to_string(),
         "revision": revision,
     }))

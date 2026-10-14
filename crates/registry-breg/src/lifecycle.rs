@@ -303,15 +303,13 @@ mod tests {
                     .count()
             );
         }
-        assert!(
-            lifecycle
-                .enforcement
+        assert!(lifecycle
+            .enforcement
+            .iter()
+            .flat_map(|layer| layer.events)
+            .all(|event| lifecycle
+                .transitions
                 .iter()
-                .flat_map(|layer| layer.events)
-                .all(|event| lifecycle
-                    .transitions
-                    .iter()
-                    .any(|edge| edge.event == *event))
-        );
+                .any(|edge| edge.event == *event)));
     }
 }

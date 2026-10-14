@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use registry_breg::{
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, RegistryProject, parse_project_yaml},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_yaml, ModuleAssetSource, RegistryProject},
     model::{CompiledActionExecution, CompiledPlanValue, CompiledProposalReview},
 };
 const MINIMAL: &[u8] =
@@ -48,12 +48,10 @@ fn standalone_native_records_need_no_manifest_or_external_products() {
 fn one_action_family_compiles_both_modes_and_a_neutral_dag() {
     let project = parse_project_yaml(PROJECT).expect("canonical project reads");
     let model = compile(&project).expect("canonical project compiles");
-    assert!(
-        !serde_json::to_value(model.entities())
-            .unwrap()
-            .to_string()
-            .contains("changeRequest")
-    );
+    assert!(!serde_json::to_value(model.entities())
+        .unwrap()
+        .to_string()
+        .contains("changeRequest"));
     assert!(!model.ddl().script().contains("registry_request_"));
     let actions = &model.actions().actions;
     let register = actions
@@ -73,18 +71,16 @@ fn one_action_family_compiles_both_modes_and_a_neutral_dag() {
         vec!["facility", "assignment"]
     );
     assert!(register.effects[1].depends_on.contains("facility"));
-    assert!(
-        register.effects[0]
-            .mutations
-            .iter()
-            .any(|mutation| matches!(
-                mutation,
-                registry_breg::model::CompiledPlanMutation::Set {
-                    value: CompiledPlanValue::Literal { .. },
-                    ..
-                }
-            ))
-    );
+    assert!(register.effects[0]
+        .mutations
+        .iter()
+        .any(|mutation| matches!(
+            mutation,
+            registry_breg::model::CompiledPlanMutation::Set {
+                value: CompiledPlanValue::Literal { .. },
+                ..
+            }
+        )));
     let correction = actions
         .iter()
         .find(|action| action.id == "correct-address")
@@ -108,17 +104,15 @@ fn one_action_family_compiles_both_modes_and_a_neutral_dag() {
         panic!("proposal execution")
     };
     assert!(matches!(proposal.review, CompiledProposalReview::None));
-    assert!(
-        deactivate
-            .requires
-            .iter()
-            .any(|guard| guard.revision_unchanged)
-    );
+    assert!(deactivate
+        .requires
+        .iter()
+        .any(|guard| guard.revision_unchanged));
 }
 
 #[test]
 fn canonical_address_function_evaluates_valid_inputs_and_declared_refusal() {
-    use registry_breg::action_handler::{ActionHandlerOutcome, evaluate_action};
+    use registry_breg::action_handler::{evaluate_action, ActionHandlerOutcome};
     use serde_json::json;
     let registry = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
     let action = registry
@@ -152,6 +146,71 @@ fn canonical_address_function_evaluates_valid_inputs_and_declared_refusal() {
     };
     assert_eq!(refusal.code, "invalid-postal-code");
     assert_eq!(refusal.field.as_deref(), Some("postal-code"));
+}
+
+#[test]
+fn automatic_recovery_grants_reject_known_nonhuman_profiles() {
+    use registry_breg::contract::parse_project_json;
+    use serde_json::json;
+
+    for (actor_kind, admitted) in [
+        (None, true),
+        (Some("human"), true),
+        (Some("service"), false),
+        (Some("agent"), false),
+    ] {
+        for operation in ["apply", "retry"] {
+            let mut source = project_source();
+            let profile = source["accessProfiles"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|profile| profile["id"] == "facility-correction-applier")
+                .unwrap();
+            if let Some(kind) = actor_kind {
+                profile["actorKind"] = json!(kind);
+                profile["requesterClients"] = json!(["registry-client"]);
+            }
+            let grant = profile["permissions"]["proposals"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|grant| grant["action"] == "correct-address")
+                .unwrap();
+            grant["operations"] = json!(["get", operation]);
+            let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+            let result = compile(&project);
+            if admitted {
+                assert!(result.is_ok(), "{actor_kind:?}/{operation}: {result:?}");
+            } else {
+                assert!(
+                    result.unwrap_err().diagnostics().iter().any(|diagnostic| {
+                        diagnostic.code == "breg.proposal.automatic-recovery-requires-human"
+                    }),
+                    "{actor_kind:?}/{operation}"
+                );
+            }
+        }
+    }
+
+    let mut source = project_source();
+    let profile = source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "facility-correction-applier")
+        .unwrap();
+    profile["actorKind"] = json!("service");
+    profile["requesterClients"] = json!(["registry-client"]);
+    profile["permissions"]["proposals"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|grant| grant["action"] == "deactivate-facility");
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    assert!(
+        compile(&project).is_ok(),
+        "manual Apply keeps its own grant policy"
+    );
 }
 #[test]
 fn authored_after_is_not_a_plan_surface() {
@@ -199,24 +258,22 @@ fn proposal_attachments_require_explicit_bounded_slot_grants() {
         panic!("Proposal")
     };
     assert_eq!(proposal.attachments["supporting-file"].maximum_bytes, 1024);
-    assert!(
-        proposal
-            .permissions
-            .iter()
-            .find(|permission| permission.profile_id == "facility-correction-author")
-            .unwrap()
-            .writable_attachments
-            .contains("supporting-file")
-    );
+    assert!(proposal
+        .permissions
+        .iter()
+        .find(|permission| permission.profile_id == "facility-correction-author")
+        .unwrap()
+        .writable_attachments
+        .contains("supporting-file"));
     let mut missing_operation = value.clone();
     missing_operation["accessProfiles"][profile_index]["permissions"]["proposals"][0]["operations"]
         .as_array_mut()
         .unwrap()
         .retain(|operation| operation != "edit");
-    assert!(
-        compile(&parse_project_json(&serde_json::to_vec(&missing_operation).unwrap()).unwrap())
-            .is_err()
-    );
+    assert!(compile(
+        &parse_project_json(&serde_json::to_vec(&missing_operation).unwrap()).unwrap()
+    )
+    .is_err());
     value["actions"][action_index]["execution"]["proposal"]["attachments"][0]["maximumBytes"] =
         json!(16777217);
     assert!(parse_project_json(&serde_json::to_vec(&value).unwrap()).is_err());
@@ -264,12 +321,10 @@ fn explicit_automatic_application_has_a_bounded_revision_bound_system_grant() {
             .count(),
         1
     );
-    assert!(
-        grant
-            .targets
-            .iter()
-            .all(|target| target.entity_id == "facility")
-    );
+    assert!(grant
+        .targets
+        .iter()
+        .all(|target| target.entity_id == "facility"));
     assert_eq!(
         grant
             .targets
@@ -286,17 +341,14 @@ fn explicit_automatic_application_has_a_bounded_revision_bound_system_grant() {
     }
     let manual =
         compile(&parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()).unwrap();
-    assert!(
-        manual
-            .actions()
-            .actions
-            .iter()
-            .all(|action| match &action.execution {
-                CompiledActionExecution::Immediate => true,
-                CompiledActionExecution::Proposal { proposal } =>
-                    proposal.system_apply_grant.is_none(),
-            })
-    );
+    assert!(manual
+        .actions()
+        .actions
+        .iter()
+        .all(|action| match &action.execution {
+            CompiledActionExecution::Immediate => true,
+            CompiledActionExecution::Proposal { proposal } => proposal.system_apply_grant.is_none(),
+        }));
 }
 
 #[test]
@@ -340,12 +392,10 @@ fn system_executor_profile_cannot_inherit_authored_record_grants() {
     value["accessProfiles"][0]["id"] = serde_json::json!("system-proposal-apply");
     let failure =
         compile(&parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()).unwrap_err();
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.access-profile.system-id-reserved")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.system-id-reserved"));
 }
 
 #[test]
@@ -398,14 +448,12 @@ fn guard_only_revision_reads_share_one_condition_bound_reference_scope() {
         std::collections::BTreeSet::from(["status".to_owned(), "jurisdiction".to_owned()])
     );
     assert!(action.condition_route.is_some());
-    assert!(
-        model
-            .actions()
-            .actions
-            .iter()
-            .filter(|action| action.execution.is_proposal())
-            .all(|action| action.condition_route.is_none())
-    );
+    assert!(model
+        .actions()
+        .actions
+        .iter()
+        .filter(|action| action.execution.is_proposal())
+        .all(|action| action.condition_route.is_none()));
 }
 
 #[test]
@@ -497,6 +545,38 @@ fn review_context_schema_has_exact_bytes_and_no_policy_digest_cycle() {
     assert_eq!(schema.revision, same_schema.revision);
     assert_eq!(schema.digest, same_schema.digest);
     assert_eq!(schema.bytes, same_schema.bytes);
+    let mut changed_disclosure = value.clone();
+    let record = changed_disclosure["recordTypes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|record| record["id"] == "facility")
+        .unwrap();
+    let address = record["fields"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|field| field["id"] == "address-line")
+        .unwrap();
+    address["classification"] = json!("restricted");
+    let changed_disclosure =
+        compile(&parse_project_json(&serde_json::to_vec(&changed_disclosure).unwrap()).unwrap())
+            .unwrap();
+    let changed_action = changed_disclosure
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "correct-address")
+        .unwrap();
+    let changed_schema = compile_schema(&changed_disclosure, changed_action)
+        .unwrap()
+        .unwrap();
+    assert_ne!(schema.revision, changed_schema.revision);
+    assert_ne!(schema.digest, changed_schema.digest);
+    assert_eq!(
+        changed_schema.schema["x-registry-review-context"]["classifications"]["currentAddressLine"],
+        "restricted"
+    );
     value["valueTypes"]["city"]["maximumLength"] = json!(121);
     let changed_type =
         compile(&parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap()).unwrap();
@@ -535,12 +615,10 @@ fn immediate_mode_cannot_bypass_target_proposal_policy() {
         }
     }
     let failure = compile(&project).expect_err("immediate policy bypass refuses");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.action.effect-controlled-target")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-controlled-target"));
 }
 #[test]
 fn presentation_and_unrelated_record_changes_preserve_action_revision() {
@@ -751,13 +829,11 @@ fn local_type_resolution_preserves_field_addressed_diagnostics() {
         .iter()
         .find(|diagnostic| diagnostic.path.ends_with("/required"))
         .expect("required field diagnostic");
-    assert!(
-        diagnostic
-            .source
-            .as_ref()
-            .and_then(|source| source.line)
-            .is_some()
-    );
+    assert!(diagnostic
+        .source
+        .as_ref()
+        .and_then(|source| source.line)
+        .is_some());
 }
 
 fn ordered_effect(

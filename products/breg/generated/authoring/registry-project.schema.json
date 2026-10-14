@@ -17,8 +17,8 @@
           "minLength": 1,
           "type": "string"
         },
-        "sourceEntity": {
-          "description": "Entity whose access profile authorizes the read. Omitted for direct reads of the logged entity.",
+        "sourceRecordType": {
+          "description": "Record type whose access profile authorizes the read. Omitted for direct reads of the logged record type.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-z][a-z0-9_-]*$",
@@ -814,10 +814,14 @@
       "properties": {
         "atLeast": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         },
         "atMost": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         },
         "currentDate": {
@@ -1673,7 +1677,7 @@
           "default": {}
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
@@ -2503,8 +2507,28 @@
             "display": {
               "$ref": "#/$defs/DisplaySource"
             },
+            "encrypted": {
+              "default": false,
+              "type": "boolean"
+            },
             "id": {
               "$ref": "#/$defs/LocalId"
+            },
+            "lookup": {
+              "$ref": "#/$defs/FieldLookupSource"
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "relationship": {
+              "additionalProperties": false,
+              "properties": {
+                "inverseName": {
+                  "pattern": "^[a-z][A-Za-z0-9]*$",
+                  "type": "string"
+                }
+              },
+              "type": "object"
             },
             "required": {
               "default": false,
@@ -2512,6 +2536,9 @@
             },
             "typeRef": {
               "$ref": "#/$defs/LocalId"
+            },
+            "validTimeRole": {
+              "$ref": "#/$defs/ValidTimeRole"
             }
           },
           "required": [
@@ -2770,13 +2797,15 @@
         "maximumOperations": {
           "default": 10000,
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 100000,
+          "minimum": 1,
           "type": "integer"
         },
         "maximumOutputBytes": {
           "default": 8192,
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 2097152,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -2801,7 +2830,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "limits": {
           "$ref": "#/$defs/FunctionLimitsSource",
@@ -3706,7 +3735,13 @@
           "$ref": "#/$defs/Digest"
         },
         "id": {
-          "type": "string"
+          "$comment": "The review protocol also bounds UTF-8 bytes, which the reader checks without restricting externally issued identifiers to ASCII.",
+          "allOf": [
+            {
+              "$ref": "#/$defs/ExternalId"
+            }
+          ],
+          "maxLength": 128
         },
         "version": {
           "type": "string"
@@ -3800,9 +3835,9 @@
           "properties": {
             "maximumAttempts": {
               "default": 3,
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
+              "format": "uint32",
+              "maximum": 32,
+              "minimum": 1,
               "type": "integer"
             },
             "mode": {
@@ -3830,6 +3865,43 @@
           "type": "string"
         }
       },
+      "type": "object"
+    },
+    "ProposalEventTransition": {
+      "enum": [
+        "started",
+        "edited",
+        "submitted",
+        "revised",
+        "rebased",
+        "retried",
+        "cancelled",
+        "applied"
+      ],
+      "type": "string"
+    },
+    "ProposalHookSource": {
+      "additionalProperties": false,
+      "properties": {
+        "handler": {
+          "$ref": "#/$defs/HookHandlerSource"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "transitions": {
+          "description": "Omit to observe every committed lifecycle transition.",
+          "items": {
+            "$ref": "#/$defs/ProposalEventTransition"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "handler"
+      ],
       "type": "object"
     },
     "ProposalOperation": {
@@ -3936,6 +4008,13 @@
           },
           "type": "array"
         },
+        "hooks": {
+          "description": "Post-commit observers of the fixed, value-free Proposal lifecycle event.",
+          "items": {
+            "$ref": "#/$defs/ProposalHookSource"
+          },
+          "type": "array"
+        },
         "retention": {
           "$ref": "#/$defs/ProposalRetentionSource"
         },
@@ -3978,10 +4057,29 @@
           "additionalProperties": {
             "$ref": "#/$defs/ProposalContextValueSource"
           },
-          "type": "object"
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 64,
+            "minLength": 1,
+            "not": {
+              "enum": [
+                "id",
+                "recordId",
+                "revision",
+                "createdAt",
+                "updatedAt",
+                "deletedAt"
+              ],
+              "x-registry-member-names": true
+            },
+            "pattern": "^[a-z][A-Za-z0-9]{0,63}$",
+            "type": "string"
+          },
+          "type": "object",
+          "x-registry-member-names": true
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
@@ -4310,7 +4408,7 @@
           "default": {}
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "protocol": {
           "type": "string"
@@ -5086,6 +5184,9 @@
         "$ref": "#/$defs/FieldTypeSource"
       },
       "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
       "type": "object"
     },
     "vocabularies": {

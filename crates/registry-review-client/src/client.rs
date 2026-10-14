@@ -104,7 +104,7 @@ impl ReviewClient {
             .await?;
         check_accepted(
             &complete.value,
-            &request.kind,
+            &request.policy,
             &request.subject,
             expected_submission_digest,
             &complete.trace_id,
@@ -475,7 +475,7 @@ impl ReviewClient {
 
 fn check_accepted(
     value: &ReviewRequestAccepted,
-    expected_kind: &str,
+    expected_policy: &registry_review_protocol::PolicyBinding,
     expected_subject: &registry_review_protocol::SubjectBinding,
     expected_submission_digest: &SubmissionDigest,
     trace_id: &str,
@@ -498,7 +498,7 @@ fn check_accepted(
     // A nil request identifier cannot anchor the later result polls,
     // cancellations, and completion correlations the binding is kept for.
     if value.request_id.is_nil()
-        || value.policy.id != expected_kind
+        || value.policy != *expected_policy
         || value.subject != *expected_subject
         || value.submission_digest != *expected_submission_digest
     {

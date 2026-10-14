@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 use registry_breg::{
-    action_handler::{ActionHandlerError, evaluate_action_with_evidence},
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_yaml},
+    action_handler::{evaluate_action_with_evidence, ActionHandlerError},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_yaml, ModuleAssetSource},
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };

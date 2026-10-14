@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use registry_breg::action_handler::{ActionHandlerError, evaluate_action_detailed};
+use registry_breg::action_handler::{evaluate_action_detailed, ActionHandlerError};
 use registry_breg::model::{CompiledAction, CompiledActionInventory, CompiledPlanFunctionKind};
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::Value;

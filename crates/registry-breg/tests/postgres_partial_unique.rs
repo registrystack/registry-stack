@@ -7,11 +7,11 @@
 mod postgres_harness;
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema, verify_catalog_identity_for_catalog,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
 
 const PACKAGE_ID: &str = "partial-unique-registry";
@@ -118,22 +118,20 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
         )
         .await
         .expect("first active open row inserts");
-    assert!(
-        database
-            .admin
-            .execute(
-                &insert,
-                &[
-                    &"00000000-0000-0000-0000-000000000702",
-                    &"active",
-                    &"A-1",
-                    &"active",
-                    &Option::<&str>::None,
-                ],
-            )
-            .await
-            .is_err()
-    );
+    assert!(database
+        .admin
+        .execute(
+            &insert,
+            &[
+                &"00000000-0000-0000-0000-000000000702",
+                &"active",
+                &"A-1",
+                &"active",
+                &Option::<&str>::None,
+            ],
+        )
+        .await
+        .is_err());
     for (record_id, lifecycle, status_value, ended_value) in [
         (
             "00000000-0000-0000-0000-000000000703",

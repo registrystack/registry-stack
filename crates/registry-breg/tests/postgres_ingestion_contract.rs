@@ -18,23 +18,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
-use registry_breg::compiler::{CompileProfile, IngestionApiOperation, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile, IngestionApiOperation};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema,
+    RegistryStateTestIdentity,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use zeroize::Zeroizing;
@@ -162,8 +162,8 @@ async fn create_run_schema_publishes_the_enforced_count_range() {
     let response = harness.get_json("/openapi.json", &claims).await;
     assert_eq!(response.status(), StatusCode::OK);
     let document = body_json(response).await;
-    let schema = &document["paths"]["/v1/records/widgets/ingestion-runs"]["post"]["requestBody"]["content"]
-        ["application/json"]["schema"];
+    let schema = &document["paths"]["/v1/records/widgets/ingestion-runs"]["post"]["requestBody"]
+        ["content"]["application/json"]["schema"];
     let range = json!({
         "type": "integer",
         "minimum": 1,

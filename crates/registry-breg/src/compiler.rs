@@ -7,32 +7,35 @@ use registry_platform_hooks::HOOK_HANDLER_ABI_V1;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use time::{Date, Month, OffsetDateTime, format_description::well_known::Rfc3339};
+use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::artifacts::{event_data_schema_binding, generate_artifacts};
 use crate::contract::{
-    AccessProfileSource, ActionSource, Classification, ConstraintSource, DerivedExecutionSource,
-    DerivedFieldSource, EntityExtensionSource, EntitySource, EventConditionSource, EventTrigger,
-    FieldSource, FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
-    MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES, MAX_ACCESS_LOG_EXEMPTIONS,
+    parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource, ActionSource,
+    Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource,
+    EntityExtensionSource, EntitySource, EventConditionSource, EventTrigger, FieldSource,
+    FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
+    ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
+    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
+    SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
+    WebhookDeadLetterMode, MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
     MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
     MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
     MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
-    MAX_STRUCTURED_VALUE_BYTES, ManifestProjectionTextSource, ModuleAssetSource, MutationMode,
-    Operation, ReadPathPermissionSource, RegistryModule, RegistryProject,
-    SpatialBboxPermissionSource, SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole,
-    WebhookAuthenticationProfile, WebhookDeadLetterMode, parsed_bbox, valid_decimal_bounds,
-    valid_structured_schema,
+    MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
 use crate::generated_ddl::generate_ddl_with_actions;
 use crate::immediate_actions::{
-    CollectedActionSource, CollectedFunctionSource, compile_immediate_actions, hex_lower,
+    compile_immediate_actions, hex_lower, CollectedActionSource, CollectedFunctionSource,
 };
 use crate::logical_names::{
     canonical_sql_name, default_api_name, reserved_logical_name, valid_api_name,
+};
+use crate::model::{
+    leading_field_indexed, leading_field_indexed_for_list_finding, REFERENCE_INDEX_PREFIX,
 };
 use crate::model::{
     CompiledAccessEntry, CompiledAccessInventory, CompiledBboxQueryCapability, CompiledBlindIndex,
@@ -51,11 +54,8 @@ use crate::model::{
     CompiledStoredField, CompiledTemporal, CompiledWebhookDeliveryMode,
     CompiledWebhookRetryProfile, HttpMethod, MAX_REVISION_HISTORY_RECORDS,
 };
-use crate::model::{
-    REFERENCE_INDEX_PREFIX, leading_field_indexed, leading_field_indexed_for_list_finding,
-};
 use crate::physical_names::{
-    EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory, hex_prefix,
+    hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
 };
 
 pub(crate) mod attachments;
@@ -343,6 +343,8 @@ pub fn compile_project_with_assets(
     .map_err(CompileFailure::from_errors)?;
     crate::action_evidence_contracts::compile_evidence(project, assets, &mut action_inventory)
         .map_err(CompileFailure::from_errors)?;
+    crate::proposal_hooks::compile_hooks(&action_sources, &mut action_inventory, assets)
+        .map_err(CompileFailure::from_errors)?;
     crate::immediate_actions::finalize_action_revisions(&mut action_inventory, &entities);
     findings.extend(crate::access::compiled_access_findings(
         &entities,
@@ -361,9 +363,22 @@ pub fn compile_project_with_assets(
     if profile == CompileProfile::Authoring {
         findings.extend(unindexed_list_findings(&entities));
     }
-    let event_delivery_inventory =
+    let mut event_delivery_inventory =
         compile_event_delivery_inventory(&project.project.id, &entities, &origins.hooks, assets)
             .map_err(CompileFailure::from_one)?;
+    for action in &action_inventory.actions {
+        if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+            event_delivery_inventory.deliveries.extend(
+                proposal
+                    .hooks
+                    .iter()
+                    .map(|hook| crate::proposal_hooks::compile_delivery(action, hook)),
+            );
+        }
+    }
+    event_delivery_inventory
+        .deliveries
+        .sort_by(|left, right| left.id.cmp(&right.id));
     validate_manifest_projection(project, &entities, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Err(CompileFailure::from_errors(diagnostics));
@@ -1435,9 +1450,9 @@ fn insert_entity(
 ) {
     if entities.insert(entity.id.clone(), entity.clone()).is_some() {
         errors.push(Diagnostic::error(
-            "breg.entity.id-duplicate",
+            "breg.record-type.id-duplicate",
             path,
-            "an entity identifier is contributed more than once",
+            "a record type identifier is contributed more than once",
         ));
         return;
     }
@@ -1562,9 +1577,9 @@ fn apply_extensions(
         for extension in &extensions {
             let Some(entity) = entities.get_mut(&extension.entity) else {
                 errors.push(Diagnostic::error(
-                    "breg.extension.entity-unknown",
+                    "breg.extension.record-type-unknown",
                     "modules[].extendRecordTypes[].recordType",
-                    "an extension targets an unknown entity",
+                    "an extension targets an unknown record type",
                 ));
                 continue;
             };
@@ -1586,7 +1601,7 @@ fn merge_extension(
                 errors.push(Diagnostic::error(
                     "breg.extension.geojson-conflict",
                     format!("recordTypes[id={}].geojson.geometryField", entity.id),
-                    "an extension cannot change an entity GeoJSON geometry field",
+                    "an extension cannot change a record type GeoJSON geometry field",
                 ));
             }
         } else {
@@ -1598,7 +1613,7 @@ fn merge_extension(
             errors.push(Diagnostic::error(
                 "breg.extension.access-requirements-replace-forbidden",
                 format!("recordTypes[id={}].accessRequirements", entity.id),
-                "an extension cannot replace existing access requirements; edit and review the owning entity declaration",
+                "an extension cannot replace existing access requirements; edit and review the owning record type declaration",
             ));
         } else {
             entity.access_requirements = Some(requirements.clone());
@@ -1791,9 +1806,9 @@ fn validate_project_entity_access_profiles(
         .any(|entity| !entity.access_profiles.is_empty())
     {
         errors.push(Diagnostic::error(
-            "breg.access-profile.project-entity-local-forbidden",
+            "breg.access-profile.project-record-type-local-forbidden",
             "project.recordTypes[].accessProfiles",
-            "root project entities must declare access through top-level accessProfiles",
+            "root project record types must declare access through top-level accessProfiles",
         ));
     }
 }
@@ -1957,15 +1972,15 @@ pub(crate) fn expand_project_access(
                 errors.push(Diagnostic::error(
                     "breg.access-profile.permission-duplicate",
                     "project.accessProfiles[].permissions.records[].recordType",
-                    "an access profile contains duplicate entity permissions",
+                    "an access profile contains duplicate record type permissions",
                 ));
                 continue;
             }
             let Some(entity) = entities.get_mut(&grant.entity) else {
                 errors.push(Diagnostic::error(
-                    "breg.access-profile.permission-entity-unknown",
+                    "breg.access-profile.permission-record-type-unknown",
                     "project.accessProfiles[].permissions.records[].recordType",
-                    "an access permission refers to an unknown entity",
+                    "an access permission refers to an unknown record type",
                 ));
                 continue;
             };
@@ -1977,7 +1992,7 @@ pub(crate) fn expand_project_access(
                 errors.push(Diagnostic::error(
                     "breg.access-profile.id-duplicate",
                     "project.accessProfiles[].id",
-                    "an access profile identifier is duplicated for an entity",
+                    "an access profile identifier is duplicated for a record type",
                 ));
                 continue;
             }
@@ -2123,9 +2138,9 @@ fn validate_entities(
         validate_id(&entity.id, "recordTypes[].id", errors);
         if !sql_names.insert(canonical_sql_name(&entity.id)) {
             errors.push(Diagnostic::error(
-                "breg.entity.sql-name-duplicate",
+                "breg.record-type.sql-name-duplicate",
                 "recordTypes[].id",
-                "entity SQL names must be unique after PostgreSQL canonicalization",
+                "record type SQL names must be unique after PostgreSQL canonicalization",
             ));
         }
         nonempty(
@@ -2137,16 +2152,16 @@ fn validate_entities(
         validate_id(&entity.route, "recordTypes[].route", errors);
         if !routes.insert(entity.route.as_str()) {
             errors.push(Diagnostic::error(
-                "breg.entity.route-duplicate",
+                "breg.record-type.route-duplicate",
                 "recordTypes[].route",
-                "an entity route is duplicated",
+                "a record type route is duplicated",
             ));
         }
         if entity.mutation_mode == MutationMode::CreateOnly && entity.tombstone {
             errors.push(Diagnostic::error(
-                "breg.entity.tombstone-create-only",
+                "breg.record-type.tombstone-create-only",
                 "recordTypes[].tombstone",
-                "a create-only entity cannot expose tombstone behavior",
+                "a create-only record type cannot expose tombstone behavior",
             ));
         }
         let grants_batch = entity
@@ -2155,9 +2170,9 @@ fn validate_entities(
             .any(|profile| profile.operations.contains(&Operation::Batch));
         match entity.batch.as_ref() {
             None if grants_batch => errors.push(Diagnostic::error(
-                "breg.entity.batch-required",
+                "breg.record-type.batch-required",
                 "recordTypes[].batch",
-                "an entity permissioned batch access must declare bounded batch configuration",
+                "a record type with batch access must declare bounded batch configuration",
             )),
             Some(batch)
                 if batch.maximum_items == 0
@@ -2166,7 +2181,7 @@ fn validate_entities(
                     || batch.maximum_bytes > MAX_BATCH_BYTES =>
             {
                 errors.push(Diagnostic::error(
-                    "breg.entity.batch-bounds-invalid",
+                    "breg.record-type.batch-bounds-invalid",
                     "recordTypes[].batch",
                     "batch maximumItems and maximumBytes must be within the supported bounds",
                 ));
@@ -2257,7 +2272,7 @@ fn validate_access_log(
         if exemption.source_entity.is_some() {
             validate_id(
                 source_entity_id,
-                &format!("{path}.exemptions[{profile_id}].sourceEntity"),
+                &format!("{path}.exemptions[{profile_id}].sourceRecordType"),
                 errors,
             );
         }
@@ -2278,7 +2293,7 @@ fn validate_access_log(
             errors.push(Diagnostic::error(
                 "breg.access-log.exemption-profile-invalid",
                 format!("{path}.exemptions[{profile_id}]"),
-                "an access-log exemption must name a profile on sourceEntity that directly reads the logged entity or has a declared read path to it",
+                "an access-log exemption must name a profile on sourceRecordType that directly reads the logged record type or has a declared read path to it",
             ));
         }
         if exemption.reason.is_empty()
@@ -2361,10 +2376,10 @@ fn validate_entity_fields(
         > crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY
     {
         errors.push(Diagnostic::error(
-            "breg.entity.encrypted-fields-too-many",
+            "breg.record-type.encrypted-fields-too-many",
             format!("recordTypes[{}].fields", entity.id),
             &format!(
-                "an entity may declare at most {} encrypted fields so every valid Phase 1 plaintext snapshot has bounded envelope expansion",
+                "a record type may declare at most {} encrypted fields so every valid Phase 1 plaintext snapshot has bounded envelope expansion",
                 crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY
             ),
         ));
@@ -2718,7 +2733,7 @@ fn validate_logical_names(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             errors.push(Diagnostic::error(
                 "breg.field.api-name-duplicate",
                 "recordTypes[].fields[].apiName",
-                "field API names must be unique within an entity",
+                "field API names must be unique within a record type",
             ));
         }
         let sql_name = canonical_sql_name(field.0);
@@ -2726,7 +2741,7 @@ fn validate_logical_names(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             errors.push(Diagnostic::error(
                 "breg.field.sql-name-duplicate",
                 "recordTypes[].fields[].id",
-                "field SQL names must be non-reserved and unique within an entity",
+                "field SQL names must be non-reserved and unique within a record type",
             ));
         }
     }
@@ -3250,7 +3265,7 @@ fn validate_selector_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic
                 "breg.selector-profile.fields-unknown",
                 "recordTypes[].selectorProfiles[].fields",
                 &format!(
-                    "selector profile `{}` names {}, which entity `{}` does not store; a selector profile may name only stored fields",
+                    "selector profile `{}` names {}, which record type `{}` does not store; a selector profile may name only stored fields",
                     selector.id,
                     quoted_list(&unknown),
                     entity.id
@@ -3349,21 +3364,21 @@ fn validate_read_paths(
             errors.push(Diagnostic::error(
                 "breg.read-path.route-duplicate",
                 "recordTypes[].readPaths[].route",
-                "a read path route is duplicated for an entity",
+                "a read path route is duplicated for a record type",
             ));
         }
         if path.to == entity.id {
             errors.push(Diagnostic::error(
                 "breg.read-path.target-self",
                 "recordTypes[].readPaths[].to",
-                "a read path target must differ from its source entity",
+                "a read path target must differ from its source record type",
             ));
         }
         let Some(through) = entities.get(&path.through) else {
             errors.push(Diagnostic::error(
                 "breg.read-path.through-unknown",
                 "recordTypes[].readPaths[].through",
-                "a read path association entity does not resolve",
+                "a read path association record type does not resolve",
             ));
             continue;
         };
@@ -3371,7 +3386,7 @@ fn validate_read_paths(
             errors.push(Diagnostic::error(
                 "breg.read-path.target-unknown",
                 "recordTypes[].readPaths[].to",
-                "a read path target entity does not resolve",
+                "a read path target record type does not resolve",
             ));
             continue;
         }
@@ -3446,7 +3461,7 @@ fn validate_import_grant(
         errors.push(Diagnostic::error(
             "breg.import.batch-bounds-required",
             path.clone(),
-            "an import grant loads records in chunks, so the entity must declare batch maximumItems and maximumBytes",
+            "an import grant loads records in chunks, so the record type must declare batch maximumItems and maximumBytes",
         ));
     }
     if entity
@@ -3457,7 +3472,7 @@ fn validate_import_grant(
         errors.push(Diagnostic::error(
             "breg.import.batch-redundant",
             path,
-            "a batch grant on the same entity writes records outside any import authority; remove batch and load through import",
+            "a batch grant on the same record type writes records outside any import authority; remove batch and load through import",
         ));
     }
 }
@@ -3515,7 +3530,7 @@ fn validate_profiles(
                 errors.push(Diagnostic::error(
                     "breg.access-profile.operation-unavailable",
                     "recordTypes[].accessProfiles[].operations",
-                    "an access profile grants an operation the entity does not expose",
+                    "an access profile grants an operation the record type does not expose",
                 ));
             }
         }
@@ -3793,7 +3808,7 @@ fn validate_single_default(
                 entity_id
             ),
             &format!(
-                "{route} on entity `{}` accepts one default profile and `{claimed}` already claims it; clear `default: true` on `{duplicate}`",
+                "{route} on record type `{}` accepts one default profile and `{claimed}` already claims it; clear `default: true` on `{duplicate}`",
                 entity_id
             ),
         ));
@@ -3846,7 +3861,7 @@ fn validate_spatial_queries(
         errors.push(Diagnostic::error(
             "breg.access-profile.spatial-queries-bbox-geometry-required",
             "recordTypes[].geojson.geometryField",
-            "bbox spatial queries require an entity GeoJSON geometry field",
+            "bbox spatial queries require a record type GeoJSON geometry field",
         ));
         return;
     };
@@ -4044,7 +4059,7 @@ fn validate_read_path_permission_fields(
         errors.push(Diagnostic::error(
             "breg.access-profile.read-path-self-target",
             "recordTypes[].accessProfiles[].readPaths[].path",
-            "a read-path permission cannot target the source entity",
+            "a read-path permission cannot target the source record type",
         ));
     }
 }
@@ -4267,7 +4282,7 @@ fn validate_hook_assets(
     }
 }
 
-fn validate_hook_module_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
+pub(crate) fn validate_hook_module_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
     if bytes.is_empty() || bytes.len() > crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES {
         errors.push(Diagnostic::error(
             "breg.hook.handler-module-bound",
@@ -4308,7 +4323,7 @@ fn validate_hook_module_structure(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
 #[cfg(not(feature = "wasm"))]
 fn validate_hook_module_structure(_bytes: &[u8], _errors: &mut Vec<Diagnostic>) {}
 
-fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
+pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
     if bytes.is_empty() || bytes.len() > crate::rhai_planner::MAXIMUM_SOURCE_BYTES {
         errors.push(Diagnostic::error(
             "breg.hook.handler-source-bound",
@@ -4499,7 +4514,7 @@ fn quoted_list(values: &[&str]) -> String {
         .join(", ")
 }
 
-fn valid_logical_destination_id(value: &str) -> bool {
+pub(crate) fn valid_logical_destination_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value
@@ -4525,7 +4540,7 @@ fn maximum_event_payload_bytes<'a>(
 ) -> Option<u64> {
     let values = maximum_event_values_bytes(&event.projection, field)?;
     let fixed_keys = [
-        "entity",
+        "recordType",
         "recordId",
         "revision",
         "trigger",
@@ -4780,9 +4795,11 @@ fn compile_event_delivery_inventory(
                 .expect("validated event projection is non-empty");
             Ok(CompiledEventDelivery {
                 id: format!("events.{}.{}.webhook", entity.id, event.id),
-                entity_id: entity.id.clone(),
+                owner: crate::model::CompiledEventOwner::RecordType {
+                    record_type: entity.id.clone(),
+                    trigger: event.trigger,
+                },
                 event_id: event.id.clone(),
-                trigger: event.trigger,
                 destination_id,
                 handler,
                 projection_fields: event.projection.iter().cloned().collect(),
@@ -5004,7 +5021,11 @@ fn valid_relative_asset_path(path: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
-fn webhook_retry_delays(initial_ms: u32, maximum_ms: u32, maximum_attempts: u8) -> Vec<u32> {
+pub(crate) fn webhook_retry_delays(
+    initial_ms: u32,
+    maximum_ms: u32,
+    maximum_attempts: u8,
+) -> Vec<u32> {
     let mut delay = initial_ms;
     (1..maximum_attempts)
         .map(|_| {
@@ -5921,7 +5942,7 @@ fn unindexed_field_findings<'a>(
     for field in filterable_fields {
         if unindexed(field) && !exclusion_leading(field) {
             findings.push(Diagnostic::finding(
-                "breg.entity.list-unindexed-filter",
+                "breg.record-type.list-unindexed-filter",
                 format!("{path}.filterableFields[field={field}]"),
                 "no index leads with this filterable field, so a filtered list scans every row the caller may read. If this Record type will hold more than a few thousand rows, declare an index that leads with the field under recordTypes[].indexes",
             ));
@@ -5930,7 +5951,7 @@ fn unindexed_field_findings<'a>(
     for field in sortable_fields {
         if unindexed(field) {
             findings.push(Diagnostic::finding(
-                "breg.entity.list-unindexed-sort",
+                "breg.record-type.list-unindexed-sort",
                 format!("{path}.sortableFields[field={field}]"),
                 "no index leads with this sortable field, so a sorted list orders every row the caller may read before returning a page. If this Record type will hold more than a few thousand rows, declare an index that leads with the field under recordTypes[].indexes",
             ));

@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime};
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde::Serialize;
-use serde_json::{Map, Value, json};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use serde_json::{json, Map, Value};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio_postgres::types::ToSql;
 use uuid::Uuid;
 
@@ -19,9 +19,8 @@ use crate::api::{
     RevisionReadService, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
 };
 use crate::audit::{
-    PreIoAudit, PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit,
-    TerminalAuditOutcome, begin_pre_io_audit, profile_is_keyed, read_terminal_entry,
-    record_pre_io_audit,
+    begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
+    PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::contract::{FieldTypeSource, Operation, ProvenanceFieldSource};
 use crate::cursor::CursorRepresentation;
@@ -43,8 +42,8 @@ use super::cancellation::QueryCancellationGuard;
 use super::history_read::HISTORY_STATEMENT_TIMEOUT;
 use super::read::{load_retained_plaintext_fields, open_history_row_members};
 use super::{
-    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
-    begin_record_transaction, snapshot_read_error, validate_field_value,
+    begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
+    ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
 };
 
 const MAX_JOURNAL_TEXT_BYTES: usize = 512;
@@ -621,11 +620,9 @@ fn canonical_boundary_value(
     validate_field_value(value, field_type).map_err(|_| ReadServiceError::Unavailable)?;
     let value = match field_type {
         FieldTypeSource::Boolean => Value::Bool(value == "true"),
-        FieldTypeSource::Int64 => json!(
-            value
-                .parse::<i64>()
-                .map_err(|_| ReadServiceError::Unavailable)?
-        ),
+        FieldTypeSource::Int64 => json!(value
+            .parse::<i64>()
+            .map_err(|_| ReadServiceError::Unavailable)?),
         FieldTypeSource::String { .. }
         | FieldTypeSource::Text { .. }
         | FieldTypeSource::Decimal { .. }
@@ -1297,17 +1294,15 @@ fn row_boundary_reference(
     package_revision: &str,
     claims: &ClaimContext,
 ) -> Result<String, crate::audit::RegistryAuditError> {
-    let canonical = canonicalize_json(&json!(
-        claims
-            .row_boundaries()
-            .iter()
-            .map(|boundary| json!({
-                "field": boundary.field(),
-                "operator": boundary.operator().as_str(),
-                "values": boundary.values(),
-            }))
-            .collect::<Vec<_>>()
-    ))
+    let canonical = canonicalize_json(&json!(claims
+        .row_boundaries()
+        .iter()
+        .map(|boundary| json!({
+            "field": boundary.field(),
+            "operator": boundary.operator().as_str(),
+            "values": boundary.values(),
+        }))
+        .collect::<Vec<_>>()))
     .map_err(|_| crate::audit::RegistryAuditError::InvalidContext)?;
     let canonical = std::str::from_utf8(&canonical)
         .map_err(|_| crate::audit::RegistryAuditError::InvalidContext)?;
@@ -1350,10 +1345,10 @@ impl RevisionReadFaultControl {
 
 #[cfg(all(test, feature = "postgres-test"))]
 mod tests {
-    use crate::postgres::stored_bytes_probe::{UNREADABLE, expression_error};
+    use crate::postgres::stored_bytes_probe::{expression_error, UNREADABLE};
 
     use super::{
-        ReadServiceError, snapshot_boundary_expression, snapshot_read_error, stored_bytes,
+        snapshot_boundary_expression, snapshot_read_error, stored_bytes, ReadServiceError,
     };
 
     /// A stored snapshot the JSON reader will not accept must refuse the

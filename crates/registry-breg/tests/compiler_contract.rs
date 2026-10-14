@@ -10,14 +10,14 @@ use std::path::PathBuf;
 
 use registry_breg::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use registry_breg::compiler::{
-    CompileProfile, compile_project, compile_project_with_assets, module_digest,
-    module_digest_with_assets,
+    compile_project, compile_project_with_assets, module_digest, module_digest_with_assets,
+    CompileProfile,
 };
 use registry_breg::contract::{
-    Classification, ComparisonOperator, ConstraintSource, FieldTypeSource, MODULE_API_VERSION,
-    MODULE_KIND, ModuleAssetSource, Operation, PackageIdentitySource, ReferenceDelete,
-    RegistryModule, UniqueWhenPredicate, parse_module_json, parse_module_yaml, parse_project_json,
-    parse_project_yaml,
+    parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, Classification,
+    ComparisonOperator, ConstraintSource, FieldTypeSource, ModuleAssetSource, Operation,
+    PackageIdentitySource, ReferenceDelete, RegistryModule, UniqueWhenPredicate,
+    MODULE_API_VERSION, MODULE_KIND,
 };
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::generated_ddl::DdlStatementKind;
@@ -26,9 +26,9 @@ use registry_breg::model::{
     CompiledQuerySortDirection, CompiledQueryTemporalSemantics, CompiledRevisionKind,
     MAX_REVISION_HISTORY_RECORDS,
 };
-use registry_manifest_core::{AccessRights, FieldType, MetadataManifest, compile_manifest};
+use registry_manifest_core::{compile_manifest, AccessRights, FieldType, MetadataManifest};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 #[path = "support/source_bytes.rs"]
 mod source_bytes;
@@ -223,12 +223,10 @@ fn plural_projection_compiles_resolved_membership_and_manifest_resources() {
         .iter()
         .find(|dataset| dataset.id == "residences")
         .expect("residences remains visible in the portable projection");
-    assert!(
-        residence.entities[0]
-            .relationships
-            .iter()
-            .all(|relationship| relationship.name != "resident")
-    );
+    assert!(residence.entities[0]
+        .relationships
+        .iter()
+        .all(|relationship| relationship.name != "resident"));
 }
 
 #[test]
@@ -377,23 +375,19 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
         .push(repeated);
     let failure = compile_project(&duplicate, &[], CompileProfile::Authoring)
         .expect_err("duplicate dataset fails");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.manifest-projection.dataset-duplicate")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.manifest-projection.dataset-duplicate"));
 
     let mut dangling = multi_dataset_project();
     dangling.entities[0].primary_dataset = "missing".to_owned();
     let failure = compile_project(&dangling, &[], CompileProfile::Authoring)
         .expect_err("dangling entity dataset fails");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.record-type.dataset-unknown")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.record-type.dataset-unknown"));
 
     let mut missing = multi_dataset_project();
     missing.entities[0].primary_dataset.clear();
@@ -722,42 +716,32 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         "all source views must exist before cross-entity derived SQL is installed"
     );
     let derived_view = &compiled.ddl().statements[first_derived_view].sql;
-    assert!(
-        derived_view
-            .contains("count(*) OVER (PARTITION BY canonical_derived.\"__registry$derived$key\")")
-    );
+    assert!(derived_view
+        .contains("count(*) OVER (PARTITION BY canonical_derived.\"__registry$derived$key\")"));
     assert!(derived_view.contains("\"__registry$derived$cardinality\""));
-    assert!(
-        derived_view
-            .contains("CASE WHEN \"registry_derived_key_cardinality\" IS NULL THEN NULL::bigint")
-    );
+    assert!(derived_view
+        .contains("CASE WHEN \"registry_derived_key_cardinality\" IS NULL THEN NULL::bigint"));
     assert!(derived_view.contains(
         "derived field household.registry-derived-key-cardinality violates declared type"
     ));
-    assert!(
-        compiled
-            .routes()
-            .routes
-            .iter()
-            .any(|route| route.id == "records.household.lookup"
-                && route.path == "/v1/records/households:lookup")
-    );
-    assert!(
-        compiled
-            .routes()
-            .routes
-            .iter()
-            .any(|route| route.id == "records.household.path.people"
-                && route.path == "/v1/records/households/{record_id}/people")
-    );
-    assert!(
-        compiled
-            .access()
-            .entries
-            .iter()
-            .any(|entry| entry.route_id == "records.household.path.people"
-                && entry.profile_ids.contains("operator"))
-    );
+    assert!(compiled
+        .routes()
+        .routes
+        .iter()
+        .any(|route| route.id == "records.household.lookup"
+            && route.path == "/v1/records/households:lookup"));
+    assert!(compiled
+        .routes()
+        .routes
+        .iter()
+        .any(|route| route.id == "records.household.path.people"
+            && route.path == "/v1/records/households/{record_id}/people"));
+    assert!(compiled
+        .access()
+        .entries
+        .iter()
+        .any(|entry| entry.route_id == "records.household.path.people"
+            && entry.profile_ids.contains("operator")));
     let lookup = compiled
         .queries()
         .operations
@@ -845,15 +829,13 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
 
     let missing = compile_json_with_assets(project, vec![])
         .expect_err("derived SQL must be supplied as an explicit asset");
-    assert!(
-        missing
-            .diagnostics()
-            .iter()
-            .any(
-                |diagnostic| diagnostic.code == "breg.derived.sql-asset-missing"
-                    && !diagnostic.message.contains("SELECT")
-            )
-    );
+    assert!(missing
+        .diagnostics()
+        .iter()
+        .any(
+            |diagnostic| diagnostic.code == "breg.derived.sql-asset-missing"
+                && !diagnostic.message.contains("SELECT")
+        ));
 
     let wrong_alias = compile_json_with_assets(
         project,
@@ -863,14 +845,12 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
         )],
     )
     .expect_err("SQL output aliases must use stable SQL field names");
-    assert!(
-        wrong_alias
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.derived.sql-invalid"
-                && diagnostic.path == "recordTypes[household].derived[demographics].sql"
-                && !diagnostic.message.contains("childCount"))
-    );
+    assert!(wrong_alias
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.derived.sql-invalid"
+            && diagnostic.path == "recordTypes[household].derived[demographics].sql"
+            && !diagnostic.message.contains("childCount")));
 
     let wildcard = compile_json_with_assets(
         project,
@@ -880,12 +860,10 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
         )],
     )
     .expect_err("derived SQL cannot use wildcard projection");
-    assert!(
-        wildcard
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.derived.sql-invalid")
-    );
+    assert!(wildcard
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.derived.sql-invalid"));
 
     compile_json_with_assets(
         project,
@@ -952,12 +930,10 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
 
     let missing = compile_json(source("", r#"["create","batch"]"#).as_bytes())
         .expect_err("Batch grants require explicit entity-local bounds");
-    assert!(
-        missing
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.entity.batch-required")
-    );
+    assert!(missing
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.record-type.batch-required"));
 
     for batch in [
         r#", "batch":{"maximumItems":0,"maximumBytes":1}"#,
@@ -967,12 +943,10 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     ] {
         let failure = parse_project_yaml(source(batch, r#"["create","batch"]"#).as_bytes())
             .expect_err("out-of-range Batch bounds are refused when the project is read");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == "config.out-of-range")
-        );
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "config.out-of-range"));
     }
 
     let configured = compile_json(
@@ -1037,22 +1011,18 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
         .as_array()
         .expect("batch request item alternatives are rendered")
     {
-        assert!(
-            item_schema["properties"]
-                .as_object()
-                .expect("batch item properties render")
-                .get("changeContext")
-                .is_none()
-        );
+        assert!(item_schema["properties"]
+            .as_object()
+            .expect("batch item properties render")
+            .get("changeContext")
+            .is_none());
     }
     let batch_response_schema =
         &batch_operation["responses"]["200"]["content"]["application/json"]["schema"];
-    assert!(
-        batch_response_schema["required"]
-            .as_array()
-            .expect("batch response required properties render")
-            .contains(&json!("snapshot"))
-    );
+    assert!(batch_response_schema["required"]
+        .as_array()
+        .expect("batch response required properties render")
+        .contains(&json!("snapshot")));
     assert_eq!(
         batch_response_schema["properties"]["results"]["maxItems"],
         37
@@ -1065,12 +1035,12 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
             .is_none()
     );
 
-    let create_response_schema = &openapi["paths"]["/v1/records/records"]["post"]["responses"]["201"]
-        ["content"]["application/json"]["schema"];
-    let get_response_schema = &openapi["paths"]["/v1/records/records/{record_id}"]["get"]["responses"]
-        ["200"]["content"]["application/json"]["schema"];
-    let patch_response_schema = &openapi["paths"]["/v1/records/records/{record_id}"]["patch"]["responses"]
-        ["200"]["content"]["application/json"]["schema"];
+    let create_response_schema = &openapi["paths"]["/v1/records/records"]["post"]["responses"]
+        ["201"]["content"]["application/json"]["schema"];
+    let get_response_schema = &openapi["paths"]["/v1/records/records/{record_id}"]["get"]
+        ["responses"]["200"]["content"]["application/json"]["schema"];
+    let patch_response_schema = &openapi["paths"]["/v1/records/records/{record_id}"]["patch"]
+        ["responses"]["200"]["content"]["application/json"]["schema"];
     let tombstone_response_schema = &openapi["paths"]["/v1/records/records/{record_id}"]["delete"]
         ["responses"]["200"]["content"]["application/json"]["schema"];
     for schema in [
@@ -1079,22 +1049,18 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
         tombstone_response_schema,
     ] {
         let record = &schema["properties"]["data"];
-        assert!(
-            record["required"]
-                .as_array()
-                .expect("mutation response record properties render")
-                .contains(&json!("snapshot"))
-        );
+        assert!(record["required"]
+            .as_array()
+            .expect("mutation response record properties render")
+            .contains(&json!("snapshot")));
         assert!(record["properties"].get("snapshot").is_some());
     }
     let get_record = &get_response_schema["properties"]["data"];
-    assert!(
-        get_record["required"]
-            .as_array()
-            .expect("read response record properties render")
-            .iter()
-            .all(|property| property.as_str() != Some("snapshot"))
-    );
+    assert!(get_record["required"]
+        .as_array()
+        .expect("read response record properties render")
+        .iter()
+        .all(|property| property.as_str() != Some("snapshot")));
     assert!(get_record["properties"].get("snapshot").is_none());
 
     let configured_but_ungranted = compile_json(
@@ -1105,13 +1071,11 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
         .as_bytes(),
     )
     .expect("unused valid bounds do not create authority");
-    assert!(
-        configured_but_ungranted
-            .routes()
-            .routes
-            .iter()
-            .all(|route| route.operation != Operation::Batch)
-    );
+    assert!(configured_but_ungranted
+        .routes()
+        .routes
+        .iter()
+        .all(|route| route.operation != Operation::Batch));
 
     let create_only = source(
         r#", "batch":{"maximumItems":10,"maximumBytes":4096}"#,
@@ -1123,13 +1087,11 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     );
     let create_only = compile_json(create_only.as_bytes())
         .expect("create-only entities may expose bounded batch create");
-    assert!(
-        create_only
-            .routes()
-            .routes
-            .iter()
-            .any(|route| route.operation == Operation::Batch)
-    );
+    assert!(create_only
+        .routes()
+        .routes
+        .iter()
+        .any(|route| route.operation == Operation::Batch));
 
     let create_only_patch = source(
         r#", "batch":{"maximumItems":10,"maximumBytes":4096}"#,
@@ -1141,12 +1103,10 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     );
     let unavailable = compile_json(create_only_patch.as_bytes())
         .expect_err("create-only Batch profiles can never grant patch");
-    assert!(
-        unavailable
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.access-profile.operation-unavailable")
-    );
+    assert!(unavailable
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.operation-unavailable"));
 }
 
 #[test]
@@ -1163,18 +1123,14 @@ fn public_asset_fixture_compiles_to_coherent_deterministic_inventories() {
     assert!(first.ddl().requires_btree_gist);
     assert!(first.ddl().script().contains("EXCLUDE USING gist"));
     assert!(first.artifacts().get("generated/openapi.json").is_some());
-    assert!(
-        first
-            .artifacts()
-            .get("generated/manifest/registry-manifest.json")
-            .is_some()
-    );
-    assert!(
-        first
-            .artifacts()
-            .get("generated/schemas/asset-placement.schema.json")
-            .is_some()
-    );
+    assert!(first
+        .artifacts()
+        .get("generated/manifest/registry-manifest.json")
+        .is_some());
+    assert!(first
+        .artifacts()
+        .get("generated/schemas/asset-placement.schema.json")
+        .is_some());
 
     let inspection_routes: Vec<_> = first
         .routes()
@@ -1182,17 +1138,13 @@ fn public_asset_fixture_compiles_to_coherent_deterministic_inventories() {
         .iter()
         .filter(|route| route.entity_id == "inspection-event")
         .collect();
-    assert!(
-        inspection_routes
-            .iter()
-            .all(|route| !matches!(route.operation, Operation::Patch | Operation::Tombstone))
-    );
-    assert!(
-        first
-            .findings()
-            .iter()
-            .all(|d| d.code == "breg.access.profile-unrestricted-collection")
-    );
+    assert!(inspection_routes
+        .iter()
+        .all(|route| !matches!(route.operation, Operation::Patch | Operation::Tombstone)));
+    assert!(first
+        .findings()
+        .iter()
+        .all(|d| d.code == "breg.access.profile-unrestricted-collection"));
 }
 
 #[test]
@@ -1424,13 +1376,11 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
     .expect("production compilation does not require a manifest projection");
 
     assert!(compiled.manifest_projection().is_none());
-    assert!(
-        compiled
-            .artifacts()
-            .entries()
-            .keys()
-            .all(|path| !path.starts_with("generated/manifest/"))
-    );
+    assert!(compiled
+        .artifacts()
+        .entries()
+        .keys()
+        .all(|path| !path.starts_with("generated/manifest/")));
     assert_eq!(
         compiled
             .findings()
@@ -1532,7 +1482,9 @@ fn root_project_entity_access_profiles_are_compile_time_errors() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "breg.access-profile.project-entity-local-forbidden")
+        .find(|diagnostic| {
+            diagnostic.code == "breg.access-profile.project-record-type-local-forbidden"
+        })
         .expect("root entity-local profile refusal is reported");
     assert_eq!(diagnostic.path, "project.recordTypes[].accessProfiles");
 }
@@ -1584,16 +1536,12 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
 
     let compiled = compile_project(&project, &[module], CompileProfile::Authoring)
         .expect("module-local access profiles remain module composition input");
-    assert!(
-        compiled.entities()["module-record"]
-            .access_profiles
-            .contains_key("module-reader")
-    );
-    assert!(
-        compiled.entities()["case-file"]
-            .access_profiles
-            .contains_key("extension-reader")
-    );
+    assert!(compiled.entities()["module-record"]
+        .access_profiles
+        .contains_key("module-reader"));
+    assert!(compiled.entities()["case-file"]
+        .access_profiles
+        .contains_key("extension-reader"));
 }
 
 #[test]
@@ -1749,11 +1697,9 @@ fn manifest_projection_unknown_nested_keys_are_rejected_without_values() {
         failure.diagnostics()[0].path,
         "project.manifestProjection.catalog.publisher.privateKey"
     );
-    assert!(
-        !serde_json::to_string(&failure)
-            .expect("diagnostic serializes")
-            .contains("do-not-echo")
-    );
+    assert!(!serde_json::to_string(&failure)
+        .expect("diagnostic serializes")
+        .contains("do-not-echo"));
 }
 
 #[test]
@@ -1945,20 +1891,16 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
                 dataset.entities["establishment"].concept_uri.as_deref(),
                 Some("https://business-establishments.example.gov/model/establishment")
             );
-            assert!(
-                dataset.entities["operator-assignment"]
-                    .relationships
-                    .iter()
-                    .all(|relationship| relationship.name != "business")
-            );
+            assert!(dataset.entities["operator-assignment"]
+                .relationships
+                .iter()
+                .all(|relationship| relationship.name != "business"));
             assert!(manifest.dataset("registered-businesses").is_some());
             assert_eq!(manifest.data_services().count(), 1);
             assert_eq!(manifest.distributions().count(), 1);
-            assert!(
-                manifest
-                    .codelists()
-                    .any(|codelist| codelist.id == "establishment-role")
-            );
+            assert!(manifest
+                .codelists()
+                .any(|codelist| codelist.id == "establishment-role"));
             assert_eq!(
                 dcat["dcat:service"][0]["dcat:endpointURL"],
                 "https://business-establishments.example.gov/v1"
@@ -2028,18 +1970,15 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
     assert!(link.fields.contains_key("name"));
     assert_eq!(link.fields["name"].field_type, FieldType::String);
     assert!(!link.fields.contains_key("operator-note"));
-    assert!(
-        link.relationships
-            .iter()
-            .any(|relationship| relationship.name == "visible-ref"
-                && relationship.target == "visible-target")
-    );
-    assert!(
-        !link
-            .relationships
-            .iter()
-            .any(|relationship| relationship.name == "hidden-ref")
-    );
+    assert!(link
+        .relationships
+        .iter()
+        .any(|relationship| relationship.name == "visible-ref"
+            && relationship.target == "visible-target"));
+    assert!(!link
+        .relationships
+        .iter()
+        .any(|relationship| relationship.name == "hidden-ref"));
 }
 
 #[test]
@@ -3072,7 +3011,7 @@ fn an_entity_two_files_contribute_is_refused_by_the_compiler() {
         failure
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code == "breg.entity.id-duplicate"),
+            .any(|diagnostic| diagnostic.code == "breg.record-type.id-duplicate"),
         "{:?}",
         failure.diagnostics()
     );
@@ -3096,11 +3035,9 @@ project:
     let diagnostic = &unknown_yaml_member.diagnostics()[0];
     assert_eq!(diagnostic.code, "config.unknown-key");
     assert_eq!(diagnostic.path, "project.project.secretField");
-    assert!(
-        diagnostic
-            .message
-            .contains("`secretField` is not a member of this mapping")
-    );
+    assert!(diagnostic
+        .message
+        .contains("`secretField` is not a member of this mapping"));
     assert!(diagnostic.message.contains("the accepted keys are"));
     assert!(diagnostic.message.contains("canonicalBaseIri"));
     assert!(diagnostic.message.contains("line 9"));
@@ -3121,11 +3058,9 @@ project:
         missing_yaml_member.diagnostics()[0].code,
         "config.missing-key"
     );
-    assert!(
-        missing_yaml_member.diagnostics()[0]
-            .message
-            .contains("`version`")
-    );
+    assert!(missing_yaml_member.diagnostics()[0]
+        .message
+        .contains("`version`"));
 
     let wrong_yaml_type = parse_project_yaml(
         br#"
@@ -3590,22 +3525,18 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
     .expect("ordinary project compiles");
     let ordinary_json =
         serde_json::to_value(&ordinary).expect("compiled ordinary project serializes");
-    assert!(
-        !ordinary_json["entities"]["entry"]
+    assert!(!ordinary_json["entities"]["entry"]
+        .as_object()
+        .expect("compiled entity is an object")
+        .contains_key("geojson"));
+    assert!(ordinary_json["queryInventory"]["operations"]
+        .as_array()
+        .expect("operations are serialized")
+        .iter()
+        .all(|operation| !operation
             .as_object()
-            .expect("compiled entity is an object")
-            .contains_key("geojson")
-    );
-    assert!(
-        ordinary_json["queryInventory"]["operations"]
-            .as_array()
-            .expect("operations are serialized")
-            .iter()
-            .all(|operation| !operation
-                .as_object()
-                .expect("operation is an object")
-                .contains_key("spatial"))
-    );
+            .expect("operation is an object")
+            .contains_key("spatial")));
 }
 
 #[test]
@@ -3974,16 +3905,12 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
         .find(|statement| statement.id == "entity.record.table")
         .expect("record table DDL exists");
     let optional_reference = &record.fields["alternate-parent"].physical_name;
-    assert!(
-        table
-            .sql
-            .contains(&format!("\"{optional_reference}\" uuid"))
-    );
-    assert!(
-        !table
-            .sql
-            .contains(&format!("\"{optional_reference}\" uuid NOT NULL"))
-    );
+    assert!(table
+        .sql
+        .contains(&format!("\"{optional_reference}\" uuid")));
+    assert!(!table
+        .sql
+        .contains(&format!("\"{optional_reference}\" uuid NOT NULL")));
     let amount = &record.fields["amount"].physical_name;
     assert!(table.sql.contains(&format!(
         "\"{amount}\" numeric(8,2) CHECK (\"{amount}\" >= -100.00 AND \"{amount}\" <= 100.00)"
@@ -3998,11 +3925,9 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
             .unwrap_or_else(|| panic!("constraint DDL exists for {id}"))
     };
     assert!(statement("composite-key").sql.contains(" UNIQUE ("));
-    assert!(
-        statement("active-code")
-            .sql
-            .starts_with("CREATE UNIQUE INDEX ")
-    );
+    assert!(statement("active-code")
+        .sql
+        .starts_with("CREATE UNIQUE INDEX "));
     for id in [
         "int-less",
         "date-less-or-equal",
@@ -4015,11 +3940,9 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
     }
     assert!(statement("quantity-range").sql.contains(" >= 0 AND "));
     assert!(statement("quantity-range").sql.contains(" <= 100"));
-    assert!(
-        statement("status-membership")
-            .sql
-            .contains(" IN ('active', 'paused')")
-    );
+    assert!(statement("status-membership")
+        .sql
+        .contains(" IN ('active', 'paused')"));
     assert!(statement("scope-time").sql.contains("EXCLUDE USING gist"));
     assert!(statement("scope-time").sql.contains("tstzrange"));
     assert!(compiled.ddl().statements.iter().any(|statement| {
@@ -4117,11 +4040,9 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
     )
     .expect_err("predicate members are closed");
     assert_eq!(unknown_member.diagnostics()[0].code, "config.unknown-key");
-    assert!(
-        !serde_json::to_string(&unknown_member)
-            .expect("diagnostic serializes")
-            .contains("record_lifecycle")
-    );
+    assert!(!serde_json::to_string(&unknown_member)
+        .expect("diagnostic serializes")
+        .contains("record_lifecycle"));
 
     let arbitrary_lifecycle = parse_project_json(
         br#"{"datasets":[{"id": "test-dataset"}],
@@ -4235,12 +4156,10 @@ fn partial_unique_rejects_invalid_literals_and_json_predicate_fields() {
             }}"#
         );
         let failure = compile_json(source.as_bytes()).expect_err("invalid partial predicate fails");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == code)
-        );
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == code));
     }
 }
 
@@ -4288,12 +4207,10 @@ fn partial_unique_rejects_empty_unknown_duplicate_and_contradictory_when_predica
             }}"#
         );
         let failure = compile_json(source.as_bytes()).expect_err("invalid when fails");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == code)
-        );
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == code));
     }
 }
 
@@ -4368,11 +4285,9 @@ fn partial_unique_ddl_is_quoted_and_deterministic_across_predicate_order() {
         .expect("partial unique renders as an index");
     assert!(statement.sql.starts_with("CREATE UNIQUE INDEX "));
     assert!(statement.sql.contains(" WHERE "));
-    assert!(
-        statement
-            .sql
-            .contains("'O''Hare''); DROP TABLE registry_data.x; --'")
-    );
+    assert!(statement
+        .sql
+        .contains("'O''Hare''); DROP TABLE registry_data.x; --'"));
     assert!(statement.sql.contains(" IS NULL"));
     assert!(statement.sql.ends_with("record_lifecycle = 'active'"));
 }
@@ -4407,12 +4322,10 @@ fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
     for modules in [vec![a.clone(), b.clone()], vec![b, a]] {
         let failure = compile_project(&project, &modules, CompileProfile::Authoring)
             .expect_err("equivalent partial unique extensions are duplicates");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == "breg.extension.constraint-duplicate")
-        );
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.extension.constraint-duplicate"));
     }
 }
 
@@ -4547,12 +4460,10 @@ fn create_only_operation_conflict_fails_before_artifact_generation() {
 
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
         .expect_err("create-only patch is refused");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.access-profile.operation-unavailable")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.operation-unavailable"));
 }
 
 #[test]
@@ -4573,7 +4484,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
         .expect("paths is an object")
         .values()
         .flat_map(|entry| entry.as_object().expect("path item is an object").values())
-        .filter(|operation| operation.get("x-registry-entity").is_some())
+        .filter(|operation| operation.get("x-registry-recordType").is_some())
         .map(|operation| {
             operation["operationId"]
                 .as_str()
@@ -4589,7 +4500,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
     assert_eq!(generated_compiled_operation_ids, compiled_operation_ids);
     let review_completion = &value["paths"]["/v1/review-completions"]["post"];
     assert_eq!(review_completion["operationId"], "receiveReviewCompletion");
-    assert!(review_completion.get("x-registry-entity").is_none());
+    assert!(review_completion.get("x-registry-recordType").is_none());
     assert_eq!(
         value["components"]["securitySchemes"]["bearerAuth"],
         json!({"type": "http", "scheme": "bearer", "bearerFormat": "JWT"})
@@ -4615,7 +4526,6 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "query.cursor_invalid",
             "query.invalid",
             "request.invalid",
-            "request.plan_refused",
             "request.timeout",
             "resource.not_found",
             "runtime.field_encryption.unavailable",
@@ -4639,11 +4549,9 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
 
     let list = &value["paths"]["/v1/records/assets"]["get"];
     assert_eq!(list["security"], json!([{"bearerAuth": []}]));
-    assert!(
-        list["responses"]["200"]["headers"]
-            .get("traceparent")
-            .is_some()
-    );
+    assert!(list["responses"]["200"]["headers"]
+        .get("traceparent")
+        .is_some());
     assert!(
         list["responses"]["200"]["content"]["application/json"]["schema"]["required"]
             .as_array()
@@ -4682,19 +4590,15 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
         ]
     );
     assert!(detail["responses"]["200"]["headers"].get("ETag").is_some());
-    assert!(
-        detail["responses"]["200"]["headers"]
-            .get("traceparent")
-            .is_some()
-    );
-    assert!(
-        detail["responses"]["504"]["headers"]
-            .get("traceparent")
-            .is_some()
-    );
+    assert!(detail["responses"]["200"]["headers"]
+        .get("traceparent")
+        .is_some());
+    assert!(detail["responses"]["504"]["headers"]
+        .get("traceparent")
+        .is_some());
     assert_eq!(
-        detail["responses"]["504"]["content"]["application/problem+json"]["examples"]["request.timeout"]
-            ["value"]["traceId"],
+        detail["responses"]["504"]["content"]["application/problem+json"]["examples"]
+            ["request.timeout"]["value"]["traceId"],
         "11111111111111111111111111111111"
     );
     assert_eq!(
@@ -4717,16 +4621,12 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
         ["Accept", "Idempotency-Key", "accessProfile", "traceparent"]
     );
     assert!(create["responses"]["201"]["headers"].get("ETag").is_some());
-    assert!(
-        create["responses"]["201"]["headers"]
-            .get("Location")
-            .is_some()
-    );
-    assert!(
-        create["responses"]["201"]["headers"]
-            .get("traceparent")
-            .is_some()
-    );
+    assert!(create["responses"]["201"]["headers"]
+        .get("Location")
+        .is_some());
+    assert!(create["responses"]["201"]["headers"]
+        .get("traceparent")
+        .is_some());
     assert_eq!(
         create["requestBody"]["content"]["application/json"]["schema"]["properties"]["data"],
         json!({"$ref": "#/components/schemas/asset-item-create-input"})
@@ -4744,16 +4644,12 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "traceparent"
         ]
     );
-    assert!(
-        patch["requestBody"]["content"]
-            .get("application/json-patch+json")
-            .is_some()
-    );
-    assert!(
-        patch["responses"]["428"]["headers"]
-            .get("traceparent")
-            .is_some()
-    );
+    assert!(patch["requestBody"]["content"]
+        .get("application/json-patch+json")
+        .is_some());
+    assert!(patch["responses"]["428"]["headers"]
+        .get("traceparent")
+        .is_some());
     assert!(
         patch["responses"]["428"]["content"]["application/problem+json"]["schema"]
             .get("$ref")
@@ -4768,10 +4664,9 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             .chain(names.policies.values());
         for name in all {
             assert!(name.len() <= 63);
-            assert!(
-                name.bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-            );
+            assert!(name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'));
         }
     }
 }
@@ -4833,13 +4728,13 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
         json!([{"bearerAuth": []}])
     );
     assert_eq!(
-        openapi["paths"]["/v1/records/business-records"]["post"]["requestBody"]["content"]["application/json"]
-            ["schema"]["properties"]["data"],
+        openapi["paths"]["/v1/records/business-records"]["post"]["requestBody"]["content"]
+            ["application/json"]["schema"]["properties"]["data"],
         json!({"$ref": "#/components/schemas/business-record-create-input"})
     );
     assert_eq!(
-        openapi["paths"]["/v1/records/business-records"]["post"]["responses"]["201"]["content"]["application/json"]
-            ["schema"]["properties"]["data"],
+        openapi["paths"]["/v1/records/business-records"]["post"]["responses"]["201"]["content"]
+            ["application/json"]["schema"]["properties"]["data"],
         json!({
             "type": "object",
             "additionalProperties": false,
@@ -4965,15 +4860,13 @@ fn compiled_metadata_inventory_is_bijective_canonical_schema_bound_and_determini
             metadata_entity.schema_path,
             format!("/v1/schemas/{}", metadata_entity.id)
         );
-        assert!(
-            first
-                .artifacts()
-                .get(&format!(
-                    "generated/schemas/{}.schema.json",
-                    metadata_entity.id
-                ))
-                .is_some()
-        );
+        assert!(first
+            .artifacts()
+            .get(&format!(
+                "generated/schemas/{}.schema.json",
+                metadata_entity.id
+            ))
+            .is_some());
         for entry in &metadata_entity.entries {
             let route = first
                 .routes()
@@ -5072,7 +4965,8 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
         "records.entry.revisions.list"
     );
     assert_eq!(
-        openapi["paths"]["/v1/records/entries/{record_id}/revisions/{revision}"]["get"]["operationId"],
+        openapi["paths"]["/v1/records/entries/{record_id}/revisions/{revision}"]["get"]
+            ["operationId"],
         "records.entry.revisions.detail"
     );
     assert_eq!(
@@ -5081,32 +4975,30 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
         ),
         ["Accept", "accessProfile", "record_id", "traceparent"]
     );
-    let revision_list_schema = &openapi["paths"]["/v1/records/entries/{record_id}/revisions"]["get"]
-        ["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["items"]["items"];
+    let revision_list_schema = &openapi["paths"]["/v1/records/entries/{record_id}/revisions"]
+        ["get"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["items"]
+        ["items"];
     assert_eq!(
         revision_list_schema["properties"]["mutationKind"]["enum"],
         json!(["create", "patch", "tombstone", "migration"])
     );
-    assert!(
-        revision_list_schema["properties"]
-            .as_object()
-            .expect("revision item properties render")
-            .get("changeContext")
-            .is_none()
-    );
-    let revision_detail_schema = &openapi["paths"]["/v1/records/entries/{record_id}/revisions/{revision}"]
-        ["get"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["data"];
+    assert!(revision_list_schema["properties"]
+        .as_object()
+        .expect("revision item properties render")
+        .get("changeContext")
+        .is_none());
+    let revision_detail_schema = &openapi["paths"]
+        ["/v1/records/entries/{record_id}/revisions/{revision}"]["get"]["responses"]["200"]
+        ["content"]["application/json"]["schema"]["properties"]["data"];
     assert_eq!(
         revision_detail_schema["properties"]["mutationKind"]["enum"],
         json!(["create", "patch", "tombstone", "migration"])
     );
-    assert!(
-        revision_detail_schema["properties"]
-            .as_object()
-            .expect("revision detail properties render")
-            .get("changeContext")
-            .is_none()
-    );
+    assert!(revision_detail_schema["properties"]
+        .as_object()
+        .expect("revision detail properties render")
+        .get("changeContext")
+        .is_none());
 }
 
 #[test]
@@ -5129,25 +5021,21 @@ fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_fals
             }}"#
         );
         let compiled = compile_json(source.as_bytes()).expect("fixture compiles");
-        assert!(
-            compiled
-                .routes()
-                .routes
-                .iter()
-                .all(|route| route.operation != Operation::Revisions)
-        );
+        assert!(compiled
+            .routes()
+            .routes
+            .iter()
+            .all(|route| route.operation != Operation::Revisions));
         let openapi = compiled
             .artifacts()
             .get("generated/openapi.json")
             .expect("OpenAPI is generated");
         let openapi = parse_json_strict(&openapi.bytes).expect("OpenAPI is strict JSON");
-        assert!(
-            openapi["paths"]
-                .as_object()
-                .expect("paths object")
-                .keys()
-                .all(|path| !path.contains("revisions"))
-        );
+        assert!(openapi["paths"]
+            .as_object()
+            .expect("paths object")
+            .keys()
+            .all(|path| !path.contains("revisions")));
     }
 }
 
@@ -5169,17 +5057,13 @@ fn unresolved_reference_is_value_free_and_fails_before_ddl() {
     }
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
         .expect_err("unresolved reference fails compilation");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.field.reference-target-unknown")
-    );
-    assert!(
-        !serde_json::to_string(&failure)
-            .expect("diagnostics serialize")
-            .contains("classified-target-name")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.field.reference-target-unknown"));
+    assert!(!serde_json::to_string(&failure)
+        .expect("diagnostics serialize")
+        .contains("classified-target-name"));
 }
 
 #[test]
@@ -5207,12 +5091,10 @@ fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
     for modules in [vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]] {
         let failure = compile_project(&project, &modules, CompileProfile::Authoring)
             .expect_err("conflicting additive extensions fail");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == "breg.extension.field-duplicate")
-        );
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.extension.field-duplicate"));
     }
 }
 
@@ -5280,15 +5162,13 @@ fn entity_ids_that_share_one_sql_name_are_refused() {
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
         .expect_err("a hyphen and an underscore yield one SQL name");
 
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(
-                |diagnostic| diagnostic.code == "breg.entity.sql-name-duplicate"
-                    && diagnostic.path == "recordTypes[].id"
-            )
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(
+            |diagnostic| diagnostic.code == "breg.record-type.sql-name-duplicate"
+                && diagnostic.path == "recordTypes[].id"
+        ));
 }
 
 #[test]
@@ -5310,11 +5190,9 @@ fn temporal_non_overlap_refuses_a_nullable_scope_field() {
         .find(|diagnostic| diagnostic.code == "breg.constraint.temporal-scope-nullable")
         .expect("nullable temporal scope has a stable diagnostic");
     assert_eq!(diagnostic.path, "recordTypes[].constraints[].scopeFields");
-    assert!(
-        !serde_json::to_string(diagnostic)
-            .expect("diagnostic serializes")
-            .contains("asset-placement")
-    );
+    assert!(!serde_json::to_string(diagnostic)
+        .expect("diagnostic serializes")
+        .contains("asset-placement"));
 }
 
 #[test]
@@ -5501,26 +5379,20 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
         .iter()
         .find(|field| field.field == "valid-from")
         .expect("configured date filter is present");
-    assert!(
-        valid_from_filter
-            .operators
-            .contains(&CompiledQueryFilterOperator::Range)
-    );
+    assert!(valid_from_filter
+        .operators
+        .contains(&CompiledQueryFilterOperator::Range));
     let asset_filter = base
         .filter_fields
         .iter()
         .find(|field| field.field == "asset")
         .expect("configured reference filter is present");
-    assert!(
-        asset_filter
-            .operators
-            .contains(&CompiledQueryFilterOperator::Equals)
-    );
-    assert!(
-        !asset_filter
-            .operators
-            .contains(&CompiledQueryFilterOperator::Prefix)
-    );
+    assert!(asset_filter
+        .operators
+        .contains(&CompiledQueryFilterOperator::Equals));
+    assert!(!asset_filter
+        .operators
+        .contains(&CompiledQueryFilterOperator::Prefix));
 
     let current = operations
         .iter()
@@ -5547,12 +5419,10 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
         );
     }
 
-    assert!(
-        compiled
-            .artifacts()
-            .get("compiled/query-inventory.json")
-            .is_some()
-    );
+    assert!(compiled
+        .artifacts()
+        .get("compiled/query-inventory.json")
+        .is_some());
     let effective = compiled
         .artifacts()
         .get("compiled/effective-model.json")
@@ -5659,8 +5529,8 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
             registry_breg::query::MAX_CURSOR_TOKEN_BYTES
         );
         for media in ["application/json", "application/ld+json"] {
-            let response_cursor = &operation["responses"]["200"]["content"][media]["schema"]["properties"]
-                ["pageInfo"]["properties"]["nextCursor"];
+            let response_cursor = &operation["responses"]["200"]["content"][media]["schema"]
+                ["properties"]["pageInfo"]["properties"]["nextCursor"];
             assert_eq!(
                 response_cursor["maxLength"],
                 registry_breg::query::MAX_CURSOR_TOKEN_BYTES
@@ -5931,36 +5801,29 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
         json!({"type": "string", "format": "date"})
     );
     let response_schema = &operation["responses"]["200"]["content"]["application/json"]["schema"];
-    assert!(
-        response_schema["required"]
-            .as_array()
-            .expect("required properties render")
-            .contains(&json!("snapshot"))
-    );
+    assert!(response_schema["required"]
+        .as_array()
+        .expect("required properties render")
+        .contains(&json!("snapshot")));
     assert_eq!(
         response_schema["properties"]["validAt"],
         json!({"type": "string", "format": "date"})
     );
-    assert!(
-        response_schema["properties"]["items"]["items"]["required"]
-            .as_array()
-            .expect("snapshot record required properties render")
-            .contains(&json!("revisionIdentifier"))
-    );
-    assert!(
-        !serde_json::to_string(response_schema)
-            .expect("schema serializes")
-            .contains("reasonCode")
-    );
+    assert!(response_schema["properties"]["items"]["items"]["required"]
+        .as_array()
+        .expect("snapshot record required properties render")
+        .contains(&json!("revisionIdentifier")));
+    assert!(!serde_json::to_string(response_schema)
+        .expect("schema serializes")
+        .contains("reasonCode"));
 
     let revision_schema = &openapi["paths"]["/v1/records/households/{record_id}/revisions"]["get"]
-        ["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["items"]["items"];
-    assert!(
-        !revision_schema["required"]
-            .as_array()
-            .expect("revision item required properties render")
-            .contains(&json!("changeContext"))
-    );
+        ["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["items"]
+        ["items"];
+    assert!(!revision_schema["required"]
+        .as_array()
+        .expect("revision item required properties render")
+        .contains(&json!("changeContext")));
     let change_context = &revision_schema["properties"]["changeContext"];
     assert_eq!(change_context["additionalProperties"], false);
     let mut context_properties = change_context["properties"]
@@ -5983,14 +5846,13 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
         change_context["properties"]["sourceReferences"]["items"]["x-registry-maxBytes"],
         256
     );
-    let revision_detail_schema = &openapi["paths"]["/v1/records/households/{record_id}/revisions/{revision}"]
-        ["get"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["data"];
-    assert!(
-        revision_detail_schema["properties"]
-            .as_object()
-            .expect("revision detail properties render")
-            .contains_key("changeContext")
-    );
+    let revision_detail_schema = &openapi["paths"]
+        ["/v1/records/households/{record_id}/revisions/{revision}"]["get"]["responses"]["200"]
+        ["content"]["application/json"]["schema"]["properties"]["data"];
+    assert!(revision_detail_schema["properties"]
+        .as_object()
+        .expect("revision detail properties render")
+        .contains_key("changeContext"));
 }
 
 #[test]
@@ -6014,11 +5876,10 @@ fn snapshot_operation_rejects_unauthorized_provenance() {
         }"#,
     )
     .expect_err("provenance fields require revision access");
-    assert!(
-        provenance.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == "breg.access-profile.provenance-fields-invalid"
-        })
-    );
+    assert!(provenance
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| { diagnostic.code == "breg.access-profile.provenance-fields-invalid" }));
 }
 
 #[test]
@@ -6050,13 +5911,11 @@ fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
     assert!(compiled.queries().operations.iter().any(|operation| {
         operation.kind == CompiledQueryKind::Snapshot && operation.allow_count
     }));
-    assert!(
-        compiled
-            .routes()
-            .routes
-            .iter()
-            .all(|route| route.operation != Operation::List)
-    );
+    assert!(compiled
+        .routes()
+        .routes
+        .iter()
+        .all(|route| route.operation != Operation::List));
     let openapi = compiled
         .artifacts()
         .get("generated/openapi.json")
@@ -6072,8 +5931,8 @@ fn snapshot_valid_at_openapi_schema_matches_temporal_value_type() {
         valid_at["schema"],
         json!({"type": "string", "format": "date-time"})
     );
-    let response_schema = &openapi["paths"]["/v1/records/records:snapshot"]["get"]["responses"]["200"]
-        ["content"]["application/json"]["schema"];
+    let response_schema = &openapi["paths"]["/v1/records/records:snapshot"]["get"]["responses"]
+        ["200"]["content"]["application/json"]["schema"];
     assert_eq!(
         response_schema["properties"]["validAt"],
         json!({"type": "string", "format": "date-time"})
@@ -6129,12 +5988,10 @@ fn query_inventory_rejects_unsupported_filter_and_sort_field_types() {
         let project = parse_project_json(source.as_bytes()).expect("project shape parses");
         let failure = compile_project(&project, &[], CompileProfile::Authoring)
             .expect_err("unsupported query field type is refused");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == code)
-        );
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == code));
     }
 }
 
@@ -6246,7 +6103,7 @@ fn duplicate_routes_fail_before_artifact_generation() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "breg.entity.route-duplicate")
+        .find(|diagnostic| diagnostic.code == "breg.record-type.route-duplicate")
         .expect("duplicate route has a stable diagnostic");
     assert_eq!(diagnostic.path, "recordTypes[].route");
     let rendered = serde_json::to_string(&failure).expect("failure serializes");

@@ -17,10 +17,9 @@ use super::postgres_harness::TestDatabase;
 use registry_breg::api::{HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-    PostgresRevisionReadService, PostgresSnapshotReadService, RegistryLockKey,
-    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedRegistryIdentity,
+    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
+    PostgresSnapshotReadService, RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_platform_audit::AuditProfile;
 use zeroize::Zeroizing;

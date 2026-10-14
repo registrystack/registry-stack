@@ -130,6 +130,7 @@ pub mod problem;
 pub mod problem_location;
 #[cfg(feature = "runtime")]
 pub mod proposal_events;
+pub mod proposal_hooks;
 #[cfg(feature = "runtime")]
 mod proposal_prepare;
 #[cfg(feature = "runtime")]
@@ -175,10 +176,10 @@ pub mod webhook;
 pub use artifacts::{GeneratedArtifact, GeneratedArtifacts};
 #[cfg(feature = "runtime")]
 pub use cli::command;
-pub use compiler::{CompileProfile, compile_project, compile_project_with_assets};
+pub use compiler::{compile_project, compile_project_with_assets, CompileProfile};
 pub use contract::{
-    RegistryModule, RegistryProject, parse_module_json, parse_module_yaml, parse_project_json,
-    parse_project_yaml,
+    parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, RegistryModule,
+    RegistryProject,
 };
 pub use diagnostics::{CompileFailure, Diagnostic, DiagnosticSeverity};
 pub use model::CompiledRegistry;

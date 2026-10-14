@@ -9,7 +9,7 @@ use registry_platform_hooks::{
 use crate::action_evidence::FrozenEvidenceEvaluation;
 use crate::action_evidence_client::EvidenceSubjects;
 use crate::action_evidence_contracts::CompiledEvidenceCapability;
-use crate::action_handler::{ActionHandlerOutcome, evaluate_admitted_action_detailed};
+use crate::action_handler::{evaluate_admitted_action_detailed, ActionHandlerOutcome};
 use crate::action_outcome::{
     bound_document, decode_document, json_document, validate_proposed_outcome,
 };
@@ -431,6 +431,27 @@ impl MutationCoordinator {
                 "The delivered envelope bytes could not be re-read as an envelope.",
             );
         };
+        // Proposal lifecycle observers are permanently notification-only.
+        // The delivered fixed contract also fences a forged compiled owner or
+        // principal before any callback candidate can resolve an Action grant.
+        if envelope.dataschema == crate::proposal_hooks::PROPOSAL_EVENT_SCHEMA
+            || registry
+                .event_deliveries()
+                .deliveries
+                .iter()
+                .any(|delivery| {
+                    delivery.id == application.compiled_delivery_id
+                        && matches!(
+                            delivery.owner,
+                            crate::model::CompiledEventOwner::ProposalAction { .. }
+                        )
+                })
+        {
+            return dead_lettered_proposal(
+                "hook.proposal.observer_only",
+                "A Proposal lifecycle observer carries no callback application authority.",
+            );
+        }
         let Ok(message) =
             HookMessage::from_canonical_json(application.answer, &HandlerOutputLimits::default())
         else {

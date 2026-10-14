@@ -13,7 +13,7 @@ class BaseRegistryClientError extends Error {
     this.name = 'BaseRegistryClientError';
     this.kind = envelope.kind;
     this.outcomeUnknown = envelope.outcomeUnknown === true;
-    for (const field of ['code', 'planRefusal', 'refusalCode', 'reasonCode', 'status', 'traceId', 'transportKind', 'tokenKind']) {
+    for (const field of ['code', 'refusalCode', 'reasonCode', 'status', 'traceId', 'transportKind', 'tokenKind']) {
       if (envelope[field] !== undefined && envelope[field] !== null) this[field] = envelope[field];
     }
     if (envelope.fieldPath !== undefined && envelope.fieldPath !== null) {

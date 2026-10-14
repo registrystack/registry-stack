@@ -8,7 +8,7 @@ mod proposal;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::api::{
@@ -16,7 +16,7 @@ use crate::api::{
     BatchMutationInput, ConditionalMutationInput, CreateMutationInput, HeldReadResponse,
     ImmediateActionInput, RowBoundaryOperator as ApiRowBoundaryOperator, VerifiedRowBoundary,
 };
-use crate::audit::{HttpRefusalAudit, RegistryAudit, record_http_refusal_audit};
+use crate::audit::{record_http_refusal_audit, HttpRefusalAudit, RegistryAudit};
 use crate::correlation::RequestCorrelation;
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::ingestion_store::{self, IngestionAttemptOutcome, IngestionRunStatus};
@@ -24,15 +24,15 @@ use crate::model::CompiledRegistry;
 #[cfg(feature = "postgres-test")]
 use crate::mutation::MutationFaultPoint;
 use crate::mutation::{
-    BatchMutationItem, BatchMutationRequest, IngestionChunkBinding, MutationBody,
-    MutationCoordinator, MutationError, MutationOutcome, MutationPlan, MutationRequest,
-    PatchOperation, valid_strong_etag,
+    valid_strong_etag, BatchMutationItem, BatchMutationRequest, IngestionChunkBinding,
+    MutationBody, MutationCoordinator, MutationError, MutationOutcome, MutationPlan,
+    MutationRequest, PatchOperation,
 };
 
 use super::cancellation::QueryCancellationGuard;
 use super::{
-    ActionClaimContext, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
-    RowBoundaryContext, RuntimePool, begin_record_transaction,
+    begin_record_transaction, ActionClaimContext, ClaimContext, ExpectedRegistryIdentity,
+    RegistryLockKey, RowBoundaryContext, RuntimePool,
 };
 
 const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1828,7 +1828,6 @@ impl PostgresRecordMutationService {
                     | MutationError::MigrationLockHeld
                     | MutationError::PackagePinMismatch(_)
                     | MutationError::FieldEncryptionUnavailable
-                    | MutationError::PlannerFailure(_)
                     | MutationError::ActionHandlerFailure(_)
                     | MutationError::ActionEvidenceFailure { .. }
                     | MutationError::ActionRefusal(_) => {
@@ -2263,7 +2262,7 @@ fn receipt_json(
 #[cfg(test)]
 mod ingestion_context_tests {
     use super::*;
-    use crate::compiler::{CompileProfile, compile_project};
+    use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::parse_project_json;
     use crate::task_grant::TaskGrantBinding;
 

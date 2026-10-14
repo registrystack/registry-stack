@@ -2,10 +2,10 @@
 //! Shared compiler fixture for provider activation and compiled-program binding.
 pub(crate) fn registry(evidence: bool) -> crate::CompiledRegistry {
     use crate::{
-        compiler::{CompileProfile, compile_project_with_assets},
-        contract::{ModuleAssetSource, parse_project_json},
+        compiler::{compile_project_with_assets, CompileProfile},
+        contract::{parse_project_json, ModuleAssetSource},
     };
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
     let mut source: Value = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(
             "../../../../products/breg/examples/refactor/facility/registry.yaml"

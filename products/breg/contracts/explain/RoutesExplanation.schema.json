@@ -39,7 +39,7 @@
             ],
             "properties": {
               "type": {
-                "const": "entity"
+                "const": "record"
               },
               "id": {
                 "$ref": "#/$defs/DerivedId"

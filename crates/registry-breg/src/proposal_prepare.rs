@@ -3,7 +3,7 @@
 //! Bind the one validated neutral plan into an immutable Proposal submission.
 
 use crate::contract::Operation;
-use crate::data::{FieldValue as DataFieldValue, validate_field_value};
+use crate::data::{validate_field_value, FieldValue as DataFieldValue};
 use crate::model::{
     CompiledAction, CompiledActionExecution, CompiledPlanEffect, CompiledPlanFunctionKind,
     CompiledPlanMutation, CompiledPlanTargetBinding, CompiledPlanValue, CompiledRegistry,
@@ -12,8 +12,8 @@ use crate::mutation::MutationError;
 use crate::proposal_workflow::{
     ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, FrozenApplicationPreconditions,
     FrozenGuardTargetSnapshot, FrozenInputTarget, FrozenPlannerKind, FrozenPlanningBinding,
-    MAX_PROPOSAL_SNAPSHOT_BYTES, PackageFingerprint, PreparedEffect, PreparedFieldChange,
-    PreparedProposal, PreparedTarget, ProposalDigest, RecordId, RecordRevision,
+    PackageFingerprint, PreparedEffect, PreparedFieldChange, PreparedProposal, PreparedTarget,
+    ProposalDigest, RecordId, RecordRevision, MAX_PROPOSAL_SNAPSHOT_BYTES,
 };
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::{Map, Value};

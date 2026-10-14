@@ -19,29 +19,30 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use base64::Engine as _;
 use postgres_harness::TestDatabase;
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::field_encryption::{
     FieldEncryptionError, FieldEncryptionProvider, FieldEncryptionService,
 };
 use registry_breg::package::{
-    FIXTURE_JOURNEYS_PATH, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSourceFile, VerifiedPackage, load_package, prepare_package,
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, VerifiedPackage,
+    FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
-    ExpectedManagedCatalog, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema, managed_schema_fingerprint,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
 use registry_breg::startup::{
-    PreparedServer, StartupError, prepare_with_connection_config_for_test,
+    prepare_with_connection_config_for_test, PreparedServer, StartupError,
 };
+use registry_breg::CompiledRegistry;
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use registry_platform_crypto::transit_datakey::TransitDataKeyConfig;
 use registry_platform_testing::{
     fixtures as testing_fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixListener;
@@ -62,7 +63,8 @@ const METADATA_PATH: &str = "/v1/transit/keys/breg-field-dek";
 const DATAKEY_PATH: &str = "/v1/transit/datakey/plaintext/breg-field-dek";
 const DECRYPT_PATH: &str = "/v1/transit/decrypt/breg-field-dek";
 
-const MODULE_SOURCE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\n\
+const MODULE_SOURCE: &str =
+    "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\n\
      id: field-encryption-core\nversion: 1.0.0\n";
 
 const PROJECT_TEMPLATE: &str = r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
@@ -1422,11 +1424,9 @@ async fn sealed_idempotency_bodies_serve_plaintext_and_replay_exactly() {
     assert_eq!(batch.status(), StatusCode::OK);
     let batch_served = body_bytes(batch).await;
     let batch_json: Value = serde_json::from_slice(&batch_served).expect("batch response is JSON");
-    assert!(
-        batch_json["snapshot"]
-            .as_str()
-            .is_some_and(|snapshot| !snapshot.is_empty())
-    );
+    assert!(batch_json["snapshot"]
+        .as_str()
+        .is_some_and(|snapshot| !snapshot.is_empty()));
     assert_eq!(batch_json["results"][0]["operation"], "create");
     assert_eq!(batch_json["results"][0]["data"]["secret"], "sigma-five");
     assert_eq!(batch_json["results"][0]["data"]["code"], "TUV-8888");

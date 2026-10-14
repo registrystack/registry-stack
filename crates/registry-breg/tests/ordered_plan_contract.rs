@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 use registry_breg::{
-    action_handler::{ActionHandlerOutcome, evaluate_action},
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_module_json, parse_project_json},
+    action_handler::{evaluate_action, ActionHandlerOutcome},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_module_json, parse_project_json, ModuleAssetSource},
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 fn project() -> Value {
     json!({
@@ -92,14 +92,12 @@ fn production_function_evaluator_preserves_order_and_refuses_forward_refs() {
     );
     let script = r#"fn plan(ctx) { #{effects:[#{id:"a-result",set:#{name:ctx.inputs.name,parent:#{fromEffect:"z-result"}}},#{id:"z-result",set:#{name:ctx.inputs.name}}]} }"#;
     let model = compile(value, script).unwrap();
-    assert!(
-        evaluate_action(
-            &model.actions().actions[0],
-            &inputs,
-            Instant::now() + Duration::from_secs(2)
-        )
-        .is_err()
-    );
+    assert!(evaluate_action(
+        &model.actions().actions[0],
+        &inputs,
+        Instant::now() + Duration::from_secs(2)
+    )
+    .is_err());
 }
 
 #[test]
@@ -153,14 +151,12 @@ fn modules_share_native_record_types_value_types_and_function_asset_provenance()
             .as_deref(),
         Some("records")
     );
-    assert!(
-        evaluate_action(
-            &model.actions().actions[0],
-            &json!({"name":"entry"}).as_object().unwrap().clone(),
-            Instant::now() + Duration::from_secs(2)
-        )
-        .is_ok()
-    );
+    assert!(evaluate_action(
+        &model.actions().actions[0],
+        &json!({"name":"entry"}).as_object().unwrap().clone(),
+        Instant::now() + Duration::from_secs(2)
+    )
+    .is_ok());
 }
 
 #[test]
@@ -169,12 +165,10 @@ fn fixed_reference_values_require_an_authorized_input_or_created_result() {
     value["actions"][0]["plan"]["effects"][0]["set"]["parent"] =
         json!({"value":"00000000-0000-4000-8000-000000000001"});
     let failure = compile(value.clone(), "fn plan(ctx) { #{effects: []} }").unwrap_err();
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|d| d.code == "breg.action.effect-reference-input-required")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|d| d.code == "breg.action.effect-reference-input-required"));
     value["actions"][0]["plan"]["effects"][0]["set"]
         .as_object_mut()
         .unwrap()

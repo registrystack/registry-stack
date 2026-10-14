@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::auth::{AuthorityClaimConfig, RegistryAuthenticator};
-use crate::compiler::{CompileProfile, compile_project};
+use crate::compiler::{compile_project, CompileProfile};
 use crate::contract::parse_project_yaml;
 use crate::cursor::CursorCodec;
 use crate::model::{CompiledAction, CompiledRegistry};
@@ -12,7 +12,7 @@ use crate::postgres::{
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{ClaimNames, JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{MockIdp, oidc_verifier_config};
+use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -106,13 +106,11 @@ fn task_action_registry() -> Arc<CompiledRegistry> {
 #[tokio::test]
 async fn task_granted_invoke_uses_exact_action_scope_and_frozen_subjects() {
     let registry = task_action_registry();
-    assert!(
-        registry
-            .entities()
-            .values()
-            .flat_map(|entity| entity.access_profiles.values())
-            .all(|profile| profile.task_grant.is_none())
-    );
+    assert!(registry
+        .entities()
+        .values()
+        .flat_map(|entity| entity.access_profiles.values())
+        .all(|profile| profile.task_grant.is_none()));
     assert_eq!(
         crate::task_grant::required_source_issuers(&registry),
         BTreeSet::from(["https://casework.example"]),
@@ -342,26 +340,22 @@ async fn proposal_task_scopes_are_exact_and_standing_agents_only_start_or_edit_o
     let admit = |claims: &VerifiedRequestClaims, profile: &str, operation, id| {
         super::super::proposals::authorize(&registry, action, claims, Some(profile), operation, id)
     };
-    assert!(
-        admit(
-            &start,
-            "task-proposer",
-            ProposalAuthorityOperation::Start,
-            None
-        )
-        .is_some()
-    );
+    assert!(admit(
+        &start,
+        "task-proposer",
+        ProposalAuthorityOperation::Start,
+        None
+    )
+    .is_some());
     let proposal_id = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
     let other = Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap();
-    assert!(
-        admit(
-            &start,
-            "task-proposer",
-            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
-            Some(proposal_id)
-        )
-        .is_none()
-    );
+    assert!(admit(
+        &start,
+        "task-proposer",
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
+        Some(proposal_id)
+    )
+    .is_none());
     let mut lifecycle_token = token.clone();
     lifecycle_token["registry_grant_bounds"]["permissions"] =
         json!([{"collection":format!("proposal:{proposal_id}"),"operations":["submit","list"]}]);
@@ -369,33 +363,27 @@ async fn proposal_task_scopes_are_exact_and_standing_agents_only_start_or_edit_o
         .authenticate(&idp.mint_token(lifecycle_token.clone()))
         .await
         .unwrap();
-    assert!(
-        admit(
-            &lifecycle,
-            "task-proposer",
-            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
-            Some(proposal_id)
-        )
-        .is_some()
-    );
-    assert!(
-        admit(
-            &lifecycle,
-            "task-proposer",
-            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
-            Some(other)
-        )
-        .is_none()
-    );
-    assert!(
-        admit(
-            &lifecycle,
-            "task-proposer",
-            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply),
-            Some(proposal_id)
-        )
-        .is_none()
-    );
+    assert!(admit(
+        &lifecycle,
+        "task-proposer",
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
+        Some(proposal_id)
+    )
+    .is_some());
+    assert!(admit(
+        &lifecycle,
+        "task-proposer",
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
+        Some(other)
+    )
+    .is_none());
+    assert!(admit(
+        &lifecycle,
+        "task-proposer",
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply),
+        Some(proposal_id)
+    )
+    .is_none());
     let list = admit(
         &lifecycle,
         "task-proposer",
@@ -409,15 +397,13 @@ async fn proposal_task_scopes_are_exact_and_standing_agents_only_start_or_edit_o
         .authenticate(&idp.mint_token(lifecycle_token))
         .await
         .unwrap();
-    assert!(
-        admit(
-            &wrong,
-            "task-proposer",
-            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
-            Some(proposal_id)
-        )
-        .is_none()
-    );
+    assert!(admit(
+        &wrong,
+        "task-proposer",
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
+        Some(proposal_id)
+    )
+    .is_none());
     let mut standing = token;
     standing
         .as_object_mut()
@@ -426,24 +412,20 @@ async fn proposal_task_scopes_are_exact_and_standing_agents_only_start_or_edit_o
     standing["grantRegion"] = json!("north");
     let standing = auth.authenticate(&idp.mint_token(standing)).await.unwrap();
     assert!(standing.actor_subject().is_none() && standing.grant().is_none());
-    assert!(
-        admit(
-            &standing,
-            "standing-proposer",
-            ProposalAuthorityOperation::Start,
-            None
-        )
-        .is_some()
-    );
-    assert!(
-        admit(
-            &standing,
-            "standing-proposer",
-            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit),
-            Some(proposal_id)
-        )
-        .is_some()
-    );
+    assert!(admit(
+        &standing,
+        "standing-proposer",
+        ProposalAuthorityOperation::Start,
+        None
+    )
+    .is_some());
+    assert!(admit(
+        &standing,
+        "standing-proposer",
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit),
+        Some(proposal_id)
+    )
+    .is_some());
     let discovery = service_for(Arc::new(registry.clone()), true);
     let selected = QueryOptions::parse(Some("accessProfile=standing-proposer"), false).unwrap();
     assert!(
@@ -459,15 +441,13 @@ async fn proposal_task_scopes_are_exact_and_standing_agents_only_start_or_edit_o
         ProposalOperation::Submit,
         ProposalOperation::Apply,
     ] {
-        assert!(
-            admit(
-                &standing,
-                "standing-proposer",
-                ProposalAuthorityOperation::Lifecycle(operation),
-                Some(proposal_id)
-            )
-            .is_none()
-        );
+        assert!(admit(
+            &standing,
+            "standing-proposer",
+            ProposalAuthorityOperation::Lifecycle(operation),
+            Some(proposal_id)
+        )
+        .is_none());
     }
 }
 
@@ -619,14 +599,12 @@ fn handler_timestamp_admission_enforces_the_kernel_string_bound_without_changing
     }))
     .unwrap();
     let fixed = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    assert!(
-        parse_body(
-            &fixed.actions().actions[0],
-            ActionRouteKind::Invoke,
-            &oversized
-        )
-        .is_ok()
-    );
+    assert!(parse_body(
+        &fixed.actions().actions[0],
+        ActionRouteKind::Invoke,
+        &oversized
+    )
+    .is_ok());
 
     project.functions.push(
         serde_json::from_value(json!({
@@ -835,13 +813,11 @@ fn action_authority_has_no_crud_requirement_or_profile_fallback() {
     );
     assert!(authorize_action(&service, route, &supervisor, &QueryOptions::default()).is_none());
     let explicit = QueryOptions::parse(Some("accessProfile=supervisor"), false).unwrap();
-    assert!(
-        authorize_action(&service, route, &supervisor, &explicit)
-            .unwrap()
-            .context
-            .result_effects()
-            .is_empty()
-    );
+    assert!(authorize_action(&service, route, &supervisor, &explicit)
+        .unwrap()
+        .context
+        .result_effects()
+        .is_empty());
     for denied in [
         claims("sub", ["case.rename"], Some("case-management"), true),
         claims("registry_principal", ["case.rename"], None, true),
@@ -862,23 +838,19 @@ fn action_authority_has_no_crud_requirement_or_profile_fallback() {
     }
     let mut forged = route.clone();
     forged.path.push_str("/forged");
-    assert!(
-        authorize_action(
-            &service,
-            &forged,
-            &authorized_claims,
-            &QueryOptions::default()
-        )
-        .is_none()
-    );
-    assert!(
-        visible_actions(
-            &service_for(registry, false),
-            &authorized_claims,
-            &QueryOptions::default()
-        )
-        .is_empty()
-    );
+    assert!(authorize_action(
+        &service,
+        &forged,
+        &authorized_claims,
+        &QueryOptions::default()
+    )
+    .is_none());
+    assert!(visible_actions(
+        &service_for(registry, false),
+        &authorized_claims,
+        &QueryOptions::default()
+    )
+    .is_empty());
 }
 
 #[tokio::test]
@@ -1044,13 +1016,11 @@ async fn action_only_discovery_is_profile_filtered_without_entity_read_access() 
     let body = response_json(response).await;
     assert!(body["paths"]["/v1/actions/rename-case"]["post"].is_object());
     assert!(body["paths"]["/v1/actions/rename-case/target-conditions"]["post"].is_object());
-    assert!(
-        body["paths"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .all(|path| path.starts_with("/v1/actions/"))
-    );
+    assert!(body["paths"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .all(|path| path.starts_with("/v1/actions/")));
     let result_schema = crate::artifacts::openapi_action_response_schema_id("rename-case");
     assert_eq!(
         body["components"]["schemas"][&result_schema]["properties"]["results"]["properties"],
@@ -1231,24 +1201,20 @@ fn fixed_action_optional_values_reject_explicit_null_in_schema_and_admission() {
         "preconditions": {"caseId": {"ifMatch": "\"opaque\""}}
     });
     assert!(validator.is_valid(&body));
-    assert!(
-        parse_body(
-            action,
-            ActionRouteKind::Invoke,
-            &serde_json::to_vec(&body).unwrap()
-        )
-        .is_ok()
-    );
+    assert!(parse_body(
+        action,
+        ActionRouteKind::Invoke,
+        &serde_json::to_vec(&body).unwrap()
+    )
+    .is_ok());
     body["input"]["newLabel"] = json!("Changed");
     assert!(validator.is_valid(&body));
-    assert!(
-        parse_body(
-            action,
-            ActionRouteKind::Invoke,
-            &serde_json::to_vec(&body).unwrap()
-        )
-        .is_ok()
-    );
+    assert!(parse_body(
+        action,
+        ActionRouteKind::Invoke,
+        &serde_json::to_vec(&body).unwrap()
+    )
+    .is_ok());
     body["input"]["newLabel"] = Value::Null;
     assert!(!validator.is_valid(&body));
     assert_eq!(

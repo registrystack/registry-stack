@@ -114,6 +114,16 @@ fn boundaries(
         .collect()
 }
 
+pub(crate) fn external_recovery_actor_allowed(
+    application: &crate::model::CompiledProposalApplication,
+    claims: Option<&VerifiedRequestClaims>,
+) -> bool {
+    !application.is_automatic()
+        || claims.is_some_and(|claims| {
+            claims.actor_kind() == Some(registry_platform_oidc::ActorKind::Human)
+        })
+}
+
 pub(crate) fn authorize(
     registry: &CompiledRegistry,
     action: &CompiledAction,
@@ -125,6 +135,13 @@ pub(crate) fn authorize(
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
         return None;
     };
+    if matches!(
+        operation,
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply | ProposalOperation::Retry)
+    ) && !external_recovery_actor_allowed(&proposal.application, Some(claims))
+    {
+        return None;
+    }
     let standing_agent = (claims.actor_subject().is_some()
         || claims.actor_kind() == Some(registry_platform_oidc::ActorKind::Agent))
         && claims.grant().is_none();

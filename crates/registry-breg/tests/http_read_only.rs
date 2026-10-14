@@ -6,13 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request, StatusCode, header::CONTENT_TYPE};
+use axum::body::{to_bytes, Body};
+use axum::http::{header::CONTENT_TYPE, Method, Request, StatusCode};
 use registry_breg::api::{
-    HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError, ReadinessProbe,
+    router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError, ReadinessProbe,
     RecordReadKind, RecordReadRequest, RecordReadService, RevisionReadRefusal, RevisionReadRequest,
     RevisionReadService, ServiceFuture, SnapshotReadRequest, SnapshotReadService,
-    VerifiedClaimValue, VerifiedRequestClaims, router,
+    VerifiedClaimValue, VerifiedRequestClaims,
 };
 use registry_breg::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use registry_breg::contract::{ModuleAssetSource, Operation};
@@ -20,10 +20,10 @@ use registry_breg::cursor::CursorCodec;
 use registry_breg::cursor::{CursorAdapter, CursorRepresentation};
 use registry_breg::runtime_config::PublicOrigin;
 use registry_breg::{
-    CompileProfile, compile_project, compile_project_with_assets, parse_project_yaml,
+    compile_project, compile_project_with_assets, parse_project_yaml, CompileProfile,
 };
 use registry_platform_canonical_json::parse_json_strict;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::Service as _;
 use zeroize::Zeroizing;
 
@@ -721,11 +721,9 @@ async fn snapshot_route_requires_its_own_current_authority_and_never_calls_live_
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert!(
-            !String::from_utf8(body_bytes(response).await)
-                .unwrap()
-                .contains("canary")
-        );
+        assert!(!String::from_utf8(body_bytes(response).await)
+            .unwrap()
+            .contains("canary"));
     }
     assert!(snapshots.requests.lock().unwrap().is_empty());
     let response = send_to(&app, Method::GET,
@@ -930,11 +928,9 @@ async fn snapshot_rejects_ambiguous_time_and_cursor_overrides_before_history_io(
         )
         .await;
         assert!(response.status().is_client_error(), "{query}");
-        assert!(
-            !String::from_utf8(body_bytes(response).await)
-                .unwrap()
-                .contains("canary")
-        );
+        assert!(!String::from_utf8(body_bytes(response).await)
+            .unwrap()
+            .contains("canary"));
     }
     assert!(snapshots.requests.lock().unwrap().is_empty());
     assert_eq!(records.calls.load(Ordering::SeqCst), 0);
@@ -960,14 +956,12 @@ async fn snapshot_default_projection_excludes_live_derived_fields() {
     .await;
     assert_eq!(metadata.status(), StatusCode::OK);
     let metadata = body_json(metadata).await;
-    assert!(
-        metadata["recordTypes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|entity| entity["operations"].as_array().unwrap())
-            .any(|operation| operation["operation"] == "snapshot")
-    );
+    assert!(metadata["recordTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|entity| entity["operations"].as_array().unwrap())
+        .any(|operation| operation["operation"] == "snapshot"));
     let response = send_to(
         &app,
         Method::GET,
@@ -1170,14 +1164,12 @@ async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
     )
     .await;
     let spatial_success = &openapi["paths"]["/v1/records/sites"]["get"]["responses"]["200"];
-    assert!(
-        spatial_success["content"]
-            .get("application/geo+json")
-            .is_some()
-    );
+    assert!(spatial_success["content"]
+        .get("application/geo+json")
+        .is_some());
     assert_eq!(
         spatial_success["headers"]["Link"]["description"],
-        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers."
+        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible record type schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers."
     );
     assert_eq!(
         spatial_success["headers"]["Link"]["schema"]["example"],
@@ -1363,18 +1355,14 @@ fn strict_bbox_decimal_helpers_are_exact_and_bounded() {
             .expect("grant decimal canonicalizes"),
         "0.3"
     );
-    assert!(
-        strict_query::decimal_difference_within("0.4", "0.1", "0.3")
-            .expect("span compares exactly")
-    );
-    assert!(
-        !strict_query::decimal_difference_within(
-            "0.30000000000000000000000000000000000001",
-            "0",
-            "0.3",
-        )
-        .expect("just-over span compares exactly")
-    );
+    assert!(strict_query::decimal_difference_within("0.4", "0.1", "0.3")
+        .expect("span compares exactly"));
+    assert!(!strict_query::decimal_difference_within(
+        "0.30000000000000000000000000000000000001",
+        "0",
+        "0.3",
+    )
+    .expect("just-over span compares exactly"));
     assert_eq!(
         strict_query::parse_read_query([("bbox", "0,0,1e-1000,1")]),
         Err(strict_query::QueryParseError::InvalidValue)
@@ -1874,11 +1862,9 @@ async fn relationship_discovery_uses_target_entity_and_unions_authorized_operati
                 .find(|field| field.field == "person-code")
         })
         .expect("relationship string filter capability is compiled");
-    assert!(
-        path_filter
-            .operators
-            .contains(&registry_breg::model::CompiledQueryFilterOperator::Contains)
-    );
+    assert!(path_filter
+        .operators
+        .contains(&registry_breg::model::CompiledQueryFilterOperator::Contains));
 
     let harness = Harness::from_project(LOOKUP_PATH_PROJECT, true);
     let claims = Some(caseworker_claims("case-management"));
@@ -1893,7 +1879,8 @@ async fn relationship_discovery_uses_target_entity_and_unions_authorized_operati
     )
     .await;
     assert_eq!(
-        openapi["paths"]["/v1/records/households/{record_id}/people"]["get"]["x-registry-responseEntity"],
+        openapi["paths"]["/v1/records/households/{record_id}/people"]["get"]
+            ["x-registry-responseRecordType"],
         "person"
     );
     assert_eq!(
@@ -1928,11 +1915,9 @@ async fn relationship_discovery_uses_target_entity_and_unions_authorized_operati
             .await,
     )
     .await;
-    assert!(
-        household_schema["properties"]
-            .get("householdCode")
-            .is_some()
-    );
+    assert!(household_schema["properties"]
+        .get("householdCode")
+        .is_some());
     assert!(household_schema["properties"].get("personCode").is_none());
 
     let metadata = body_json(
@@ -1970,11 +1955,9 @@ async fn derived_fields_are_discoverable_as_read_only_response_properties() {
         )
         .expect("derived discovery project compiles"),
     );
-    assert!(
-        !registry.entities()["benefit-record"]
-            .fields
-            .contains_key("eligibility-score")
-    );
+    assert!(!registry.entities()["benefit-record"]
+        .fields
+        .contains_key("eligibility-score"));
     let records = Arc::new(RecordingReadService::default());
     let app = router(Arc::new(HttpService::new(
         registry,
@@ -2893,11 +2876,9 @@ async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
             .await,
     )
     .await;
-    assert!(
-        protected_openapi["paths"]
-            .get("/v1/records/notes")
-            .is_some()
-    );
+    assert!(protected_openapi["paths"]
+        .get("/v1/records/notes")
+        .is_some());
     assert!(
         protected_openapi["components"]["schemas"]["case"]["properties"]
             .get("secret")
@@ -3015,8 +2996,8 @@ async fn lower_camel_select_resolves_only_compiled_authorized_api_names() {
 }
 
 #[tokio::test]
-async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_and_every_metadata_surface()
- {
+async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_and_every_metadata_surface(
+) {
     let project =
         parse_project_yaml(DISCOVERY_MATRIX_PROJECT.as_bytes()).expect("matrix project parses");
     let registry = Arc::new(
@@ -3181,29 +3162,30 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
         );
     }
     assert_eq!(
-        protected_openapi["paths"]["/v1/records/classified-records:current"]["get"]["x-registry-queryKind"],
+        protected_openapi["paths"]["/v1/records/classified-records:current"]["get"]
+            ["x-registry-queryKind"],
         "current"
     );
     assert_eq!(
-        protected_openapi["paths"]["/v1/records/classified-records:as-of"]["get"]["x-registry-queryKind"],
+        protected_openapi["paths"]["/v1/records/classified-records:as-of"]["get"]
+            ["x-registry-queryKind"],
         "as-of"
     );
     assert_eq!(
-        protected_openapi["components"]["schemas"]["protected-ledger"]["properties"]["classifiedStatus"],
+        protected_openapi["components"]["schemas"]["protected-ledger"]["properties"]
+            ["classifiedStatus"],
         json!({
             "type": "string",
             "enum": ["sealed-canary-value", "retired-canary-value"],
             "x-registry-vocabulary": "classified-status-vocabulary"
         })
     );
-    assert!(
-        protected_openapi["paths"]
-            .as_object()
-            .expect("caseworker paths")
-            .values()
-            .flat_map(|path| path.as_object().expect("path methods").values())
-            .all(|operation| operation["x-registry-accessProfile"] == "caseworker")
-    );
+    assert!(protected_openapi["paths"]
+        .as_object()
+        .expect("caseworker paths")
+        .values()
+        .flat_map(|path| path.as_object().expect("path methods").values())
+        .all(|operation| operation["x-registry-accessProfile"] == "caseworker"));
     let protected_metadata = body_json(
         send_to(
             &app,
@@ -3218,14 +3200,12 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
         protected_metadata["recordTypes"].as_array().unwrap().len(),
         2
     );
-    assert!(
-        protected_metadata["recordTypes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|entity| entity["operations"].as_array().unwrap())
-            .all(|operation| operation["accessProfile"] == "caseworker")
-    );
+    assert!(protected_metadata["recordTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|entity| entity["operations"].as_array().unwrap())
+        .all(|operation| operation["accessProfile"] == "caseworker"));
     let protected_ledger_metadata = protected_metadata["recordTypes"]
         .as_array()
         .expect("protected metadata entities")
@@ -3412,13 +3392,11 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
 
     let public_openapi =
         body_json(send_to(&app, Method::GET, "/openapi.json", Some(public_claims())).await).await;
-    assert!(
-        public_openapi["paths"]
-            .as_object()
-            .expect("paths")
-            .keys()
-            .all(|path| !path.contains("revisions"))
-    );
+    assert!(public_openapi["paths"]
+        .as_object()
+        .expect("paths")
+        .keys()
+        .all(|path| !path.contains("revisions")));
     let protected_openapi = body_json(
         send_to(
             &app,
@@ -3429,16 +3407,12 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
         .await,
     )
     .await;
-    assert!(
-        protected_openapi["paths"]
-            .get("/v1/records/cases/{record_id}/revisions")
-            .is_some()
-    );
-    assert!(
-        protected_openapi["paths"]
-            .get("/v1/records/cases/{record_id}/revisions/{revision}")
-            .is_some()
-    );
+    assert!(protected_openapi["paths"]
+        .get("/v1/records/cases/{record_id}/revisions")
+        .is_some());
+    assert!(protected_openapi["paths"]
+        .get("/v1/records/cases/{record_id}/revisions/{revision}")
+        .is_some());
     let protected_metadata = body_json(
         send_to(
             &app,
@@ -3455,13 +3429,11 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
         .iter()
         .find(|entity| entity["id"] == "case")
         .expect("case metadata");
-    assert!(
-        case["operations"]
-            .as_array()
-            .expect("operations")
-            .iter()
-            .any(|operation| operation["operation"] == "revisions")
-    );
+    assert!(case["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .any(|operation| operation["operation"] == "revisions"));
     assert!(revisions.refusals.load(Ordering::SeqCst) >= 2);
 
     revisions.refusal_fails.store(true, Ordering::SeqCst);
@@ -3579,11 +3551,9 @@ async fn runtime_openapi_contract_is_filtered_to_the_selected_acceptance_profile
         openapi["components"]["securitySchemes"]["bearerAuth"],
         json!({"type": "http", "scheme": "bearer", "bearerFormat": "JWT"})
     );
-    assert!(
-        openapi["components"]["schemas"]["Problem"]
-            .get("properties")
-            .is_some()
-    );
+    assert!(openapi["components"]["schemas"]["Problem"]
+        .get("properties")
+        .is_some());
     assert_eq!(
         openapi["components"]["schemas"]["Problem"]["required"],
         json!(["type", "title", "status", "detail", "code", "traceId"])
@@ -3596,18 +3566,15 @@ async fn runtime_openapi_contract_is_filtered_to_the_selected_acceptance_profile
         openapi["paths"]["/v1/records/assets"]["get"]["security"],
         json!([{"bearerAuth": []}])
     );
-    assert!(
-        openapi["paths"]["/v1/records/assets"]["get"]
-            .get("x-registry-queryProfile")
-            .is_some()
-    );
-    assert!(
-        openapi["paths"]["/v1/records/assets"]["get"]
-            .get("x-registry-queryProfiles")
-            .is_none()
-    );
+    assert!(openapi["paths"]["/v1/records/assets"]["get"]
+        .get("x-registry-queryProfile")
+        .is_some());
+    assert!(openapi["paths"]["/v1/records/assets"]["get"]
+        .get("x-registry-queryProfiles")
+        .is_none());
     assert_eq!(
-        openapi["paths"]["/v1/records/assets"]["get"]["x-registry-queryProfile"]["selectableProperties"],
+        openapi["paths"]["/v1/records/assets"]["get"]["x-registry-queryProfile"]
+            ["selectableProperties"],
         json!(["assetCode", "label"])
     );
     assert_eq!(
@@ -3656,7 +3623,7 @@ async fn runtime_openapi_contract_is_filtered_to_the_selected_acceptance_profile
     let link = &record_operation["responses"]["200"]["headers"]["Link"];
     assert_eq!(
         link["description"],
-        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible entity schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers."
+        "Emitted only for application/json and application/ld+json Registry Record responses and omitted for application/geo+json. Carries the Registry Record profile and caller-visible record type schema. The describedby target includes the configured deployment prefix and is never derived from Host or forwarded headers."
     );
     assert_eq!(
         link["schema"]["example"],
@@ -3672,11 +3639,9 @@ async fn runtime_openapi_contract_is_filtered_to_the_selected_acceptance_profile
             .get("traceparent")
             .is_some()
     );
-    assert!(
-        openapi["components"]["schemas"]["asset-item"]["properties"]
-            .get("assetClass")
-            .is_none()
-    );
+    assert!(openapi["components"]["schemas"]["asset-item"]["properties"]
+        .get("assetClass")
+        .is_none());
     assert!(openapi["paths"].get("/v1/records/inspections").is_none());
     assert_eq!(harness.records.calls(), 0);
 }
@@ -3863,8 +3828,8 @@ fn metadata_operation<'a>(document: &'a Value, id: &str) -> &'a Value {
 }
 
 #[tokio::test]
-async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_before_generic_fallback()
- {
+async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_before_generic_fallback(
+) {
     let harness = Harness::from_project(METADATA_LABEL_PROJECT, true);
     let document = body_json(
         harness
@@ -3902,13 +3867,11 @@ async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_b
     let finding = metadata_operation(&document, "records.finding.get");
     let reference = &finding["fields"][0]["reference"];
     assert_eq!(reference["targetRecordType"], "inspection");
-    assert!(
-        reference["operations"]
-            .as_array()
-            .expect("reference operations")
-            .iter()
-            .any(|operation| operation["labelFields"] == json!(["inspection-code"]))
-    );
+    assert!(reference["operations"]
+        .as_array()
+        .expect("reference operations")
+        .iter()
+        .any(|operation| operation["labelFields"] == json!(["inspection-code"])));
 
     let rendered = document.to_string();
     for hidden in [
@@ -3937,13 +3900,11 @@ async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_b
     );
     let redacted_reference =
         &metadata_operation(&redacted, "records.finding.get")["fields"][0]["reference"];
-    assert!(
-        redacted_reference["operations"]
-            .as_array()
-            .expect("redacted reference operations")
-            .iter()
-            .all(|operation| operation["labelFields"] == json!(["import-source"]))
-    );
+    assert!(redacted_reference["operations"]
+        .as_array()
+        .expect("redacted reference operations")
+        .iter()
+        .all(|operation| operation["labelFields"] == json!(["import-source"])));
     assert!(!redacted.to_string().contains("inspection-code"));
     assert_eq!(harness.records.calls(), 0);
 }
@@ -4142,13 +4103,11 @@ async fn workspace_references_require_independent_same_profile_target_operations
     let reference =
         &metadata_operation(&document, "records.membership.get")["fields"][0]["reference"];
     assert_eq!(reference, &json!({"manualEntry":true,"operations":[]}));
-    assert!(
-        document["operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|operation| operation["readPath"]["id"] == "people")
-    );
+    assert!(document["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|operation| operation["readPath"]["id"] == "people"));
     // The no-profile request can have different compiled defaults per route.
     // Even a visible direct operation in another profile cannot label this reference.
     let other_profile = format!(
@@ -4196,12 +4155,10 @@ async fn workspace_temporal_capabilities_and_no_store_cover_success_and_refusal(
         .unwrap();
     assert_eq!(as_of["query"]["temporal"]["parameter"], "asOf");
     assert_eq!(as_of["query"]["temporal"]["required"], true);
-    assert!(
-        as_of["request"]["queryParameters"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("asOf"))
-    );
+    assert!(as_of["request"]["queryParameters"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("asOf")));
     for uri in [
         "/v1/registry",
         "/openapi.json",

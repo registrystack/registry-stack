@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use registry_review_client::{
     ReviewCreateRequest, ReviewRequestAccepted, ReviewResult, SubmissionDigest,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tokio_postgres::GenericClient;
@@ -99,7 +99,7 @@ fn validate_retained_closure(registry_id: &str, row: &Retained) -> Result<(), Mu
     );
     if authority != &row.authority
         || policy != &row.policy
-        || row.request.kind != policy.id
+        || row.request.policy != *policy
         || row.request.subject.source != *source
         || row.request.subject.subject_type != "proposal"
         || row.request.subject.id != row.id.to_string()

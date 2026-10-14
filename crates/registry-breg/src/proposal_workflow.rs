@@ -5,7 +5,7 @@ use std::fmt;
 
 use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -2531,14 +2531,12 @@ mod source_owned_review_tests {
                 record("placement-1"),
                 revision(3),
             ),
-            vec![
-                PreparedFieldChange::set(
-                    FieldId::new("site").expect("field id"),
-                    FieldValue::present(json!("site-a")),
-                    json!("site-b"),
-                )
-                .expect("field change"),
-            ],
+            vec![PreparedFieldChange::set(
+                FieldId::new("site").expect("field id"),
+                FieldValue::present(json!("site-a")),
+                json!("site-b"),
+            )
+            .expect("field change")],
         )
         .expect("effect");
         let snapshot_bytes = canonicalize_json(

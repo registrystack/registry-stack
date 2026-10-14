@@ -10,7 +10,7 @@ mod client_http;
 mod postgres_harness;
 
 use registry_breg::api::VerifiedRequestClaims;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg_client::{
     BRegAsOfListRequest, BRegBatchBuilder, BRegChangeContext, BRegCreateRequest,
@@ -18,7 +18,7 @@ use registry_breg_client::{
     BRegPreparedCreate, BRegProblemCode, BRegRecordFormat, BRegRecordOptions,
     BRegSnapshotListRequest,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn registry() -> registry_breg::CompiledRegistry {
@@ -145,27 +145,21 @@ async fn sdk_atomic_corrections_snapshots_revisions_tombstone_and_recovery_use_r
     );
     let oversized =
         create(json!({"code":"LIMIT","label":"x".repeat(16_384),"validFrom":"2020-01-01"}));
-    assert!(
-        BRegBatchBuilder::new(&batch_binding)
-            .create(&oversized)
-            .unwrap()
-            .build()
-            .is_err()
-    );
+    assert!(BRegBatchBuilder::new(&batch_binding)
+        .create(&oversized)
+        .unwrap()
+        .build()
+        .is_err());
     let missing_required = create(json!({"code":"LIMIT","validFrom":"2020-01-01"}));
-    assert!(
-        BRegBatchBuilder::new(&batch_binding)
-            .create(&missing_required)
-            .is_err()
-    );
+    assert!(BRegBatchBuilder::new(&batch_binding)
+        .create(&missing_required)
+        .is_err());
     let unknown_field = create(
         json!({"code":"LIMIT","label":"bounded","validFrom":"2020-01-01","secret":"not writable"}),
     );
-    assert!(
-        BRegBatchBuilder::new(&batch_binding)
-            .create(&unknown_field)
-            .is_err()
-    );
+    assert!(BRegBatchBuilder::new(&batch_binding)
+        .create(&unknown_field)
+        .is_err());
 
     let old = client
         .create_record(
@@ -405,12 +399,10 @@ async fn sdk_atomic_corrections_snapshots_revisions_tombstone_and_recovery_use_r
         .await
         .unwrap();
     assert_eq!(live.value.value.items.len(), 1);
-    assert!(
-        client
-            .record_revisions("entries", &current.value.data.record_identifier, None)
-            .await
-            .is_ok()
-    );
+    assert!(client
+        .record_revisions("entries", &current.value.data.record_identifier, None)
+        .await
+        .is_ok());
 
     let request = create(json!({"code":"RECOVERY","label":"saved","validFrom":"2020-01-01"}));
     let prepared = client

@@ -10,27 +10,27 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, Method, Request, Response, StatusCode};
 use chrono::{Datelike, Days, NaiveDate, Utc};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router, set_request_deadline_for_test,
+    router, set_request_deadline_for_test, HttpService, ReadRuntimeIdentity, ReadinessProbe,
+    ServiceFuture, VerifiedClaimValue, VerifiedRequestClaims,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
-    ClaimContext, ExpectedManagedCatalog, PostgresRecordReadService, PostgresStatisticsService,
-    RegistryLockKey, RegistryStateTestIdentity, StatisticsPublishPause, StatisticsWithdrawalPause,
     begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
-    verify_catalog_identity_for_catalog,
+    verify_catalog_identity_for_catalog, ClaimContext, ExpectedManagedCatalog,
+    PostgresRecordReadService, PostgresStatisticsService, RegistryLockKey,
+    RegistryStateTestIdentity, StatisticsPublishPause, StatisticsWithdrawalPause,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::Service as _;
 use zeroize::Zeroizing;
 
@@ -377,22 +377,18 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
     .await;
     assert_eq!(reader_metadata.status(), StatusCode::OK);
     let reader_metadata = body_json(reader_metadata).await;
-    assert!(
-        reader_metadata["recordTypes"]
-            .as_array()
-            .is_some_and(Vec::is_empty)
-    );
+    assert!(reader_metadata["recordTypes"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
     assert_eq!(
         reader_metadata["statisticalDatasets"][0]["id"],
         "records-by-category"
     );
-    assert!(
-        reader_metadata["statisticalDatasets"][0]["operations"]
-            .as_array()
-            .is_some_and(|operations| operations
-                .iter()
-                .all(|operation| operation != "read-live" && operation != "publish-release"))
-    );
+    assert!(reader_metadata["statisticalDatasets"][0]["operations"]
+        .as_array()
+        .is_some_and(|operations| operations
+            .iter()
+            .all(|operation| operation != "read-live" && operation != "publish-release")));
     let reader_openapi = send(
         &app,
         Method::GET,
@@ -404,21 +400,16 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
     .await;
     assert_eq!(reader_openapi.status(), StatusCode::OK);
     let reader_openapi = body_json(reader_openapi).await;
-    assert!(
-        reader_openapi["paths"]
-            .get("/v1/statistics/records-by-category:live")
-            .is_none()
-    );
-    assert!(
-        reader_openapi["paths"]
-            .get("/v1/statistics/records-by-category/releases")
-            .is_some()
-    );
-    assert!(
-        reader_openapi["paths"]["/v1/statistics/records-by-category/releases/{period}/versions"]
-            .get("post")
-            .is_none()
-    );
+    assert!(reader_openapi["paths"]
+        .get("/v1/statistics/records-by-category:live")
+        .is_none());
+    assert!(reader_openapi["paths"]
+        .get("/v1/statistics/records-by-category/releases")
+        .is_some());
+    assert!(reader_openapi["paths"]
+        ["/v1/statistics/records-by-category/releases/{period}/versions"]
+        .get("post")
+        .is_none());
     let neither = send(
         &app,
         Method::GET,
@@ -3398,11 +3389,9 @@ async fn caller_filtered_openapi_hides_an_inaccessible_statistical_default() {
     assert_eq!(operation["x-registry-accessProfile"], "analyst-wide");
     assert!(operation.get("x-registry-accessProfiles").is_none());
     assert!(operation.get("x-registry-defaultAccessProfile").is_none());
-    assert!(
-        !serde_json::to_string(operation)
-            .unwrap()
-            .contains("\"analyst\"")
-    );
+    assert!(!serde_json::to_string(operation)
+        .unwrap()
+        .contains("\"analyst\""));
     let period = month_code(Utc::now().date_naive());
 
     let omitted = send(
@@ -4053,12 +4042,12 @@ async fn insert_other_definition_release(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn changing_population_through_package_apply_starts_a_new_release_series() {
     use registry_breg::migration::{
-        ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-        ApplyVerifiedPackageRequest, apply_verified_package,
+        apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+        ApplyVerifiedPackageRequest,
     };
     use registry_breg::package::{
-        PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile,
-        load_package, prepare_package,
+        load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+        PackageMigrationPlanInput, PackageSourceFile,
     };
     use registry_breg::postgres::managed_schema_fingerprint;
     let database = TestDatabase::create(4).await;

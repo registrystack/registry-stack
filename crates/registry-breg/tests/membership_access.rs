@@ -34,12 +34,10 @@ fn membership_boundaries_compile_for_distinct_registry_models() {
         let explained =
             serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
         assert!(explained.to_string().contains("membershipBoundaries"));
-        assert!(
-            !registry
-                .findings()
-                .iter()
-                .any(|finding| finding.code == "breg.access.profile-unrestricted-collection")
-        );
+        assert!(!registry
+            .findings()
+            .iter()
+            .any(|finding| finding.code == "breg.access.profile-unrestricted-collection"));
     }
 }
 
@@ -103,18 +101,16 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
         json!([{"path":"facilities","readableFields":["label"]}]);
     let failure =
         compile(&value).expect_err("read paths cannot ignore protected target membership");
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.access.membership-read-path-target")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.access.membership-read-path-target"));
 
     let mut action = action_requirements::project();
-    action["accessProfiles"][0]["permissions"]["actions"][0]["membershipBoundaries"] = source(
-        "facility",
-    )["accessProfiles"][0]["permissions"]["records"][0]["membershipBoundaries"]
-        .clone();
+    action["accessProfiles"][0]["permissions"]["actions"][0]["membershipBoundaries"] =
+        source("facility")["accessProfiles"][0]["permissions"]["records"][0]
+            ["membershipBoundaries"]
+            .clone();
     let failure = registry_breg::parse_project_yaml(&serde_json::to_vec(&action).unwrap())
         .expect_err("an action grant must not silently ignore entity membership rules");
     let refusals: Vec<_> = failure

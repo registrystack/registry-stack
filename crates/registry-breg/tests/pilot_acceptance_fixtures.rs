@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
+use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{
     Classification, ConstraintSource, FieldTypeSource, ModuleAssetSource, MutationMode, Operation,
     RegistryModule, RegistryProject, UniqueWhenPredicate, ValidTimeRole,
@@ -199,12 +199,10 @@ fn inspection_pilot_fixture_compiles_protected_observations_and_create_only_perm
     let compiled = compile_fixture("inspection");
     assert_eq!(compiled.registry_id(), "inspection");
     assert_eq!(compiled.entities().len(), 4);
-    assert!(
-        compiled
-            .entities()
-            .values()
-            .all(|entity| entity.classification == Classification::Restricted)
-    );
+    assert!(compiled
+        .entities()
+        .values()
+        .all(|entity| entity.classification == Classification::Restricted));
 
     let observation = entity(&compiled, "inspection-observation");
     assert!(observation.constraints.values().any(|constraint| {
@@ -219,11 +217,9 @@ fn inspection_pilot_fixture_compiles_protected_observations_and_create_only_perm
         )
     }));
 
-    assert!(
-        entity(&compiled, "public-authority")
-            .fields
-            .contains_key("jurisdiction")
-    );
+    assert!(entity(&compiled, "public-authority")
+        .fields
+        .contains_key("jurisdiction"));
     let permit = entity(&compiled, "permit");
     assert!(permit.fields.contains_key("issuing-authority"));
     assert_eq!(permit.mutation_mode, MutationMode::CreateOnly);
@@ -319,12 +315,10 @@ fn business_pilot_fixture_compiles_composite_identifiers_temporal_appointments_a
         .access_profiles
         .get("public-register")
         .expect("public profile compiled");
-    assert!(
-        public_entity
-            .required_scopes
-            .iter()
-            .eq(["business:public.read"])
-    );
+    assert!(public_entity
+        .required_scopes
+        .iter()
+        .eq(["business:public.read"]));
     assert!(public_entity.readable_fields.contains("legal-name"));
     assert!(!public_entity.readable_fields.contains("protected-contact"));
     assert!(!public_entity.readable_fields.contains("internal-case-note"));
@@ -333,11 +327,9 @@ fn business_pilot_fixture_compiles_composite_identifiers_temporal_appointments_a
         .access_profiles
         .get("business-registrar")
         .expect("registrar profile compiled");
-    assert!(
-        registrar_entity
-            .readable_fields
-            .contains("protected-contact")
-    );
+    assert!(registrar_entity
+        .readable_fields
+        .contains("protected-contact"));
 
     let filing = entity(&compiled, "filing");
     assert_eq!(filing.mutation_mode, MutationMode::CreateOnly);
@@ -375,23 +367,17 @@ fn business_pilot_fixture_compiles_composite_identifiers_temporal_appointments_a
         .access_profiles
         .get("public-register")
         .expect("appointment public profile compiled");
-    assert!(
-        public_appointment
-            .required_purposes
-            .iter()
-            .eq(["public-register"])
-    );
-    assert!(
-        public_appointment
-            .filterable_fields
-            .contains("effective-from")
-    );
+    assert!(public_appointment
+        .required_purposes
+        .iter()
+        .eq(["public-register"]));
+    assert!(public_appointment
+        .filterable_fields
+        .contains("effective-from"));
     assert!(!public_appointment.readable_fields.contains("officer-code"));
-    assert!(
-        !public_appointment
-            .readable_fields
-            .contains("protected-officer-id")
-    );
+    assert!(!public_appointment
+        .readable_fields
+        .contains("protected-officer-id"));
 
     let get_access = compiled
         .access()

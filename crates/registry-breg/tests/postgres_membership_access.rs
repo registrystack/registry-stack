@@ -7,25 +7,24 @@ mod membership_fixture;
 #[allow(dead_code)]
 mod postgres_harness;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, authenticated_router,
+    authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    ClaimContext, ExpectedManagedCatalog, PostgresRecordMutationService, PostgresRecordReadService,
-    PostgresRevisionReadService, PostgresSnapshotReadService, RegistryLockKey,
-    RegistryStateTestIdentity, begin_record_transaction,
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
-    verify_catalog_identity_for_catalog,
+    begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
+    verify_catalog_identity_for_catalog, ClaimContext, ExpectedManagedCatalog,
+    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
+    PostgresSnapshotReadService, RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{MockIdp, oidc_verifier_config};
-use serde_json::{Value, json};
+use registry_platform_testing::{oidc_verifier_config, MockIdp};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
 use tower::Service as _;
@@ -372,17 +371,15 @@ async fn real_postgres_membership_reads_recheck_live_membership_and_hide_process
             ))
             .await
             .unwrap();
-        assert!(
-            verify_catalog_identity_for_catalog(
-                &migration,
-                &identity,
-                &catalog,
-                &database.migration_role,
-                &database.runtime_role
-            )
-            .await
-            .is_err()
-        );
+        assert!(verify_catalog_identity_for_catalog(
+            &migration,
+            &identity,
+            &catalog,
+            &database.migration_role,
+            &database.runtime_role
+        )
+        .await
+        .is_err());
         migration
             .batch_execute(&format!(
                 "ALTER FUNCTION registry_context.\"{}\"(uuid) SECURITY INVOKER",
@@ -400,17 +397,15 @@ async fn real_postgres_membership_reads_recheck_live_membership_and_hide_process
         .await
         .expect("restored helper matches original catalog");
         migration.batch_execute("CREATE FUNCTION registry_context.membership_aaaaaaaaaaaaaaaaaaaaaaaa(uuid) RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS 'SELECT false'").await.unwrap();
-        assert!(
-            verify_catalog_identity_for_catalog(
-                &migration,
-                &identity,
-                &catalog,
-                &database.migration_role,
-                &database.runtime_role
-            )
-            .await
-            .is_err()
-        );
+        assert!(verify_catalog_identity_for_catalog(
+            &migration,
+            &identity,
+            &catalog,
+            &database.migration_role,
+            &database.runtime_role
+        )
+        .await
+        .is_err());
         task.abort();
         database.cleanup().await;
     }
@@ -511,8 +506,8 @@ async fn real_postgres_membership_successors_match_fresh_install_when_added_chan
         .unwrap();
     let guarded = membership_fixture::source("facility");
     let mut changed = guarded.clone();
-    changed["accessProfiles"][0]["permissions"]["records"][0]["membershipBoundaries"][0]["principalField"] =
-        json!("private-note");
+    changed["accessProfiles"][0]["permissions"]["records"][0]["membershipBoundaries"][0]
+        ["principalField"] = json!("private-note");
     for (stage, source) in [("added", guarded), ("changed", changed), ("removed", base)] {
         let candidate = membership_fixture::compile(&source).unwrap();
         let changes =

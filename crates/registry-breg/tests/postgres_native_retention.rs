@@ -9,30 +9,30 @@ mod client_http;
 mod postgres_harness;
 
 use axum::{
-    Router,
     body::{Body, Bytes},
     extract::{OriginalUri, State},
     http::{Method, StatusCode},
     response::{IntoResponse, Response},
+    Router,
 };
 use registry_breg::{
     api::{VerifiedClaimValue, VerifiedRequestClaims},
     attachment_storage::AttachmentStorage,
-    compiler::{CompileProfile, compile_project},
+    compiler::{compile_project, CompileProfile},
     contract::parse_project_json,
-    runtime_config::{RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND, parse_runtime_config},
+    runtime_config::{parse_runtime_config, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND},
 };
 use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
     BRegRecordFormat,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
 };
 
@@ -411,13 +411,28 @@ async fn shared_attachment_bytes_survive_until_the_last_native_proposal_erasure(
             .attachment_references,
         1
     );
+    assert!(fixture
+        .http
+        .client
+        .download_proposal_attachment(&first, "support")
+        .await
+        .is_err());
+    let erased = fixture
+        .http
+        .client
+        .read_proposal(&first)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        erased.state(),
+        registry_breg_client::BRegProposalState::Applied
+    );
+    assert!(erased.effect_digest().is_none());
+    assert!(erased.application_status().is_none());
     assert!(
-        fixture
-            .http
-            .client
-            .download_proposal_attachment(&first, "support")
-            .await
-            .is_err()
+        erased.application().is_none(),
+        "erased evidence cannot settle a frozen-submission observation"
     );
     assert_eq!(
         fixture
@@ -541,12 +556,10 @@ async fn external_tombstones_survive_late_writes_failed_rechecks_and_backend_cha
         .await
         .unwrap();
     assert_eq!(row.get::<_, String>(0), "delete_pending");
-    assert!(
-        cleanup(&fixture, AttachmentStorage::Database)
-            .cleanup_attachments()
-            .await
-            .is_err()
-    );
+    assert!(cleanup(&fixture, AttachmentStorage::Database)
+        .cleanup_attachments()
+        .await
+        .is_err());
     s3.state.mode.store(0, Ordering::SeqCst);
     let result = operator.cleanup_attachments().await.unwrap();
     assert_eq!(result.pending_external_deletions, 0);

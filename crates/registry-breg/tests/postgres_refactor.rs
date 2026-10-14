@@ -10,13 +10,13 @@ mod client_http;
 mod postgres_harness;
 
 use registry_breg::api::{VerifiedClaimValue, VerifiedRequestClaims};
-use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
-use registry_breg::contract::{ModuleAssetSource, parse_project_yaml};
+use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_yaml, ModuleAssetSource};
 use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
     BRegListRequest, BRegPatchRequest, BRegProblemCode, BRegRecordFormat, BRegRecordOptions,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
@@ -176,13 +176,11 @@ async fn facility_action_is_atomic_checks_references_and_recovers_exactly_once()
     let fault_request =
         BRegActionInvocationRequest::new(&fault_binding, input("F-1", &operators[0]), None)
             .unwrap();
-    assert!(
-        fault
-            .client
-            .invoke_action(&fault_binding, &fault_request, &key("facility-aborted"))
-            .await
-            .is_err()
-    );
+    assert!(fault
+        .client
+        .invoke_action(&fault_binding, &fault_request, &key("facility-aborted"))
+        .await
+        .is_err());
     assert_eq!(count(&fixture, "facility").await, 0);
     assert_eq!(count(&fixture, "facility-assignment").await, 0);
     let first = registrar
@@ -240,13 +238,11 @@ async fn facility_action_is_atomic_checks_references_and_recovers_exactly_once()
         None,
     )
     .unwrap();
-    assert!(
-        registrar
-            .client
-            .invoke_action(&binding, &missing, &key("missing-operator"))
-            .await
-            .is_err()
-    );
+    assert!(registrar
+        .client
+        .invoke_action(&binding, &missing, &key("missing-operator"))
+        .await
+        .is_err());
     assert_eq!(count(&fixture, "facility").await, 1);
     assert_eq!(count(&fixture, "facility-assignment").await, 1);
 
@@ -299,12 +295,11 @@ async fn facility_action_is_atomic_checks_references_and_recovers_exactly_once()
         .unwrap();
     let lost_request =
         BRegActionInvocationRequest::new(&lost_binding, input("F-3", &operators[0]), None).unwrap();
-    assert!(
-        lost.client
-            .invoke_action(&lost_binding, &lost_request, &key("facility-lost-response"))
-            .await
-            .is_err()
-    );
+    assert!(lost
+        .client
+        .invoke_action(&lost_binding, &lost_request, &key("facility-lost-response"))
+        .await
+        .is_err());
     assert_eq!(count(&fixture, "facility").await, 3);
     let recovery =
         BRegActionInvocationRequest::new(&binding, input("F-3", &operators[0]), None).unwrap();
@@ -436,6 +431,30 @@ async fn interleaved_input_aliases_wait_for_dependencies_and_commit_one_patch_or
         .await
         .unwrap();
     let record = &original.value.data.record_identifier;
+    // Commit members have canonical UUID order, independent of SQL execution.
+    // Observe actual writes to prove the folded patch waits for its later
+    // member's create dependency, regardless of the two random UUIDs' order.
+    let table = &fixture.registry.entities()["contact"].physical_table;
+    fixture
+        .database
+        .admin
+        .batch_execute(&format!(
+            r#"
+        CREATE TABLE registry_internal.fixture_write_order (
+            observed_index bigserial PRIMARY KEY, record_id uuid NOT NULL
+        );
+        CREATE FUNCTION registry_internal.fixture_observe_write() RETURNS trigger
+            LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+        BEGIN
+            INSERT INTO registry_internal.fixture_write_order(record_id) VALUES(NEW.record_id);
+            RETURN NEW;
+        END $$;
+        CREATE TRIGGER fixture_observe_write AFTER INSERT OR UPDATE ON registry_data."{table}"
+            FOR EACH ROW EXECUTE FUNCTION registry_internal.fixture_observe_write();
+    "#
+        ))
+        .await
+        .unwrap();
     let input = json!({"first":record,"second":record,"name":"Changed","jurisdiction":"zone-a"});
     let binding = metadata
         .value
@@ -484,6 +503,23 @@ async fn interleaved_input_aliases_wait_for_dependencies_and_commit_one_patch_or
         current.value.data.domain_data["parent"],
         json!(parent.to_string())
     );
+    let writes = fixture
+        .database
+        .admin
+        .query(
+            "SELECT record_id FROM registry_internal.fixture_write_order ORDER BY observed_index",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        writes
+            .iter()
+            .map(|row| row.get::<_, Uuid>(0))
+            .collect::<Vec<_>>(),
+        vec![parent, Uuid::parse_str(record).unwrap()],
+        "the physical folded patch follows every member's dependency"
+    );
     let members = fixture
         .database
         .admin
@@ -495,13 +531,15 @@ async fn interleaved_input_aliases_wait_for_dependencies_and_commit_one_patch_or
         )
         .await
         .unwrap();
+    let mut expected_members = vec![parent, Uuid::parse_str(record).unwrap()];
+    expected_members.sort();
     assert_eq!(
         members
             .iter()
             .map(|row| row.get::<_, Uuid>(0))
             .collect::<Vec<_>>(),
-        vec![parent, Uuid::parse_str(record).unwrap()],
-        "the folded group waits for every member dependency"
+        expected_members,
+        "the commit contains each physical row once in canonical order"
     );
     let events: i64 = fixture
         .database
@@ -538,12 +576,10 @@ async fn interleaved_input_aliases_wait_for_dependencies_and_commit_one_patch_or
         Some(&conditions.value),
     )
     .unwrap();
-    assert!(
-        client
-            .invoke_action(&conflict, &invocation, &key("conflicting-aliases"))
-            .await
-            .is_err()
-    );
+    assert!(client
+        .invoke_action(&conflict, &invocation, &key("conflicting-aliases"))
+        .await
+        .is_err());
     assert_eq!(
         count(&fixture, "contact").await,
         2,
@@ -741,17 +777,15 @@ async fn minimal_standalone_crud_concealment_conditions_and_exact_receipts() {
 
     let outside =
         create(json!({"name":"Outside","email":"outside@example.test","jurisdiction":"zone-b"}));
-    assert!(
-        client
-            .create_record(
-                &create_binding,
-                &outside,
-                &key("minimal-outside"),
-                BRegRecordFormat::Json
-            )
-            .await
-            .is_err()
-    );
+    assert!(client
+        .create_record(
+            &create_binding,
+            &outside,
+            &key("minimal-outside"),
+            BRegRecordFormat::Json
+        )
+        .await
+        .is_err());
     let table = &fixture.registry.entities()["contact"].physical_table;
     let row = fixture
         .database

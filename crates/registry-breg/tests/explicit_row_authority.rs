@@ -5,7 +5,7 @@ use registry_breg::contract::{
     ActionTargetPermissionSource, EntityPermissionSource, ProposalTargetPermissionSource,
 };
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// An authored grant states its row reach: `unrestricted`, or at least one
 /// boundary. Nothing written, `null`, and an empty list are all refused.

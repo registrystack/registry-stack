@@ -222,7 +222,7 @@ test('unknown problem codes fall back to HTTP status semantics', async () => {
       assert.equal(error.status, status);
       assert.equal(error.traceId, TRACE_ID);
       assert.equal(error.code, undefined);
-      assert.equal(error.planRefusal, undefined);
+      assert.equal('planRefusal' in error, false);
       assert.equal(error.refusalCode, undefined);
       assert.equal(error.reasonCode, undefined);
       assert.equal(error.fieldPath, undefined);

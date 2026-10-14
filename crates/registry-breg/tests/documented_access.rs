@@ -4,8 +4,8 @@
 )]
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_json};
-use serde_json::{Value, json};
+use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
+use serde_json::{json, Value};
 
 const ACCESS_PAGE: &str =
     include_str!("../../../docs/site/src/content/docs/configure/breg-access.mdx");

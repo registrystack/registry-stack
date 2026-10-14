@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::action_handler::{ActionHandlerOutcome, evaluate_plan_detailed};
-use crate::compiler::{CompileProfile, compile_project_with_assets};
-use crate::contract::{ModuleAssetSource, parse_project_json};
+use crate::action_handler::{evaluate_plan_detailed, ActionHandlerOutcome};
+use crate::compiler::{compile_project_with_assets, CompileProfile};
+use crate::contract::{parse_project_json, ModuleAssetSource};
 use crate::proposal_workflow::{
     ProposalKey, ProposalWorkflow, TrustedActorRef, TrustedTimestamp, TrustedTransitionContext,
 };
@@ -139,14 +139,12 @@ fn neutral_inputs_preserve_omitted_and_function_null_distinction() {
     let fixed = fixture_with(json!([patch_effect()]), |source| {
         source["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({"id":"optional-note","type":"string","maximumLength":32,"classification":"internal"}))
     });
-    assert!(
-        existing(
-            &fixed,
-            map(json!({"one":TARGET,"value":"changed","optional-note":null})),
-            map(json!({"first":"old"}))
-        )
-        .is_err()
-    );
+    assert!(existing(
+        &fixed,
+        map(json!({"one":TARGET,"value":"changed","optional-note":null})),
+        map(json!({"first":"old"}))
+    )
+    .is_err());
 }
 
 #[test]

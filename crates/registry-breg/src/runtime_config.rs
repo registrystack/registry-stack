@@ -10,24 +10,24 @@ use std::{
     time::Duration,
 };
 
-use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
     AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
-    PackageConfig as SharedPackageConfig, REMOVED_OIDC_JWKS_SOURCE_KIND, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
-    TaskGrantStatusConfig,
+    PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    SecretError, SecretReference, SecretResolver, TaskGrantStatusConfig,
+    REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
-use registry_platform_crypto::{PublicJwk, SigningAlgorithm, parse_json_strict};
+use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
 use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_oidc::{
-    ClaimNames, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
-    access_token_typ_set, fetch_discovery,
+    access_token_typ_set, fetch_discovery, ClaimNames, JwksFetcher, JwksFetcherConfig,
+    OidcDiscoveryConfig, TokenVerifierConfig,
 };
 #[cfg(feature = "schema")]
 use registry_platform_yaml::{BoundedU32, BoundedU64};
@@ -48,8 +48,8 @@ use crate::{
     },
     model::CompiledRegistry,
     package::{
-        PackageError, PackageLoadContext, VerifiedPackage, VerifiedPredecessorPackage,
         load_package_with_verified_envelope, load_predecessor_package_with_verified_envelope,
+        PackageError, PackageLoadContext, VerifiedPackage, VerifiedPredecessorPackage,
     },
     postgres::{ConnectionConfig, PoolBounds, SqlIdentifier},
 };
@@ -701,22 +701,15 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         ["attachmentStorage" | "attachmentVerification", "endpoint"]
         | ["eventDestinations", _, "origin"]
         | ["evidenceProviders", _, "baseUrl"]
-        | [
-            "taskGrantStatus",
-            _,
-            "baseUrl"
-            | "sourceIssuer"
-            | "tokenEndpoint"
-            | "clientAssertionAudience"
-            | "caseworkResource",
-        ]
+        | ["taskGrantStatus", _, "baseUrl"
+        | "sourceIssuer"
+        | "tokenEndpoint"
+        | "clientAssertionAudience"
+        | "caseworkResource"]
         | ["reviewAuthorities", _, "endpoint"]
-        | [
-            "reviewAuthorities",
-            _,
-            "privateKeyJwt",
-            "tokenEndpoint" | "assertionAudience" | "resource",
-        ] => "https://deferred.invalid/",
+        | ["reviewAuthorities", _, "privateKeyJwt", "tokenEndpoint" | "assertionAudience" | "resource"] => {
+            "https://deferred.invalid/"
+        }
         _ => registry_platform_config::DEFAULT_STAND_IN,
     }
 }

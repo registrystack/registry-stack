@@ -14,28 +14,28 @@
 mod postgres_harness;
 
 use axum::{
-    body::{Body, to_bytes},
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
 use postgres_harness::TestDatabase;
 use registry_breg::contract::{ActionHandlerKindSource, ActionPlanSource};
 use registry_breg::{
     api::{
-        HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-        VerifiedRequestClaims, router,
+        router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+        VerifiedClaimValue, VerifiedRequestClaims,
     },
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_yaml},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_yaml, ModuleAssetSource},
     cursor::CursorCodec,
     mutation::MutationFaultPoint,
     postgres::{
+        initialize_compiled_registry_state_for_test, install_compiled_schema,
         ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-        RegistryLockKey, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-        install_compiled_schema,
+        RegistryLockKey, RegistryStateTestIdentity,
     },
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;

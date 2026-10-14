@@ -12,21 +12,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-use axum::Router;
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, IF_MATCH};
 use axum::http::{HeaderMap, Method, Request, Response, StatusCode};
+use axum::Router;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use registry_platform_httpsec::{TraceId, response_trace_id};
+use registry_platform_httpsec::{response_trace_id, TraceId};
 use registry_platform_oidc::{JwksFetcher, TokenVerifier};
 use registry_platform_yaml::{
-    ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Node, RemovedKey, Report,
-    RetiredApiVersion, Severity, Source, UniqueList, shape_union, tagged_union,
+    shape_union, tagged_union, ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Node,
+    RemovedKey, Report, RetiredApiVersion, Severity, Source, UniqueList,
 };
 #[cfg(feature = "schema")]
 use registry_platform_yaml::{BoundedU32, LocalId};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use zeroize::Zeroizing;
@@ -34,10 +34,10 @@ use zeroize::Zeroizing;
 use crate::api::{HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture};
 use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use crate::auth::RegistryAuthenticator;
-use crate::compiler::{CompileProfile, compile_project_with_assets, module_digest_with_assets};
+use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
+use crate::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use crate::contract::{AccessProfileSource, LookupValueOrigin, Operation};
-use crate::contract::{ModuleAssetSource, parse_module_yaml, parse_project_yaml};
-use crate::data::{DataImportOperation, DataImportPlan, FieldValue, validate_field_value};
+use crate::data::{validate_field_value, DataImportOperation, DataImportPlan, FieldValue};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::event_destination::EventDestinationActivationError;
 use crate::import_authority::{
@@ -52,14 +52,13 @@ use crate::model::{CompiledQueryKind, CompiledQueryOperation, CompiledRegistry, 
 #[cfg(any(test, feature = "postgres-test"))]
 use crate::package::VerifiedPackage;
 use crate::package::{
-    FIXTURE_JOURNEYS_PATH, MAX_RHAI_PLANNER_SOURCE_BYTES, PackageCompileProfile, PackageFileRole,
-    PreparedPackage,
+    PackageCompileProfile, PackageFileRole, PreparedPackage, FIXTURE_JOURNEYS_PATH,
+    MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
 use crate::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
     PreparedSchemaTestCatalogVerifier, PreparedSchemaTestDatabase, RuntimePool,
 };
-use crate::rhai_planner::PlanError;
 use crate::runtime_config::RuntimeConfig;
 #[cfg(feature = "postgres-test")]
 use crate::startup::PreparedServer;
@@ -700,6 +699,7 @@ struct ExpectationSource {
     #[serde(default)]
     refusal_code: Option<String>,
     #[serde(default)]
+    #[serde(rename = "recordType")]
     entity_id: Option<String>,
     #[serde(default)]
     field_id: Option<String>,
@@ -4110,8 +4110,8 @@ fn assert_response(
                         .ok_or(FixtureError::ResponseShapeRefused)?,
                 )
             } else if let Some((entity, field)) = &step.problem_bindings.pattern_field {
-                keys.extend(["entityId", "fieldId"]);
-                if document.get("entityId").and_then(Value::as_str) != Some(entity.as_str())
+                keys.extend(["recordType", "fieldId"]);
+                if document.get("recordType").and_then(Value::as_str) != Some(entity.as_str())
                     || document.get("fieldId").and_then(Value::as_str) != Some(field.as_str())
                 {
                     return Err(FixtureError::ExpectationMismatch);
@@ -4529,18 +4529,6 @@ fn assert_record_meta(object: &Map<String, Value>) -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// The details a refused change-request plan may carry: one for each closed
-/// planner kind, taken from the planner's own vocabulary.
-static PLAN_REFUSED_DETAILS: [&str; PlanError::PLAN_REFUSALS.len()] = {
-    let mut details = [""; PlanError::PLAN_REFUSALS.len()];
-    let mut index = 0;
-    while index < details.len() {
-        details[index] = PlanError::PLAN_REFUSALS[index].problem_detail();
-        index += 1;
-    }
-    details
-};
-
 static HANDLER_FAILED_DETAILS: [&str; 1] =
     ["The action handler could not produce an accepted result."];
 
@@ -4553,7 +4541,6 @@ fn problem_contract(
     match (status, code?) {
         (400, "query.invalid") => Some(("Bad Request", &["The query request is invalid."])),
         (400, "request.invalid") => Some(("Bad Request", &["The request is invalid."])),
-        (400, "request.plan_refused") => Some(("Bad Request", &PLAN_REFUSED_DETAILS)),
         (503, "action.evidence_failed") => Some((
             "Service Unavailable",
             &["The declared Evidence dependency could not be accepted."],
@@ -5710,8 +5697,8 @@ mod tests {
 
     use crate::compiler::module_digest;
     use crate::package::{
-        PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
-        PackageSourceFile, load_package, prepare_package, prepare_package_with_project_assets,
+        load_package, prepare_package, prepare_package_with_project_assets, PackageBuildRequest,
+        PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
     };
 
     /// A request decoded the way the journeys reader decodes one: the shape
@@ -7212,38 +7199,7 @@ journeys:
     }
 
     #[test]
-    fn a_refused_plan_admits_every_closed_planner_detail_and_nothing_else() {
-        let step = plan_refused_step();
-        for kind in PlanError::PLAN_REFUSALS {
-            assert_eq!(
-                assert_response(
-                    &step,
-                    StatusCode::BAD_REQUEST,
-                    &plan_refused_document(kind.problem_detail())
-                ),
-                Ok(()),
-                "the journey expects the closed planner kind {kind}"
-            );
-        }
-        for detail in [
-            PlanError::Deadline.problem_detail(),
-            "The change-request planner refused the submission.",
-            "The change-request planner refused the submission: change_request.planner.unknown.",
-        ] {
-            assert_eq!(
-                assert_response(
-                    &step,
-                    StatusCode::BAD_REQUEST,
-                    &plan_refused_document(detail)
-                ),
-                Err(FixtureError::ExpectationMismatch),
-                "a detail outside the closed planner vocabulary is refused: {detail}"
-            );
-        }
-    }
-
-    #[test]
-    fn only_a_refused_plan_carries_more_than_one_expectable_detail() {
+    fn fixed_problem_details_are_closed_and_retired_plan_refusals_are_unrecognized() {
         for (status, code) in [
             (400, "query.invalid"),
             (400, "request.invalid"),
@@ -7254,17 +7210,14 @@ journeys:
             (412, "precondition.failed"),
             (415, "unsupported.media_type"),
             (428, "precondition.required"),
+            (500, "action.handler_failed"),
             (503, "source.unavailable"),
             (503, "service.unavailable"),
         ] {
             let (_, details) = problem_contract(status, Some(code)).expect("registered problem");
             assert_eq!(details.len(), 1, "{code} carries exactly one detail");
         }
-        let (title, details) =
-            problem_contract(400, Some("request.plan_refused")).expect("registered problem");
-        assert_eq!(title, "Bad Request");
-        assert_eq!(details.len(), PlanError::PLAN_REFUSALS.len());
-        assert!(problem_contract(400, Some("request.plan_declined")).is_none());
+        assert!(problem_contract(400, Some("request.plan_refused")).is_none());
         assert!(problem_contract(503, Some("request.plan_refused")).is_none());
     }
 
@@ -7303,60 +7256,10 @@ journeys:
         );
     }
 
-    fn plan_refused_step() -> ValidatedStep {
-        let route = CompiledRoute {
-            id: "records.request.request.submit".to_owned(),
-            entity_id: "request".to_owned(),
-            method: HttpMethod::Post,
-            path: "/v1/records/requests/{record_id}/actions/submit".to_owned(),
-            operation: Operation::Invoke,
-            query_kind: None,
-            revision_kind: None,
-            maximum_records: Some(1),
-            access_profiles: vec!["submitter".to_owned()],
-            default_access_profile: Some("submitter".to_owned()),
-        };
-        let profile: AccessProfileSource = serde_json::from_value(json!({
-            "id": "submitter",
-            "principalClaim": "principal",
-            "operations": ["invoke"],
-            "rowBoundaries": []
-        }))
-        .expect("test profile parses");
-        ValidatedStep {
-            id: "submit-refused-plan".to_owned(),
-            entity: Some("request".to_owned()),
-            action_id: None,
-            access_profile: "submitter".to_owned(),
-            claims: ClaimsSource::default(),
-            route: FixtureRoute::Entity(route),
-            profile,
-            response_readable_fields: BTreeSet::new(),
-            action: ActionSource::Invoke {
-                input: Map::new(),
-                preconditions: BTreeMap::new(),
-                idempotency_key: None,
-            },
-            problem_bindings: FixtureProblemBindings::default(),
-            expect: ExpectationSource {
-                refusal_code: None,
-                entity_id: None,
-                field_id: None,
-                outcome: ExpectedOutcome::Refusal,
-                status: 400,
-                problem_code: Some("request.plan_refused".to_owned()),
-                fields: Map::new(),
-                count: None,
-            },
-            capture: None,
-            capture_results: BTreeMap::new(),
-        }
-    }
-
     #[test]
     fn handler_and_pattern_problem_responses_are_closed_against_compiled_bindings() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance/person-registration-rhai");
+            .join("tests/fixtures/native-models/products/breg/acceptance/person-registration-rhai");
         let mut project =
             parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
         project
@@ -7414,11 +7317,11 @@ journeys:
             .flat_map(|journey| &journey.steps)
             .find(|step| step.id == "ordinary-create-enforces-identifier-pattern")
             .unwrap();
-        let document = json!({"type":crate::problem::ProblemCode::MutationConflict.type_uri(),"title":"Conflict","status":409,"detail":"The field does not conform to its declared storage pattern.","code":"mutation.conflict","traceId":"11111111111111111111111111111111","entityId":"person","fieldId":"identifier"});
+        let document = json!({"type":crate::problem::ProblemCode::MutationConflict.type_uri(),"title":"Conflict","status":409,"detail":"The field does not conform to its declared storage pattern.","code":"mutation.conflict","traceId":"11111111111111111111111111111111","recordType":"person","fieldId":"identifier"});
         assert_response(pattern, StatusCode::CONFLICT, &document).unwrap();
         for (field, value) in [
             ("detail", json!("private-canary")),
-            ("entityId", json!("unrelated")),
+            ("recordType", json!("unrelated")),
             ("fieldId", json!("display-name")),
             ("value", json!("private-canary")),
             ("fieldPath", json!("/data/identifier")),
@@ -7429,8 +7332,8 @@ journeys:
         }
         for missing_keys in [
             vec!["fieldId"],
-            vec!["entityId"],
-            vec!["entityId", "fieldId"],
+            vec!["recordType"],
+            vec!["recordType", "fieldId"],
         ] {
             let mut missing = document.clone();
             for key in missing_keys {
@@ -7445,14 +7348,18 @@ journeys:
             .find(|step| step.id == "duplicate-identifier")
             .unwrap();
         let mut generic_document = document.clone();
-        generic_document.as_object_mut().unwrap().remove("entityId");
+        generic_document
+            .as_object_mut()
+            .unwrap()
+            .remove("recordType");
         generic_document.as_object_mut().unwrap().remove("fieldId");
         generic_document["detail"] = json!("The mutation conflicts with current state.");
         assert_response(generic, StatusCode::CONFLICT, &generic_document).unwrap();
         assert!(assert_response(generic, StatusCode::CONFLICT, &document).is_err());
         assert!(assert_response(pattern, StatusCode::CONFLICT, &generic_document).is_err());
 
-        let mut concealed = plan_refused_step();
+        let mut concealed = (*generic).clone();
+        concealed.problem_bindings = FixtureProblemBindings::default();
         concealed.expect.status = 409;
         concealed.expect.problem_code = Some("mutation.conflict".to_owned());
         assert_response(&concealed, StatusCode::CONFLICT, &generic_document).unwrap();
@@ -7470,17 +7377,6 @@ journeys:
             changed["fieldPath"] = json!(path);
             assert!(assert_response(invalid, StatusCode::BAD_REQUEST, &changed).is_err());
         }
-    }
-
-    fn plan_refused_document(detail: &str) -> Value {
-        json!({
-            "type": "https://id.registrystack.org/problems/registry-breg/request/plan_refused",
-            "title": "Bad Request",
-            "status": 400,
-            "detail": detail,
-            "code": "request.plan_refused",
-            "traceId": "11111111111111111111111111111111"
-        })
     }
 
     fn scripted_response(index: usize, mode: ScriptMode) -> Result<Response<Body>, FixtureError> {

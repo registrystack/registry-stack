@@ -11,42 +11,41 @@ use std::path::{Component, Path, PathBuf};
 
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_config::package::{
-    PackageLimits as SharedPackageLimits, REVISION_FILE, SUM_FILE,
-    VerifiedPackage as SharedVerifiedPackage, plan_package, write_sum_file,
+    plan_package, write_sum_file, PackageLimits as SharedPackageLimits,
+    VerifiedPackage as SharedVerifiedPackage, REVISION_FILE, SUM_FILE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::CompiledRegistry;
 use crate::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
-use crate::compiler::{CompileProfile, compile_project_with_assets};
+use crate::compiler::{compile_project_with_assets, CompileProfile};
 use crate::contract::{
-    FieldTypeSource, ModuleAssetSource, RegistryModule, RegistryProject, parse_module_yaml,
-    parse_project_yaml,
+    parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource, RegistryModule,
+    RegistryProject,
 };
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::generated_ddl::{
-    DdlInventory, DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind, DdlTable,
     add_blind_index_column_statement, add_column_statement, drop_spatial_bbox_function_statement,
     drop_spatial_candidate_view_statement, generate_ddl_with_actions, quote_identifier,
     replace_length_check_statement, replace_vocabulary_check_statement,
     set_column_not_null_statement, spatial_bbox_function_statement, spatial_projection_fields,
-    spatial_projection_statements,
+    spatial_projection_statements, DdlInventory, DdlPolicy, DdlPolicyRole, DdlStatement,
+    DdlStatementKind, DdlTable,
 };
 use crate::history_schema::{
-    HISTORY_SCHEMA_ENCODING_VERSION, HistoryEntityDescriptor, HistoryLifecycleDescriptor,
-    HistoryLifecycleSource, HistorySchemaDescriptor, serialize_descriptor,
+    serialize_descriptor, HistoryEntityDescriptor, HistoryLifecycleDescriptor,
+    HistoryLifecycleSource, HistorySchemaDescriptor, HISTORY_SCHEMA_ENCODING_VERSION,
 };
 #[cfg(feature = "tooling")]
 use crate::migration_plan::{
+    prepare_reviewed_migration_plan, validate_reviewed_migration_plan,
     PreparedReviewedMigrationPlan, ReviewedMigrationError, ReviewedMigrationRecovery,
     ReviewedMigrationSource, ReviewedMigrationStepDescriptor, ReviewedPlanBindings,
-    prepare_reviewed_migration_plan, validate_reviewed_migration_plan,
 };
 use crate::migration_plan::{
-    ReviewedArtifactKind, ValidatedReviewedMigrationPlan, reviewed_artifact_kind,
+    reviewed_artifact_kind, ReviewedArtifactKind, ValidatedReviewedMigrationPlan,
 };
 use crate::model::CompiledStatisticalDataset;
 use crate::model::{
@@ -55,6 +54,7 @@ use crate::model::{
     CompiledRouteInventory, REFERENCE_INDEX_PREFIX,
 };
 use crate::physical_names::PhysicalNameInventory;
+use crate::CompiledRegistry;
 
 pub const PACKAGE_API_VERSION: &str = "id.registrystack.org/formats/breg/package/v2";
 pub const PACKAGE_KIND: &str = "BRegPackage";
@@ -3114,6 +3114,10 @@ fn validate_declared_package_assets(
                 .flat_map(|entity| entity.hooks.iter())
                 .filter_map(hook_handler_source_path),
         )
+        .chain(
+            crate::proposal_hooks::source_hooks(&project.actions)
+                .filter_map(|(_, hook)| crate::proposal_hooks::handler_source_path(&hook.handler)),
+        )
         .collect::<BTreeSet<_>>();
     let supplied_project = project_assets
         .iter()
@@ -3136,6 +3140,10 @@ fn validate_declared_package_assets(
             .iter()
             .map(|function| function.source.as_str())
             .collect::<BTreeSet<_>>();
+        declared.extend(
+            crate::proposal_hooks::source_hooks(&module.actions)
+                .filter_map(|(_, hook)| crate::proposal_hooks::handler_source_path(&hook.handler)),
+        );
         for entity in &module.entities {
             declared.extend(entity.derived.iter().map(|derived| derived.sql.as_str()));
             declared.extend(entity.hooks.iter().filter_map(hook_handler_source_path));

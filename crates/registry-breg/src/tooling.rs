@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::CompiledRegistry;
 use crate::package::{
-    CompiledRegistryChange, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
-    compiled_registry_change_set,
+    compiled_registry_change_set, CompiledRegistryChange, CompiledRegistryChangeClass,
+    CompiledRegistryChangeCode,
 };
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -248,8 +248,8 @@ fn access_change_details(
     candidate: &CompiledRegistry,
     change: &CompiledRegistryChange,
 ) -> Vec<AccessChangeDetail> {
+    use serde_json::{json, Value};
     use CompiledRegistryChangeCode as Code;
-    use serde_json::{Value, json};
     match change.code {
         Code::RecipientOrganizationAdded
         | Code::RecipientOrganizationRemoved
@@ -398,9 +398,9 @@ fn recipient_details(
     candidate: &CompiledRegistry,
     change: &CompiledRegistryChange,
 ) -> Vec<AccessChangeDetail> {
+    use serde_json::{json, Value};
     use AccessChangeDirection::{Narrowing, ReviewRequired};
     use CompiledRegistryChangeCode as Code;
-    use serde_json::{Value, json};
     let Some(id) = change.target.member_id.as_deref() else {
         return vec![];
     };
@@ -455,8 +455,8 @@ fn consent_record_details(
     before: Option<&crate::model::CompiledConsentRecord>,
     after: Option<&crate::model::CompiledConsentRecord>,
 ) -> Vec<AccessChangeDetail> {
-    use AccessChangeDirection::{Narrowing, ReviewRequired};
     use serde_json::json;
+    use AccessChangeDirection::{Narrowing, ReviewRequired};
     let (Some(before), Some(after)) = (before, after) else {
         return vec![AccessChangeDetail {
             field: "consentRecord".into(),
@@ -540,8 +540,8 @@ fn action_details(
     change: &CompiledRegistryChange,
 ) -> Vec<AccessChangeDetail> {
     use crate::contract::ConsentIssuerSource;
+    use serde_json::{json, Map, Value};
     use CompiledRegistryChangeCode as Code;
-    use serde_json::{Map, Value, json};
     let Some(id) = change.target.member_id.as_deref() else {
         return vec![];
     };
@@ -764,7 +764,7 @@ impl ChangeTargetIds for CompiledRegistryChange {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::{CompileProfile, compile_project, module_digest};
+    use crate::compiler::{compile_project, module_digest, CompileProfile};
     use crate::contract::{parse_module_json, parse_project_json};
     use crate::package::CompiledRegistryChangeCode;
 
@@ -905,16 +905,13 @@ mod tests {
             !query_changes.is_empty(),
             "snapshot revocation removes query operations"
         );
-        assert!(
-            query_changes
-                .iter()
-                .all(|change| change.classification == DiffClassification::AccessChange)
-        );
-        assert!(
-            diff.changes
-                .iter()
-                .all(|change| change.classification != DiffClassification::Unsupported)
-        );
+        assert!(query_changes
+            .iter()
+            .all(|change| change.classification == DiffClassification::AccessChange));
+        assert!(diff
+            .changes
+            .iter()
+            .all(|change| change.classification != DiffClassification::Unsupported));
     }
 
     #[test]
@@ -935,16 +932,13 @@ mod tests {
             !query_changes.is_empty(),
             "snapshot adoption adds query operations"
         );
-        assert!(
-            query_changes
-                .iter()
-                .all(|change| change.classification == DiffClassification::AccessChange)
-        );
-        assert!(
-            diff.changes
-                .iter()
-                .all(|change| change.classification != DiffClassification::Unsupported)
-        );
+        assert!(query_changes
+            .iter()
+            .all(|change| change.classification == DiffClassification::AccessChange));
+        assert!(diff
+            .changes
+            .iter()
+            .all(|change| change.classification != DiffClassification::Unsupported));
     }
 
     #[test]

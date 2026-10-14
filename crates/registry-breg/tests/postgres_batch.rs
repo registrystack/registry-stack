@@ -10,25 +10,25 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims, router,
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
 };
 use registry_breg::audit::RegistryAudit;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
+    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
-    install_compiled_schema, test_activation_id,
+    RegistryStateTestIdentity,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -155,11 +155,9 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     assert_eq!(items[1]["operation"], "patch");
     assert_eq!(items[1]["data"]["label"], "batch-patched");
     assert_eq!(items[1]["revision"], 2);
-    assert!(
-        items
-            .iter()
-            .all(|item| item["data"].get("secret").is_none())
-    );
+    assert!(items
+        .iter()
+        .all(|item| item["data"].get("secret").is_none()));
     let after = effect_counts(&database, table).await;
     assert_eq!(after.current, before.current + 1);
     assert_eq!(after.revisions, before.revisions + 2);

@@ -15,10 +15,9 @@ use registry_breg_client::{
     BRegBatchError, BRegBatchOperation, BRegCreateRequest, BRegDirectWrite, BRegEtag,
     BRegIdempotencyKey, BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest,
     BRegIngestionRunStatus, BRegMetadataErrorKind, BRegMetadataSelectionErrorKind,
-    BRegPatchRequest, BRegPlanRefusal, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure,
-    BRegRecordFormat, BRegRefusalCode, BaseRegistryClient, BaseRegistryClientConfig,
-    BaseRegistryClientError, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
-    REGISTRY_RECORD_CONTEXT_IDENTIFIER,
+    BRegPatchRequest, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure, BRegRecordFormat,
+    BRegRefusalCode, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
+    BREG_INGESTION_CHUNK_ALGORITHM_VERSION, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
 use registry_platform_httputil::client::{
     BearerToken, TokenError, TokenProvider, DEFAULT_MUTATION_RETRIES,
@@ -957,12 +956,52 @@ async fn every_registered_problem_is_accepted_exactly_for_a_direct_write() {
 }
 
 #[tokio::test]
+async fn retired_plan_problems_have_only_generic_unknown_problem_semantics() {
+    let retired = MockResponse::json(StatusCode::BAD_REQUEST, json!({
+        "type": "https://id.registrystack.org/problems/registry-breg/request/plan_refused",
+        "title": "Bad Request",
+        "status": 400,
+        "detail": "The change-request planner refused the submission: change_request.planner.disposition.",
+        "code": "request.plan_refused",
+        "traceId": TRACE_ID,
+        "fieldPath": "/private/legacy-location",
+        "refusalCode": "private-legacy-refusal",
+    })).with_header("cache-control", "no-store");
+    let fixture = single_attempt_client(vec![metadata_response(), retired]).await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let error = fixture
+        .client
+        .create_record(
+            &create_binding(&metadata),
+            &create_request(),
+            &key("retired-plan"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), "problem");
+    assert_eq!(error.status(), Some(400));
+    assert_eq!(error.problem_code(), None);
+    assert!(error.field_path().is_none());
+    assert!(error.refusal_code().is_none());
+    assert!(!error.is_outcome_unknown());
+    assert!(!error.to_string().contains("planner"));
+    assert!(!format!("{error:?}").contains("private-legacy"));
+    assert_eq!(fixture.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata() {
     let generic = problem_response(BRegProblemCode::MutationConflict);
     let mut pattern: Value = serde_json::from_slice(&generic.body).unwrap();
     pattern["detail"] = json!("The field does not conform to its declared storage pattern.");
     let without_location = pattern.clone();
-    pattern["entityId"] = json!("company");
+    pattern["recordType"] = json!("company");
     pattern["fieldId"] = json!("registration_number");
     let response_for = |value: Value| {
         let mut response = generic.clone();
@@ -970,7 +1009,14 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
         response
     };
     let mut bad = Vec::new();
-    for member in ["entityId", "fieldId"] {
+    let mut removed_location = pattern.clone();
+    removed_location
+        .as_object_mut()
+        .unwrap()
+        .remove("recordType");
+    removed_location["entityId"] = json!("company");
+    bad.push(response_for(removed_location));
+    for member in ["recordType", "fieldId"] {
         let mut absent = pattern.clone();
         absent.as_object_mut().unwrap().remove(member);
         bad.push(response_for(absent));
@@ -999,13 +1045,13 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
     }
     let evidence = problem_response(BRegProblemCode::ActionEvidenceFailed);
     let mut misplaced: Value = serde_json::from_slice(&evidence.body).unwrap();
-    misplaced["entityId"] = json!("company");
+    misplaced["recordType"] = json!("company");
     misplaced["fieldId"] = json!("registration_number");
     bad.push(MockResponse {
         body: serde_json::to_vec(&misplaced).unwrap(),
         ..evidence
     });
-    for member in ["entityId", "fieldId", "detail"] {
+    for member in ["recordType", "fieldId", "detail"] {
         let mut duplicate = generic.clone();
         duplicate.body = format!(
             "{{\"{member}\":\"duplicate-canary\",{}",
@@ -1121,7 +1167,7 @@ async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
     accepted.push(response_for(additive));
     for (member, value) in [
         ("refusalCode", json!("private-canary")),
-        ("entityId", json!("private-canary")),
+        ("recordType", json!("private-canary")),
         ("detail", json!("private-canary")),
         ("status", json!(409)),
         ("traceId", json!("0123456789abcdef0123456789abcdef")),
@@ -1131,7 +1177,7 @@ async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
         refused.push(response_for(invalid));
     }
     let mut paired = located.clone();
-    paired["entityId"] = json!("company");
+    paired["recordType"] = json!("company");
     paired["fieldId"] = json!("registration_number");
     refused.push(response_for(paired));
     for code in [
@@ -1715,7 +1761,6 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::QueryCursorInvalid => "The query cursor is invalid.",
         Code::QueryInvalid => "The query request is invalid.",
         Code::RequestInvalid => "The request is invalid.",
-        Code::RequestPlanRefused(refusal) => plan_refused_detail(refusal),
         Code::RequestTimeout => "The request timed out.",
         Code::ResourceNotFound => "The requested resource was not found.",
         Code::RuntimeFieldEncryptionUnavailable => {
@@ -1738,35 +1783,6 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         }
         Code::UnsupportedMediaType => "The request media type is not supported.",
         _ => panic!("unregistered problem code"),
-    }
-}
-
-fn plan_refused_detail(refusal: BRegPlanRefusal) -> &'static str {
-    use BRegPlanRefusal as Refusal;
-
-    match refusal {
-        Refusal::Source => {
-            "The change-request planner refused the submission: change_request.planner.source."
-        }
-        Refusal::Entrypoint => {
-            "The change-request planner refused the submission: change_request.planner.entrypoint."
-        }
-        Refusal::Execution => {
-            "The change-request planner refused the submission: change_request.planner.execution."
-        }
-        Refusal::Result => {
-            "The change-request planner refused the submission: change_request.planner.result."
-        }
-        Refusal::Ceiling => {
-            "The change-request planner refused the submission: change_request.planner.ceiling."
-        }
-        Refusal::Disposition => {
-            "The change-request planner refused the submission: change_request.planner.disposition."
-        }
-        Refusal::Resource => {
-            "The change-request planner refused the submission: change_request.planner.resource."
-        }
-        _ => panic!("unregistered plan refusal"),
     }
 }
 
@@ -2667,7 +2683,7 @@ async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded(
         refused.push(response_for(value));
     }
     let mut paired = document.clone();
-    paired["entityId"] = json!("company");
+    paired["recordType"] = json!("company");
     paired["fieldId"] = json!("registration_number");
     refused.push(response_for(paired));
     for code in [

@@ -199,7 +199,7 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
         argument_failure(
             "module.consent.subject-unknown",
             "subject",
-            "the subject must name an entity the project or one of its modules declares",
+            "the subject must name a record type the project or one of its modules declares",
         )
     })?;
     let module_id = format!("consent-{subject}");
@@ -866,7 +866,7 @@ fn explanation(plan: &Plan, subject: &str, compiles: bool) -> Value {
     json!({
         "subject": subject,
         "module": plan.module_id,
-        "entities": plan.module.entities.iter().map(|entity| &entity.id).collect::<Vec<_>>(),
+        "recordTypes": plan.module.entities.iter().map(|entity| &entity.id).collect::<Vec<_>>(),
         "actions": plan.module.actions.iter().map(|action| &action.id).collect::<Vec<_>>(),
         "accessProfiles": ids(
             &["", "", "", "", ""],
@@ -885,7 +885,7 @@ fn explanation(plan: &Plan, subject: &str, compiles: bool) -> Value {
         "requireConsent": plan
             .requirements
             .iter()
-            .map(|(entity, line)| json!({"entity": entity, "line": line}))
+            .map(|(entity, line)| json!({"recordType": entity, "line": line}))
             .collect::<Vec<_>>(),
         "compiles": compiles,
     })

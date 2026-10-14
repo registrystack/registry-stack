@@ -9,16 +9,16 @@ mod action_requirements;
 #[path = "support/membership_fixture.rs"]
 mod membership_fixture;
 
-use registry_breg::compiler::{CompileProfile, compile_project, compile_project_with_assets};
+use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{
-    ActionInputSource, Classification, DerivedFieldSource, FieldSource,
+    parse_project_json, ActionInputSource, Classification, DerivedFieldSource, FieldSource,
+    ModuleAssetSource, NormalizationStep, MAX_ENCRYPTED_FIELDS_PER_ENTITY,
     MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
-    MAX_ENCRYPTED_FIELDS_PER_ENTITY, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS, ModuleAssetSource,
-    NormalizationStep, parse_project_json,
+    MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
 };
 use registry_breg::generated_ddl::field_lookup_index_name;
 use registry_breg::{CompileFailure, CompiledRegistry};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// A minimal project whose `case` entity carries one encrypted restricted
 /// field with a unique normalized blind-index lookup.
@@ -195,16 +195,12 @@ fn encrypted_field_compiles_to_envelope_and_blind_index_storage() {
         .iter()
         .find(|statement| statement.id == "entity.case.table")
         .unwrap();
-    assert!(
-        table
-            .sql
-            .contains(&format!("{} bytea", quote(&field.physical_name)))
-    );
-    assert!(
-        table
-            .sql
-            .contains(&format!("{} bytea", quote(&blind.physical_name)))
-    );
+    assert!(table
+        .sql
+        .contains(&format!("{} bytea", quote(&field.physical_name))));
+    assert!(table
+        .sql
+        .contains(&format!("{} bytea", quote(&blind.physical_name))));
 
     let lookup_index = statements
         .iter()
@@ -230,13 +226,11 @@ fn encrypted_field_compiles_to_envelope_and_blind_index_storage() {
     assert!(!source_view.sql.contains("\"secret\""));
     assert!(source_view.sql.contains("\"label\""));
     let compiled_entity = &registry.entities()["case"];
-    assert!(
-        !compiled_entity
-            .source_relation
-            .stored_fields
-            .iter()
-            .any(|stored| stored == "secret")
-    );
+    assert!(!compiled_entity
+        .source_relation
+        .stored_fields
+        .iter()
+        .any(|stored| stored == "secret"));
 }
 
 fn quote(identifier: &str) -> String {
@@ -258,21 +252,17 @@ fn non_unique_lookup_declares_no_unique_index_and_no_blind_column() {
         .unwrap();
     assert!(!blind.unique);
     let statements = &registry.ddl().statements;
-    assert!(
-        statements
-            .iter()
-            .all(|statement| statement.id != "entity.case.field.secret.lookup-unique")
-    );
+    assert!(statements
+        .iter()
+        .all(|statement| statement.id != "entity.case.field.secret.lookup-unique"));
     // The blind-index column exists for exact-match lookup even without a
     // unique index over it.
-    assert!(
-        statements
-            .iter()
-            .find(|statement| statement.id == "entity.case.table")
-            .unwrap()
-            .sql
-            .contains(&format!("{} bytea", quote(&blind.physical_name)))
-    );
+    assert!(statements
+        .iter()
+        .find(|statement| statement.id == "entity.case.table")
+        .unwrap()
+        .sql
+        .contains(&format!("{} bytea", quote(&blind.physical_name))));
 }
 
 #[test]
@@ -361,7 +351,7 @@ fn encrypted_field_count_bounds_snapshot_envelope_overhead() {
             "encrypted":true
         }));
     }
-    expect_code(&source, "breg.entity.encrypted-fields-too-many");
+    expect_code(&source, "breg.record-type.encrypted-fields-too-many");
 
     source["recordTypes"][0]["fields"]
         .as_array_mut()
@@ -392,14 +382,17 @@ fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
     );
 
     let mut bounded = encrypted_project();
-    bounded["recordTypes"][0]["fields"][1]["lookup"]["normalization"] = json!(
-        std::iter::repeat_n("trim", MAX_FIELD_LOOKUP_NORMALIZATION_STEPS).collect::<Vec<_>>()
-    );
+    bounded["recordTypes"][0]["fields"][1]["lookup"]["normalization"] =
+        json!(
+            std::iter::repeat_n("trim", MAX_FIELD_LOOKUP_NORMALIZATION_STEPS).collect::<Vec<_>>()
+        );
     compile_value(&bounded).expect("the normalization-step boundary compiles");
 
-    bounded["recordTypes"][0]["fields"][1]["lookup"]["normalization"] = json!(
-        std::iter::repeat_n("trim", MAX_FIELD_LOOKUP_NORMALIZATION_STEPS + 1).collect::<Vec<_>>()
-    );
+    bounded["recordTypes"][0]["fields"][1]["lookup"]["normalization"] = json!(std::iter::repeat_n(
+        "trim",
+        MAX_FIELD_LOOKUP_NORMALIZATION_STEPS + 1
+    )
+    .collect::<Vec<_>>());
     let failure =
         compile_value(&bounded).expect_err("an unbounded normalization pipeline is refused");
     let diagnostics = failure.diagnostics();
@@ -431,12 +424,10 @@ fn encrypted_field_refuses_valid_time_role_and_inconsistent_classification() {
         parse_project_json(&serde_json::to_vec(&encrypted_project()).unwrap()).unwrap();
     project.entities[0].fields[1].classification = Classification::Internal;
     let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.field.encrypted-classification-invalid")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.field.encrypted-classification-invalid"));
 }
 
 #[test]
@@ -522,12 +513,10 @@ fn derived_sql_cannot_reference_encrypted_columns() {
         }],
     )
     .unwrap_err();
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.derived.sql-encrypted-column")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.derived.sql-encrypted-column"));
 
     let accepting = compile_with_assets(
         &source,
@@ -628,12 +617,10 @@ fn derived_sql_resolves_qualified_columns_to_their_source_relation() {
             }],
         )
         .expect_err("encrypted, duplicate, and wildcard CTE outputs stay fail-closed");
-        assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == "breg.derived.sql-encrypted-column")
-        );
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.derived.sql-encrypted-column"));
     }
 }
 
@@ -657,8 +644,8 @@ fn native_proposal_context_refuses_encrypted_record_fields() {
     let mut source = proposal_project();
     compile_value(&source)
         .expect("plaintext context can coexist with unchanged encrypted Record fields");
-    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["currentLabel"]["field"] =
-        json!("secret");
+    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["currentLabel"]
+        ["field"] = json!("secret");
     expect_code(&source, "breg.proposal.context-mapping-invalid");
 }
 
@@ -686,12 +673,10 @@ fn membership_principal_field_cannot_be_encrypted() {
     let mut source = membership_fixture::source("facility");
     source["recordTypes"][1]["fields"][1]["encrypted"] = json!(true);
     let failure = membership_fixture::compile(&source).unwrap_err();
-    assert!(
-        failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == "breg.access.membership-principal-encrypted")
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.access.membership-principal-encrypted"));
 }
 
 #[test]
@@ -706,19 +691,18 @@ fn action_requirements_cannot_name_encrypted_fields() {
             "input":"parent","field":"zone","equals":"north"
         }));
     let failure = compile_value(&source).unwrap_err();
-    assert!(
-        failure.diagnostics().iter().any(
-            |diagnostic| diagnostic.code == "breg.action.commit_guards.targets-field-encrypted"
-        )
-    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.commit_guards.targets-field-encrypted"));
 }
 
 #[cfg(feature = "runtime")]
 #[test]
 fn encryption_flip_change_sets_classify_without_a_physical_rename() {
     use registry_breg::package::{
-        CompiledRegistryChangeClass as Class, CompiledRegistryChangeCode as Code,
         change_set_to_applicable_migration_plan, compiled_registry_change_set,
+        CompiledRegistryChangeClass as Class, CompiledRegistryChangeCode as Code,
     };
 
     let compile = |lookup: Option<Value>| {
@@ -755,37 +739,29 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
     // Turning encryption on rekeys storage behind a reviewed backfill and is
     // never the compiler-applicable physical rename it replaces.
     let flip_on = compiled_registry_change_set(&plaintext, &encrypted_unique, prior);
-    assert!(
-        flip_on
-            .changes
-            .iter()
-            .any(|change| change.code == Code::FieldEncryptionChanged
-                && change.class == Class::DataBackfillRequired)
-    );
-    assert!(
-        flip_on
-            .changes
-            .iter()
-            .all(|change| change.code != Code::FieldPhysicalNameChanged)
-    );
+    assert!(flip_on
+        .changes
+        .iter()
+        .any(|change| change.code == Code::FieldEncryptionChanged
+            && change.class == Class::DataBackfillRequired));
+    assert!(flip_on
+        .changes
+        .iter()
+        .all(|change| change.code != Code::FieldPhysicalNameChanged));
     assert!(change_set_to_applicable_migration_plan(&flip_on).is_err());
 
     // Phase 1 cannot open envelopes into a replacement plaintext column, so
     // turning encryption off is rejected rather than delegated to authored SQL.
     let flip_off = compiled_registry_change_set(&encrypted_unique, &plaintext, prior);
-    assert!(
-        flip_off
-            .changes
-            .iter()
-            .any(|change| change.code == Code::FieldEncryptionChanged
-                && change.class == Class::Unsupported)
-    );
-    assert!(
-        flip_off
-            .changes
-            .iter()
-            .all(|change| change.code != Code::FieldPhysicalNameChanged)
-    );
+    assert!(flip_off
+        .changes
+        .iter()
+        .any(|change| change.code == Code::FieldEncryptionChanged
+            && change.class == Class::Unsupported));
+    assert!(flip_off
+        .changes
+        .iter()
+        .all(|change| change.code != Code::FieldPhysicalNameChanged));
     assert!(change_set_to_applicable_migration_plan(&flip_off).is_err());
 
     // Existing envelopes are the only source values, so every lookup change on

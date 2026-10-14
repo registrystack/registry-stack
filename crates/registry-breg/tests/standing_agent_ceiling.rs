@@ -8,9 +8,9 @@
 
 use std::collections::BTreeSet;
 
-use registry_breg::contract::{Operation, parse_module_json};
-use registry_breg::{CompileFailure, CompileProfile, compile_project, parse_project_json};
-use serde_json::{Value, json};
+use registry_breg::contract::{parse_module_json, Operation};
+use registry_breg::{compile_project, parse_project_json, CompileFailure, CompileProfile};
+use serde_json::{json, Value};
 
 const OPERATION_FORBIDDEN: &str = "breg.proposal.standing-agent-operation-forbidden";
 const DIRECT_MUTATION_FORBIDDEN: &str =

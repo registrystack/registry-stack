@@ -3,11 +3,11 @@
 //! capability that mutation policy does not count as a direct write, and that
 //! every `breg.import.*` refusal names the grant it concerns.
 
-use registry_breg::CompiledRegistry;
-use registry_breg::compiler::{CompileProfile, compile_project};
-use registry_breg::contract::{Operation, parse_project_json, parse_project_yaml};
+use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::contract::{parse_project_json, parse_project_yaml, Operation};
 use registry_breg::diagnostics::CompileFailure;
-use serde_json::{Value, json};
+use registry_breg::CompiledRegistry;
+use serde_json::{json, Value};
 
 fn compile(project: &Value) -> Result<CompiledRegistry, CompileFailure> {
     let source = serde_json::to_vec(project).expect("project serializes");

@@ -10,14 +10,14 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::mutation::{
     MutationBody, MutationCoordinator, MutationError, MutationPlan, MutationRequest,
 };
 use registry_breg::postgres::{
-    ClaimContext, RegistryLockKey, RegistryStateTestIdentity,
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
+    RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::{Map, Value};

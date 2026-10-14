@@ -3,8 +3,8 @@
 //! PostgreSQL computation and immutable storage for governed statistical datasets.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -16,8 +16,9 @@ use crate::api::{AuthorizedRequestContext, ReadServiceError};
 use crate::audit::RegistryAudit;
 use crate::history_reference::SnapshotReference;
 use crate::idempotency::{
-    HeldResponse, IdempotencyBinding, IdempotencyError, IdempotencyKeyDomain, IdempotencyPolicy,
-    PermittedResponseHeader, StoredResultMetadata, insert_result, lock_and_load, resolve_binding,
+    insert_result, lock_and_load, resolve_binding, HeldResponse, IdempotencyBinding,
+    IdempotencyError, IdempotencyKeyDomain, IdempotencyPolicy, PermittedResponseHeader,
+    StoredResultMetadata,
 };
 use crate::model::{
     CompiledEntity, CompiledRegistry, CompiledStatisticalDataset,
@@ -26,19 +27,19 @@ use crate::model::{
 };
 use crate::mutation::BoundValue;
 use crate::statistics::{
-    Cell, DatasetDocument, DimensionDomain, DisclosureDocument, GroupedCell, LiveDocument,
-    MAX_CELLS_PER_RESPONSE, Measure, Period, PeriodDocument, PeriodGranularity, PeriodKind,
+    apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
+    period_for_code, period_range, Cell, DatasetDocument, DimensionDomain, DisclosureDocument,
+    GroupedCell, LiveDocument, Measure, Period, PeriodDocument, PeriodGranularity, PeriodKind,
     PeriodVersionHeader, ReleaseDocument, ReleaseStatus, ReleaseVersionHeader, StatisticsDocument,
-    StatisticsError, WithdrawalDocument, WithdrawalReason, apply_disclosure, build_exact_cells,
-    canonical_document_and_digest, current_period, period_for_code, period_range,
+    StatisticsError, WithdrawalDocument, WithdrawalReason, MAX_CELLS_PER_RESPONSE,
 };
 
 use super::read::{
-    ReadRelations, install_statistics_evaluation_date, read_predicates, strict_claim_context,
+    install_statistics_evaluation_date, read_predicates, strict_claim_context, ReadRelations,
 };
 use super::{
-    ExpectedRegistryIdentity, GuardedTransaction, RegistryLockKey, RuntimePool,
-    begin_record_transaction,
+    begin_record_transaction, ExpectedRegistryIdentity, GuardedTransaction, RegistryLockKey,
+    RuntimePool,
 };
 
 const CONTENT_TYPE_JSON: &[u8] = b"application/json";

@@ -11,20 +11,20 @@ mod postgres_harness;
 use registry_breg::{
     api::{VerifiedClaimValue, VerifiedRequestClaims},
     auth::{AuthorityClaimConfig, RegistryAuthenticator},
-    compiler::{CompileProfile, compile_project},
+    compiler::{compile_project, CompileProfile},
     contract::parse_project_json,
     task_grant::{TaskGrantBinding, TaskGrantError, TaskGrantStatusChecker},
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{MockIdp, oidc_verifier_config};
+use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use reqwest::{Method, StatusCode};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
 };
 
@@ -386,11 +386,15 @@ async fn review_context_requires_record_grant_and_current_membership() {
         calls: AtomicUsize::new(0),
     });
     let checker = status.clone();
-    let fixture =
-        client_http::ClientFixture::start_with_mutations(registry(true), clerk(), move |service| {
-            service.with_task_status(checker)
-        })
-        .await;
+    let mut source = source(true);
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] =
+        json!(["get", "list", "edit", "submit", "cancel"]);
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        clerk(),
+        move |service| service.with_task_status(checker),
+    )
+    .await;
     let (organization, target) = seed(&fixture).await;
     let (code, draft, etag) = send(
         &fixture.http,
@@ -413,6 +417,46 @@ async fn review_context_requires_record_grant_and_current_membership() {
     )
     .await;
     assert_eq!(code, StatusCode::OK, "{value}");
+    for path in [
+        format!("/v1/proposals/{id}?accessProfile=clerk"),
+        "/v1/proposals?accessProfile=clerk".to_owned(),
+    ] {
+        let (code, public, _) =
+            send(&fixture.http, Method::GET, &path, Value::Null, None, None).await;
+        assert_eq!(code, StatusCode::OK, "{public}");
+        let serialized = public.to_string();
+        for hidden in [
+            "current-name-canary",
+            "currentName",
+            "proposedName",
+            "acceptedBinding",
+            "\"result\"",
+            "uploadedBy",
+            "submitterReference",
+            "applierReference",
+        ] {
+            assert!(
+                !serialized.contains(hidden),
+                "ordinary Proposal read disclosed {hidden}"
+            );
+        }
+    }
+    for suffix in ["review-context", "review-status"] {
+        let (code, public, _) = send(
+            &fixture.http,
+            Method::GET,
+            &format!("/v1/proposals/{id}/{suffix}?accessProfile=clerk"),
+            Value::Null,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            code,
+            StatusCode::NOT_FOUND,
+            "ordinary reader gained {suffix}: {public}"
+        );
+    }
     let idp = MockIdp::start().await;
     let auth = authenticator(&fixture.registry, &idp).await;
     let proposal_bound =
@@ -463,6 +507,21 @@ async fn review_context_requires_record_grant_and_current_membership() {
     assert_eq!(
         value["context"]["fields"]["currentName"],
         "current-name-canary"
+    );
+    assert_review_contract(&fixture.registry, &value);
+    let (code, concealed, _) = send(
+        &reader,
+        Method::GET,
+        &format!("/v1/proposals/{id}/review-status?accessProfile=task-reviewer"),
+        Value::Null,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        code,
+        StatusCode::NOT_FOUND,
+        "context authority gained status: {concealed}"
     );
     for permissions in [
         json!([proposal_bound]),
@@ -632,6 +691,11 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
         .unwrap();
     assert_eq!(upload.status(), StatusCode::OK);
     let uploaded: Value = upload.json().await.unwrap();
+    let attachment = &uploaded["attachments"]["support"]["value"];
+    assert_eq!(attachment["contentType"], "text/plain");
+    assert_eq!(attachment["byteSize"], "attachment-disclosure-canary".len());
+    assert!(attachment["sha256"].as_str().is_some());
+    assert!(attachment.get("uploadedBy").is_none());
     let etag = uploaded["links"]["submit"]["ifMatch"].as_str().unwrap();
     let (code, submitted, _) = send(
         &fixture.http,
@@ -852,6 +916,7 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     assert_eq!(value["authority"], "casework");
     assert_eq!(value["subject"]["id"], id);
     assert_eq!(value["result"]["state"], "pending");
+    assert_review_contract(&fixture.registry, &value);
     assert!(value["context"].get("fields").is_none());
     assert!(!value.to_string().contains("current-name-canary"));
     for suffix in ["", "/review-context"] {
@@ -885,7 +950,15 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     let stored: Value = row.get(0);
     let policy: Value = row.get(1);
     let digest: String = row.get(2);
-    for field in ["authority", "subject", "context", "policy"] {
+    for field in [
+        "authority",
+        "subject",
+        "context",
+        "policy",
+        "policy-id",
+        "policy-version",
+        "policy-digest",
+    ] {
         match field {
             "authority" => {
                 fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET authority='other-review'",&[]).await.unwrap();
@@ -897,10 +970,27 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
                 let mut changed = stored.clone();
                 if field == "subject" {
                     changed["subject"]["id"] = json!(uuid::Uuid::new_v4());
+                } else if let Some(policy_field) = field.strip_prefix("policy-") {
+                    changed["policy"][policy_field] = match policy_field {
+                        "id" => json!("other-policy"),
+                        "version" => json!("2"),
+                        "digest" => json!(registry_review_client::ContentDigest::for_bytes(
+                            b"other-policy"
+                        )),
+                        _ => unreachable!(),
+                    };
                 } else {
                     changed["context"]["binding"]["reference"] = json!("breg:different:context");
                 }
-                fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET create_request=$1",&[&changed]).await.unwrap();
+                let request: registry_review_client::ReviewCreateRequest =
+                    serde_json::from_value(changed.clone()).unwrap();
+                let recomputed = registry_review_client::submission_digest(
+                    "proposal-producer",
+                    "proposal-security",
+                    &request,
+                )
+                .unwrap();
+                fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET create_request=$1,expected_submission_digest=$2",&[&changed,&recomputed.as_str()]).await.unwrap();
             }
         }
         let (code, value, _) = send(&service, Method::GET, &path, Value::Null, None, None).await;
@@ -909,8 +999,8 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
             StatusCode::NOT_FOUND,
             "substituted {field} disclosed status: {value}"
         );
-        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET authority='casework',create_request=$1,expected_policy=$2",
-            &[&stored,&policy]).await.unwrap();
+        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET authority='casework',create_request=$1,expected_policy=$2,expected_submission_digest=$3",
+            &[&stored,&policy,&digest]).await.unwrap();
     }
     let create: registry_review_client::ReviewCreateRequest =
         serde_json::from_value(stored).unwrap();
@@ -962,4 +1052,20 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     drop(service);
     drop(human);
     fixture.finish().await;
+}
+
+fn assert_review_contract(registry: &registry_breg::CompiledRegistry, value: &Value) {
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "correct-name")
+        .unwrap();
+    let exported = registry_breg::compiler::review_context::compile_schema(registry, action)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        value["context"]["contract"],
+        json!({"id":exported.id,"revision":exported.revision,"schemaDigest":exported.digest})
+    );
 }

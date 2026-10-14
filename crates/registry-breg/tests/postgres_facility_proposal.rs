@@ -10,8 +10,8 @@ mod postgres_harness;
 
 use registry_breg::{
     api::{VerifiedClaimValue, VerifiedRequestClaims},
-    compiler::{CompileProfile, compile_project_with_assets},
-    contract::{ModuleAssetSource, parse_project_yaml},
+    compiler::{compile_project_with_assets, CompileProfile},
+    contract::{parse_project_yaml, ModuleAssetSource},
     model::{CompiledActionExecution, CompiledProposalReview},
     proposal_workflow::{EntityId, FrozenPlannerKind, ProposalKey, ProposalSnapshot, RecordId},
 };
@@ -19,12 +19,12 @@ use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
     BRegProblemCode, BRegProposal, BRegProposalState, BRegRecordFormat,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
 };
 use uuid::Uuid;
@@ -334,7 +334,7 @@ async fn approve(
     let CompiledProposalReview::Required { policy, .. } = &policy.review else {
         unreachable!()
     };
-    assert_eq!(create.kind, policy.id);
+    assert_eq!(create.policy, *policy);
     let accepted = registry_review_client::ReviewRequestAccepted {
         request_id: Uuid::new_v4(),
         subject: create.subject,
@@ -504,19 +504,39 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
     let status = response.status();
     let context: Value = response.json().await.unwrap();
     assert_eq!(status, reqwest::StatusCode::OK, "{context}");
+    let action = fixture
+        .registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "correct-address")
+        .unwrap();
+    let exported =
+        registry_breg::compiler::review_context::compile_schema(&fixture.registry, action)
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        context["context"]["contract"],
+        json!({"id":exported.id,"revision":exported.revision,"schemaDigest":exported.digest})
+    );
+    let typed: registry_breg_client::BRegProposalReviewDocument =
+        serde_json::from_value(context.clone()).unwrap();
+    assert_eq!(
+        typed.context.contract.unwrap().schema_digest,
+        exported.digest
+    );
+    assert!(context["context"].get("id").is_none());
     assert_eq!(
         context["context"]["fields"],
         json!({"facilityId":facility,"currentAddressLine":"1 Main Road",
         "proposedAddressLine":"3 Civic Road","proposedCity":"Chiang Mai","proposedPostalCode":"50000"})
     );
     approve(&fixture, &submitted, &review).await;
-    assert!(
-        fixture
-            .mutations
-            .run_automatic_proposal_once_for_test()
-            .await
-            .unwrap()
-    );
+    assert!(fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
     assert_eq!(
         review.calls.load(Ordering::SeqCst),
         1,
@@ -549,13 +569,11 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
         )
     );
     review.unavailable.store(true, Ordering::SeqCst);
-    assert!(
-        !fixture
-            .mutations
-            .run_automatic_proposal_once_for_test()
-            .await
-            .unwrap()
-    );
+    assert!(!fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
     // Recover the original exact submission receipt after automatic application,
     // with the authority offline. This must retain its original response bytes.
     let replay = author.client.execute_proposal(&submit).await.unwrap();
@@ -658,13 +676,11 @@ async fn canonical_rhai_refusal_current_revision_and_status_guards_recover_by_re
             )
             .await
             .unwrap();
-        assert!(
-            fixture
-                .mutations
-                .run_automatic_proposal_once_for_test()
-                .await
-                .unwrap()
-        );
+        assert!(fixture
+            .mutations
+            .run_automatic_proposal_once_for_test()
+            .await
+            .unwrap());
         assert_eq!(
             author
                 .client
@@ -732,13 +748,11 @@ async fn canonical_rhai_refusal_current_revision_and_status_guards_recover_by_re
         assert_ne!(resubmitted.effect_digest(), submitted.effect_digest());
         assert_frozen_plan(&fixture, &resubmitted, &facility).await;
         approve(&fixture, &resubmitted, &review).await;
-        assert!(
-            fixture
-                .mutations
-                .run_automatic_proposal_once_for_test()
-                .await
-                .unwrap()
-        );
+        assert!(fixture
+            .mutations
+            .run_automatic_proposal_once_for_test()
+            .await
+            .unwrap());
         assert_eq!(
             author
                 .client

@@ -2469,6 +2469,24 @@ fn compile_execution(
             .filter(|grant| grant.action == action.id)
         {
             crate::consent::validate_proposal_permission(profile, grant, entities, errors);
+            if application.is_automatic()
+                && grant.operations.iter().any(|operation| {
+                    matches!(
+                        operation,
+                        ProposalOperation::Apply | ProposalOperation::Retry
+                    )
+                })
+                && matches!(
+                    profile.actor_kind,
+                    Some(ActorKindSource::Agent | ActorKindSource::Service)
+                )
+            {
+                errors.push(Diagnostic::error(
+                    "breg.proposal.automatic-recovery-requires-human",
+                    format!("accessProfiles[id={}].permissions.proposals[action={}].operations", profile.id, action.id),
+                    "external Apply or Retry on automatic work is human recovery; service and agent profiles cannot hold those grants",
+                ));
+            }
             let authority_status = grant.review_authority.is_some();
             if authority_status {
                 let matches_authority = matches!(&review, CompiledProposalReview::Required { authority, .. }
@@ -2671,6 +2689,7 @@ fn compile_execution(
     }
     CompiledActionExecution::Proposal {
         proposal: CompiledProposalPolicy {
+            hooks: Vec::new(),
             system_apply_grant: None,
             review,
             application,

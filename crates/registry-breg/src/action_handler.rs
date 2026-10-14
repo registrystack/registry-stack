@@ -2,8 +2,8 @@
 //! Input-only immediate action evaluation inside the shared bounded Rhai kernel.
 
 use crate::{
-    contract::{ACTION_PLAN_ABI_V1, FieldTypeSource},
-    data::{FieldValue, validate_field_value},
+    contract::{FieldTypeSource, ACTION_PLAN_ABI_V1},
+    data::{validate_field_value, FieldValue},
     model::*,
     rhai_planner::{self, PlanError},
 };
@@ -11,7 +11,7 @@ use crate::{
 use std::collections::BTreeMap;
 
 use registry_platform_script::rhai as platform;
-use rhai::{AST, Dynamic, Map};
+use rhai::{Dynamic, Map, AST};
 use serde_json::{Map as JsonMap, Value};
 use std::{collections::BTreeSet, time::Instant};
 

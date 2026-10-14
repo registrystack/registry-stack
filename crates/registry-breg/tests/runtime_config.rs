@@ -10,21 +10,22 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use registry_breg::compiler::{CompileProfile, compile_project};
+use base64::Engine as _;
+use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::event_destination::EventDestinationActivationError;
 use registry_breg::runtime_config::{
-    RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND, RuntimeConfigError, load_runtime_config,
-    load_runtime_config_with_env, parse_runtime_config, parse_runtime_config_with_env,
+    load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
+    parse_runtime_config_with_env, RuntimeConfigError, RUNTIME_CONFIG_API_VERSION,
+    RUNTIME_CONFIG_KIND,
 };
-use registry_platform_config::package::{PackageLimits, write_sum_file};
+use registry_platform_config::package::{write_sum_file, PackageLimits};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::destination::{
     DestinationDnsFamily, DestinationSendError, EventDeliveryHeaders,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const DATABASE_URL_CANARY: &str =
     "postgresql://registry_runtime:database-url-canary@db.example/registry";

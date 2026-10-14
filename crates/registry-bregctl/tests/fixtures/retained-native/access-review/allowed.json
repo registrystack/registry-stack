@@ -1,5 +1,5 @@
 {
-  "entity": "record",
+  "recordType": "record",
   "accessProfile": "district-reader",
   "operation": "list",
   "claims": {

@@ -9,30 +9,30 @@ mod client_http;
 mod postgres_harness;
 
 use axum::{
-    Router,
     body::{Body, Bytes},
     extract::{OriginalUri, State},
     http::{Method, StatusCode},
     response::{IntoResponse, Response},
+    Router,
 };
 use registry_breg::{
     api::{VerifiedClaimValue, VerifiedRequestClaims},
     attachment_storage::AttachmentStorage,
-    compiler::{CompileProfile, compile_project},
+    compiler::{compile_project, CompileProfile},
     contract::parse_project_json,
-    runtime_config::{RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND, parse_runtime_config},
+    runtime_config::{parse_runtime_config, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND},
 };
 use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
     BRegRecordFormat,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
     time::Duration,
 };
@@ -548,14 +548,12 @@ async fn s3_integrity_binding_quarantine_and_authority_refusals_precede_transpor
         )
         .await
         .unwrap();
-    assert!(
-        fixture
-            .http
-            .client
-            .download_proposal_attachment(&uploaded, "support")
-            .await
-            .is_err()
-    );
+    assert!(fixture
+        .http
+        .client
+        .download_proposal_attachment(&uploaded, "support")
+        .await
+        .is_err());
     assert_eq!(
         s3.state.requests.load(Ordering::SeqCst),
         requests,

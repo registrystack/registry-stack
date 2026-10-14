@@ -233,7 +233,9 @@ impl Attempt {
     fn save(&self, directory: &Path) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(self)?;
         if bytes.len() as u64 > MAX_BYTES {
-            bail!("example attempt exceeds its retained-state size bound; no further mutation was sent");
+            bail!(
+                "example attempt exceeds its retained-state size bound; no further mutation was sent"
+            );
         }
         private::replace(&directory.join(format!("{}.json", self.id)), &bytes)
     }
@@ -584,7 +586,9 @@ fn inherit_captures(attempt: &mut Attempt, parent: &Attempt, catalogue: &Catalog
             .iter()
             .any(|step| !parent.completed.contains_key(&step.id))
     {
-        bail!("--from-attempt requires a completed population with the same source, package, clients, catalogue and database generation");
+        bail!(
+            "--from-attempt requires a completed population with the same source, package, clients, catalogue and database generation"
+        );
     }
     attempt.from_attempt = Some(parent.id);
     attempt.captures = parent.captures.clone();
@@ -630,7 +634,9 @@ fn run_example(args: RunArgs) -> Result<Value> {
     )
     .map_err(|_| anyhow::anyhow!("examples require the original bounded dev clients file"))?;
     if super::capture(&project, &client_bytes)?.digest != state.source_digest {
-        bail!("governed source changed since dev start; restore the captured source or use the documented migration/restart workflow");
+        bail!(
+            "governed source changed since dev start; restore the captured source or use the documented migration/restart workflow"
+        );
     }
     let clients = config::clients(&state.clients_file.display().to_string(), &client_bytes)?;
     let (catalogue, bytes) = catalogue(&project)?;
@@ -698,7 +704,9 @@ fn run_example(args: RunArgs) -> Result<Value> {
     };
     let mut attempt = if let Some(existing) = existing {
         if existing.binding != binding || existing.scenario != scenario.id {
-            bail!("attempt source, input, client, scenario or database generation differs; unchanged input resumes, changed input requires --new-attempt");
+            bail!(
+                "attempt source, input, client, scenario or database generation differs; unchanged input resumes, changed input requires --new-attempt"
+            );
         }
         if args.from_attempt.is_some() && args.from_attempt != existing.from_attempt {
             bail!("attempt already binds another source attempt; use --new-attempt");
@@ -768,7 +776,9 @@ fn create_binding(metadata: &BRegMetadata, step: &Step) -> Result<BRegCreateBind
         })
         .collect();
     if operations.len() != 1 {
-        bail!("example create requires one advertised direct create operation for its entity and profile");
+        bail!(
+            "example create requires one advertised direct create operation for its entity and profile"
+        );
     }
     match metadata.select_direct_write(operations[0].identifier(), &step.access_profile)? {
         BRegDirectWrite::Create(binding) => Ok(binding),
@@ -959,7 +969,12 @@ async fn execute(
                 .compile(binding.request_schema())
                 .map_err(|_| anyhow::anyhow!("advertised example input schema is invalid"))?;
             if !schema.is_valid(&json!({"data":data})) {
-                bail!("example {} step {} input does not match its advertised create schema; inspect payload {} before running",scenario.id,step.id,step.input.as_deref().unwrap_or_default());
+                bail!(
+                    "example {} step {} input does not match its advertised create schema; inspect payload {} before running",
+                    scenario.id,
+                    step.id,
+                    step.input.as_deref().unwrap_or_default()
+                );
             }
             client.prepare_create(
                 &binding,
@@ -1106,7 +1121,9 @@ async fn execute(
             if serde_json::from_slice::<Value>(prepared.as_bytes())?
                 != serde_json::from_slice::<Value>(expected.as_bytes())?
             {
-                bail!("pending create no longer matches its exact attempt input and captured dependencies");
+                bail!(
+                    "pending create no longer matches its exact attempt input and captured dependencies"
+                );
             }
             let (request, key, format) = client.recover_create(&binding, &prepared)?;
             let response = client
@@ -1942,7 +1959,7 @@ journeys:
             cases.push((
                 scenario,
                 input,
-                "requires advertised revisions permission".into(),
+                "requires advertised revisions permission".to_owned(),
             ));
         }
         let samples = catalogue
