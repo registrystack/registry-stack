@@ -62,6 +62,7 @@ registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.
   -p registry-evidence -p registry-evidencectl --bins >/dev/null
 evidence_bin="$repository_root/target/$build_profile/evidence"
 evidencectl="$repository_root/target/$build_profile/evidencectl"
+export EVIDENCE_BIN="$evidence_bin"
 project="$run_dir/project"
 mock_pid=""
 
