@@ -436,6 +436,38 @@ mod problem_tests {
     use super::*;
 
     #[test]
+    fn admission_keys_require_one_bounded_printable_header_value() {
+        for key in [
+            "stable-key".to_owned(),
+            "key with spaces,1".to_owned(),
+            "k".repeat(256),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("idempotency-key", HeaderValue::from_str(&key).unwrap());
+            assert_eq!(idempotency_key(&headers).unwrap(), key);
+        }
+        let long = "k".repeat(257);
+        for keys in [
+            vec![],
+            vec![""],
+            vec![long.as_str()],
+            vec!["tab\tkey"],
+            vec!["same", "same"],
+            vec!["first", "second"],
+            vec!["second", "first"],
+        ] {
+            let mut headers = HeaderMap::new();
+            for key in keys {
+                headers.append("idempotency-key", HeaderValue::from_str(key).unwrap());
+            }
+            assert_eq!(
+                idempotency_key(&headers).unwrap_err().code,
+                "start-key-invalid"
+            );
+        }
+    }
+
+    #[test]
     fn only_credential_refusal_returns_a_bearer_challenge() {
         for (code, status, challenge) in [
             (
@@ -828,6 +860,17 @@ async fn workflow_contract(
     }.await)
 }
 
+pub(crate) fn idempotency_key(headers: &HeaderMap) -> Result<&str> {
+    let mut values = headers.get_all("idempotency-key").iter();
+    match (values.next(), values.next()) {
+        (Some(key), None) => key.to_str().ok().filter(|key| {
+            !key.is_empty() && key.len() <= 256 && !key.chars().any(char::is_control)
+        }),
+        _ => None,
+    }
+    .ok_or_else(|| CoordinatorError::new("start-key-invalid", "supply one bounded Idempotency-Key"))
+}
+
 async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody) -> Response {
     let result = async {
         let c = caller(&s, &headers).await?;
@@ -855,16 +898,7 @@ async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody
             .suggest("name a workflow whose package this deployment lists")
         })?;
         deployment::check(&s.store, &s.runtime, s.workflows.digest()).await?;
-        let key = headers
-            .get("idempotency-key")
-            .and_then(|v| v.to_str().ok())
-            .filter(|key| !key.is_empty() && key.len() <= 256)
-            .ok_or_else(|| {
-                CoordinatorError::new(
-                    "start-key-invalid",
-                    "supply Idempotency-Key within 1..=256 bytes",
-                )
-            })?;
+        let key = idempotency_key(&headers)?;
         let binding = s.runtime.binding_digest_for(&package.definition.workflow)?;
         let id = s
             .store

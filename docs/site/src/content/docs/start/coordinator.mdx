@@ -71,14 +71,15 @@ and no distributed rollback.
 
 ## Authority boundaries
 
-A caller explicitly starts every run. Completion events only advance eligible observations on
-existing waits. Each downstream call acquires the operator-configured identity, and its receiver
+A run starts from an authorized caller, an accepted Review request, or a configured authenticated
+product event. Completion events only advance eligible observations on existing waits.
+Each downstream call acquires the operator-configured identity, and its receiver
 checks current authority. A wait or retry preserves the original approval deadline. Public HTTP
 contracts separate products; each owns its database. Cancellation stops future dispatch where
 possible and leaves accepted effects in place.
 
 {/* Evidence: products/coordinator/README.md, Waits and polling;
-    products/coordinator/PRODUCT-CONTRACT.md, Execution and authority;
+    products/coordinator/PRODUCT-CONTRACT.md, Admission and integration, Execution and authority;
     crates/registry-coordinator/src/completion.rs, receive_review_completion;
     products/coordinator/DEPLOYMENT.md, Recover safely. */}
 

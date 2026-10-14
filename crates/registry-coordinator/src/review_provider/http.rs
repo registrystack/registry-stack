@@ -3,7 +3,7 @@
 use crate::{
     access::{Action, Caller},
     deployment,
-    http::{BoundedBody, HttpState},
+    http::{idempotency_key, BoundedBody, HttpState},
     store::ReviewLookup,
     CoordinatorError, Result,
 };
@@ -63,20 +63,6 @@ fn binding<'a>(caller: &'a Caller, headers: &HeaderMap) -> Result<&'a super::Rev
     )
 }
 
-fn key(headers: &HeaderMap) -> Result<&str> {
-    let values = headers
-        .get_all("idempotency-key")
-        .iter()
-        .collect::<Vec<_>>();
-    match values.as_slice() {
-        [key] => key.to_str().ok().filter(|key| {
-            !key.is_empty() && key.len() <= 256 && !key.chars().any(char::is_control)
-        }),
-        _ => None,
-    }
-    .ok_or_else(|| CoordinatorError::new("start-key-invalid", "supply one bounded Idempotency-Key"))
-}
-
 async fn body<T: DeserializeOwned>(headers: &HeaderMap, body: BoundedBody) -> Result<T> {
     let bytes = body.map_err(|_| {
         CoordinatorError::new(
@@ -126,7 +112,7 @@ async fn create(State(s): State<HttpState>, headers: HeaderMap, input: BoundedBo
                 &request,
                 &caller.actor,
                 binding(&caller, &headers)?,
-                key(&headers)?,
+                idempotency_key(&headers)?,
             )
             .await?
         {
@@ -147,7 +133,7 @@ async fn create(State(s): State<HttpState>, headers: HeaderMap, input: BoundedBo
                 request,
                 &caller.actor,
                 binding(&caller, &headers)?,
-                key(&headers)?,
+                idempotency_key(&headers)?,
                 &runtime_binding,
                 &s.runtime,
             )
@@ -246,7 +232,7 @@ async fn cancel(
                     &caller.actor,
                     binding(&caller, &headers)?,
                     workflows,
-                    key(&headers)?,
+                    idempotency_key(&headers)?,
                     &cancellation,
                 )
                 .await?;

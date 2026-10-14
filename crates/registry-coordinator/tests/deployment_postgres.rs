@@ -1160,7 +1160,14 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     let input = json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()});
     assert_bounded_readiness(&http, &origin, &database, &namespace).await;
     let long_key = "x".repeat(257);
-    for key in [None, Some(""), Some(long_key.as_str())] {
+    for keys in [
+        vec![],
+        vec![""],
+        vec![long_key.as_str()],
+        vec!["same-key", "same-key"],
+        vec!["first-key", "second-key"],
+        vec!["second-key", "first-key"],
+    ] {
         for (credential, expected, code) in [
             (None, 401, "authentication.refused"),
             (Some(&op), 403, "operation.not-authorized"),
@@ -1169,8 +1176,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             let mut request = http
                 .post(format!("{origin}/v1/runs"))
                 .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}));
-            if let Some(key) = key {
-                request = request.header("Idempotency-Key", key);
+            for key in &keys {
+                request = request.header("Idempotency-Key", *key);
             }
             if let Some(credential) = credential {
                 request = request.bearer_auth(credential);
