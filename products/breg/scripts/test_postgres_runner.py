@@ -24,10 +24,11 @@ assert SPEC is not None and SPEC.loader is not None
 VALIDATOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(VALIDATOR)
 RUNNER = SCRIPT_DIR / "test-postgres.sh"
+ACTION_EXAMPLES_RUNNER = SCRIPT_DIR / "test-immediate-action-examples.sh"
 
 
 class PostgresRunnerTests(unittest.TestCase):
-    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False):
+    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False, runner: Path = RUNNER):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             log = root / "cargo.jsonl"
@@ -75,7 +76,7 @@ class PostgresRunnerTests(unittest.TestCase):
             if database:
                 environment["BREG_TEST_DATABASE_URL"] = "postgresql://fixture.invalid/test"
             result = subprocess.run(
-                [str(RUNNER), *arguments], env=environment,
+                [str(runner), *arguments], env=environment,
                 capture_output=True, text=True, check=False,
             )
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -156,6 +157,29 @@ class PostgresRunnerTests(unittest.TestCase):
                 self.assertEqual(17, result.returncode)
                 self.assertEqual(1, len(calls))
 
+    def test_immediate_action_examples_run_the_native_atomicity_and_recovery_proof(self):
+        result, calls = self.run_lane(runner=ACTION_EXAMPLES_RUNNER)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([shlex.split(
+            "test --locked -p registry-breg --features postgres-test,tooling,schema "
+            "--test postgres_refactor "
+            "facility_action_is_atomic_checks_references_and_recovers_exactly_once "
+            "-- --exact --test-threads=1"
+        )], calls)
+
+    def test_immediate_action_examples_require_database_and_propagate_failures(self):
+        result, calls = self.run_lane(runner=ACTION_EXAMPLES_RUNNER, database=False)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("BREG_TEST_DATABASE_URL must be set", result.stderr)
+        self.assertEqual([], calls)
+        result, calls = self.run_lane(runner=ACTION_EXAMPLES_RUNNER, fail=True)
+        self.assertEqual(17, result.returncode)
+        self.assertEqual(1, len(calls))
+        result, calls = self.run_lane("--mode", "immediate-actions", runner=ACTION_EXAMPLES_RUNNER)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("Usage:", result.stderr)
+        self.assertEqual([], calls)
+
     def test_inventory_validator_rejects_lost_duplicate_filtered_or_wrong_feature_targets(self):
         source = RUNNER.read_text(encoding="utf-8")
         for changed in (
@@ -198,10 +222,17 @@ class PostgresRunnerTests(unittest.TestCase):
             "products/breg/quickstart/run.sh --spatial --smoke",
             "products/breg/scripts/check-mcp-gateway-boundary.sh",
             "products/breg/scripts/check-service-dependencies.sh",
+            "products/breg/scripts/test-immediate-action-examples.sh",
         )
         for command in contract_commands:
             self.assertEqual("matrix.lane == 'contracts'", runs[command]["if"])
         self.assertLess(list(runs).index(contract_commands[2]), list(runs).index(contract_commands[3]))
+        # The native Action harness uses a plain administrator connection. The
+        # TLS proof changes this shared service to TLS-only for adopter checks.
+        self.assertLess(
+            list(runs).index("products/breg/scripts/test-immediate-action-examples.sh"),
+            list(runs).index("products/breg/scripts/test-postgres-tls.sh"),
+        )
         uv = next(step for step in job["steps"] if step.get("name") == "Install uv")
         self.assertEqual("matrix.lane != 'immediate-actions'", uv["if"])
         postgres = runs['products/breg/scripts/test-postgres.sh --lane "$BREG_POSTGRES_LANE"']

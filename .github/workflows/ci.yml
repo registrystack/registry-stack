@@ -1304,6 +1304,12 @@ jobs:
         if: matrix.lane == 'postgres'
         run: cargo test --locked -p registry-breg --features postgres-test,tooling,schema --lib --test startup_http --test runtime_config --test issuer_portability -- --test-threads=1
 
+      # The transactional harness uses its own roles over the initial local
+      # connection. Run it before the TLS proof makes this service TLS-only.
+      - name: Base Registry Engine immediate Action transaction and recovery
+        if: matrix.lane == 'contracts'
+        run: products/breg/scripts/test-immediate-action-examples.sh
+
       - name: Base Registry Engine PostgreSQL TLS proof
         if: matrix.lane == 'contracts'
         run: products/breg/scripts/test-postgres-tls.sh
@@ -1340,10 +1346,6 @@ jobs:
         env:
           BREG_SKIP_BUILD: "1"
         run: products/breg/scripts/test-backup-restore.sh
-
-      - name: Base Registry Engine immediate-action adopter examples
-        if: matrix.lane == 'contracts'
-        run: products/breg/scripts/test-immediate-action-examples.sh
 
       - name: Base Registry Engine generic quickstart
         if: matrix.lane == 'contracts'
