@@ -304,6 +304,11 @@ function branchCoverage(collected) {
 // and `scope` is a stable node path so two independent conditions on one key
 // path do not collapse into a single alternative.
 function walk(document, schema, prefix, kind, required, occurrences, state) {
+  // A true schema declares an unconstrained leaf, not an absent property.
+  // Preserve its key path without inventing a type or nested fields.
+  if (schema === true) {
+    schema = {};
+  }
   if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
     return;
   }

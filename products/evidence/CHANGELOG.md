@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- BREAKING: authoring uses one normalized `evidence.yaml` project with named
+  Sources and Functions, AssertionDefinitions and declared Outputs, plus a
+  separate target and complete target authority. Retired question/source/selector
+  documents and local access policies are rejected. See the authoring reference
+  and standalone example for the current model.
+- BREAKING: use `evidencectl dev start PROJECT` to launch local development.
+  The bare `dev --detach` and hidden `dev --project` spellings are removed.
+- Targets now have closed nested schemas and field-addressed diagnostics.
+  Production check refuses a missing governed public signing key before runtime
+  delegation. Check and explain accept a target file or its containing directory.
+- `evidencectl check --file` accepts the standard `--deny-warnings` policy,
+  as project checks do. Source suggestions name the actual project file and
+  require authored fixtures before recommending fixture evaluation.
+- Local audit inspection recognizes normalized authority metadata, every retained
+  Output form and bounded holder-batch release sets while preserving minimized
+  presentation and refusal on incoherent records.
+- The maintained authoring reference, generated configuration reference and
+  first-hour tutorial chain use the normalized project and complete-grant model.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries
