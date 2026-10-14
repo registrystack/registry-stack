@@ -278,6 +278,58 @@ fn proposal_attachments_require_explicit_bounded_slot_grants() {
 }
 
 #[test]
+fn proposal_attachment_download_schema_requires_a_positive_u32_submission_version() {
+    use serde_json::json;
+    let model = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
+    let openapi: serde_json::Value = serde_json::from_slice(
+        &model
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let attachment =
+        &openapi["paths"]["/v1/proposals/{proposal_id}/attachments/supporting-document"];
+    let parameter = attachment["get"]["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|parameter| parameter["name"] == "submissionVersion")
+        .expect("attachment downloads bind an exact submitted version");
+    assert_eq!(parameter["in"], "query");
+    assert_eq!(parameter["required"], true);
+    let validator = jsonschema::JSONSchema::compile(&parameter["schema"]).unwrap();
+    for version in [json!(1), json!(u32::MAX)] {
+        assert!(validator.is_valid(&version), "{version}");
+    }
+    for version in [
+        json!(-1),
+        json!(0),
+        json!(u64::from(u32::MAX) + 1),
+        json!(1.5),
+        json!("1"),
+    ] {
+        assert!(!validator.is_valid(&version), "{version}");
+    }
+
+    // An unsubmitted draft remains version zero, with unversioned slot edits.
+    let proposal_version_schema = &openapi["paths"]["/v1/proposals/{proposal_id}"]["get"]
+        ["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
+        ["submissionVersion"];
+    assert!(jsonschema::JSONSchema::compile(proposal_version_schema)
+        .unwrap()
+        .is_valid(&json!(0)));
+    for method in ["patch", "delete"] {
+        assert!(!attachment[method]["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|parameter| parameter["name"] == "submissionVersion"));
+    }
+}
+
+#[test]
 fn explicit_automatic_application_has_a_bounded_revision_bound_system_grant() {
     use registry_breg::contract::parse_project_json;
     use serde_json::json;

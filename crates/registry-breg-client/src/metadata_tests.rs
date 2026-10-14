@@ -756,8 +756,7 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
         "kind": "odata",
         "selectableFields": [{"id": "legal-name", "apiName": "legalName"}],
         "filterableFields": [
-            {"id": "__request_breg_state", "apiName": "bregState", "operators": ["equals", "in"]},
-            {"id": "__request_review_outcome", "apiName": "reviewOutcome", "operators": ["equals", "in"]}
+            {"id": "legal-name", "apiName": "legalName", "operators": ["equals", "in"]}
         ],
         "sortableFields": [{"id": "legal-name", "apiName": "legalName", "directions": ["asc", "desc"]}],
         "allowCount": true, "defaultPageSize": 25, "maximumPageSize": 100,
@@ -772,9 +771,8 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
         "Response-controlled presentation"
     );
     let query = operation.query().unwrap();
-    assert_eq!(query.filterable_fields[0].api_name, "bregState");
+    assert_eq!(query.filterable_fields[0].api_name, "legalName");
     assert_eq!(query.filterable_fields[0].operators, ["equals", "in"]);
-    assert_eq!(query.filterable_fields[1].api_name, "reviewOutcome");
     assert_eq!(query.maximum_page_size, 100);
     assert!(metadata
         .select_direct_write("records.company.get", "company-writer")
@@ -786,6 +784,25 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
         BRegMetadata::from_slice(&serde_json::to_vec(&beyond_exact).unwrap()).is_err(),
         "a limit the JavaScript number boundary cannot carry exactly must be refused"
     );
+
+    for fields in ["selectableFields", "filterableFields", "sortableFields"] {
+        for retired_id in [
+            "__request_breg_state",
+            "__request_proposal_version",
+            "__request_effect_digest",
+            "__request_review_outcome",
+        ] {
+            let mut retired = value.clone();
+            retired["operations"][2]["query"][fields][0]["id"] = json!(retired_id);
+            assert_eq!(
+                BRegMetadata::from_slice(&serde_json::to_vec(&retired).unwrap())
+                    .unwrap_err()
+                    .kind(),
+                BRegMetadataErrorKind::Identifier,
+                "{fields} must use record field identifiers"
+            );
+        }
+    }
 }
 
 #[test]

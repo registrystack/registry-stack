@@ -353,6 +353,15 @@ async fn start(
     value: &str,
     key_name: &str,
 ) -> registry_breg_client::BRegProposal {
+    start_action(fixture, "correct-name", value, key_name).await
+}
+
+async fn start_action(
+    fixture: &client_http::ClientFixture,
+    action_id: &str,
+    value: &str,
+    key_name: &str,
+) -> registry_breg_client::BRegProposal {
     let client = &fixture.http.client;
     let metadata = client.registry_contract(Some("clerk")).await.unwrap();
     let BRegDirectWrite::Create(create) = metadata
@@ -371,10 +380,7 @@ async fn start(
         )
         .await
         .unwrap();
-    let action = metadata
-        .value
-        .select_action("correct-name", "clerk")
-        .unwrap();
+    let action = metadata.value.select_action(action_id, "clerk").unwrap();
     let input = BRegActionInvocationRequest::new(
         &action,
         map(json!({"target":record.value.data.record_identifier,"value":value})),
@@ -386,6 +392,78 @@ async fn start(
         .await
         .unwrap()
         .value
+}
+
+#[tokio::test]
+async fn proposal_list_audit_counts_only_each_actions_returned_items() {
+    let mut source = registry_source(false);
+    for id in ["correct-alternate", "correct-empty"] {
+        let mut action = source["actions"][0].clone();
+        action["id"] = json!(id);
+        source["actions"].as_array_mut().unwrap().push(action);
+        for permission in ["actions", "proposals"] {
+            let mut grant = source["accessProfiles"][0]["permissions"][permission][0].clone();
+            grant["action"] = json!(id);
+            source["accessProfiles"][0]["permissions"][permission]
+                .as_array_mut()
+                .unwrap()
+                .push(grant);
+        }
+    }
+    let fixture =
+        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+    start(&fixture, "First", "audit-list-first").await;
+    start(&fixture, "Second", "audit-list-second").await;
+    start_action(&fixture, "correct-alternate", "Other", "audit-list-other").await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+    for (action, expected) in [
+        (None, [2usize, 1, 0]),
+        (Some("correct-name"), [2, 0, 0]),
+        (Some("correct-empty"), [0, 0, 0]),
+    ] {
+        let before = fixture.audit_capture.entries().len();
+        let page = client
+            .list_proposals(
+                &collection,
+                &BRegProposalQuery {
+                    action: action.map(str::to_owned),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.value.items.len(), expected.iter().sum::<usize>());
+        let entries = fixture.audit_capture.entries();
+        let terminal = entries[before..]
+            .iter()
+            .filter_map(|entry| {
+                let record = &entry["record"];
+                (record["phase"] == "terminal"
+                    && record["operationId"]
+                        .as_str()
+                        .is_some_and(|id| id.ends_with(".list")))
+                .then_some(record)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(terminal.len(), 3);
+        for (id, count) in ["correct-name", "correct-alternate", "correct-empty"]
+            .into_iter()
+            .zip(expected)
+        {
+            let record = terminal
+                .iter()
+                .find(|record| record["actionId"] == id)
+                .unwrap();
+            assert_eq!(record["resultCount"], count, "{action:?}/{id}");
+            assert_eq!(
+                record["outcome"],
+                if count == 0 { "empty" } else { "returned" }
+            );
+        }
+    }
+    fixture.finish().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

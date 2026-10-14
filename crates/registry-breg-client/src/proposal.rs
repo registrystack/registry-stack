@@ -1155,6 +1155,7 @@ impl BaseRegistryClient {
                 .action
                 .as_ref()
                 .is_some_and(|action| action != &item.action_id)
+                || query.state.is_some_and(|state| state != item.state)
             {
                 return Err(refusal());
             }
@@ -2029,6 +2030,81 @@ mod tests {
             "list-author"
         )
         .is_ok());
+    }
+    #[tokio::test]
+    async fn proposal_list_refuses_items_outside_requested_state() {
+        use axum::{extract::State, routing::get, Json, Router};
+        use std::sync::{Arc, Mutex};
+
+        let response = Arc::new(Mutex::new(json!({"items":[]})));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/v1/proposals",
+                get(|State(value): State<Arc<Mutex<Value>>>| async move {
+                    (
+                        [
+                            (
+                                "traceparent",
+                                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                            ),
+                            ("cache-control", "no-store"),
+                            ("vary", "authorization, accept"),
+                        ],
+                        Json(value.lock().unwrap().clone()),
+                    )
+                }),
+            )
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = client(&format!("http://{address}/"));
+        let collection = BRegProposalCollection::from_metadata(
+            &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["author"]}),
+            &client.source_binding(),
+            REVISION,
+            "author",
+        )
+        .unwrap();
+        let states = [
+            BRegProposalState::Draft,
+            BRegProposalState::Submitted,
+            BRegProposalState::Applied,
+            BRegProposalState::Cancelled,
+        ];
+        for returned in states {
+            let mut item = document();
+            item["state"] = serde_json::to_value(returned).unwrap();
+            *response.lock().unwrap() = json!({"items":[item]});
+            for requested in states {
+                let query = BRegProposalQuery {
+                    state: Some(requested),
+                    ..Default::default()
+                };
+                let result = client.list_proposals(&collection, &query).await;
+                assert_eq!(
+                    result.is_ok(),
+                    requested == returned,
+                    "requested {requested:?}, returned {returned:?}"
+                );
+            }
+            assert!(client
+                .list_proposals(&collection, &BRegProposalQuery::default())
+                .await
+                .is_ok());
+        }
+        *response.lock().unwrap() = json!({"items":[]});
+        assert!(client
+            .list_proposals(
+                &collection,
+                &BRegProposalQuery {
+                    state: Some(BRegProposalState::Submitted),
+                    ..Default::default()
+                }
+            )
+            .await
+            .is_ok());
+        server.abort();
     }
     #[test]
     fn promoted_links_bind_method_operation_resource_and_selected_profile() {

@@ -74,7 +74,7 @@ pub(crate) fn append_proposal_openapi(
                         false,
                     );
                     if method == "get" {
-                        operation["parameters"].as_array_mut().unwrap().push(json!({"name":"submissionVersion","in":"query","required":true,"schema":{"type":"integer","minimum":0}}));
+                        operation["parameters"].as_array_mut().unwrap().push(json!({"name":"submissionVersion","in":"query","required":true,"schema":{"type":"integer","minimum":1,"maximum":u32::MAX}}));
                         operation["responses"]["200"]["content"] = json!({"application/octet-stream":{"schema":{"type":"string","format":"binary","maxLength":slot.maximum_bytes}}});
                     } else if method == "patch" {
                         let content=slot.content_types.iter().map(|mime|(mime.clone(),json!({"schema":{"type":"string","format":"binary","maxLength":slot.maximum_bytes}}))).collect::<Map<_,_>>();

@@ -2976,18 +2976,6 @@ fn validate_spatial_queries(value: Value) -> Result<bool, BRegMetadataError> {
     Ok(coordinate_reference_system == "CRS84" && semantics == "inclusive_2d_non_crossing")
 }
 
-fn query_field_identifier(value: Value) -> Result<String, BRegMetadataError> {
-    match value.as_str() {
-        Some(
-            "__request_breg_state"
-            | "__request_proposal_version"
-            | "__request_effect_digest"
-            | "__request_review_outcome",
-        ) => string(value),
-        _ => identifier(value),
-    }
-}
-
 fn validate_field_identities(
     value: Value,
     extra_member: Option<&str>,
@@ -2997,7 +2985,7 @@ fn validate_field_identities(
     let mut api_names = BTreeSet::new();
     for field in array(value)? {
         let mut field = object(field)?;
-        let id = query_field_identifier(required(&mut field, "id")?)?;
+        let id = identifier(required(&mut field, "id")?)?;
         // A slot identifier is its own verbatim API property. Every other
         // queryable field keeps strict scalar API naming.
         let api_name_value = required(&mut field, "apiName")?;

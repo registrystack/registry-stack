@@ -981,7 +981,14 @@ impl PostgresRecordMutationService {
                 .finish_proposal_read_audit(
                     authority,
                     None,
-                    value["items"].as_array().map_or(0, Vec::len),
+                    value["items"].as_array().map_or(0, |items| {
+                        items
+                            .iter()
+                            .filter(|item| {
+                                item["actionId"].as_str() == Some(authority.common.action_id())
+                            })
+                            .count()
+                    }),
                     correlation,
                 )
                 .await?;
