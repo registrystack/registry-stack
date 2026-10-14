@@ -23,8 +23,22 @@
 - Token refusals name the supported RFC 8707 `invalid_target` code without
   exposing authorization-server descriptions. Local issuer startup reports the
   setup process exit status while discarding credential-bearing upstream output.
+- BReg-backed source setup invokes BReg's native `--record-type` option for
+  preparation and export. Use matching current BReg and Evidence tooling;
+  Evidence's own `source add --entity` selection remains unchanged.
 - The maintained authoring reference, generated configuration reference and
   first-hour tutorial chain use the normalized project and complete-grant model.
+- Compiled Functions, generated source adapters and schemas use distinct artifact
+  namespaces. Packaging refuses conflicting content, reserved output paths and
+  file/directory aliases before writing a bundle. Rebuilt projects receive the
+  revisions derived from their exact compiled artifact closure.
+- Local assurance permits focused synthetic fixture suites. Production and
+  evidence-grade still require complete case coverage; every present suite keeps
+  the same structural and synthetic-data checks at load, with the same evaluator
+  and privacy checks when run.
+- Active consumer verification, role-bound assertions and FHIR credential
+  tutorials use the normalized model. The FHIR example includes reviewed fixed
+  HTTP sources, minimized Facts and Outputs, complete grants and offline proofs.
 
 ## 0.41.0 - 2026-10-13
 

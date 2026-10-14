@@ -69,7 +69,8 @@ reader. A missing or unknown envelope, the retired `fixture` identifier key, and
 a `${...}` expression are refused, and so is a fixture that is not synthetic or
 does not cover every required case category under production or evidence-grade
 assurance. Local suites retain the same envelope, synthetic-data, case-count,
-unique-ID, unresolved-outcome, evaluation, and privacy checks. Each refusal
+unique-ID, and unresolved-outcome checks at load, with the same evaluator and
+privacy checks when the suite is run. Each refusal
 names the file, the member, its line and column, and the fix, and never repeats a value from the
 file. The evaluator runs a fixture that declares
 `coequal_acceptance_definition: true` as a coequal acceptance definition and
