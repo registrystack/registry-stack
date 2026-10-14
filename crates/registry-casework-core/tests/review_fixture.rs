@@ -197,7 +197,25 @@ fn maintained_submitted_fixture_and_current_source_policy_validate_offline() {
     )
     .unwrap();
     let project = CaseworkProject::load(root.join("canonical-review/casework.yaml")).unwrap();
-    let display = json!({"currentAddressLine":"10 Harbour Road","facilityId":"00000000-0000-4000-8000-000000000001","proposedAddressLine":"12 Harbour Road","proposedCity":"Example City","proposedPostalCode":"00100"});
+    let facility_id = "00000000-0000-4000-8000-000000000001";
+    let display = json!({
+        "currentAddressLine": "10 Harbour Road",
+        "facilityId": facility_id,
+        "changes": [{
+            "recordId": facility_id,
+            "operation": "patch",
+            "before": {
+                "address-line": "10 Harbour Road",
+                "city": "Example City",
+                "postal-code": "00100"
+            },
+            "after": {
+                "address-line": "12 Harbour Road",
+                "city": "Example City",
+                "postal-code": "00100"
+            }
+        }]
+    });
     let mut document = fixture();
     document["review"] = json!({"policy":"facility-address-review","display":display});
     document["expect"] = json!({"queue":"facility-addresses","outcomes":["approved","rejected"]});
@@ -207,6 +225,32 @@ fn maintained_submitted_fixture_and_current_source_policy_validate_offline() {
         &project,
     )
     .unwrap();
+    for invalid_display in [
+        json!({
+            "currentAddressLine": "10 Harbour Road",
+            "facilityId": facility_id,
+            "proposedAddressLine": "12 Harbour Road",
+            "proposedCity": "Example City",
+            "proposedPostalCode": "00100"
+        }),
+        {
+            let mut display = document["review"]["display"].clone();
+            display["changes"][0]["after"]["postal-code"] = json!(7);
+            display
+        },
+    ] {
+        document["review"]["display"] = invalid_display;
+        let error = CaseworkFixture::read_against(
+            "fixture.yaml",
+            &serde_json::to_vec(&document).unwrap(),
+            &project,
+        )
+        .unwrap_err();
+        assert!(error
+            .diagnostics()
+            .iter()
+            .any(|item| item.code == "casework.fixture.display-invalid"));
+    }
 }
 
 #[cfg(feature = "schema")]

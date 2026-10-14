@@ -169,8 +169,8 @@ sys.exit(37)
         return subprocess.run(
             # Set DYLD inside the shell: macOS strips it when launching /bin/sh.
             ["/bin/sh", "-c",
-             'DYLD_FALLBACK_LIBRARY_PATH=$TEST_FALLBACK_PATH; '
-             'export DYLD_FALLBACK_LIBRARY_PATH; . "$0"', str(self.checkpoint)],
+             'DYLD_FALLBACK_LIBRARY_PATH=$TEST_FALLBACK_PATH; export DYLD_FALLBACK_LIBRARY_PATH; . "$0"',
+             str(self.checkpoint)],
             env=self.env,
             capture_output=True,
             text=True,

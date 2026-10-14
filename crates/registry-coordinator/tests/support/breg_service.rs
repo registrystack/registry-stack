@@ -415,9 +415,10 @@ impl Breg {
         self.client_at(issuer, &self.base_url)
     }
 
-    // This independent test observer authenticates directly. The gateway process
-    // still exchanges its verified inbound token for every outbound call.
-    #[allow(clippy::disallowed_methods)]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Independent test observer authenticates directly; the gateway still exchanges each inbound token"
+    )]
     pub fn client_at(
         &self,
         issuer: &TestAuthorizationServer,

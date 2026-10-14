@@ -324,7 +324,7 @@ async fn assert_authenticated_run_validation(
     // Transport body bounds remain before product parsing or authorization.
     let oversized = http
         .post(format!("{origin}/v1/runs/{absent}/cancel"))
-        .body("x".repeat(65_537))
+        .body("x".repeat(131_073))
         .send()
         .await
         .unwrap();
@@ -563,8 +563,8 @@ async fn assert_reapply_preserves_schema_and_work(
         .get(0);
     assert!(!before["runs"].as_array().unwrap().is_empty());
     assert!(!before["jobs"].as_array().unwrap().is_empty());
-    assert_eq!(before["ledger"], json!([3]));
-    assert_eq!(before["schemaVersion"], 3);
+    assert_eq!(before["ledger"], json!([4]));
+    assert_eq!(before["schemaVersion"], 4);
     for _ in 0..2 {
         deployment::apply(migration, runtime, workflows, &[])
             .await
@@ -863,7 +863,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(checked["databaseId"], "router-test");
     assert_eq!(checked["workflowsDigest"], workflows_digest);
     assert_eq!(checked["workflows"], json!({"delayed-follow-up": digest}));
-    assert_eq!(checked["schemaVersion"], 3);
+    assert_eq!(checked["schemaVersion"], 4);
     assert_eq!(checked["runtimeRole"], role);
     assert_eq!(checked["active"]["roleMode"], "split");
     status_doc["deployment"]["runtimeRole"] = json!("wrong_runtime_role");
@@ -991,8 +991,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     );
     admin
         .batch_execute(&format!(
-            "UPDATE {namespace}.control SET schema_version=3;
-             ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=3)"
+            "UPDATE {namespace}.control SET schema_version=4;
+             ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=4)"
         ))
         .await
         .unwrap();
@@ -1001,8 +1001,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     // write authority all refuse status while plan still reports observation.
     for (damage, repair) in [
         (
-            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(4)"),
-            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=4"),
+            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(5)"),
+            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=5"),
         ),
         (
             format!("REVOKE SELECT ON {namespace}.jobs FROM {role}"),

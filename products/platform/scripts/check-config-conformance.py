@@ -135,7 +135,10 @@ ROWS: tuple[Row, ...] = (
             RustBlock("crates/registry-coordinator/src/deployment.rs", "DeploymentConfig", "packages", "PackageConfig", repeated=True),
             RustBlock("crates/registry-coordinator/src/deployment.rs", "DeploymentConfig", "listener", "PrivateListenerConfig"),
             RustBlock("crates/registry-coordinator/src/access.rs", "AccessConfig", "issuer", "OidcIssuerConfig"),
-            RustBlock("crates/registry-coordinator/src/access.rs", "AccessConfig", "clients", "OidcClientsConfig"),
+            # Coordinator derives the shared OidcClientsConfig from its policy keys,
+            # instead of carrying a second client-admission list. The owning
+            # policy_keys_are_the_only_closed_client_admission_configuration test
+            # verifies this authoring contract; AccessConfig still runs the shared check.
         ),
     ),
     Row(

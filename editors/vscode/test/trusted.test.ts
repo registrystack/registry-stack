@@ -76,7 +76,7 @@ suite('Registry Stack extension', () => {
       '',
     ].join('\n');
     const productFixtures = [
-      ['breg', 'registry.yaml', 'kind: BRegProject\nentities:\n  - id: host-person\n', 'host-person'],
+      ['breg', 'registry.yaml', 'kind: BRegProject\nrecordTypes:\n  - id: host-person\n', 'host-person'],
       ['casework', 'casework.yaml', 'kind: CaseworkProject\nqueues:\n  - id: host-queue\n', 'host-queue'],
       ['scheduling', 'scheduling.yaml', 'kind: SchedulingProject\nservices:\n  - id: host-service\n', 'host-service'],
       ['messaging', 'messaging.yaml', 'kind: MessagingProject\nproviders:\n  - id: host-provider\n', 'host-provider'],

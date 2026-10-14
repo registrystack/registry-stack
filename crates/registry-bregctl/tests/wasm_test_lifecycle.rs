@@ -307,14 +307,21 @@ recordTypes:
     classification: public
     fields:
       - {id: code, type: string, required: true, maximumLength: 32, classification: public}
+functions:
+  - id: fixed-output-plan
+    runtime: wasm
+    source: handlers/fixed-output.wasm
+    entrypoint: handle
+    abi: registry.action-plan/v1
 actions:
   - id: create-fixed-record
+    execution: {mode: immediate}
     inputs:
       - {id: request, type: string, required: true, maximumLength: 32, classification: public}
-    handler:
-      type: wasm
-      module: handlers/fixed-output.wasm
-      abi: registry.action-handler/v1
+    plan:
+      type: function
+      function: fixed-output-plan
+      inputs: [request]
       writes:
         - id: record
           target: {recordType: record}

@@ -23,6 +23,9 @@
 //! The portable Action contract and its schema are now packaged alongside the
 //! compiled inventory. Their addition changes the three Action fixture artifact
 //! revisions while preserving their SQL and Action definition fingerprints.
+//! The membershipRecordType spelling, optional exact Review policy selection in
+//! the Action contract schema, and normalized Python SDK EOF also change artifact
+//! revisions while preserving the exact SQL and Action fingerprints below.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -45,7 +48,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "da05fb62cb07ea689d7351c76d609a552a5a8fb9e1e5231877d103dd1e33fe88",
-        revision: "sha256:cde099a72cff82ab150cd37b58e756dfffb813201ed4257f928f32fdad03fdfd",
+        revision: "sha256:25398c9d434b6138490f6f7dab29a7ac66de9a3c29494b357ea89ecb6f6db706",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -56,7 +59,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "dfb8cefaa8059cda62c5d2d39bb14fcbf33f589061ca6fe81402e948048caaf6",
-        revision: "sha256:eb25be6a3ab809af482d53f760875492c86614bcb41c17fc05e6a666c2b3d243",
+        revision: "sha256:270dc1fad4b792c7e014fc464636fb6f7456f19647e0169fcd45076c100b8c54",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -67,7 +70,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "603a8c6c8ab8500fe5beff9b78657c667de7e90c91578700091086e2f1a82380",
-        revision: "sha256:83081da3719f9edf298148b2557081300574360761abbe51d98fb647ea963160",
+        revision: "sha256:db5501fca0ea753f38a8be5895ff97776f4a2be4c22e4e45a4fde5b71ff73f73",
     },
     Fixture {
         name: "household-contact-actions",
@@ -78,7 +81,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "451d62c09089364c81f343acfbc175f82db449f00446886fedc6e8cc03ef86ad",
-        revision: "sha256:1611b3566ed44885e6285682ee4e9bb9b532d89b6fe81677016d7878ffd19cf0",
+        revision: "sha256:523718ee6a7edbe685e0be0920f7684285b6a2dfcc066400dc0834522ba05088",
     },
 ];
 

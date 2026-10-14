@@ -35,9 +35,10 @@ coordinatorctl check --project products/coordinator/examples/review-provider
 coordinatorctl test --project products/coordinator/examples/review-provider
 ```
 
-The six offline scenarios cover automatic approval, inactive-record refusal,
-human approval and rejection, human timeout withdrawal, and assessment authority
-refusal. The checked-in context and Casework pins are synthetic fixture values.
+The nine offline scenarios cover automatic approval, inactive-record refusal,
+human approval, rejection, answer, requested changes and supersession, human
+timeout withdrawal, and assessment authority refusal. The checked-in context and
+Casework pins are synthetic fixture values.
 Before deploying, import exact owner exports. A producer normally selects the
 Review policy by ID; the provider binds its current version and revision on
 first acceptance and preserves that concrete policy for recovery and results.

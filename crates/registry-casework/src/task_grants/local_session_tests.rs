@@ -3,6 +3,7 @@
 //! native exchange test exercises the Evidence, BReg and Scheduling resources.
 use axum::http::StatusCode;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use registry_casework_core::{CASEWORK_PROFILE_HEADER, REVIEW_PROFILE_HEADER};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -144,10 +145,12 @@ async fn http(
     method: &str,
     url: &str,
     token: &str,
-    profile: &str,
+    profile: (&str, &str),
     revision: Option<i64>,
     body: Option<Value>,
+    idempotency_key: Option<&str>,
 ) -> (StatusCode, Value) {
+    let (profile_header, profile) = profile;
     let client = reqwest::Client::builder()
         .no_proxy()
         .timeout(Duration::from_secs(10))
@@ -156,9 +159,12 @@ async fn http(
     let mut request = client
         .request(method.parse().unwrap(), url)
         .bearer_auth(token)
-        .header("registry-casework-profile", profile);
+        .header(profile_header, profile);
     if method == "POST" {
-        request = request.header("idempotency-key", uuid::Uuid::new_v4().to_string());
+        let key = idempotency_key
+            .map(str::to_owned)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        request = request.header("idempotency-key", key);
     }
     if let Some(revision) = revision {
         request = request.header("if-match", format!("\"{revision}\""));
@@ -256,15 +262,49 @@ async fn submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     let binding = authored.compile_policy("external-review").unwrap().identity;
     session.start().await;
     let requester_token = session.token("requester").await;
-    let (status, accepted) = http("POST", &format!("{}/v1/review-requests", session.url()), &requester_token, "requester", None,
-        Some(json!({"policy":binding,"subject":{"source":"standalone","type":"request","id":"local-request","version":"1","digest":registry_casework_core::ContentDigest::for_bytes(b"local-request")},"requesterReference":"local-request","context":{"mode":"submitted","snapshot":{"tenant":"tenant-a"}}}))).await;
+    let request = json!({
+        "policy": binding,
+        "subject": {
+            "source": "standalone",
+            "type": "request",
+            "id": "local-request",
+            "version": "1",
+            "digest": registry_casework_core::ContentDigest::for_bytes(b"local-request")
+        },
+        "requesterReference": "local-request",
+        "context": {"mode": "submitted", "snapshot": {"tenant": "tenant-a"}}
+    });
+    let create_key = uuid::Uuid::new_v4().to_string();
+    let (status, refused) = http(
+        "POST",
+        &format!("{}/v1/review-requests", session.url()),
+        &requester_token,
+        (CASEWORK_PROFILE_HEADER, "requester"),
+        None,
+        Some(request.clone()),
+        Some(&create_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["code"], "request.invalid");
+    let (status, accepted) = http(
+        "POST",
+        &format!("{}/v1/review-requests", session.url()),
+        &requester_token,
+        (REVIEW_PROFILE_HEADER, "requester"),
+        None,
+        Some(request),
+        Some(&create_key),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "{accepted}");
     let human = session.token("staff").await;
     let (status, page) = http(
         "GET",
         &format!("{}/v1/review-tasks?queue=review&limit=25", session.url()),
         &human,
-        "staff",
+        (CASEWORK_PROFILE_HEADER, "staff"),
+        None,
         None,
         None,
     )
@@ -281,8 +321,9 @@ async fn submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         "POST",
         &format!("{}/v1/review-tasks/{id}/claim", session.url()),
         &human,
-        "staff",
+        (CASEWORK_PROFILE_HEADER, "staff"),
         Some(item["revision"].as_i64().unwrap()),
+        None,
         None,
     )
     .await;
@@ -292,7 +333,8 @@ async fn submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         "GET",
         &format!("{}/v1/review-tasks/{id}/task-templates", session.url()),
         &human,
-        "staff",
+        (CASEWORK_PROFILE_HEADER, "staff"),
+        None,
         None,
         None,
     )
@@ -306,9 +348,10 @@ async fn submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         "POST",
         &format!("{}/v1/review-tasks/{id}/task-grants", session.url()),
         &human,
-        "staff",
+        (CASEWORK_PROFILE_HEADER, "staff"),
         Some(revision),
         Some(json!({"templateId":"draft","templateVersion":"1"})),
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{grant}");
@@ -358,7 +401,8 @@ async fn submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer() {
             session.url()
         ),
         &human,
-        "staff",
+        (CASEWORK_PROFILE_HEADER, "staff"),
+        None,
         None,
         None,
     )

@@ -367,6 +367,353 @@
       }
     },
     {
+      "id": "human-answer",
+      "admittedAt": "2026-10-14T00:00:00Z",
+      "input": {
+        "policy": {
+          "id": "review-provider",
+          "version": "1",
+          "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "subject": {
+          "source": "coordinator-source",
+          "type": "proposal",
+          "id": "00000000-0000-4000-8000-000000000001",
+          "version": "1",
+          "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "requesterReference": "synthetic-correction",
+        "context": {
+          "mode": "current-source",
+          "binding": {
+            "reference": "breg:coordinator-source:correct-amount:00000000-0000-4000-8000-000000000001:1"
+          }
+        }
+      },
+      "replies": {
+        "assess": [
+          {
+            "type": "success",
+            "value": {
+              "subject": {
+                "source": "coordinator-source",
+                "type": "proposal",
+                "id": "00000000-0000-4000-8000-000000000001",
+                "version": "1",
+                "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+              },
+              "contract": {
+                "id": "urn:registry:breg:review-context:coordinator-source:correct-amount:application-amount-context",
+                "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "schemaDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "reference": "breg:coordinator-source:correct-amount:00000000-0000-4000-8000-000000000001:1",
+              "fields": {
+                "applicationId": "00000000-0000-4000-8000-000000000004",
+                "recordActive": true,
+                "currentAmount": 1200,
+                "proposedAmount": 1500
+              }
+            }
+          }
+        ],
+        "submit-human": [
+          {
+            "type": "success",
+            "value": {
+              "requestId": "00000000-0000-4000-8000-000000000002",
+              "subject": {
+                "source": "coordinator-source",
+                "type": "proposal",
+                "id": "00000000-0000-4000-8000-000000000001",
+                "version": "1",
+                "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+              },
+              "policy": {
+                "id": "external-review",
+                "version": "1",
+                "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              },
+              "submissionDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            }
+          }
+        ]
+      },
+      "waits": {
+        "await-human": {
+          "type": "event",
+          "value": {
+            "requestId": "00000000-0000-4000-8000-000000000002",
+            "subject": {
+              "source": "coordinator-source",
+              "type": "proposal",
+              "id": "00000000-0000-4000-8000-000000000001",
+              "version": "1",
+              "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "policy": {
+              "id": "external-review",
+              "version": "1",
+              "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            "submissionDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "resultId": "00000000-0000-4000-8000-000000000003",
+            "status": "answered",
+            "completedAt": "2026-10-14T00:01:00Z",
+            "availableUntil": "2026-11-14T00:00:00Z",
+            "outcome": "additional-information-recorded"
+          }
+        }
+      },
+      "expect": {
+        "path": [
+          "assess",
+          "route-assessment",
+          "submit-human",
+          "await-human",
+          "route-human",
+          "human-answered"
+        ],
+        "state": "completed",
+        "outcome": {
+          "type": "named",
+          "value": "human-answered"
+        },
+        "output": null
+      }
+    },
+    {
+      "id": "human-changes-requested",
+      "admittedAt": "2026-10-14T00:00:00Z",
+      "input": {
+        "policy": {
+          "id": "review-provider",
+          "version": "1",
+          "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "subject": {
+          "source": "coordinator-source",
+          "type": "proposal",
+          "id": "00000000-0000-4000-8000-000000000001",
+          "version": "1",
+          "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "requesterReference": "synthetic-correction",
+        "context": {
+          "mode": "current-source",
+          "binding": {
+            "reference": "breg:coordinator-source:correct-amount:00000000-0000-4000-8000-000000000001:1"
+          }
+        }
+      },
+      "replies": {
+        "assess": [
+          {
+            "type": "success",
+            "value": {
+              "subject": {
+                "source": "coordinator-source",
+                "type": "proposal",
+                "id": "00000000-0000-4000-8000-000000000001",
+                "version": "1",
+                "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+              },
+              "contract": {
+                "id": "urn:registry:breg:review-context:coordinator-source:correct-amount:application-amount-context",
+                "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "schemaDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "reference": "breg:coordinator-source:correct-amount:00000000-0000-4000-8000-000000000001:1",
+              "fields": {
+                "applicationId": "00000000-0000-4000-8000-000000000004",
+                "recordActive": true,
+                "currentAmount": 1200,
+                "proposedAmount": 1500
+              }
+            }
+          }
+        ],
+        "submit-human": [
+          {
+            "type": "success",
+            "value": {
+              "requestId": "00000000-0000-4000-8000-000000000002",
+              "subject": {
+                "source": "coordinator-source",
+                "type": "proposal",
+                "id": "00000000-0000-4000-8000-000000000001",
+                "version": "1",
+                "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+              },
+              "policy": {
+                "id": "external-review",
+                "version": "1",
+                "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              },
+              "submissionDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            }
+          }
+        ]
+      },
+      "waits": {
+        "await-human": {
+          "type": "event",
+          "value": {
+            "requestId": "00000000-0000-4000-8000-000000000002",
+            "subject": {
+              "source": "coordinator-source",
+              "type": "proposal",
+              "id": "00000000-0000-4000-8000-000000000001",
+              "version": "1",
+              "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "policy": {
+              "id": "external-review",
+              "version": "1",
+              "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            "submissionDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "resultId": "00000000-0000-4000-8000-000000000003",
+            "status": "changes-requested",
+            "completedAt": "2026-10-14T00:01:00Z",
+            "availableUntil": "2026-11-14T00:00:00Z",
+            "outcome": "correct-amount-and-resubmit"
+          }
+        }
+      },
+      "expect": {
+        "path": [
+          "assess",
+          "route-assessment",
+          "submit-human",
+          "await-human",
+          "route-human",
+          "human-changes-requested"
+        ],
+        "state": "completed",
+        "outcome": {
+          "type": "named",
+          "value": "human-changes-requested"
+        },
+        "output": null
+      }
+    },
+    {
+      "id": "human-review-superseded",
+      "admittedAt": "2026-10-14T00:00:00Z",
+      "input": {
+        "policy": {
+          "id": "review-provider",
+          "version": "1",
+          "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "subject": {
+          "source": "coordinator-source",
+          "type": "proposal",
+          "id": "00000000-0000-4000-8000-000000000001",
+          "version": "1",
+          "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "requesterReference": "synthetic-correction",
+        "context": {
+          "mode": "current-source",
+          "binding": {
+            "reference": "breg:coordinator-source:correct-amount:00000000-0000-4000-8000-000000000001:1"
+          }
+        }
+      },
+      "replies": {
+        "assess": [
+          {
+            "type": "success",
+            "value": {
+              "subject": {
+                "source": "coordinator-source",
+                "type": "proposal",
+                "id": "00000000-0000-4000-8000-000000000001",
+                "version": "1",
+                "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+              },
+              "contract": {
+                "id": "urn:registry:breg:review-context:coordinator-source:correct-amount:application-amount-context",
+                "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "schemaDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "reference": "breg:coordinator-source:correct-amount:00000000-0000-4000-8000-000000000001:1",
+              "fields": {
+                "applicationId": "00000000-0000-4000-8000-000000000004",
+                "recordActive": true,
+                "currentAmount": 1200,
+                "proposedAmount": 1500
+              }
+            }
+          }
+        ],
+        "submit-human": [
+          {
+            "type": "success",
+            "value": {
+              "requestId": "00000000-0000-4000-8000-000000000002",
+              "subject": {
+                "source": "coordinator-source",
+                "type": "proposal",
+                "id": "00000000-0000-4000-8000-000000000001",
+                "version": "1",
+                "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+              },
+              "policy": {
+                "id": "external-review",
+                "version": "1",
+                "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              },
+              "submissionDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            }
+          }
+        ]
+      },
+      "waits": {
+        "await-human": {
+          "type": "event",
+          "value": {
+            "requestId": "00000000-0000-4000-8000-000000000002",
+            "subject": {
+              "source": "coordinator-source",
+              "type": "proposal",
+              "id": "00000000-0000-4000-8000-000000000001",
+              "version": "1",
+              "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "policy": {
+              "id": "external-review",
+              "version": "1",
+              "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            "submissionDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "resultId": "00000000-0000-4000-8000-000000000003",
+            "status": "superseded",
+            "completedAt": "2026-10-14T00:01:00Z",
+            "availableUntil": "2026-11-14T00:00:00Z"
+          }
+        }
+      },
+      "expect": {
+        "path": [
+          "assess",
+          "route-assessment",
+          "submit-human",
+          "await-human",
+          "route-human",
+          "superseded"
+        ],
+        "state": "completed",
+        "outcome": {
+          "type": "named",
+          "value": "superseded"
+        },
+        "output": null
+      }
+    },
+    {
       "id": "human-timeout-withdrawal",
       "admittedAt": "2026-10-14T00:00:00Z",
       "input": {
