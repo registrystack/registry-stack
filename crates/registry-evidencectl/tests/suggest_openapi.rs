@@ -14,6 +14,10 @@
 use registry_evidence_authoring::openapi::types;
 
 #[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "the local-file loader only renders the message; suggest_fetch asserts every structured refusal field"
+)]
 struct SafeCliFailure {
     operational: bool,
     code: String,
