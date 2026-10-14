@@ -215,6 +215,30 @@ fn poll_completion_uses_base_schemas_then_resolves_typed_terminal_output() {
         "done":{"type":"finish","outcome":"terminal","output":{"type":"step","step":"wait"}}},
         "outcomes":{"terminal":{"completionOutput":{"operation":"read-job","name":"terminal"}}}});
     let definition = load(&edited, "fn observe(inputs) { #{state: \"pending\"} }").unwrap();
+    let reference = registry_coordinator::definition::CompletionReference {
+        step: "read".into(),
+        name: "terminal".into(),
+    };
+    let contract = definition.completion_contract(&reference).unwrap();
+    assert!(std::ptr::eq(
+        contract,
+        definition.completion_contract(&reference).unwrap()
+    ));
+    contract
+        .check(&json!({"state":"complete","result":"ready"}))
+        .unwrap();
+    contract
+        .check(&json!({"state":"refused","code":"job-failed"}))
+        .unwrap();
+    assert!(contract.check(&json!({"state":"pending"})).is_err());
+    let violation = contract
+        .check(&json!({"state":"complete","result":"x".repeat(16_385)}))
+        .unwrap_err();
+    assert!(violation.path.is_empty());
+    assert_eq!(
+        violation.expected,
+        "a value within the host's bounded JSON contract"
+    );
     assert_eq!(
         definition.workflow.references["/workflow/steps/wait/completion/name"].target,
         "/operations/read-job/completions/terminal"
@@ -255,6 +279,11 @@ fn poll_completion_uses_base_schemas_then_resolves_typed_terminal_output() {
         .validate_outcome("terminal", &json!({"state":"complete","result":{"id":42}}))
         .is_err());
     let restored = Definition::from_snapshot(&referenced.snapshot().unwrap()).unwrap();
+    restored
+        .completion_contract(&reference)
+        .unwrap()
+        .check(&json!({"state":"complete","result":{"id":"job-1"}}))
+        .unwrap();
     restored
         .validate_outcome("terminal", &json!({"state":"refused","code":"job-failed"}))
         .unwrap();
@@ -390,6 +419,63 @@ fn imported_action_reference_errors_point_to_the_authored_selection() {
         error.diagnostics[0].code,
         "coordinator.operation.contract-invalid"
     );
+}
+
+#[test]
+fn unavailable_and_nonregular_contract_imports_keep_the_authored_source_position() {
+    let root = tempfile::tempdir().unwrap();
+    let mut authored = project();
+    authored["contracts"] = json!({"registry":{"type":"breg","source":"contract.json"}});
+    fs::write(
+        root.path().join("workflow.yaml"),
+        serde_json::to_string_pretty(&authored).unwrap(),
+    )
+    .unwrap();
+    for (directory, exit) in [(false, 3), (true, 1)] {
+        if directory {
+            fs::create_dir(root.path().join("contract.json")).unwrap();
+        }
+        let error = Definition::load(root.path()).err().unwrap();
+        assert_eq!(error.exit_code, exit);
+        assert_eq!(error.diagnostics[0].path, "/contracts/registry/source");
+        let source = error.diagnostics[0].source.as_ref().unwrap();
+        assert!(source.file.ends_with("workflow.yaml"));
+        assert!(source.line.is_some_and(|line| line > 1));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_contract_import_keeps_the_authored_source_position() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let asset = root.path().join("contract.json");
+    let mut authored = project();
+    authored["contracts"] = json!({"registry":{"type":"breg","source":"contract.json"}});
+    fs::write(
+        root.path().join("workflow.yaml"),
+        serde_json::to_string_pretty(&authored).unwrap(),
+    )
+    .unwrap();
+    fs::write(&asset, "{}").unwrap();
+    let permissions = fs::metadata(&asset).unwrap().permissions();
+    fs::set_permissions(&asset, fs::Permissions::from_mode(0o0)).unwrap();
+    if fs::read(&asset).is_ok() {
+        fs::set_permissions(&asset, permissions).unwrap();
+        eprintln!(
+            "skipping unreadable import assertion: this process can read a file with mode 000"
+        );
+        return;
+    }
+    let error = Definition::load(root.path()).err();
+    fs::set_permissions(&asset, permissions).unwrap();
+    let error = error.expect("an unreadable import must refuse authoring");
+    assert_eq!(error.exit_code, 3);
+    assert_eq!(error.code, "coordinator.definition.read");
+    assert_eq!(error.diagnostics[0].path, "/contracts/registry/source");
+    let source = error.diagnostics[0].source.as_ref().unwrap();
+    assert!(source.file.ends_with("workflow.yaml"));
+    assert!(source.line.is_some_and(|line| line > 1));
 }
 
 #[test]

@@ -316,6 +316,9 @@ impl Renderer {
                     }
                 } else {
                     match self.language {
+                        Language::Typescript if properties.is_empty() => {
+                            "Record<string, never>".into()
+                        }
                         Language::Typescript => format!("{{ {} }}", properties.join("; ")),
                         Language::Python => {
                             let name = self.name(hint);

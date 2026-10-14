@@ -351,6 +351,137 @@ async fn manual_apply_retains_exact_binding_and_current_promoted_grant() {
     );
 }
 
+async fn frozen_transition_response_retains_original_digest(
+    transition: Transition,
+    operation: Operation,
+    name: &str,
+    result_state: &str,
+) {
+    let server = MockServer::start().await;
+    authority(&server, proposal("submitted", 2)).await;
+    let correct = proposal(result_state, 3);
+    let mut changed = correct.clone();
+    let substituted_digest = format!("sha256:{}", "c".repeat(64));
+    changed["effectDigest"] = json!(substituted_digest);
+    if result_state == "applied" {
+        // Keep the response internally consistent, so this reaches the
+        // Coordinator's saved binding check rather than DTO shape validation.
+        changed["application"]["effectDigest"] = json!(substituted_digest);
+    }
+    let answer = Arc::new(Mutex::new(changed));
+    let reply = answer.clone();
+    Mock::given(method("POST"))
+        .and(path(format!("/tenant/base/v1/proposals/{PROPOSAL}/{name}")))
+        .and(query_param("accessProfile", "writer"))
+        .respond_with(move |_: &wiremock::Request| response(reply.lock().unwrap().clone()))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let client = client(&server);
+    let command = request(proposal("submitted", 2), operation);
+    let prepared = breg_proposal::prepare(&client, "writer", &command, transition)
+        .await
+        .unwrap_or_else(|_| panic!("prepare {name}"));
+    let original = prepared.clone();
+    let outcome = breg_proposal::execute(&client, "writer", &command, &prepared, transition).await;
+    assert!(
+        matches!(outcome, CallOutcome::Uncertain { code } if code == "proposal-binding-mismatch"),
+        "a changed frozen digest must not release {name} success"
+    );
+    *answer.lock().unwrap() = correct.clone();
+    match breg_proposal::execute(&client, "writer", &command, &prepared, transition).await {
+        CallOutcome::Success(value) => assert_eq!(value, correct),
+        _ => panic!("original {name} receipt recovers only its exact frozen binding"),
+    }
+    assert_eq!(prepared, original);
+    let requests = server.received_requests().await.unwrap();
+    let mutations = requests
+        .iter()
+        .filter(|request| request.method == "POST")
+        .collect::<Vec<_>>();
+    assert_eq!(mutations.len(), 2);
+    assert_eq!(mutations[0].body, mutations[1].body);
+    assert_eq!(
+        mutations[0].headers["if-match"],
+        mutations[1].headers["if-match"]
+    );
+    assert_eq!(
+        mutations[0].headers["idempotency-key"],
+        mutations[1].headers["idempotency-key"]
+    );
+    assert_eq!(
+        mutations[0].headers["idempotency-key"],
+        "exact-proposal-command"
+    );
+    assert_eq!(mutations[0].headers["if-match"], "\"proposal-2\"");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&mutations[0].body).unwrap(),
+        if transition == Transition::Apply {
+            json!({"submissionVersion":1,"effectDigest":DIGEST})
+        } else {
+            json!({})
+        }
+    );
+}
+
+#[tokio::test]
+async fn frozen_apply_response_refuses_a_changed_effect_digest() {
+    frozen_transition_response_retains_original_digest(
+        Transition::Apply,
+        Operation::ApplyBregProposal,
+        "apply",
+        "applied",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn frozen_retry_response_refuses_a_changed_effect_digest() {
+    frozen_transition_response_retains_original_digest(
+        Transition::Retry,
+        Operation::RetryBregProposal,
+        "retry",
+        "submitted",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn frozen_cancel_response_refuses_a_changed_effect_digest() {
+    frozen_transition_response_retains_original_digest(
+        Transition::Cancel,
+        Operation::CancelBregProposal,
+        "cancel",
+        "cancelled",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn cancellation_of_a_draft_does_not_require_a_frozen_digest() {
+    let server = MockServer::start().await;
+    let mut draft = proposal("draft", 1);
+    draft["links"]["cancel"]["availability"] = json!({"available":true,"observedRevision":1});
+    authority(&server, draft.clone()).await;
+    let mut cancelled = proposal("cancelled", 2);
+    cancelled.as_object_mut().unwrap().remove("effectDigest");
+    Mock::given(method("POST"))
+        .and(path(format!("/tenant/base/v1/proposals/{PROPOSAL}/cancel")))
+        .respond_with(response(cancelled.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = client(&server);
+    let command = request(draft, Operation::CancelBregProposal);
+    let prepared = breg_proposal::prepare(&client, "writer", &command, Transition::Cancel)
+        .await
+        .unwrap_or_else(|_| panic!("prepare draft cancellation"));
+    match breg_proposal::execute(&client, "writer", &command, &prepared, Transition::Cancel).await {
+        CallOutcome::Success(value) => assert_eq!(value, cancelled),
+        _ => panic!("cancelling an unfrozen draft creates no effect digest"),
+    }
+}
+
 #[tokio::test]
 async fn cancellation_is_terminal_only_for_the_original_frozen_submission() {
     let server = MockServer::start().await;

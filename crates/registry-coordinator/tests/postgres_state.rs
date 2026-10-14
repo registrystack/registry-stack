@@ -2815,12 +2815,17 @@ async fn restored_leased_mutation() -> (Harness, Uuid, Arc<Fake>) {
 
 struct OriginalReceiptObservation {
     original: CallRequest,
+    value: Value,
     calls: Mutex<usize>,
     entered: Notify,
     release: Option<Semaphore>,
 }
 impl OriginalReceiptObservation {
     fn new(fake: &Fake, blocked: bool) -> Arc<Self> {
+        Self::with_value(fake, blocked, receipt())
+    }
+
+    fn with_value(fake: &Fake, blocked: bool, value: Value) -> Arc<Self> {
         Arc::new(Self {
             original: fake
                 .requests
@@ -2830,6 +2835,7 @@ impl OriginalReceiptObservation {
                 .find(|request| request.operation.is_mutating())
                 .unwrap()
                 .clone(),
+            value,
             calls: Mutex::new(0),
             entered: Notify::new(),
             release: blocked.then(|| Semaphore::new(0)),
@@ -2859,8 +2865,82 @@ impl AdapterSet for OriginalReceiptObservation {
             self.entered.notify_one();
             release.acquire().await.unwrap().forget();
         }
-        registry_coordinator::protocol::ReconciliationOutcome::Confirmed(receipt())
+        registry_coordinator::protocol::ReconciliationOutcome::Confirmed(self.value.clone())
     }
+}
+
+#[tokio::test]
+async fn invalid_original_receipt_preserves_unknown_command_until_valid_evidence_arrives() {
+    let h = harness().await;
+    let owner = actor("owner", false);
+    let run = h
+        .store
+        .admit_owned(
+            &h.definition,
+            input(Utc::now() - Duration::seconds(1)),
+            &owner,
+            "invalid-receipt",
+            "binding-a",
+        )
+        .await
+        .unwrap();
+    let fake = Fake::new(vec![uncertain()]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    reach_message(&worker).await;
+    assert!(worker.tick().await.unwrap());
+    let before = h.durable_rows(run).await;
+    let mut wrong_type = receipt();
+    wrong_type["id"] = json!({"private-receipt-canary": true});
+    for value in [Value::Null, wrong_type] {
+        let observation = OriginalReceiptObservation::with_value(&fake, false, value);
+        let error = h
+            .store
+            .reconcile_owned(
+                run,
+                "binding-a",
+                &owner,
+                "check-original-receipt",
+                observation.as_ref(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "reconcile-refused");
+        assert!(!format!("{error:?}").contains("private-receipt-canary"));
+        assert_eq!(h.durable_rows(run).await, before);
+        let inspection = h.store.inspect(run, "binding-a").await.unwrap();
+        assert_eq!(inspection.run.state, "attention");
+        assert_eq!(inspection.run.step, "message");
+        assert!(inspection.run.uncertain);
+        assert!(!h.output_values(run).await.contains_key("message"));
+        assert!(!worker.tick().await.unwrap());
+        assert_eq!(*observation.calls.lock().unwrap(), 1);
+    }
+    let observation = OriginalReceiptObservation::new(&fake, false);
+    let inspection = h
+        .store
+        .reconcile_owned(
+            run,
+            "binding-a",
+            &owner,
+            "valid-original-receipt",
+            observation.as_ref(),
+        )
+        .await
+        .unwrap();
+    assert!(!inspection.run.uncertain);
+    assert_eq!(h.output_values(run).await["message"], receipt());
+    assert!(worker.tick().await.unwrap());
+    assert_eq!(h.store.status(run).await.unwrap().state, "finished");
+    assert_eq!(
+        fake.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.operation.is_mutating())
+            .count(),
+        1,
+        "receipt recovery never sends another mutation"
+    );
 }
 
 #[tokio::test]

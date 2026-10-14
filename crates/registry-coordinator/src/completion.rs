@@ -22,7 +22,7 @@ use uuid::Uuid;
 pub(crate) fn interpret_poll(
     definition: &crate::definition::Definition,
     request: &crate::protocol::CallRequest,
-    completion: &crate::definition::CompletionDefinition,
+    reference: &crate::definition::CompletionReference,
     response: serde_json::Value,
     synthetic: bool,
 ) -> crate::protocol::CompletionObservation {
@@ -30,23 +30,24 @@ pub(crate) fn interpret_poll(
     let hold = || CompletionObservation::Hold {
         code: "completion-invalid-response".into(),
     };
+    let Ok(completion) = definition.completion(reference) else {
+        return hold();
+    };
     let CompletionKind::BoundedPoll { interpret, .. } = &completion.kind else {
         return hold();
     };
-    let Some(operation) = definition.workflow.operations.values().find(|operation| {
-        operation.uses == request.operation
-            && operation.connection == request.connection
-            && operation
-                .completions
-                .values()
-                .any(|candidate| candidate == completion)
-    }) else {
+    let Some(crate::definition::Step::Call { call, .. }) =
+        definition.workflow.steps.get(&reference.step)
+    else {
         return hold();
     };
-    let Ok(schema) = crate::definition::compile_schema(&operation.output) else {
+    if request.operation != call.operation || request.connection != call.connection {
+        return hold();
+    }
+    let Ok(contract) = definition.operation_contract(call) else {
         return hold();
     };
-    if crate::functions::check_value(&response).is_err() || !schema.is_valid(&response) {
+    if contract.check_output(&response).is_err() {
         return hold();
     }
     let inputs = serde_json::json!({"command":request.input,"response":response});
@@ -57,13 +58,9 @@ pub(crate) fn interpret_poll(
     };
     match value.get("state").and_then(serde_json::Value::as_str) {
         Some("pending") => CompletionObservation::Pending { retry_after: None },
-        Some("complete" | "refused")
-            if crate::contracts::completion_contract(completion)
-                .check(&value)
-                .is_ok() =>
-        {
-            CompletionObservation::Settled(value)
-        }
+        // The Function's complete interpretation envelope has been checked.
+        // The worker or scenario checks the cached terminal contract once.
+        Some("complete" | "refused") => CompletionObservation::Settled(value),
         _ => hold(),
     }
 }

@@ -16,7 +16,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    functions::{check_value, Functions, INTERPRETER_ABI},
+    functions::{
+        check_value, Functions, INTERPRETER_ABI, MAXIMUM_FUNCTION_ARRAY_ITEMS,
+        MAXIMUM_FUNCTION_CALL_LEVELS, MAXIMUM_FUNCTION_EXPRESSION_DEPTH,
+        MAXIMUM_FUNCTION_MAP_ENTRIES, MAXIMUM_FUNCTION_OPERATIONS, MAXIMUM_FUNCTION_SOURCE_BYTES,
+        MAXIMUM_FUNCTION_STRING_BYTES,
+    },
     operations::OperationIdentity,
     protocol::Operation,
     CoordinatorError, Result,
@@ -40,7 +45,7 @@ pub struct Definition {
     input_schema: Arc<JSONSchema>,
     outcome_schemas: BTreeMap<String, Arc<JSONSchema>>,
     operation_contracts: BTreeMap<String, Arc<crate::contracts::OperationContract>>,
-    completion_schemas: BTreeMap<(String, String), Arc<JSONSchema>>,
+    completion_contracts: BTreeMap<(String, String), Arc<crate::contracts::CompletionContract>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -190,13 +195,13 @@ pub struct FunctionLimits {
 impl Default for FunctionLimits {
     fn default() -> Self {
         Self {
-            operations: 100_000,
-            call_levels: 32,
-            expression_depth: 64,
-            string_bytes: 16_384,
-            array_items: 256,
-            map_entries: 256,
-            source_bytes: 65_536,
+            operations: MAXIMUM_FUNCTION_OPERATIONS as u64,
+            call_levels: MAXIMUM_FUNCTION_CALL_LEVELS as usize,
+            expression_depth: MAXIMUM_FUNCTION_EXPRESSION_DEPTH as usize,
+            string_bytes: MAXIMUM_FUNCTION_STRING_BYTES as usize,
+            array_items: MAXIMUM_FUNCTION_ARRAY_ITEMS as usize,
+            map_entries: MAXIMUM_FUNCTION_MAP_ENTRIES as usize,
+            source_bytes: MAXIMUM_FUNCTION_SOURCE_BYTES as usize,
         }
     }
 }
@@ -475,12 +480,13 @@ impl Definition {
                             error.at(&path, format!("/functions/{name}/source")),
                         )
                     })?;
-                let source = read_text(&source_path, 65_536).map_err(|error| {
-                    crate::authoring::positioned(
-                        &document,
-                        error.at(&path, format!("/functions/{name}/source")),
-                    )
-                })?;
+                let source = read_text(&source_path, MAXIMUM_FUNCTION_SOURCE_BYTES as usize)
+                    .map_err(|error| {
+                        crate::authoring::positioned(
+                            &document,
+                            error.at(&path, format!("/functions/{name}/source")),
+                        )
+                    })?;
                 sources.insert(function.source.clone(), source);
             }
         }
@@ -594,7 +600,7 @@ impl Definition {
             }
         }
         let mut operation_contracts = BTreeMap::new();
-        let mut completion_schemas = BTreeMap::new();
+        let mut completion_contracts = BTreeMap::new();
         for (alias, operation) in &frozen.workflow.operations {
             match crate::contracts::OperationContract::new(
                 operation.input.clone(),
@@ -610,9 +616,10 @@ impl Definition {
                 }
             }
             for (name, completion) in &operation.completions {
-                match compile_schema(&completion.output) {
-                    Ok(schema) => {
-                        completion_schemas.insert((alias.clone(), name.clone()), Arc::new(schema));
+                match crate::contracts::CompletionContract::new(&completion.output) {
+                    Ok(contract) => {
+                        completion_contracts
+                            .insert((alias.clone(), name.clone()), Arc::new(contract));
                     }
                     Err(error) => findings.push(error.at(
                         "workflow.yaml",
@@ -636,7 +643,7 @@ impl Definition {
             input_schema,
             outcome_schemas,
             operation_contracts,
-            completion_schemas,
+            completion_contracts,
         })
     }
 
@@ -767,24 +774,19 @@ impl Definition {
             .ok_or_else(|| fail("definition.operation"))
     }
 
-    pub fn validate_completion(
+    /// The terminal output validator compiled once for the named completion.
+    pub fn completion_contract(
         &self,
         reference: &CompletionReference,
-        value: &Value,
-    ) -> Result<()> {
+    ) -> Result<&crate::contracts::CompletionContract> {
         self.check_integrity()?;
-        check_value(value)?;
         let Some(Step::Call { call, .. }) = self.workflow.steps.get(&reference.step) else {
             return Err(fail("definition.wait"));
         };
-        let schema = self
-            .completion_schemas
+        self.completion_contracts
             .get(&(call.alias.clone(), reference.name.clone()))
-            .ok_or_else(|| fail("definition.wait"))?;
-        if !schema.is_valid(value) {
-            return Err(fail("definition.completion"));
-        }
-        Ok(())
+            .map(Arc::as_ref)
+            .ok_or_else(|| fail("definition.wait"))
     }
 
     pub fn completion(&self, reference: &CompletionReference) -> Result<&CompletionDefinition> {

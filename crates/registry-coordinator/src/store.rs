@@ -363,6 +363,17 @@ impl FrozenCommand {
         }
     }
 
+    pub(crate) fn matches_call(
+        &self,
+        definition: &Definition,
+        call: &crate::definition::Call,
+    ) -> bool {
+        let request = self.request();
+        request.operation == call.operation
+            && request.connection == call.connection
+            && request.operation_contract == definition.workflow.operation(call).action
+    }
+
     pub(crate) fn preparation(&self) -> Option<&[u8]> {
         match self {
             Self::Prepared(command) => Some(&command.preparation),
@@ -2071,13 +2082,6 @@ fn decode(row: &Row, first: usize) -> std::result::Result<Job, DispatchError> {
 /// The least time between two reads of one review wait, whatever wakes it.
 pub(crate) const WAIT_READ_SPACING_SECONDS: u32 =
     crate::operations::MINIMUM_OBSERVATION_INTERVAL_SECONDS;
-/// Failures of a waiting step that end its wait for good: reading again
-/// cannot change them, so no retry may resume the wait.
-const WAIT_ENDING_FAILURES: &[&str] = &[
-    "wait-timed-out",
-    "review-request-unknown",
-    "review-result-expired",
-];
 /// How long one attempt may run; its lease lasts this long plus Dispatch's
 /// finalization allowance.
 pub(crate) const ATTEMPT_TIMEOUT: Duration =
@@ -2409,9 +2413,7 @@ impl DispatchStore for Store {
         };
         let step_ended = !detail.recovery_hold
             && ((disposition == Disposition::Delivered && detail.recheck_seconds.is_none())
-                || detail
-                    .failure_code
-                    .is_some_and(|code| WAIT_ENDING_FAILURES.contains(&code)));
+                || detail.failure_code == Some("wait-timed-out"));
         self.end_waits(tx, id, step, step_ended).await?;
         self.settle_later(id, step, RunOutcome::from_state(written));
         Ok(())

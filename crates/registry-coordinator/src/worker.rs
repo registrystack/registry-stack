@@ -2,8 +2,8 @@
 //! One bounded step per tick, with leases and checkpoints owned by Dispatch.
 
 use crate::{
-    contracts::completion_contract,
-    definition::{CompletionDefinition, CompletionKind, Step},
+    contracts::CompletionContract,
+    definition::{CompletionKind, Step},
     metrics::StepAttempt,
     protocol::{AdapterSet, CallOutcome, CallRequest, CompletionObservation},
     store::{Detail, FrozenCommand, Job, Store, RETRY_MAXIMUM_DELAY, WAIT_READ_SPACING_SECONDS},
@@ -132,7 +132,7 @@ fn call_result(
 /// One authenticated observation. Business refusal is a typed terminal result;
 /// unavailable or invalid evidence can never enter a success/refusal edge.
 fn wait_result(
-    completion: &CompletionDefinition,
+    contract: &CompletionContract,
     read: Option<CompletionObservation>,
     next: &str,
     on_timeout: Option<&str>,
@@ -169,7 +169,7 @@ fn wait_result(
     };
     match read {
         Some(CompletionObservation::Settled(value)) => {
-            if completion_contract(completion).check(&value).is_ok() {
+            if contract.check(&value).is_ok() {
                 accepted(advance(next.to_owned(), Some(value)))
             } else {
                 held("completion-invalid-response")
@@ -240,6 +240,10 @@ impl Worker {
                     Ok(completion) => completion,
                     Err(_) => return Ok(held("protected-state-invalid")),
                 };
+                let completion_contract = match definition.completion_contract(wait_for) {
+                    Ok(contract) => contract,
+                    Err(_) => return Ok(held("protected-state-invalid")),
+                };
                 let (Some(Step::Call { call, .. }), Some(accepted_value)) = (
                     definition.workflow.steps.get(&wait_for.step),
                     payload.outputs.get(&wait_for.step),
@@ -255,10 +259,7 @@ impl Worker {
                     return Ok(held("protected-state-invalid"));
                 };
                 let request = command.request();
-                if request.operation != call.operation
-                    || request.connection != call.connection
-                    || request.operation_contract != definition.workflow.operation(call).action
-                {
+                if !command.matches_call(&definition, call) {
                     return Ok(held("protected-state-invalid"));
                 }
                 let recheck_seconds = self
@@ -284,7 +285,7 @@ impl Worker {
                     }
                     Some(crate::store::ObservationPermit::TimedOut) => {
                         return Ok(wait_result(
-                            completion,
+                            completion_contract,
                             None,
                             next,
                             on_timeout.as_deref(),
@@ -299,7 +300,7 @@ impl Worker {
                 };
                 let Some(budget) = job.remaining_budget(std::time::SystemTime::now()) else {
                     return Ok(wait_result(
-                        completion,
+                        completion_contract,
                         None,
                         next,
                         on_timeout.as_deref(),
@@ -320,7 +321,7 @@ impl Worker {
                             CallOutcome::Success(response) => crate::completion::interpret_poll(
                                 &definition,
                                 request,
-                                completion,
+                                wait_for,
                                 response,
                                 false,
                             ),
@@ -335,7 +336,7 @@ impl Worker {
                 .await
                 .ok();
                 Ok(wait_result(
-                    completion,
+                    completion_contract,
                     read,
                     next,
                     on_timeout.as_deref(),
@@ -477,10 +478,7 @@ impl Worker {
                         .map_err(|_| DispatchError::Unavailable)?
                 };
                 let request = command.request();
-                if request.operation != call.operation
-                    || request.connection != call.connection
-                    || request.operation_contract != definition.workflow.operation(call).action
-                {
+                if !command.matches_call(&definition, call) {
                     return Ok(failed("protected-state-invalid", job.job.uncertain));
                 }
                 if !self
@@ -580,7 +578,7 @@ mod leased_wait_deadline_tests;
 mod tests {
     use super::{attempt_class, call_result, safe_code, wait_result};
     use crate::{
-        definition::{CompletionDefinition, CompletionKind},
+        contracts::CompletionContract,
         metrics::StepAttempt,
         protocol::{CallOutcome, CompletionObservation, DeclaredRefusal},
     };
@@ -588,12 +586,11 @@ mod tests {
     use serde_json::{json, Value};
     use std::time::Duration;
 
-    fn review() -> CompletionDefinition {
-        CompletionDefinition {
-            kind: CompletionKind::CaseworkResult {},
-            output: crate::contracts::casework_completion_schema().clone(),
-            revision: format!("sha256:{}", "a".repeat(64)),
-        }
+    fn review() -> &'static CompletionContract {
+        static CONTRACT: std::sync::OnceLock<CompletionContract> = std::sync::OnceLock::new();
+        CONTRACT.get_or_init(|| {
+            CompletionContract::new(crate::contracts::casework_completion_schema()).unwrap()
+        })
     }
 
     fn result(status: &str) -> Value {
@@ -621,7 +618,7 @@ mod tests {
         on_timeout: Option<&str>,
         timed_out: bool,
     ) -> super::Sent<super::Detail> {
-        wait_result(&review(), read, "decide", on_timeout, timed_out, 900)
+        wait_result(review(), read, "decide", on_timeout, timed_out, 900)
     }
 
     fn permanent(sent: &super::Sent<super::Detail>) -> Option<&'static str> {
@@ -798,7 +795,7 @@ mod tests {
         assert!(matches!(sent.outcome, SendOutcome::Accepted { .. }));
         assert_eq!(sent.detail.recheck_seconds, Some(300));
         assert_eq!(sent.detail.failure_code, Some("attempt-timeout"));
-        let sent = wait_result(&review(), None, "decide", None, false, 120);
+        let sent = wait_result(review(), None, "decide", None, false, 120);
         assert_eq!(
             sent.detail.recheck_seconds,
             Some(300),

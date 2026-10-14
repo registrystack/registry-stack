@@ -236,6 +236,10 @@ pub async fn execute(
                 || answer.action_id() != expected.action_id()
                 || answer.action_revision() != expected.action_revision()
                 || answer.submission_version() != expected.submission_version()
+                // Submit creates the frozen digest. Every later transition
+                // must retain it; cancelling an unfrozen draft retains None.
+                || transition != Transition::Submit
+                    && answer.effect_digest() != expected.effect_digest()
                 || transition == Transition::Submit
                     && (answer.state() == BRegProposalState::Draft
                         || answer.effect_digest().is_none())

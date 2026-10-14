@@ -8,7 +8,7 @@ mod support;
 use registry_casework_client::{submission_digest, ReviewCreateRequest};
 use registry_coordinator::{
     adapters::{ConnectionConfig, HttpAdapters, RuntimeConfig},
-    definition::{CompletionDefinition, CompletionKind},
+    definition::{CompletionDefinition, CompletionKind, CompletionReference, Definition},
     protocol::{AdapterSet, CallOutcome, CallRequest, CompletionObservation, Operation},
     runtime::ReviewCompletionConfig,
 };
@@ -480,6 +480,16 @@ async fn a_result_read_names_each_casework_answer_without_a_value() {
             "retryable transport-unavailable",
         ),
     ];
+    let definition = Definition::load(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/review-wait"),
+    )
+    .unwrap();
+    let contract = definition
+        .completion_contract(&CompletionReference {
+            step: "submit-review".into(),
+            name: "result".into(),
+        })
+        .unwrap();
     for (answer, expected) in cases {
         let fixture = fixture().await;
         Mock::given(method("GET"))
@@ -503,9 +513,7 @@ async fn a_result_read_names_each_casework_answer_without_a_value() {
         assert_eq!(observed, expected);
         if let CompletionObservation::Settled(value) = read {
             assert_eq!(value, result("approved"));
-            registry_coordinator::contracts::completion_contract(&completion())
-                .check(&value)
-                .unwrap();
+            contract.check(&value).unwrap();
         }
     }
 }

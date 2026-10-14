@@ -6,6 +6,11 @@ use crate::{
         self, Call, CompletionDefinition, CompletionKind, CompletionReference, FunctionDefinition,
         FunctionLimits, Mapping, Presentation, ResolvedOperation, Step, Workflow,
     },
+    functions::{
+        MAXIMUM_FUNCTION_ARRAY_ITEMS, MAXIMUM_FUNCTION_CALL_LEVELS,
+        MAXIMUM_FUNCTION_EXPRESSION_DEPTH, MAXIMUM_FUNCTION_MAP_ENTRIES,
+        MAXIMUM_FUNCTION_OPERATIONS, MAXIMUM_FUNCTION_SOURCE_BYTES, MAXIMUM_FUNCTION_STRING_BYTES,
+    },
     protocol::Operation,
     CoordinatorError, Result,
 };
@@ -195,25 +200,25 @@ enum FunctionRuntime {
 struct NarrowedLimits {
     /// Maximum interpreter operations, from 1 to the 100000-operation profile ceiling.
     #[serde(default)]
-    operations: Option<BoundedU32<1, 100_000>>,
+    operations: Option<BoundedU32<1, MAXIMUM_FUNCTION_OPERATIONS>>,
     /// Maximum nested calls, from 1 to the 32-level profile ceiling.
     #[serde(default)]
-    call_levels: Option<BoundedU32<1, 32>>,
+    call_levels: Option<BoundedU32<1, MAXIMUM_FUNCTION_CALL_LEVELS>>,
     /// Maximum expression nesting, from 1 to the 64-level profile ceiling.
     #[serde(default)]
-    expression_depth: Option<BoundedU32<1, 64>>,
+    expression_depth: Option<BoundedU32<1, MAXIMUM_FUNCTION_EXPRESSION_DEPTH>>,
     /// Maximum string bytes, from 1 to the 16384-byte profile ceiling.
     #[serde(default)]
-    string_bytes: Option<BoundedU32<1, 16_384>>,
+    string_bytes: Option<BoundedU32<1, MAXIMUM_FUNCTION_STRING_BYTES>>,
     /// Maximum array entries, from 1 to the 256-entry profile ceiling.
     #[serde(default)]
-    array_items: Option<BoundedU32<1, 256>>,
+    array_items: Option<BoundedU32<1, MAXIMUM_FUNCTION_ARRAY_ITEMS>>,
     /// Maximum object entries, from 1 to the 256-entry profile ceiling.
     #[serde(default)]
-    map_entries: Option<BoundedU32<1, 256>>,
+    map_entries: Option<BoundedU32<1, MAXIMUM_FUNCTION_MAP_ENTRIES>>,
     /// Maximum source bytes, from 1 to the 65536-byte profile ceiling.
     #[serde(default)]
-    source_bytes: Option<BoundedU32<1, 65_536>>,
+    source_bytes: Option<BoundedU32<1, MAXIMUM_FUNCTION_SOURCE_BYTES>>,
 }
 impl NarrowedLimits {
     fn effective(self) -> FunctionLimits {
@@ -650,9 +655,8 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         let _product = contract.product;
         let asset = asset_path(root, &contract.source)
             .map_err(|error| error.at("workflow.yaml", format!("/contracts/{id}/source")))?;
-        let bytes = definition::read_bytes(&asset, 1_048_576).map_err(|_| {
-            CoordinatorError::new("definition.read", "the generated contract is unreadable")
-        })?;
+        let bytes = definition::read_bytes(&asset, 1_048_576)
+            .map_err(|error| error.at("workflow.yaml", format!("/contracts/{id}/source")))?;
         if bytes.len() > 1_048_576 {
             return Err(schema_error(
                 format!("/contracts/{id}/source"),

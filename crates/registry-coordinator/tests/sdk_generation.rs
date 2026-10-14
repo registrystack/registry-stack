@@ -160,6 +160,42 @@ fn omitted_additional_members_refuse_both_exports() {
 }
 
 #[test]
+fn a_closed_empty_object_is_not_an_unconstrained_typescript_value() {
+    let (_root, definition) = schema_fixture(serde_json::json!({
+        "type":"object", "additionalProperties":false
+    }));
+    let typescript = generate(&definition, Language::Typescript).unwrap();
+    assert!(typescript.contains("export type Input = Record<string, never>;"));
+}
+
+#[test]
+#[ignore = "requires COORDINATOR_SDK_TSC pointing to the installed TypeScript compiler"]
+fn typescript_closed_empty_object_rejects_primitives_and_members() {
+    let (root, definition) = schema_fixture(serde_json::json!({
+        "type":"object", "additionalProperties":false
+    }));
+    let source = generate(&definition, Language::Typescript).unwrap();
+    let input = source
+        .lines()
+        .find(|line| line.starts_with("export type Input ="))
+        .unwrap();
+    std::fs::write(root.path().join("check.ts"), format!(
+        "{input}\nconst valid: Input = {{}};\n// @ts-expect-error A closed object cannot hold a primitive.\nconst number: Input = 123;\n// @ts-expect-error A closed object cannot hold a string.\nconst text: Input = 'wrong';\n// @ts-expect-error The object declares no members.\nconst member: Input = {{ extra: true }};\n"
+    )).unwrap();
+    let compiler = std::env::var("COORDINATOR_SDK_TSC").expect("installed TypeScript compiler");
+    let checked = std::process::Command::new(compiler)
+        .args(["--strict", "--noEmit", "--skipLibCheck", "false"])
+        .arg(root.path().join("check.ts"))
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stdout)
+    );
+}
+
+#[test]
 fn intersections_group_typescript_operands_and_refuse_lossy_python_export() {
     let (_root, definition) = schema_fixture(serde_json::json!({"allOf":[
         {"anyOf":[{"type":"string"},{"type":"number"}]}, {"const":123}

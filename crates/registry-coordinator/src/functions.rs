@@ -19,6 +19,14 @@ pub const PURE_PROFILE: &str = "coordinator/bounded-pure/v1";
 
 pub const INTERPRETER_ABI: &str = "coordinator/pure-rhai-1.26.1/v1;named-input-object;raw-arithmetic-logic-string-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32";
 
+pub(crate) const MAXIMUM_FUNCTION_OPERATIONS: u32 = 100_000;
+pub(crate) const MAXIMUM_FUNCTION_CALL_LEVELS: u32 = 32;
+pub(crate) const MAXIMUM_FUNCTION_EXPRESSION_DEPTH: u32 = 64;
+pub(crate) const MAXIMUM_FUNCTION_STRING_BYTES: u32 = 16_384;
+pub(crate) const MAXIMUM_FUNCTION_ARRAY_ITEMS: u32 = 256;
+pub(crate) const MAXIMUM_FUNCTION_MAP_ENTRIES: u32 = 256;
+pub(crate) const MAXIMUM_FUNCTION_SOURCE_BYTES: u32 = 65_536;
+
 pub(crate) const MAXIMUM_VALUE_BYTES: usize = 131_072;
 pub(crate) const MAXIMUM_VALUE_DEPTH: usize = 32;
 pub(crate) const MAXIMUM_VALUE_NODES: usize = 4_096;
@@ -28,18 +36,18 @@ pub(crate) const MAXIMUM_VALUE_STRING_BYTES: usize = 16_384;
 
 const PROFILE: RhaiProfile = RhaiProfile {
     limits: RhaiLimits {
-        operations: 100_000,
-        call_levels: 32,
-        expression_depth: 64,
+        operations: MAXIMUM_FUNCTION_OPERATIONS as u64,
+        call_levels: MAXIMUM_FUNCTION_CALL_LEVELS as usize,
+        expression_depth: MAXIMUM_FUNCTION_EXPRESSION_DEPTH as usize,
         modules: 0,
-        string_bytes: 16_384,
-        array_items: 256,
-        map_entries: 256,
+        string_bytes: MAXIMUM_FUNCTION_STRING_BYTES as usize,
+        array_items: MAXIMUM_FUNCTION_ARRAY_ITEMS as usize,
+        map_entries: MAXIMUM_FUNCTION_MAP_ENTRIES as usize,
     },
     base: RhaiBaseEngine::Raw,
     disabled_symbols: &["import", "export", "eval", "print", "debug"],
     allow_anonymous_fn: false,
-    maximum_source_bytes: 65_536,
+    maximum_source_bytes: MAXIMUM_FUNCTION_SOURCE_BYTES as usize,
 };
 
 #[derive(Clone)]

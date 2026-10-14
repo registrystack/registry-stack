@@ -411,12 +411,17 @@ impl Store {
             if !command.request().operation.supports_read_receipt(){return Err(refused("reconciliation-unavailable","this operation has no authoritative original-result lookup; inspect its declared recovery capability or cancel the held run"));}
             let snapshot:String=self.open_value(run,"snapshot","",&row.get::<_,Value>(1))?;
             let definition=self.definition(&snapshot)?;
+            let Some(Step::Call{call,next,..})=definition.workflow.steps.get(&step) else{return Err(refused("definition-invalid","pinned step is not a product call"));};
+            if !command.matches_call(&definition,call){return Err(refused("reconcile-refused","the original command does not match its pinned operation; preserve the held run for investigation"));}
+            let contract=definition.operation_contract(call)?;
             let outputs:BTreeMap<String,Value>=self.open_value(run,"outputs","",&row.get::<_,Value>(5))?;
             tx.commit().await.map_err(unavailable)?;
             drop(client);
             let observation=tokio::time::timeout(Duration::from_secs(10),adapters.reconcile(command.request(),outputs.get(&step))).await;
             if let Ok(ReconciliationOutcome::Confirmed(value))=observation {
-                crate::functions::check_value(&value)?;
+                // Recovery settles the same pinned Operation as normal dispatch.
+                // Invalid evidence cannot clear uncertainty or release downstream work.
+                contract.check_output(&value).map_err(|_|refused("reconcile-refused","the original receipt does not match the pinned operation output; keep the run held and verify the owning product receipt"))?;
                 let mut client=self.client().await.map_err(unavailable)?;
                 let tx=client.transaction().await.map_err(unavailable)?;
                 self.authorize_run(&tx,run,actor).await?;
@@ -427,7 +432,6 @@ impl Store {
                 if current.get::<_,i64>(0)!=generation || current.get::<_,String>(2)!=step || current.get::<_,Option<Value>>(3)!=sealed || current.get::<_,String>(1)=="leased" && current.get::<_,Option<bool>>(5).unwrap_or(true) {
                     return Err(refused("reconcile-raced","run progress changed; inspect its current state"));
                 }
-                let Some(Step::Call{next,..})=definition.workflow.steps.get(&step) else{return Err(refused("definition-invalid","pinned step is not a product call"));};
                 let input_row=tx.query_one(&format!("SELECT input FROM {}.runs WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 let input:Value=self.open_value(run,"input","",&input_row.get::<_,Value>(0))?;
                 let payload=Payload{snapshot,input,outputs,command:Some(command)};

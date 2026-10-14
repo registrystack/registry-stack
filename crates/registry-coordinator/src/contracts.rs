@@ -469,11 +469,16 @@ fn expected(kind: &ValidationErrorKind) -> String {
 /// The committed completion contract: the value a wait-for step that
 /// continues with `next` holds as its output.
 pub struct CompletionContract {
-    pub output: Value,
     validator: JSONSchema,
 }
 
 impl CompletionContract {
+    pub(crate) fn new(output: &Value) -> crate::Result<Self> {
+        Ok(Self {
+            validator: crate::definition::compile_schema(output)?,
+        })
+    }
+
     /// Checks a value offered as the terminal result a wait receives.
     pub fn check(&self, value: &Value) -> Result<(), Violation> {
         first_violation(&self.validator, value)
@@ -489,15 +494,6 @@ pub fn casework_completion_schema() -> &'static Value {
         #[cfg(not(feature="schema"))]
         { serde_json::from_str(include_str!("../../../products/coordinator/generated/operations/casework.submit-review-request.v1.result.completion.schema.json")).expect("generated result schema") }
     })
-}
-
-/// A compiled completion's result contract, irrespective of its adapter.
-pub fn completion_contract(event: &crate::definition::CompletionDefinition) -> CompletionContract {
-    CompletionContract {
-        output: event.output.clone(),
-        validator: crate::definition::compile_schema(&event.output)
-            .expect("compiled completion schema"),
-    }
 }
 
 /// The committed contract of a catalog operation.

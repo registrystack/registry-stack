@@ -3,7 +3,7 @@
 
 use crate::{
     authoring,
-    contracts::{completion_contract, Violation},
+    contracts::Violation,
     definition::{class, parse_timestamp, CompletionKind, CompletionReference, Definition, Step},
     protocol::{CallRequest, DeclaredRefusal},
     CoordinatorError, Result,
@@ -875,13 +875,14 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             }
                             contract.check_output(response).map_err(|violation| contract_error("scenario.wait-observation", format!("/waits/{step}/responses/{index}{}", violation.path), &violation,
                                 "in the synthetic polling response; it does not match the resolved Operation output", "Correct this response to satisfy the resolved Operation output schema."))?;
-                            match crate::completion::interpret_poll(definition, command, completion, response.clone(), true) {
+                            match crate::completion::interpret_poll(definition, command, wait_for, response.clone(), true) {
                                 crate::protocol::CompletionObservation::Settled(value) => { terminal = Some(value); break; },
                                 crate::protocol::CompletionObservation::Pending { .. } => { now += chrono::Duration::seconds(i64::from(*interval_seconds)); },
                                 _ => return Err(error("scenario.wait-observation", format!("/waits/{step}/responses/{index}"), "the pinned polling interpretation did not establish a valid observation", "Correct the interpretation Function and response correlation under the named completion contract.")),
                             }
                         }
                         if let Some(value) = terminal {
+                            check_event(definition, &step, wait_for, &value)?;
                             outputs.insert(step.clone(), value);
                             step = next.clone();
                         } else if now >= timeout_at {
@@ -1235,7 +1236,7 @@ fn check_event(
 ) -> Result<()> {
     let pointer = format!("/waits/{step}/value");
     let completion = definition.completion(reference)?;
-    completion_contract(completion).check(value).map_err(|violation| {
+    definition.completion_contract(reference)?.check(value).map_err(|violation| {
         contract_error("scenario.wait-event", format!("{pointer}{}", violation.path), &violation,
             &format!("in the completion stated for step {step}; the stated value does not match its typed contract"),
             "Correct the stated value so it satisfies the named completion output.")
