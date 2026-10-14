@@ -7,6 +7,7 @@ compile_error!("registry-evidence Version 1 requires a Unix target for owner and
 
 pub mod audit;
 pub mod auth;
+pub mod authority;
 pub mod binding;
 pub mod bundle;
 pub mod check;

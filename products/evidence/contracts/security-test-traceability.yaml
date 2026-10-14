@@ -14,6 +14,8 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: release_audit_binds_activated_authority_revision_and_effective_grants}
       - {file: crates/registry-evidence/src/audit.rs, name: audit_authority_binding_is_complete_and_coherent_across_phases}
       - {file: crates/registry-evidence/src/authority.rs, name: target_grants_cannot_widen_any_definition_ceiling}
+      - {file: crates/registry-evidence/src/source.rs, name: normalized_source_plans_compile_without_grants_and_after_target_narrowing}
+      - {file: crates/registry-evidence/src/source.rs, name: connected_sources_keep_package_and_target_concurrency_ceilings}
       - {file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}
       - {file: crates/registry-evidence/tests/selector_conformance.rs, name: task_grant_context_is_bound_before_selector_or_source_access}
   - id: sec-oid4vci-offer-request-contract
@@ -191,7 +193,8 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/authority.rs, name: authority_snapshot_is_process_pinned_and_package_bound}
       - {file: crates/registry-evidence/src/bundle.rs, name: package_digest_binds_paths_and_exact_bytes_deterministically}
-      - {file: crates/registry-evidence/src/bundle.rs, name: requirement_projection_prunes_unreached_connections_and_covers_selected_behavior}
+      - {file: crates/registry-evidence/src/bundle.rs, name: authority_activation_package_loading_honors_the_runtime_expected_digest}
+      - {file: crates/registry-evidence/src/bundle.rs, name: definition_projection_excludes_connection_bindings_and_covers_selected_behavior}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: serving_runtime_never_reloads_merges_or_falls_back_after_package_capture}
   - id: sec-mutually-distrustful-configuration
     tests: [{file: crates/registry-evidence/src/config.rs, name: one_trust_domain_and_native_token_identity_are_closed_configuration}]

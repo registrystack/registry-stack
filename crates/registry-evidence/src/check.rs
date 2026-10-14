@@ -327,13 +327,18 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
         }
     };
     check.files_checked += verified.files().count();
-    let bundle = match Bundle::load_as_found(&root, &verified) {
+    let mut bundle = match Bundle::load_as_found(&root, &verified) {
         Ok(bundle) => bundle,
         Err(error) => {
             push_bundle_error(&mut check, &layout, error);
             return check;
         }
     };
+    if let Err(error) = bundle.bind_target_authority(config.authority.as_ref()) {
+        check.push_runtime(&layout, "evidence.authority.invalid", "/authority", false,
+            error.to_string(), "Activate a valid target authority for this exact package with `evidence authority activate`.");
+        return check;
+    }
     check.bundle_tree = bundle.artifact(BUNDLE_DOCUMENT).and_then(|bytes| {
         Reader::new(check.package_file(BUNDLE_DOCUMENT))
             .scan(bytes)

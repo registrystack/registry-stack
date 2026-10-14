@@ -48,12 +48,6 @@ const PROJECTION_PATH: &str = "evidence.yaml#requirement";
 /// Projected member holding the bundle's declared acquisition capabilities.
 const ACQUISITION_CAPABILITIES: &str = "acquisitionCapabilities";
 const PROVIDER_PUBLICATION: &str = "publication";
-const SIGNING: &str = "signing";
-const AUTHENTICATION: &str = "authentication";
-const OIDC: &str = "oidc";
-const ACTIVE_PUBLIC_JWK_FILE: &str = "activePublicJwkFile";
-const PUBLISHED_PUBLIC_JWK_FILES: &str = "publishedPublicJwkFiles";
-const REVOKED_KEY_IDS: &str = "revokedKeyIds";
 pub(crate) const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 /// Bytes folded into an extract's digest per read. An extract is sized by the
 /// register it holds rather than by a byte cap, so it is digested in chunks of
@@ -306,6 +300,8 @@ impl Codelist {
 /// from partially replacing the package used by a serving process.
 #[derive(Debug, Clone)]
 pub struct Bundle {
+    authority_snapshot: Option<crate::authority::AuthoritySnapshot>,
+    effective_grant_digest: Option<String>,
     root: PathBuf,
     pub config: EvidenceConfig,
     package_digest: String,
@@ -508,12 +504,8 @@ pub struct DeploymentInputs {
 impl DeploymentInputs {
     pub fn load(runtime_path: impl AsRef<Path>) -> Result<Self, BundleError> {
         let runtime = RuntimeDocument::load(runtime_path)?;
-        let verified = runtime
-            .config
-            .package
-            .verify_package(&evidence_package_limits(), "evidencectl package")
-            .map_err(package_error)?;
-        let bundle = Bundle::load_verified(&runtime.config.package.root, &verified)?;
+        let mut bundle = Bundle::load_pinned(&runtime.config.package)?;
+        bundle.bind_target_authority(runtime.config.authority.as_ref())?;
         validate_runtime_bindings(&bundle.config, &runtime.config)?;
         Ok(Self { bundle, runtime })
     }
@@ -535,6 +527,18 @@ impl DeploymentInputs {
 pub type EvidenceBundle = Bundle;
 
 impl Bundle {
+    /// Load the same verified package pin used by startup, without requiring an
+    /// authority snapshot. Activation uses this before its initial snapshot
+    /// exists and must honor the operator's expected package digest too.
+    pub fn load_pinned(
+        package: &registry_platform_config::PackageConfig,
+    ) -> Result<Self, BundleError> {
+        let verified = package
+            .verify_package(&evidence_package_limits(), "evidencectl package")
+            .map_err(package_error)?;
+        Self::load_verified(&package.root, &verified)
+    }
+
     pub fn load(root: impl AsRef<Path>) -> Result<Self, BundleError> {
         let root = root.as_ref();
         let verified = verify_package(root, &evidence_package_limits(), "evidencectl package")
@@ -597,6 +601,8 @@ impl Bundle {
         let requirement_revisions = compute_requirement_revisions(&config, &files)?;
 
         Ok(Self {
+            authority_snapshot: None,
+            effective_grant_digest: None,
             root: root.to_path_buf(),
             config,
             package_digest: verified.digest().to_owned(),
@@ -610,6 +616,54 @@ impl Bundle {
             active_public_jwk,
             published_public_jwks,
         })
+    }
+
+    /// Bind exactly one activated target authority before initialization.
+    /// The snapshot is immutable for the process lifetime and has its own
+    /// revision, separate from the package and definition identities.
+    pub fn bind_target_authority(
+        &mut self,
+        binding: Option<&crate::config::RuntimeAuthorityConfig>,
+    ) -> Result<(), BundleError> {
+        let Some(binding) = binding else {
+            if self.config.project.is_some() {
+                return Err(invalid_artifact(
+                    "normalized packages require an activated target authority binding",
+                ));
+            }
+            return Ok(());
+        };
+        let snapshot = crate::authority::load(
+            &binding.root,
+            &binding.target,
+            &self.config,
+            self.package_digest(),
+        )
+        .map_err(|_| {
+            invalid_artifact(
+                "target authority is unavailable, out of ceiling, or activated for another package",
+            )
+        })?;
+        let digest = snapshot
+            .effective_grant_digest(&self.config)
+            .map_err(|_| invalid_artifact("effective target authority does not canonicalize"))?;
+        self.config.authority_profiles = snapshot.profiles().clone();
+        self.config.validate().map_err(|_| {
+            invalid_artifact("effective target authority violates the package contract")
+        })?;
+        self.effective_grant_digest = Some(digest);
+        self.authority_snapshot = Some(snapshot);
+        Ok(())
+    }
+
+    pub fn authority_revision(&self) -> Option<&str> {
+        self.authority_snapshot
+            .as_ref()
+            .map(crate::authority::AuthoritySnapshot::revision)
+    }
+
+    pub fn effective_grant_digest(&self) -> Option<&str> {
+        self.effective_grant_digest.as_deref()
     }
 
     pub fn root(&self) -> &Path {
@@ -2771,9 +2825,6 @@ fn requirement_artifact_paths(
         paths.extend(source_artifact_paths(source));
     }
     paths.insert(requirement.derivation.script.as_str().to_owned());
-    if let Some(fixtures) = &requirement.fixtures {
-        paths.insert(fixtures.as_str().to_owned());
-    }
     for concept in &requirement.concepts {
         if matches!(
             concept.form,
@@ -2810,46 +2861,18 @@ fn requirement_selector_profiles(
     config: &EvidenceConfig,
     requirement: &RequirementConfig,
 ) -> BTreeSet<String> {
-    let mut names: BTreeSet<String> = requirement
+    let _ = config;
+    requirement
         .subject_roles
         .iter()
         .flat_map(|role| role.selector_profiles.iter().cloned())
-        .collect();
-    for (_, profile) in config.authority_profiles.iter() {
-        for grant in &profile.grants {
-            if grant.requirement == requirement.id {
-                names.extend(
-                    grant
-                        .subjects
-                        .iter()
-                        .map(|subject| subject.selector_profile.clone()),
-                );
-            }
-        }
-    }
-    names
+        .collect()
 }
 
-/// The configuration one requirement depends on, in the canonical form its
-/// revision digest covers.
-///
-/// The projection starts from the complete parsed configuration and replaces
-/// only the four members that hold per-requirement configuration, keeping this
-/// requirement's own entries: the requirement itself, every source its bounded
-/// acquisition names, the selector profiles it can be served through, and the authority
-/// grants that offer it. Provider-publication metadata is deliberately removed:
-/// it changes catalog search, not the assertion semantics a relying party pins.
-/// So are the signing member's active, published, and revoked keys, see
-/// [`remove_signing_key_trust`], and the authentication member's revoked
-/// caller token keys, see [`remove_caller_token_revocations`]. Every other
-/// member is kept exactly as configured, so a configuration member
-/// added later is covered without revisiting this projection.
-///
-/// Starting from the parsed configuration rather than the file bytes is what
-/// makes the projection possible at all, and it is faithful because the
-/// configuration types reject an unknown member: nothing in the reviewed file
-/// can be dropped by parsing it. Comments and formatting are not covered,
-/// because neither can change an assertion.
+/// The canonical behavior closure for one assertion definition. It retains
+/// fixed source plans, selectors, function assets, output semantics and package
+/// ceilings. Presentation, fixtures and independently governed target bindings
+/// have package/authority identities of their own and cannot churn this pin.
 fn canonical_projection(
     config: &EvidenceConfig,
     requirement: &RequirementConfig,
@@ -2859,11 +2882,54 @@ fn canonical_projection(
     let members = document
         .as_object_mut()
         .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
-    members.remove(PROVIDER_PUBLICATION);
-    remove_signing_key_trust(members)?;
-    remove_caller_token_revocations(members)?;
-    let requirement_value = serde_json::to_value(requirement)
+    for deployment_member in [
+        PROVIDER_PUBLICATION,
+        "project",
+        "service",
+        "issuer",
+        "authentication",
+        "audit",
+        "subjectBinding",
+        "rateLimits",
+        "signing",
+        "authorityProfiles",
+        "sourceConnections",
+        "assuranceProfile",
+    ] {
+        members.remove(deployment_member);
+    }
+    if requirement.subject_binding_mode() != crate::config::SubjectBindingMode::HolderBound {
+        members.remove("maximumHolderBoundBatchSize");
+    }
+    // Package-wide enablement must not churn pins for definitions that do not
+    // expose the added representation. The definition owns its release set.
+    let effective_formats = config
+        .response_formats
+        .iter()
+        .filter(|format| {
+            requirement.representations.as_ref().map_or_else(
+                || {
+                    crate::config::subject_binding_permits_response_format(
+                        requirement.subject_binding_mode(),
+                        **format,
+                    )
+                },
+                |declared| declared.contains(format),
+            )
+        })
+        .collect::<Vec<_>>();
+    members.insert(
+        "responseFormats".to_owned(),
+        serde_json::to_value(effective_formats)
+            .map_err(|_| invalid_artifact("definition representations do not project"))?,
+    );
+    let mut requirement_value = serde_json::to_value(requirement)
         .map_err(|_| invalid_artifact("the requirement does not project"))?;
+    if let Some(definition) = requirement_value.as_object_mut() {
+        definition.remove("question");
+        definition.remove("fixtures");
+        definition.remove("handle");
+    }
     members.insert(
         "requirements".to_owned(),
         JsonValue::Array(vec![requirement_value]),
@@ -2877,77 +2943,27 @@ fn canonical_projection(
     retain_members(members, "sources", |name| {
         acquisition_sources.contains(name)
     })?;
-    if members.contains_key("sourceConnections") {
-        let reached_connections = acquisition_sources
-            .iter()
-            .filter_map(|source_id| {
-                config
-                    .sources
-                    .get(source_id)
-                    .and_then(|source| source.connection())
-            })
-            .collect::<BTreeSet<_>>();
-        retain_members(members, "sourceConnections", |name| {
-            reached_connections.contains(name)
-        })?;
-        if reached_connections.is_empty() {
-            members.remove("sourceConnections");
+    // The logical connection name and reviewed read behavior stay in the
+    // source contract. Endpoint, credentials and TLS trust are target bindings.
+    if let Some(sources) = members
+        .get_mut("sources")
+        .and_then(JsonValue::as_object_mut)
+    {
+        for source in sources.values_mut().filter_map(JsonValue::as_object_mut) {
+            for binding in ["baseUrl", "authentication", "tlsTrustProfile"] {
+                source.remove(binding);
+            }
         }
     }
     retain_members(members, "selectorProfiles", |name| profiles.contains(name))?;
     retain_acquisition_capability(members, requirement)?;
     preserve_selector_field_order(members, config, &profiles)?;
-    project_authority_profiles(members, &requirement.id)?;
     // RFC 8785 canonicalization, shared with the rest of the stack, makes
     // order-insensitive mappings and number formatting deterministic. The one
     // mapping whose declaration order changes assertion bytes is projected as
     // a sequence first, so canonicalization cannot erase that distinction.
     canonicalize_json(&document)
         .map_err(|_| invalid_artifact("the projection does not canonicalize"))
-}
-
-/// Remove the active, published, and revoked keys from the signing member.
-///
-/// Which keys the deployment publishes, which of them signs, and which are
-/// revoked is trust a relying party takes from the JWKS and from the denylist
-/// its verification policy carries, where rotation and revocation are meant
-/// to be carried. Covering the keys here would move every requirement revision
-/// at each step of a rotation or at an emergency revocation that leaves the
-/// assertions unchanged, and break every pinned policy with it. The other
-/// signing members stay covered.
-fn remove_signing_key_trust(members: &mut JsonMap<String, JsonValue>) -> Result<(), BundleError> {
-    let signing = members
-        .get_mut(SIGNING)
-        .and_then(JsonValue::as_object_mut)
-        .ok_or_else(|| {
-            invalid_artifact("the signing configuration does not project as a mapping")
-        })?;
-    signing.remove(ACTIVE_PUBLIC_JWK_FILE);
-    signing.remove(PUBLISHED_PUBLIC_JWK_FILES);
-    signing.remove(REVOKED_KEY_IDS);
-    Ok(())
-}
-
-/// Remove the revoked caller token keys from the authentication member.
-///
-/// The denylist decides which identity-provider keys may sign an accepted
-/// access token, which is who may call, not what an assertion means, and a
-/// relying party never verifies those tokens. Covering it here would move every
-/// requirement revision at an emergency revocation and break every pinned
-/// policy with it. The other authentication members, including the issuer, its
-/// JWKS location, and the claims authorization reads, stay covered.
-fn remove_caller_token_revocations(
-    members: &mut JsonMap<String, JsonValue>,
-) -> Result<(), BundleError> {
-    let oidc = members
-        .get_mut(AUTHENTICATION)
-        .and_then(|authentication| authentication.get_mut(OIDC))
-        .and_then(JsonValue::as_object_mut)
-        .ok_or_else(|| {
-            invalid_artifact("the authentication configuration does not project as a mapping")
-        })?;
-    oidc.remove(REVOKED_KEY_IDS);
-    Ok(())
 }
 
 /// Keep only the acquisition capability this requirement's own form needs.
@@ -3033,34 +3049,6 @@ fn preserve_selector_field_order(
             .collect::<Result<Vec<_>, _>>()?;
         projected.insert("fields".to_owned(), JsonValue::Array(fields));
     }
-    Ok(())
-}
-
-/// Keep only the grants that offer one requirement, and only the authority
-/// profiles left holding at least one of them.
-fn project_authority_profiles(
-    members: &mut JsonMap<String, JsonValue>,
-    requirement_id: &str,
-) -> Result<(), BundleError> {
-    let profiles = members
-        .get_mut("authorityProfiles")
-        .and_then(JsonValue::as_object_mut)
-        .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
-    for (_, profile) in profiles.iter_mut() {
-        let grants = profile
-            .get_mut("grants")
-            .and_then(JsonValue::as_array_mut)
-            .ok_or_else(|| invalid_artifact("an authority profile does not project"))?;
-        grants.retain(|grant| {
-            grant.get("requirement").and_then(JsonValue::as_str) == Some(requirement_id)
-        });
-    }
-    profiles.retain(|_, profile| {
-        profile
-            .get("grants")
-            .and_then(JsonValue::as_array)
-            .is_some_and(|grants| !grants.is_empty())
-    });
     Ok(())
 }
 
@@ -3159,7 +3147,7 @@ mod tests {
     }
 
     #[test]
-    fn requirement_projection_prunes_unreached_connections_and_covers_selected_behavior() {
+    fn definition_projection_excludes_connection_bindings_and_covers_selected_behavior() {
         let config = EvidenceConfig::parse_yaml(include_bytes!(
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
@@ -3192,11 +3180,32 @@ mod tests {
         document["sourceConnections"]["unreached"]["tokenTimeoutMilliseconds"] = 5001.into();
         assert!(shared == project(&document));
         document["sourceConnections"]["shared"]["tokenTimeoutMilliseconds"] = 5001.into();
-        assert!(shared != project(&document));
+        assert!(
+            shared == project(&document),
+            "target connection timing cannot alter the portable definition behavior pin"
+        );
         let before_behavior = project(&document);
         document["sources"][&source_id]["behaviorRevision"] =
             format!("sha256:{}", "a".repeat(64)).into();
         assert!(before_behavior != project(&document));
+    }
+
+    #[test]
+    fn authority_activation_package_loading_honors_the_runtime_expected_digest() {
+        let directory = tempfile::tempdir().unwrap();
+        copy_acceptance_bundle("adult-status", directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let actual = Bundle::load(directory.path()).unwrap();
+        let mut package = registry_platform_config::PackageConfig {
+            root: directory.path().to_path_buf(),
+            expected_digest: Some(actual.package_digest().to_owned()),
+        };
+        Bundle::load_pinned(&package).expect("exact configured pin loads for activation");
+        package.expected_digest = Some(format!("sha256:{}", "f".repeat(64)));
+        assert!(
+            matches!(Bundle::load_pinned(&package), Err(BundleError::Package(_))),
+            "activation cannot acknowledge another package than the configured pin"
+        );
     }
 
     #[test]
@@ -3600,12 +3609,11 @@ mod tests {
         }
     }
 
-    /// Isolation between requirements is the only narrowing. A deployment-wide
-    /// edit still changes every requirement's revision, so nothing that can
-    /// change an assertion has stopped being covered.
+    /// Target key bindings have their own identity and do not alter the
+    /// portable behavior revision a relying party pins.
     #[cfg(unix)]
     #[test]
-    fn a_deployment_wide_edit_changes_every_requirement_revision() {
+    fn a_target_binding_edit_leaves_every_requirement_revision_alone() {
         let (before, after) = revisions_across_edit(|root| {
             let path = root.join(CONFIG_FILE);
             let text = fs::read_to_string(&path).expect("the configuration reads");
@@ -3616,9 +3624,9 @@ mod tests {
 
         assert_eq!(before.len(), 4);
         for (requirement, revision) in &before {
-            assert_ne!(
+            assert_eq!(
                 revision, &after[requirement],
-                "`{requirement}` depends on the edited deployment configuration"
+                "`{requirement}` retains its behavior revision across a target binding edit"
             );
         }
     }
@@ -3786,82 +3794,122 @@ mod tests {
     /// against the configuration itself instead of a copy of it.
     #[cfg(unix)]
     #[test]
-    fn the_projection_covers_every_configuration_member() {
-        let directory = tempfile::tempdir().expect("temporary bundle");
-        copy_acceptance_bundle("all-definitions", directory.path());
-        set_tree_mode(directory.path(), 0o555, 0o444);
-        let bundle = Bundle::load(directory.path()).expect("the acceptance bundle loads");
-
-        let configured = serde_json::to_value(&bundle.config).expect("the configuration projects");
-        let projected: JsonValue = serde_json::from_slice(
-            &canonical_projection(&bundle.config, &bundle.config.requirements[0])
-                .expect("the projection is canonical JSON"),
-        )
-        .expect("the projection parses");
-
+    fn the_projection_covers_behavior_and_excludes_target_bindings() {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        ))
+        .unwrap();
+        let definition = &config.requirements[0];
+        let projected: JsonValue =
+            serde_json::from_slice(&canonical_projection(&config, definition).unwrap()).unwrap();
+        let expected = BTreeSet::from([
+            "requirements",
+            "sources",
+            "selectorProfiles",
+            "responseFormats",
+        ]);
         assert_eq!(
             projected
                 .as_object()
-                .expect("the projection is a mapping")
+                .unwrap()
                 .keys()
+                .map(String::as_str)
                 .collect::<BTreeSet<_>>(),
-            configured
-                .as_object()
-                .expect("the configuration is a mapping")
-                .keys()
-                .filter(|key| key.as_str() != PROVIDER_PUBLICATION)
-                .collect::<BTreeSet<_>>()
+            expected
         );
-        // Only the four per-requirement members are narrowed, and each keeps
-        // exactly what this requirement reaches.
         assert_eq!(projected["requirements"].as_array().map(Vec::len), Some(1));
         assert_eq!(projected["sources"].as_object().map(JsonMap::len), Some(1));
-        assert!(projected["sources"].get("source-a").is_some());
-        // The signing member loses only its key files and revoked key
-        // identifiers, which the JWKS and the policy denylist carry.
-        let configured_signing = configured["signing"]
-            .as_object()
-            .expect("the signing configuration is a mapping");
-        let projected_signing = projected["signing"]
-            .as_object()
-            .expect("the projected signing configuration is a mapping");
-        assert_eq!(
-            projected_signing.keys().collect::<BTreeSet<_>>(),
-            configured_signing
-                .keys()
-                .filter(|key| {
-                    !matches!(
-                        key.as_str(),
-                        ACTIVE_PUBLIC_JWK_FILE | PUBLISHED_PUBLIC_JWK_FILES | REVOKED_KEY_IDS
-                    )
-                })
-                .collect::<BTreeSet<_>>()
-        );
-        assert!(!projected_signing.contains_key(REVOKED_KEY_IDS));
-        // The authentication member loses only its revoked caller token keys;
-        // the issuer, JWKS location, and claims authorization reads stay.
-        let configured_authentication = configured[AUTHENTICATION][OIDC]
-            .as_object()
-            .expect("the authentication configuration is a mapping");
-        let projected_authentication = projected[AUTHENTICATION][OIDC]
-            .as_object()
-            .expect("the projected authentication configuration is a mapping");
-        assert!(configured_authentication.contains_key(REVOKED_KEY_IDS));
-        assert!(!projected_authentication.contains_key(REVOKED_KEY_IDS));
-        assert_eq!(
-            projected_authentication.keys().collect::<BTreeSet<_>>(),
-            configured_authentication
-                .keys()
-                .filter(|key| key.as_str() != REVOKED_KEY_IDS)
-                .collect::<BTreeSet<_>>()
-        );
-        for (key, value) in projected_authentication {
-            assert_eq!(
-                Some(value),
-                configured_authentication.get(key),
-                "`{key}` is kept as configured"
+        assert!(projected["sources"]["source-a"].get("baseUrl").is_none());
+        assert!(projected["sources"]["source-a"]
+            .get("authentication")
+            .is_none());
+        for member in [
+            "service",
+            "issuer",
+            "authentication",
+            "audit",
+            "subjectBinding",
+            "rateLimits",
+            "signing",
+            "authorityProfiles",
+            "sourceConnections",
+        ] {
+            assert!(
+                projected.get(member).is_none(),
+                "target binding {member} is separate"
             );
         }
+    }
+
+    #[test]
+    fn definition_revision_excludes_target_authority_and_presentation_but_covers_ceilings() {
+        use crate::config::{AuthorityKind, GrantCeiling, ResponseFormat, ValueOrigin};
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .unwrap();
+        config.requirements[0].grant_ceiling = Some(GrantCeiling {
+            authorities: vec![AuthorityKind::Statutory],
+            actor_kinds: vec![registry_platform_oidc::ActorKind::Service],
+            value_origins: vec![ValueOrigin::Request],
+            audiences: vec!["urn:example:audience:one".to_owned()],
+        });
+        config.requirements[0].representations = Some(vec![ResponseFormat::SignedJws]);
+        let projection = |config: &EvidenceConfig| {
+            canonical_projection(config, &config.requirements[0]).unwrap()
+        };
+        let before = projection(&config);
+        config.requirements[0].question = Some("Reworded question".to_owned());
+        config.requirements[0].handle = "renamed-local-handle".to_owned();
+        config.project = Some("another-project-title".to_owned());
+        config.service.provider_id = "urn:example:another-provider".to_owned();
+        config.authority_profiles = OrderedMap::default();
+        assert_eq!(before, projection(&config));
+        config.requirements[0]
+            .grant_ceiling
+            .as_mut()
+            .unwrap()
+            .audiences
+            .push("urn:example:audience:two".to_owned());
+        assert_ne!(before, projection(&config));
+        let wider = projection(&config);
+        config.requirements[0].validity_seconds =
+            registry_platform_yaml::BoundedU64::new(299).unwrap();
+        assert_ne!(wider, projection(&config));
+    }
+
+    #[test]
+    fn unrelated_representation_enablement_leaves_definition_revision_unchanged() {
+        use crate::config::ResponseFormat;
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .unwrap();
+        config.requirements[0].representations = Some(vec![ResponseFormat::SignedJws]);
+        let projection = |config: &EvidenceConfig| {
+            canonical_projection(config, &config.requirements[0]).unwrap()
+        };
+        let before = projection(&config);
+        config
+            .response_formats
+            .extend([ResponseFormat::SdJwtVc, ResponseFormat::SdJwtVcBatch]);
+        config.maximum_holder_bound_batch_size =
+            Some(registry_platform_yaml::BoundedU32::new(8).unwrap());
+        assert_eq!(
+            before,
+            projection(&config),
+            "a holder-bound deployment capability cannot churn the independent JWS definition pin"
+        );
+        config.requirements[0]
+            .representations
+            .as_mut()
+            .unwrap()
+            .push(ResponseFormat::SdJwtVc);
+        assert_ne!(
+            before,
+            projection(&config),
+            "changing this definition's own release surface changes its pin"
+        );
     }
 
     /// A revision must depend on the configuration alone. Canonical JSON is

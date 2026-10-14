@@ -201,6 +201,97 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
+        Command::Authority { command } => {
+            use registry_evidence::{authority, cli::AuthorityCommand};
+            let (runtime_path, document) = match command {
+                AuthorityCommand::Activate {
+                    runtime_config,
+                    document,
+                } => (runtime_config, Some(document)),
+                AuthorityCommand::History { runtime_config } => (runtime_config, None),
+            };
+            // Operator inspection and authority activation need the closed
+            // configuration, not source extracts, credentials or a signer.
+            let mut bytes = Vec::new();
+            File::open(&runtime_path)
+                .and_then(|file| {
+                    file.take((registry_evidence::config::MAX_CONFIG_BYTES + 1) as u64)
+                        .read_to_end(&mut bytes)
+                })
+                .map_err(|_| CommandError::Cli(CliError("runtime configuration is unavailable")))?;
+            let runtime =
+                registry_evidence::config::RuntimeConfig::parse_yaml_with(&bytes, |name| {
+                    std::env::var(name).ok()
+                })
+                .map_err(
+                    |error| match error.in_file(&runtime_path.display().to_string()) {
+                        ConfigError::Refused(report) => CommandError::Refused(report),
+                        error => CommandError::Deployment(
+                            "runtime authority binding is invalid",
+                            ArtifactFault::new(runtime_path.display().to_string(), error.fault()),
+                        ),
+                    },
+                )?
+                .config;
+            let binding = runtime
+                .authority
+                .as_ref()
+                .ok_or(CommandError::Cli(CliError(
+                    "runtime authority binding is required",
+                )))?;
+            let result = if let Some(document) = document {
+                let mut bytes = Vec::new();
+                File::open(&document)
+                    .and_then(|file| {
+                        file.take((registry_evidence::config::MAX_CONFIG_BYTES + 1) as u64)
+                            .read_to_end(&mut bytes)
+                    })
+                    .map_err(|_| {
+                        CommandError::Cli(CliError("target authority document is unavailable"))
+                    })?;
+                match authority::AuthorityDocument::parse(&document.display().to_string(), &bytes) {
+                    Ok(document) => {
+                        let bundle =
+                            Bundle::load_pinned(&runtime.package).map_err(deployment_load_error)?;
+                        authority::activate(
+                            &binding.root,
+                            &binding.target,
+                            &bundle.config,
+                            bundle.package_digest(),
+                            &document,
+                        )
+                        .map(|snapshot| {
+                            println!(
+                                "ACTIVATED {} {} sequence={}",
+                                snapshot.revision(),
+                                snapshot.digest(),
+                                snapshot.sequence()
+                            )
+                        })
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                authority::history(&binding.root).map(|entries| {
+                    for entry in entries {
+                        println!(
+                            "{} {} {} {}",
+                            entry.sequence,
+                            entry.authority_revision,
+                            entry.authority_digest,
+                            entry.package_digest
+                        );
+                    }
+                })
+            };
+            match result {
+                Ok(()) => Ok(ExitCode::SUCCESS),
+                Err(error) => {
+                    eprintln!("evidence: {error}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
         Command::Check {
             runtime_config,
             format,

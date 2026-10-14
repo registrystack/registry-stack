@@ -810,6 +810,9 @@ impl<T: Serialize> Serialize for OrderedMap<T> {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceConfig {
+    /// Stable project identity emitted by the normalized project compiler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     /// The governed assurance boundary for this immutable bundle.
     pub assurance_profile: AssuranceProfile,
     pub service: ServiceConfig,
@@ -832,6 +835,9 @@ pub struct EvidenceConfig {
     /// by the authoring build and checked again when the bundle starts.
     #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
     pub source_connections: OrderedMap<SourceConnectionConfig>,
+    /// Effective target grants. Normalized packages leave this empty; startup
+    /// installs only the atomically activated target authority snapshot.
+    #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
     pub authority_profiles: OrderedMap<AuthorityProfile>,
     /// Acquisition kinds this bundle opts in to beyond the single fixed call.
     /// A kind absent from this list cannot be served, so an existing bundle
@@ -857,6 +863,37 @@ pub use registry_evidence_verifier::model::SubjectBindingMode;
 pub use registry_evidence_verifier::AssuranceProfile;
 
 pub type SourceSelectorSet = Vec<(String, String)>;
+
+/// Bound expansion before allocating the Cartesian selector combinations.
+/// This is a compiler resource limit, not an authorization decision.
+const MAXIMUM_SOURCE_SELECTOR_SETS: usize = 4096;
+
+pub(crate) fn selector_combinations(
+    choices: &[(String, Vec<String>)],
+) -> Result<Vec<SourceSelectorSet>, ConfigError> {
+    let mut sets = vec![Vec::new()];
+    for (role, profiles) in choices {
+        if profiles.is_empty()
+            || sets
+                .len()
+                .checked_mul(profiles.len())
+                .is_none_or(|count| count > MAXIMUM_SOURCE_SELECTOR_SETS)
+        {
+            return invalid("source selector alternatives exceed the supported combination bound");
+        }
+        sets = sets
+            .iter()
+            .flat_map(|set| {
+                profiles.iter().map(|profile| {
+                    let mut candidate = set.clone();
+                    candidate.push((role.clone(), profile.clone()));
+                    candidate
+                })
+            })
+            .collect();
+    }
+    Ok(sets)
+}
 
 /// The ceiling one holder-bound release may carry when the bundle declares no
 /// other, which is one assertion. Silence enables nothing.
@@ -1051,6 +1088,11 @@ impl EvidenceConfig {
                 violation.diagnostic(&decoded.document)
             ]))));
         }
+        if decoded.value.project.is_some() && !decoded.value.authority_profiles.is_empty() {
+            return invalid(
+                "normalized package authority must be activated separately from the target",
+            );
+        }
         Ok(decoded.value)
     }
 
@@ -1140,7 +1182,7 @@ impl EvidenceConfig {
         }
         validate_named_map(
             &self.authority_profiles,
-            1,
+            usize::from(self.project.is_none()),
             128,
             "/authorityProfiles",
             |profile| profile.validate(),
@@ -1212,6 +1254,21 @@ impl EvidenceConfig {
         for (index, requirement) in (0_u32..).zip(&self.requirements) {
             let at = format!("/requirements/{index}");
             requirement.validate().at(&at)?;
+            if self.project.is_some()
+                && (requirement.grant_ceiling.is_none() || requirement.representations.is_none())
+            {
+                return invalid(
+                    "normalized definitions require complete grant and representation ceilings",
+                )
+                .at(&at);
+            }
+            if requirement.representations.as_ref().is_some_and(|formats| {
+                formats
+                    .iter()
+                    .any(|format| !self.response_formats.contains(format))
+            }) {
+                return invalid("definition representations exceed the package ceiling").at(&at);
+            }
             if self.assurance_profile.requires_fixtures() && requirement.fixtures.is_none() {
                 return invalid("production and evidence-grade requirements must declare fixtures")
                     .at(at);
@@ -1306,7 +1363,7 @@ impl EvidenceConfig {
                                 )
                         })
                 });
-            if !reachable {
+            if !reachable && self.project.is_none() {
                 return invalid(
                     "holder-bound requirement needs one grant permitting the mode and a permitted response format",
                 )
@@ -1358,6 +1415,11 @@ impl EvidenceConfig {
         let Some(source) = self.sources.get(source_id) else {
             return Vec::new();
         };
+        if self.project.is_some() {
+            return self
+                .declared_source_selector_sets(source_id)
+                .unwrap_or_default();
+        }
         let requirement_sources = self
             .requirements
             .iter()
@@ -1391,6 +1453,53 @@ impl EvidenceConfig {
             }
         }
         sets.into_iter().collect()
+    }
+
+    fn declared_source_selector_sets(
+        &self,
+        source_id: &str,
+    ) -> Result<Vec<SourceSelectorSet>, ConfigError> {
+        let source = self
+            .sources
+            .get(source_id)
+            .ok_or(ConfigError::Invalid("definition source is unknown"))?;
+        let mut sets = BTreeSet::new();
+        for definition in self
+            .requirements
+            .iter()
+            .filter(|definition| definition.acquisition.uses_source(source_id))
+        {
+            let choices = source
+                .selector_inputs()
+                .iter()
+                .filter_map(|input| {
+                    let role = definition
+                        .subject_roles
+                        .iter()
+                        .find(|role| role.role == input.role)?;
+                    let profiles = input
+                        .alternatives
+                        .iter()
+                        .filter(|alternative| role.selector_profiles.contains(&alternative.profile))
+                        .map(|alternative| alternative.profile.clone())
+                        .collect::<Vec<_>>();
+                    (!profiles.is_empty()).then(|| (input.role.clone(), profiles))
+                })
+                .collect::<Vec<_>>();
+            if choices.is_empty() && !source.selector_inputs().is_empty() {
+                continue;
+            }
+            for mut set in selector_combinations(&choices)? {
+                set.sort();
+                sets.insert(set);
+                if sets.len() > MAXIMUM_SOURCE_SELECTOR_SETS {
+                    return invalid(
+                        "source selector alternatives exceed the supported combination bound",
+                    );
+                }
+            }
+        }
+        Ok(sets.into_iter().collect())
     }
 
     /// Select the optional one-call source optimization for a logical request
@@ -1561,6 +1670,33 @@ impl EvidenceConfig {
                         "authority grant references an unknown requirement",
                     ))
                     .at(format!("{at}/requirement"))?;
+                if let Some(ceiling) = &requirement.grant_ceiling {
+                    if !ceiling.authorities.contains(&authority.kind)
+                        || authority
+                            .actor_kind
+                            .is_none_or(|kind| !ceiling.actor_kinds.contains(&kind))
+                        || grant
+                            .subjects
+                            .iter()
+                            .any(|subject| !ceiling.value_origins.contains(&subject.value_origin))
+                        || grant
+                            .subject_binding_modes
+                            .iter()
+                            .any(|mode| *mode != requirement.subject_binding_mode())
+                        || (grant.subject_binding_modes.is_empty()
+                            && requirement.subject_binding_mode()
+                                != SubjectBindingMode::AudienceScoped)
+                        || requirement.representations.as_ref().is_some_and(|formats| {
+                            grant
+                                .response_formats
+                                .iter()
+                                .any(|format| !formats.contains(format))
+                        })
+                    {
+                        return invalid("target authority exceeds the definition grant ceiling")
+                            .at(&at);
+                    }
+                }
                 if !requirement
                     .purposes
                     .iter()
@@ -1664,6 +1800,22 @@ impl EvidenceConfig {
             }
         }
 
+        if self.project.is_some() {
+            // Source plans are package contracts, so a target may narrow grants
+            // without disabling unrelated source plans or fixture compilation.
+            let mut declared = BTreeMap::<String, BTreeSet<SourceSelectorSet>>::new();
+            for source_id in self.sources.keys() {
+                declared.insert(
+                    source_id.to_owned(),
+                    self.declared_source_selector_sets(source_id)
+                        .at(named("/sources", source_id))?
+                        .into_iter()
+                        .collect(),
+                );
+            }
+            self.validate_source_selector_sets(&declared)?;
+            return Ok(());
+        }
         for (index, requirement) in self.requirements.iter().enumerate() {
             for purpose in &requirement.purposes {
                 for role in &requirement.subject_roles {
@@ -2043,6 +2195,9 @@ fn absolute_path_map_findings<T>(
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeConfig {
+    /// Separately governed target authority, captured once before serving.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<RuntimeAuthorityConfig>,
     pub api_version: String,
     pub kind: String,
     /// The one governed package directory this process verifies and loads at startup.
@@ -2071,6 +2226,14 @@ pub struct RuntimeConfig {
     /// serves anything.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acquisition_capabilities: Vec<String>,
+}
+
+/// The target authority store is operator storage, never a package override.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeAuthorityConfig {
+    pub root: PathBuf,
+    pub target: String,
 }
 
 impl RuntimeConfig {
@@ -2133,6 +2296,20 @@ impl RuntimeConfig {
     /// [`RuntimeConfig::validate`] returns.
     pub fn findings(&self) -> Vec<RuntimeFinding> {
         let mut findings = Vec::new();
+        if let Some(authority) = &self.authority {
+            if validate_absolute_path(&authority.root.to_string_lossy()).is_err()
+                || !valid_local_id(&authority.target)
+            {
+                findings.push(RuntimeFinding::at_value(
+                    "evidence.runtime.invalid-authority",
+                    "/authority",
+                    ConfigError::Invalid(
+                        "authority requires an absolute root and local target identifier",
+                    ),
+                    "Bind an absolute authority store root and the governed target identifier.",
+                ));
+            }
+        }
         match self.package.check() {
             Err(error)
                 if error.kind()
@@ -3493,9 +3670,9 @@ impl SourceConnectionConfig {
     }
 
     pub(crate) fn matches_source(&self, source: &SourceConfig) -> bool {
-        matches!(source, SourceConfig::HttpJson { base_url, authentication, tls_trust_profile, request, .. }
+        matches!(source, SourceConfig::HttpJson { base_url, authentication, tls_trust_profile, .. }
             if base_url == &self.base_url && authentication == &self.authentication
-                && tls_trust_profile == &self.tls_trust_profile && request.maximum_concurrency == self.maximum_concurrency)
+                && tls_trust_profile == &self.tls_trust_profile)
     }
 }
 
@@ -5012,7 +5189,17 @@ impl AuthorityGrant {
     fn validate(&self) -> Result<(), ConfigError> {
         validate_uri(&self.requirement)?;
         validate_purpose(&self.purpose)?;
-        validate_response_formats(&self.response_formats, "authority grant response formats")?;
+        validate_len(
+            self.response_formats.len(),
+            1,
+            4,
+            "authority grant response formats",
+        )?;
+        for (index, format) in self.response_formats.iter().enumerate() {
+            if self.response_formats[..index].contains(format) {
+                return invalid("authority grant response formats must be unique");
+            }
+        }
         validate_subject_binding_modes(&self.subject_binding_modes)?;
         validate_len(self.subjects.len(), 1, 8, "authority grant subjects")
     }
@@ -5456,6 +5643,15 @@ impl StageInputs {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequirementConfig {
+    /// Human-facing presentation, excluded from the behavior revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    /// Package ceiling for every target grant serving this definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_ceiling: Option<GrantCeiling>,
+    /// Definition-specific representation ceiling, distinct from package formats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub representations: Option<Vec<ResponseFormat>>,
     /// Stable application-facing handle for the complete published
     /// definition. It is explicit rather than inferred from the requirement
     /// URI so URI revisions cannot silently rename application code.
@@ -5488,6 +5684,48 @@ pub struct RequirementConfig {
     pub existence_disclosure: ExistenceDisclosure,
 }
 
+/// The dimensions not already bounded by the definition's purposes, subjects,
+/// selector profiles, representations and subject-binding declaration.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantCeiling {
+    pub authorities: Vec<AuthorityKind>,
+    pub actor_kinds: Vec<registry_platform_oidc::ActorKind>,
+    pub value_origins: Vec<ValueOrigin>,
+    pub audiences: Vec<String>,
+}
+
+impl GrantCeiling {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_len(self.authorities.len(), 1, 5, "grant authority ceiling")?;
+        validate_len(self.actor_kinds.len(), 1, 3, "grant actor-kind ceiling")?;
+        validate_len(self.value_origins.len(), 1, 3, "grant value-origin ceiling")?;
+        validate_strings(&self.audiences, 1, 32, 1, 2048, "grant audience ceiling")?;
+        for audience in &self.audiences {
+            validate_uri(audience)?;
+        }
+        if self.audiences.iter().collect::<BTreeSet<_>>().len() != self.audiences.len() {
+            return invalid("grant audience ceiling contains a duplicate");
+        }
+        for i in 0..self.authorities.len() {
+            if self.authorities[..i].contains(&self.authorities[i]) {
+                return invalid("grant authority ceiling contains a duplicate");
+            }
+        }
+        for i in 0..self.actor_kinds.len() {
+            if self.actor_kinds[..i].contains(&self.actor_kinds[i]) {
+                return invalid("grant actor-kind ceiling contains a duplicate");
+            }
+        }
+        for i in 0..self.value_origins.len() {
+            if self.value_origins[..i].contains(&self.value_origins[i]) {
+                return invalid("grant value-origin ceiling contains a duplicate");
+            }
+        }
+        Ok(())
+    }
+}
+
 impl RequirementConfig {
     pub fn initial_source(&self) -> &str {
         self.acquisition.initial_source()
@@ -5503,6 +5741,25 @@ impl RequirementConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         if !valid_local_id(&self.handle) {
             return invalid("requirement handle is invalid");
+        }
+        if let Some(question) = &self.question {
+            validate_len(question.len(), 1, 2048, "definition question")?;
+        }
+        if let Some(ceiling) = &self.grant_ceiling {
+            ceiling.validate()?;
+        }
+        if let Some(formats) = &self.representations {
+            validate_len(formats.len(), 1, 4, "definition representations")?;
+            for (index, format) in formats.iter().enumerate() {
+                if formats[..index].contains(format)
+                    || !subject_binding_permits_response_format(
+                        self.subject_binding_mode(),
+                        *format,
+                    )
+                {
+                    return invalid("definition representations violate its binding ceiling");
+                }
+            }
         }
         validate_uri(&self.id)?;
         self.acquisition.validate()?;
@@ -7283,7 +7540,7 @@ mod tests {
             config.validate().is_err(),
             "a source cannot retarget its named connection's OAuth resource"
         );
-        for field in ["authentication", "tlsTrustProfile", "maximumConcurrency"] {
+        for field in ["authentication", "tlsTrustProfile"] {
             config = before.clone();
             if let SourceConfig::HttpJson {
                 authentication,
@@ -7312,6 +7569,13 @@ mod tests {
                 "connection-owned fields cannot differ"
             );
         }
+        config = before.clone();
+        if let SourceConfig::HttpJson { request, .. } = &mut config.sources.0[0].1 {
+            request.maximum_concurrency = BoundedU32::new(2).unwrap();
+        }
+        config
+            .validate()
+            .expect("package-source and target-connection limits are independently enforced");
         config = before;
         config.source_connections.0.clear();
         assert!(
@@ -9427,10 +9691,10 @@ mod tests {
                 "\nresponseFormats: [signed-jws, unsigned-json]",
                 "\nresponseFormats: [signed-jws, signed-jws]",
             ),
-            // A grant cannot drop the mandatory signed format either.
+            // A complete grant may narrow the enabled formats, but cannot duplicate one.
             (
                 "        responseFormats: [signed-jws, unsigned-json]\n        subjects:\n          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}",
-                "        responseFormats: [unsigned-json]\n        subjects:\n          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}",
+                "        responseFormats: [unsigned-json, unsigned-json]\n        subjects:\n          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}",
             ),
             // The vocabulary is closed.
             (

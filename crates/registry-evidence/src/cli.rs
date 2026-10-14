@@ -57,7 +57,28 @@ where
 }
 
 #[derive(Debug, Subcommand)]
+pub enum AuthorityCommand {
+    /// Validate package ceilings and durably commit one target authority snapshot.
+    Activate {
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        document: PathBuf,
+    },
+    /// Inspect revisions and digests from committed activation history, without identity values.
+    History {
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Atomically activate separately governed target authority for the next restart.
+    Authority {
+        #[command(subcommand)]
+        command: AuthorityCommand,
+    },
     /// Check a runtime file and the package it binds, offline, and report
     /// every problem found.
     ///
