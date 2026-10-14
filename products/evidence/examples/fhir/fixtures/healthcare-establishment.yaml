@@ -1,0 +1,187 @@
+apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
+synthetic_only: true
+common:
+  observed_at: '2026-10-14T00:00:00Z'
+  selectors:
+    organization:
+      profile: organization-by-id
+      values:
+        organization_id: organization-synthetic
+  expectedRequestParts:
+    query: []
+    body: null
+  expectedTransport:
+    path: /Organization/organization-synthetic
+    fixedHeaders:
+    - name: Accept
+      value: application/json
+cases:
+- id: active-provider
+  response:
+    resourceType: Organization
+    id: organization-synthetic
+    active: true
+    type:
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: prov
+  expected:
+    lookup: match
+    value: true
+    derivationRuns: true
+    signed: true
+- id: inactive-is-false
+  response:
+    resourceType: Organization
+    id: organization-synthetic
+    active: false
+    type:
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: prov
+  expected:
+    lookup: match
+    value: false
+    derivationRuns: true
+    signed: true
+- id: other-type-is-false
+  response:
+    resourceType: Organization
+    id: organization-synthetic
+    active: true
+    type:
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: pay
+  expected:
+    lookup: match
+    value: false
+    derivationRuns: true
+    signed: true
+- id: other-system-is-false
+  response:
+    resourceType: Organization
+    id: organization-synthetic
+    active: true
+    type:
+    - coding:
+      - system: urn:example:unrelated-code-system
+        code: prov
+  expected:
+    lookup: match
+    value: false
+    derivationRuns: true
+    signed: true
+- id: split-codings-do-not-match
+  response:
+    resourceType: Organization
+    id: organization-synthetic
+    active: true
+    type:
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: pay
+      - system: urn:example:unrelated-code-system
+        code: prov
+  expected:
+    lookup: match
+    value: false
+    derivationRuns: true
+    signed: true
+- id: coding-below-bound
+  response:
+    resourceType: Organization
+    id: organization-synthetic
+    active: true
+    type:
+    - coding: []
+  expected:
+    publicProblem: source.unavailable
+    derivationRuns: false
+    signed: false
+- id: type-above-bound
+  response:
+    resourceType: Organization
+    id: organization-synthetic
+    active: true
+    type:
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: prov
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: prov
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: prov
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: prov
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: prov
+  expected:
+    publicProblem: source.unavailable
+    derivationRuns: false
+    signed: false
+- id: resource-identity-mismatch
+  response:
+    resourceType: Organization
+    id: another-organization
+    active: true
+    type:
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: prov
+  expected:
+    publicProblem: source.unavailable
+    derivationRuns: false
+    signed: false
+- id: missing-active
+  response:
+    resourceType: Organization
+    id: organization-synthetic
+    type:
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: prov
+  expected:
+    publicProblem: source.unavailable
+    derivationRuns: false
+    signed: false
+- id: private-fields-are-projected-out
+  response:
+    resourceType: Organization
+    id: organization-synthetic
+    active: true
+    type:
+    - coding:
+      - system: http://terminology.hl7.org/CodeSystem/organization-type
+        code: prov
+        display: FHIR-PRIVATE-CANARY
+    name: FHIR-PRIVATE-CANARY
+  expected:
+    lookup: match
+    value: true
+    derivationRuns: true
+    signed: true
+- id: source-timeout
+  sourceFailure: timeout
+  expected:
+    publicProblem: source.unavailable
+    signed: false
+    sourceRequestCount: 1
+privacyExpectation:
+  evidenceContains:
+  - urn:example:concept:healthcare-provider-record-active:v1
+  evidenceExcludes:
+  - coverage-synthetic
+  - patient-synthetic
+  - organization-synthetic
+  - FHIR-PRIVATE-CANARY
+  diagnosticsExclude:
+  - coverage-synthetic
+  - patient-synthetic
+  - organization-synthetic
+  - FHIR-PRIVATE-CANARY

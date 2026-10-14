@@ -1,0 +1,109 @@
+openapi: 3.1.0
+info:
+  title: SMART Health IT public FHIR R4 tutorial subset
+  version: 1.0.0
+servers:
+- url: http://127.0.0.1:8000
+paths:
+  /Coverage/{coverage_id}:
+    get:
+      operationId: getCoverage
+      parameters:
+      - name: coverage_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: One FHIR R4 Coverage resource
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - resourceType
+                - id
+                - status
+                - beneficiary
+                properties:
+                  resourceType:
+                    type: string
+                    const: Coverage
+                  id:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                  status:
+                    type: string
+                    enum:
+                    - active
+                    - cancelled
+                    - draft
+                    - entered-in-error
+                  beneficiary:
+                    type: object
+                    required:
+                    - reference
+                    properties:
+                      reference:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+  /Organization/{organization_id}:
+    get:
+      operationId: getOrganization
+      parameters:
+      - name: organization_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: One FHIR R4 Organization resource
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - resourceType
+                - id
+                - active
+                - type
+                properties:
+                  resourceType:
+                    type: string
+                    const: Organization
+                  id:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                  active:
+                    type: boolean
+                  type:
+                    type: array
+                    minItems: 1
+                    maxItems: 4
+                    items:
+                      type: object
+                      required:
+                      - coding
+                      properties:
+                        coding:
+                          type: array
+                          minItems: 1
+                          maxItems: 8
+                          items:
+                            type: object
+                            required:
+                            - system
+                            - code
+                            properties:
+                              system:
+                                type: string
+                                const: http://terminology.hl7.org/CodeSystem/organization-type
+                              code:
+                                type: string
+                                minLength: 1
+                                maxLength: 64
