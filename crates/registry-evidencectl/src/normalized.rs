@@ -4,7 +4,7 @@ use anyhow::{bail, Context as _, Result};
 use registry_evidence_authoring::{
     compile::{self, CompiledProject},
     project::{self, EvidenceProject},
-    target::TargetAssuranceProfile,
+    target::{TargetAssuranceProfile, TargetSigner},
 };
 use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
 use serde_json::{json, Value};
@@ -268,12 +268,24 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
         && !source_root.join(key).exists()
         && key == ".generated/secrets/signing-p256-public.jwk.json"
     {
-        let generated = source_root.join(".generated");
-        if !generated.exists() {
-            std::fs::create_dir(&generated)?;
-            std::fs::set_permissions(&generated, std::fs::Permissions::from_mode(0o700))?;
+        let default_signer = matches!(
+            &target.signer,
+            TargetSigner::LocalJwk { private_key_ref, .. }
+                if private_key_ref.as_str() == "secret:file/signing-p256-private-jwk"
+        );
+        let default_file_root = target
+            .secret_providers
+            .file
+            .as_ref()
+            .is_some_and(|provider| provider.root == ".generated/secrets");
+        if !default_signer || !default_file_root {
+            return Err(crate::build::TargetDocumentDiagnostic {
+                code: "evidence.target.signing-key-missing",
+                path: format!("{}:/signer/publicJwkFile", path.display()),
+                message: "automatic local signing keys require signer.type local-jwk, signer.privateKeyRef secret:file/signing-p256-private-jwk and secretProviders.file.root .generated/secrets; provide the matching public JWK for any explicit alternative binding".to_owned(),
+            }.into());
         }
-        crate::keygen::ensure_local_key_material(&generated.join("secrets"))?;
+        crate::authoring::ensure_local_project_key_material(&source_root)?;
     }
     let key_bytes =
         authored::read_authored_file(&safe_asset(&source_root, key)?, "target public signing key")?;

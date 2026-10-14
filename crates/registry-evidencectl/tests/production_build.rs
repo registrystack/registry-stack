@@ -350,6 +350,224 @@ fn package_accepts_local_targets_with_the_same_complete_grant_model() {
 }
 
 #[test]
+fn local_target_bootstrap_generates_matching_keys_and_repairs_only_the_public_half() {
+    let fixture = Fixture::new();
+    fixture.use_default_local_signer();
+    let secrets = fixture.target.parent().unwrap().join(".generated/secrets");
+    let private_path = secrets.join("signing-p256-private-jwk");
+    let public_path = secrets.join("signing-p256-public.jwk.json");
+
+    assert_success(&fixture.package("json"), "default local signing bootstrap");
+    let private_bytes = fs::read(&private_path).expect("generated private key");
+    let public_bytes = fs::read(&public_path).expect("generated public key");
+    let private =
+        registry_platform_crypto::PrivateJwk::parse(std::str::from_utf8(&private_bytes).unwrap())
+            .expect("generated local private key parses");
+    let public =
+        registry_platform_crypto::PublicJwk::parse(std::str::from_utf8(&public_bytes).unwrap())
+            .expect("generated local public key parses");
+    assert!(
+        private.public() == public,
+        "generated signing halves must match"
+    );
+    assert_eq!(
+        fs::metadata(&secrets).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&private_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    fs::remove_file(&public_path).expect("remove recoverable public half");
+    assert_success(
+        &fixture.package_to("json", &fixture.root.join("repaired-candidate")),
+        "repair public half from the existing private key",
+    );
+    assert!(
+        fs::read(&private_path).unwrap() == private_bytes,
+        "private key was replaced"
+    );
+    assert!(
+        registry_platform_crypto::PublicJwk::parse(&fs::read_to_string(&public_path).unwrap())
+            .unwrap()
+            == public,
+        "public half was not recovered"
+    );
+}
+
+#[test]
+fn local_target_bootstrap_refuses_symlinked_ancestors_before_writes_or_chmod() {
+    for boundary in [".generated", ".generated/secrets"] {
+        for repair in [false, true] {
+            let fixture = Fixture::new();
+            fixture.use_default_local_signer();
+            let target_root = fixture.target.parent().unwrap();
+            let outside = fixture.root.join("outside");
+            let outside_secrets = if boundary == ".generated" {
+                outside.join("secrets")
+            } else {
+                outside.clone()
+            };
+            fs::create_dir_all(&outside_secrets).expect("outside secret directory");
+            if repair {
+                let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+                    .args(["keygen", "signing", "--output-dir"])
+                    .arg(&outside_secrets)
+                    .output()
+                    .expect("seed existing local key");
+                assert_success(&output, "seed local signing key");
+                fs::remove_file(outside_secrets.join("signing-p256-public.jwk.json"))
+                    .expect("remove public half");
+            }
+            fs::write(outside_secrets.join("sentinel"), b"preserve outside data")
+                .expect("outside sentinel");
+            fs::set_permissions(&outside_secrets, fs::Permissions::from_mode(0o750))
+                .expect("outside directory mode");
+            let before = snapshot(&outside);
+            if boundary == ".generated/secrets" {
+                fs::create_dir(target_root.join(".generated")).expect("generated parent");
+            }
+            symlink(&outside, target_root.join(boundary)).expect("generated ancestor link");
+
+            let output = fixture.package("json");
+
+            assert_failed(&output, "linked local signing ancestor");
+            assert!(snapshot(&outside) == before, "outside files changed");
+            assert_eq!(
+                fs::metadata(&outside_secrets).unwrap().permissions().mode() & 0o777,
+                0o750
+            );
+            assert!(target_root.join(boundary).is_symlink());
+            assert!(fixture.invocations().is_empty());
+            assert!(!fixture.output.exists());
+            fixture.assert_no_staging_residue();
+        }
+    }
+}
+
+#[test]
+fn local_target_bootstrap_refuses_bindings_that_cannot_use_the_generated_key() {
+    for mismatch in [
+        "private-file",
+        "private-environment",
+        "file-root",
+        "missing-file-provider",
+        "transit",
+    ] {
+        let fixture = Fixture::new();
+        fixture.use_default_local_signer();
+        edit_json(&fixture.target, |target| match mismatch {
+            "private-file" => {
+                target["signer"]["privateKeyRef"] = json!("secret:file/custom-signing")
+            }
+            "private-environment" => {
+                target["signer"]["privateKeyRef"] = json!("secret:env/SIGNING_KEY")
+            }
+            "file-root" => target["secretProviders"]["file"]["root"] = json!("custom-secrets"),
+            "missing-file-provider" => target["secretProviders"] = json!({}),
+            "transit" => {
+                target["signer"] = target_document()["signer"].clone();
+                target["signer"]["publicJwkFile"] =
+                    json!(".generated/secrets/signing-p256-public.jwk.json");
+            }
+            _ => unreachable!(),
+        });
+
+        let output = fixture.package("json");
+
+        assert_failed(&output, mismatch);
+        let report: Value = serde_json::from_slice(&output.stdout).expect("JSON refusal report");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "evidence.target.signing-key-missing"
+        );
+        assert!(report["diagnostics"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("target.yaml:/signer/publicJwkFile"));
+        assert!(report["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("provide the matching public JWK"));
+        assert!(
+            !fixture.target.parent().unwrap().join(".generated").exists(),
+            "{mismatch} generated unused keys"
+        );
+        assert!(fixture.invocations().is_empty());
+        assert!(!fixture.output.exists());
+        fixture.assert_no_staging_residue();
+    }
+}
+
+#[test]
+fn local_target_creation_refuses_a_symlinked_generated_parent_before_key_generation() {
+    let fixture = Fixture::new();
+    let outside = fixture.root.join("outside");
+    fs::create_dir(&outside).expect("outside directory");
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o750)).expect("outside mode");
+    symlink(&outside, fixture.project.join(".generated")).expect("generated parent link");
+    let destination = fixture.root.join("local-target");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["target", "new"])
+        .arg(&destination)
+        .arg("--local")
+        .arg("--project")
+        .arg(&fixture.project)
+        .output()
+        .expect("create local target");
+
+    assert_failed(&output, "linked generated parent during target creation");
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    assert_eq!(
+        fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+    assert!(!destination.exists());
+}
+
+#[test]
+fn local_target_preserves_explicit_matching_custom_signing_material() {
+    let fixture = Fixture::new();
+    fixture.use_default_local_signer();
+    let target_root = fixture.target.parent().unwrap();
+    let secrets = target_root.join("custom-secrets");
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["keygen", "signing", "--output-dir"])
+        .arg(&secrets)
+        .arg("--public-output")
+        .arg(target_root.join("public-keys/custom.jwk.json"))
+        .output()
+        .expect("custom signing key");
+    assert_success(&output, "explicit custom signing key");
+    fs::rename(
+        secrets.join("signing-p256-private-jwk"),
+        secrets.join("custom-signing"),
+    )
+    .expect("custom private key name");
+    edit_json(&fixture.target, |target| {
+        target["signer"]["privateKeyRef"] = json!("secret:file/custom-signing");
+        target["signer"]["publicJwkFile"] = json!("public-keys/custom.jwk.json");
+        target["secretProviders"]["file"]["root"] = json!("custom-secrets");
+    });
+
+    assert_success(&fixture.package("json"), "explicit custom signing binding");
+
+    let runtime = registry_platform_yaml::Reader::new("runtime.yaml")
+        .scan(&fs::read(fixture.output.join("runtime.yaml")).unwrap())
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    assert_eq!(
+        runtime["signer"]["privateKeyRef"],
+        "secret:file/custom-signing"
+    );
+    assert_eq!(runtime["secretProviders"]["file"]["root"], json!(secrets));
+    assert!(!target_root.join(".generated").exists());
+}
+
+#[test]
 fn local_targets_obey_the_same_create_only_output_boundaries() {
     let fixture = Fixture::new();
     edit_json(&fixture.target, |target| {
@@ -1048,6 +1266,16 @@ struct Fixture {
 }
 
 impl Fixture {
+    fn use_default_local_signer(&self) {
+        edit_json(&self.target, |target| {
+            target["assuranceProfile"] = json!("local");
+            target["connections"]["registry-http"]["origin"] = json!("http://127.0.0.1:8088");
+            target["connections"]["registry-http"]["authentication"] = json!({"type":"none"});
+            target["secretProviders"]["file"]["root"] = json!(".generated/secrets");
+            target["signer"] = json!({"type":"local-jwk", "algorithm":"ES256", "privateKeyRef":"secret:file/signing-p256-private-jwk", "publicJwkFile":".generated/secrets/signing-p256-public.jwk.json"});
+        });
+    }
+
     fn new() -> Self {
         let temporary_root = workspace_root().join("target");
         fs::create_dir_all(&temporary_root).expect("workspace target");

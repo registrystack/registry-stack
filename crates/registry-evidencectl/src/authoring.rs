@@ -261,12 +261,7 @@ fn compile_local_project_with_target_inputs_resource_and_authority(
     }) {
         bail!("local dev requires HTTP sources; SQLite extracts remain available through fixture and deployed runtime paths");
     }
-    let generated = project_root.join(".generated");
-    if !generated.exists() {
-        create_private_directory(&generated)?;
-    }
-    let secrets = project_root.join(SECRETS_DIRECTORY);
-    crate::keygen::ensure_local_key_material(&secrets)?;
+    ensure_local_project_key_material(&project_root)?;
     let (active_public_jwk_file, active_public_jwk) =
         ensure_local_signing_public_jwk(&project_root)?;
     let mut plan = compile_plan_with_connections(
@@ -552,9 +547,10 @@ fn read_inputs(project_root: &Path, _require_local_secrets: bool) -> Result<Inpu
 }
 
 fn local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
-    let path = project_root
-        .join(SECRETS_DIRECTORY)
-        .join(LOCAL_SIGNING_PUBLIC_FILENAME);
+    let path = crate::normalized::safe_asset(
+        project_root,
+        &format!("{SECRETS_DIRECTORY}/{LOCAL_SIGNING_PUBLIC_FILENAME}"),
+    )?;
     let bytes = read_regular_file(&path, MAX_SOURCE_ARTIFACT_BYTES, "local signing public JWK")?;
     let text = std::str::from_utf8(&bytes).context("local signing public JWK must be UTF-8")?;
     let public = registry_platform_crypto::PublicJwk::parse(text)
@@ -571,6 +567,28 @@ fn local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
     Ok((format!("public-keys/{kid}.jwk.json"), bytes))
 }
 
+/// Fill disposable local material only after checking the generated ancestor.
+/// Key generation validates the secret directory itself before any chmod/write.
+pub(crate) fn ensure_local_project_key_material(project_root: &Path) -> Result<()> {
+    let generated = project_root.join(".generated");
+    match fs::symlink_metadata(&generated) {
+        Ok(_) => {
+            crate::normalized::safe_asset(project_root, ".generated").map_err(|_| {
+                AuthoredDiagnostic {
+                    code: "evidence.project.symbolic-link".to_owned(),
+                    path: generated.display().to_string(),
+                    message: "local signing material requires a plain .generated directory; replace the symbolic link with a directory inside this project".to_owned(),
+                }
+            })?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            create_private_directory(&generated)?;
+        }
+        Err(error) => return Err(error).context("inspecting local generated directory"),
+    }
+    crate::keygen::ensure_local_key_material(&project_root.join(SECRETS_DIRECTORY))
+}
+
 /// Read the project's local signing public JWK, creating the keypair once
 /// when the project has none.
 ///
@@ -578,7 +596,7 @@ fn local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
 /// or was authored without it, gets the same create-only generation here —
 /// under the same names and modes `init` uses — so the governed key reference
 /// this compiler renders and the key material on disk always agree. An
-/// existing key is never regenerated.
+/// existing private key is never regenerated; its missing public half is restored.
 pub(crate) fn ensure_local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
     let public = project_root
         .join(SECRETS_DIRECTORY)
@@ -586,7 +604,7 @@ pub(crate) fn ensure_local_signing_public_jwk(project_root: &Path) -> Result<(St
     match fs::symlink_metadata(&public) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            crate::keygen::generate_signing_keypair(&project_root.join(SECRETS_DIRECTORY))
+            ensure_local_project_key_material(project_root)
                 .context("generating the local project signing key")?;
         }
         Err(error) => {
@@ -1980,6 +1998,50 @@ mod tests {
     use super::*;
     use crate::evidence_binary::retry_busy_stub;
     use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
+
+    #[test]
+    fn local_target_compilation_refuses_a_symlinked_generated_parent_before_key_generation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let project = root.join("project");
+        let stage = root.join("stage");
+        let outside = root.join("outside");
+        for path in [&project, &stage, &outside] {
+            fs::create_dir(path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        fs::copy(example.join("evidence.yaml"), project.join("evidence.yaml")).unwrap();
+        for (relative, bytes) in crate::normalized::read(&example).unwrap().1 {
+            let path = project.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        std::os::unix::fs::symlink(&outside, project.join(".generated")).unwrap();
+        let evidence = root.join("evidence");
+        write_stub_evidence(&evidence, "#!/bin/sh\nexit 1\n");
+
+        let result = compile_local_project_with_target_inputs_resource_and_authority(
+            &project,
+            &stage,
+            &evidence,
+            LocalServicePorts::default(),
+            json!({}),
+            json!({}),
+            LOCAL_AUDIENCE,
+            &LocalAdmission::default(),
+            None,
+        );
+
+        assert!(result.is_err(), "linked generated parent must be refused");
+        assert_eq!(
+            fs::read_dir(&outside).unwrap().count(),
+            0,
+            "local compilation wrote outside the project"
+        );
+        assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    }
 
     #[test]
     fn generated_yaml_indents_sequences_beneath_their_keys() {
