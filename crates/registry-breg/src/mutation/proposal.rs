@@ -7,7 +7,7 @@ use crate::model::{
     CompiledActionExecution, CompiledProposalReview, ProposalOperation, ProposalOwnership,
 };
 use crate::postgres::{
-    ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase, begin_proposal_transaction,
+    begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase,
 };
 use crate::proposal_prepare::{self, ProposalTargetSnapshot};
 use crate::proposal_store::{self, ProposalDocument};

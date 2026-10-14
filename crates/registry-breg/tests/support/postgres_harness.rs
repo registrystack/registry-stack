@@ -7,9 +7,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use registry_breg::audit::{RegistryAudit, test_support::AuditCapture};
+use registry_breg::audit::{test_support::AuditCapture, RegistryAudit};
 use registry_breg::postgres::{
-    ConnectionConfig, PoolBounds, SqlIdentifier, provision_managed_schemas,
+    provision_managed_schemas, ConnectionConfig, PoolBounds, SqlIdentifier,
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::Value;

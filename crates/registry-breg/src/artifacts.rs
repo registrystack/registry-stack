@@ -809,7 +809,9 @@ fn action_contracts(actions: &CompiledActionInventory) -> Value {
                 .iter()
                 .flat_map(|handler| handler.refusals.keys())
                 .collect();
-            if !refusals.is_empty() {
+            // A Proposal invocation creates a draft. Its planner only runs on
+            // Submit, so these invocation schemas must not promise that refusal.
+            if !action.execution.is_proposal() && !refusals.is_empty() {
                 contract["declaredRefusal"] = json!({
                     "type": "object", "additionalProperties": false,
                     "required": ["refusalCode"],
@@ -827,7 +829,7 @@ fn action_contracts(actions: &CompiledActionInventory) -> Value {
 fn action_contracts_schema() -> Value {
     json!({
         "$schema":"https://json-schema.org/draft/2020-12/schema",
-        "$id":"https://id.registrystack.org/formats/breg/action-contracts/v1/schema.json",
+        "$id":"https://id.registrystack.org/schemas/breg/action-contracts/action-contracts.v1.schema.json",
         "title":"BReg Action contracts", "type":"object", "additionalProperties":false,
         "required":["apiVersion","kind","actions"],
         "properties":{
@@ -852,7 +854,7 @@ fn action_contracts_schema() -> Value {
             "Application":{"oneOf":[
                 {"type":"object","additionalProperties":false,"required":["mode"],"properties":{"mode":{"const":"manual"}}},
                 {"type":"object","additionalProperties":false,"required":["mode","maximumAttempts"],"properties":{
-                    "mode":{"const":"automatic"},"maximumAttempts":{"type":"integer","minimum":1,"maximum":65535}
+                    "mode":{"const":"automatic"},"maximumAttempts":{"type":"integer","minimum":1,"maximum":32}
                 }}
             ]},
             "Action":{"type":"object","additionalProperties":false,"required":["id","revision","display","mode","input","output"],"properties":{

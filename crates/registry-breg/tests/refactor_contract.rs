@@ -1080,23 +1080,21 @@ fn public_action_export_comes_from_the_compiled_owner_contract() {
             .keys()
             .map(String::as_str)
             .collect::<std::collections::BTreeSet<_>>();
-        assert!(
-            keys.is_subset(
-                &[
-                    "id",
-                    "revision",
-                    "display",
-                    "mode",
-                    "input",
-                    "output",
-                    "review",
-                    "application",
-                    "declaredRefusal"
-                ]
-                .into_iter()
-                .collect()
-            )
-        );
+        assert!(keys.is_subset(
+            &[
+                "id",
+                "revision",
+                "display",
+                "mode",
+                "input",
+                "output",
+                "review",
+                "application",
+                "declaredRefusal"
+            ]
+            .into_iter()
+            .collect()
+        ));
         assert!(!entry.to_string().contains("correct-address.rhai"));
     }
     let correction = actions
@@ -1107,26 +1105,38 @@ fn public_action_export_comes_from_the_compiled_owner_contract() {
     assert!(correction.get("review").is_some());
     assert!(correction.get("application").is_some());
     assert!(
-        correction["declaredRefusal"]
-            .to_string()
-            .contains("invalid-postal-code")
+        correction.get("declaredRefusal").is_none(),
+        "draft creation does not evaluate the Proposal plan"
     );
-    let refusal = jsonschema::JSONSchema::compile(&correction["declaredRefusal"]).unwrap();
-    assert!(refusal.is_valid(&serde_json::json!({"refusalCode":"invalid-postal-code"})));
-    assert!(!refusal.is_valid(&serde_json::json!({"refusalCode":"transport-error"})));
-    assert!(!refusal.is_valid(
-        &serde_json::json!({"refusalCode":"invalid-postal-code","detail":"private-input"})
-    ));
 }
 
 #[test]
 fn coordinator_information_request_declares_and_executes_blank_reason_refusal() {
-    use registry_breg::action_handler::{ActionHandlerOutcome, evaluate_action};
+    use registry_breg::action_handler::{evaluate_action, ActionHandlerOutcome};
     let project = parse_project_yaml(include_bytes!(
         "../../../products/breg/examples/coordinator-actions/registry.yaml"
     ))
     .unwrap();
     let registry = compile_project_with_assets(&project, &[], &[ModuleAssetSource { module: None, path: "scripts/request-information.rhai".into(), bytes: include_bytes!("../../../products/breg/examples/coordinator-actions/scripts/request-information.rhai").to_vec() }], CompileProfile::Authoring).unwrap();
+    let export: serde_json::Value = serde_json::from_slice(
+        &registry
+            .artifacts()
+            .get("generated/action-contracts.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let exported = export["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == "request-information")
+        .unwrap();
+    let refusal = jsonschema::JSONSchema::compile(&exported["declaredRefusal"]).unwrap();
+    assert!(refusal.is_valid(&serde_json::json!({"refusalCode":"invalid-reason"})));
+    assert!(!refusal.is_valid(&serde_json::json!({"refusalCode":"transport-error"})));
+    assert!(!refusal
+        .is_valid(&serde_json::json!({"refusalCode":"invalid-reason","detail":"private-input"})));
     let action = registry
         .actions()
         .actions
