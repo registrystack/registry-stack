@@ -99,12 +99,17 @@ the error identifies the file to resolve before retrying. Rerun setup from the
 matching checkout after upgrading. The generated setup contains local paths;
 regenerate it when moving a workspace.
 
-Evidence retains its canonical `tooling editor` schema generator.
-The shared helper invokes the matching Evidence CLI. Schema setup and
-CLI tasks can be used without installing the semantic extension.
-It maps the normalized `evidence.yaml`, `*-target.yaml`, `*-authority.yaml`,
-`access/clients/*.yaml`, `fixtures/*.yaml`, and `mocks/source.yaml` authoring
-files, plus the maintained JSON source-resolution and client-profile formats.
+The shared helper copies Evidence's maintained schemas directly and owns its
+workspace settings. Evidence also provides standalone CLI-managed setup through
+`evidencectl tooling editor`. Rerun the setup command that owns your workspace
+configuration after upgrading. Shared setup preserves existing independent
+schema mappings and settings; the standalone CLI refuses customized settings
+rather than replacing them. Schema setup and CLI tasks can be used without
+installing the semantic extension.
+Evidence maps the normalized `evidence.yaml`, `*-target.yaml`, `target.yaml`,
+`targets/*/target.yaml`, `*-authority.yaml`, `authority.yaml`,
+`targets/*/authority.yaml`, `access/clients/*.yaml`, `fixtures/*.yaml`, and
+`mocks/source.yaml`, plus the maintained JSON source-resolution and client-profile formats.
 
 `evidence-deployment` configures an Evidence deployment project: the
 `runtime.yaml` the `evidence` runtime reads, beside its bundle in `bundle/`.
@@ -119,8 +124,9 @@ policy contracts are JSON Schema documents written in YAML.
 
 ## Install
 
-Project setup and editor installation are separate operations. Refresh a
-project's version-matched schema settings with its adopter CLI:
+Project setup and editor installation are separate operations. Use the shared
+helper in [Configure a project](#configure-a-project), or choose standalone CLI
+setup for an Evidence-only workspace. Rerun that chosen setup after upgrading:
 
 ```console
 evidencectl tooling editor /path/to/evidence-project

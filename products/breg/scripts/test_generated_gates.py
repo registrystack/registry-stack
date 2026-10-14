@@ -137,6 +137,28 @@ class GeneratedGateTests(unittest.TestCase):
         self.assertIn("--project minimal", script)
         self.assertIn('"$repository_root/products/breg/generated/minimal" "$temporary_root/minimal"', script)
 
+    def test_facility_console_typecheck_inputs_resolve(self) -> None:
+        product = SCRIPT_DIR.parent
+        console = product / "examples/facility/console"
+        sdk = (product / "generated/facility/generated/sdk").resolve()
+        typescript = json.loads((console / "tsconfig.json").read_text())
+        python = json.loads((console / "pyrightconfig.json").read_text())
+        for configured in typescript["files"] + python["include"]:
+            with self.subTest(configured=configured):
+                self.assertTrue((console / configured).is_file(), configured)
+        self.assertEqual(
+            sdk,
+            (console / typescript["files"][1]).resolve().parent,
+        )
+        self.assertEqual([sdk], [(console / path).resolve() for path in python["extraPaths"]])
+        self.assertEqual(
+            SCRIPT_DIR.parents[2].resolve(),
+            (console / typescript["compilerOptions"]["rootDir"]).resolve(),
+        )
+        for configured in typescript["compilerOptions"]["paths"].values():
+            for path in configured:
+                self.assertTrue((console / path).is_file(), path)
+
     def test_editor_schemas_expose_native_breg_without_retired_aliases(self) -> None:
         authoring = SCRIPT_DIR.parent / "generated/authoring"
         for name in ("registry-project.schema.json", "registry-module.schema.json"):

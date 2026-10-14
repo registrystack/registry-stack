@@ -8,8 +8,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -129,8 +127,24 @@ SCHEMAS = {
             "*-target.yaml",
         ),
         (
+            "crates/registry-evidencectl/schemas/authoring/target.schema.json",
+            "target.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target.schema.json",
+            "targets/*/target.yaml",
+        ),
+        (
             "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
             "*-authority.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
+            "authority.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
+            "targets/*/authority.yaml",
         ),
         (
             "crates/registry-evidencectl/schemas/authoring/access-client.schema.json",
@@ -244,25 +258,6 @@ def workspace_version() -> str:
     if match is None:
         raise SetupError("could not read the Registry Stack workspace version")
     return match.group(1)
-
-
-def matching_cli(name: str) -> str:
-    command = shutil.which(name)
-    if command is None:
-        raise SetupError(f"{name} is required for this product's editor schemas")
-    result = subprocess.run(
-        [command, "--version"], capture_output=True, text=True, timeout=5, check=False
-    )
-    expected = workspace_version()
-    version = result.stdout.strip().split()
-    if (
-        result.returncode != 0
-        or len(version) < 2
-        or version[0] != name
-        or version[1] not in (expected, f"{expected}-dev")
-    ):
-        raise SetupError(f"{name} must report Registry Stack {expected} or {expected}-dev")
-    return command
 
 
 def check_project(product: str, project: Path, document_arg: str | None) -> tuple[str | None, Path | None]:
@@ -540,17 +535,6 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
     }
     prepare_file(state_path, json_bytes(state), writes, project)
 
-    # The two established authoring CLIs own their schema snapshots and editor mappings.
-    # Run them only after validating our settings and task files.
-    if product == "evidence":
-        name = "evidencectl"
-        command = matching_cli(name)
-        args = [command, "tooling", "editor", str(project)]
-        if product == "evidence" and workspace != project:
-            args.extend(["--workspace", str(workspace)])
-        result = subprocess.run(args, check=False)
-        if result.returncode != 0:
-            raise SetupError(f"{name} tooling editor failed; no Registry Stack tasks were changed")
     publish(writes, project, workspace)
 
 
@@ -563,7 +547,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         configure(args.product, args.project, args.workspace or args.project, args.document)
-    except (OSError, SetupError, subprocess.TimeoutExpired) as error:
+    except (OSError, SetupError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"Configured Registry Stack {args.product} editor support for {args.project.absolute()}")

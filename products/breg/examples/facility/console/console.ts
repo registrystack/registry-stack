@@ -1,4 +1,4 @@
-import { ProjectClient, type RegisterFacilityInput, type CorrectAddressInput, type CorrectAddressRefusal } from '../../../../generated/facility/generated/sdk/project';
+import { ProjectClient, type RegisterFacilityInput, type CorrectAddressInput, type CorrectAddressRefusal } from '../../../generated/facility/generated/sdk/project';
 
 /** The host supplies authenticated native clients, one per explicitly selected profile. */
 export async function facilityConsole(reader: ProjectClient, registrar: ProjectClient, author: ProjectClient, facilityId: string, input: RegisterFacilityInput, correction: CorrectAddressInput) {
