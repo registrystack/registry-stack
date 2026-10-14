@@ -14,7 +14,7 @@ use tower_lsp_server::ls_types::{
 
 use crate::{
     workspace::ProjectFamily,
-    yaml::{ScalarStyle, written_as},
+    yaml::{written_as, ScalarStyle},
 };
 
 /// The kind of a symbol, qualified by the document family that declares it. Keys, queries, and

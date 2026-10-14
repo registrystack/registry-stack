@@ -4,7 +4,7 @@
 mod lsp;
 #[path = "support/normalized.rs"]
 mod normalized;
-use lsp::{LspSession, uri};
+use lsp::{uri, LspSession};
 use normalized::*;
 use serde_json::json;
 
@@ -36,12 +36,10 @@ async fn positions_outside_the_project_have_no_cards_or_completions() {
     ] {
         let params =
             json!({"textDocument":{"uri":uri(&path)},"position":{"line":26,"character":41}});
-        assert!(
-            session
-                .request("textDocument/hover", params.clone())
-                .await
-                .is_null()
-        );
+        assert!(session
+            .request("textDocument/hover", params.clone())
+            .await
+            .is_null());
         let c = session.request("textDocument/completion", params).await;
         assert!(c.is_null() || c["items"].as_array().is_none_or(Vec::is_empty));
     }

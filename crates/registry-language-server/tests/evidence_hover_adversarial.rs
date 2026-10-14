@@ -15,11 +15,9 @@ fn reference_hover_names_the_normalized_symbol_and_relative_file() {
         .unwrap();
     assert!(hover.markdown.contains("source"));
     assert!(hover.markdown.contains("evidence.yaml"));
-    assert!(
-        !hover
-            .markdown
-            .contains(&p.root.to_string_lossy().to_string())
-    );
+    assert!(!hover
+        .markdown
+        .contains(&p.root.to_string_lossy().to_string()));
 }
 #[test]
 fn scoped_output_hover_names_its_definition() {
@@ -48,10 +46,8 @@ fn secrets_and_runtime_state_have_no_hover() {
     for name in ["secrets/key.yaml", ".evidence/dev/bundle.yaml"] {
         p.write(name, SOURCE);
         let index = p.index();
-        assert!(
-            index
-                .hover_at(&p.path(name), at(SOURCE, "active-status:"))
-                .is_none()
-        );
+        assert!(index
+            .hover_at(&p.path(name), at(SOURCE, "active-status:"))
+            .is_none());
     }
 }

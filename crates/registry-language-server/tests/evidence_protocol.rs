@@ -4,7 +4,7 @@
 mod lsp;
 #[path = "support/normalized.rs"]
 mod normalized;
-use lsp::{LspSession, uri};
+use lsp::{uri, LspSession};
 use normalized::*;
 use serde_json::json;
 
@@ -36,12 +36,10 @@ async fn definition_references_completion_and_hover_use_named_sources() {
         json!(at(SOURCE, "person:\n"))
     );
     let hover = session.request("textDocument/hover", params.clone()).await;
-    assert!(
-        hover["contents"]["value"]
-            .as_str()
-            .unwrap()
-            .contains("source")
-    );
+    assert!(hover["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("source"));
     let completion = session
         .request("textDocument/completion", params.clone())
         .await;
@@ -57,10 +55,8 @@ async fn a_shared_parser_refusal_reaches_the_protocol() {
     session.initialize(&p.root).await;
     session.open(&p.path(PROJECT), &source, 1).await;
     let diagnostics = session.published_diagnostics(&p.path(PROJECT)).unwrap();
-    assert!(
-        diagnostics
-            .iter()
-            .any(|d| d["code"] == "evidence.project.acquisition-source")
-    );
+    assert!(diagnostics
+        .iter()
+        .any(|d| d["code"] == "evidence.project.acquisition-source"));
     assert!(diagnostics.iter().all(|d| d["source"] == "evidence"));
 }

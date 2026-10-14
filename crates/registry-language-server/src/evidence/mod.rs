@@ -5,12 +5,12 @@ pub(crate) mod index;
 pub(crate) mod layout;
 use crate::{
     refs::{
-        DOCUMENT_CEILING_RULE, PROJECT_CEILING_RULE, document_diagnostic, document_rule_diagnostic,
+        document_diagnostic, document_rule_diagnostic, DOCUMENT_CEILING_RULE, PROJECT_CEILING_RULE,
     },
-    safety::{SecureFileRead, plain_file, secure_directory, secure_regular_file},
+    safety::{plain_file, secure_directory, secure_regular_file, SecureFileRead},
     workspace::{
-        DocumentCeiling, LoadedProjectDocuments, MAX_INDEXED_PROJECT_BYTES,
-        MAX_INDEXED_PROJECT_DOCUMENTS, PROJECT_CEILING_MESSAGE, ProjectFamily,
+        DocumentCeiling, LoadedProjectDocuments, ProjectFamily, MAX_INDEXED_PROJECT_BYTES,
+        MAX_INDEXED_PROJECT_DOCUMENTS, PROJECT_CEILING_MESSAGE,
     },
 };
 use anyhow::Result;

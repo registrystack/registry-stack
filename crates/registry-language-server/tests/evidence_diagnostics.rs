@@ -40,24 +40,22 @@ fn unknown_keys_are_reported_at_the_key() {
 #[test]
 fn environment_substitution_is_refused_without_expansion() {
     let p = Project::new(&SOURCE.replace("population", "${SOURCE_CONNECTION}"));
-    assert!(
-        p.index()
-            .diagnostics()
-            .iter()
-            .any(|x| x.code.as_deref() == Some("config.substitution-not-allowed"))
-    );
+    assert!(p
+        .index()
+        .diagnostics()
+        .iter()
+        .any(|x| x.code.as_deref() == Some("config.substitution-not-allowed")));
 }
 #[test]
 fn named_function_interface_fault_is_reported_without_executing_code() {
     let p = Project::new(SOURCE);
     p.write(DERIVE, "fn extract(response,selectors) {}\n");
-    assert!(
-        p.index()
-            .diagnostics()
-            .iter()
-            .any(|x| x.path == p.path(DERIVE)
-                && x.code.as_ref().unwrap().starts_with("evidence.function."))
-    );
+    assert!(p
+        .index()
+        .diagnostics()
+        .iter()
+        .any(|x| x.path == p.path(DERIVE)
+            && x.code.as_ref().unwrap().starts_with("evidence.function.")));
 }
 #[test]
 fn authority_diagnostics_use_the_shared_grant_reader() {
@@ -66,12 +64,11 @@ fn authority_diagnostics_use_the_shared_grant_reader() {
         "targets/local/authority.yaml",
         &AUTHORITY.replace("definition: active-status", "definition: missing"),
     );
-    assert!(
-        p.index()
-            .diagnostics()
-            .iter()
-            .any(|x| x.path == p.path("targets/local/authority.yaml"))
-    );
+    assert!(p
+        .index()
+        .diagnostics()
+        .iter()
+        .any(|x| x.path == p.path("targets/local/authority.yaml")));
 }
 #[test]
 fn old_question_inline_operation_and_disclosure_are_rejected() {

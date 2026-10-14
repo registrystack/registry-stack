@@ -36,15 +36,13 @@ fn unresolved_function_completion_still_offers_the_correct_interface() {
 fn controls_in_recoverable_names_are_not_offered() {
     let source = SOURCE.replace("  person:\n", "  \"bad\\u0001name\":\n");
     let p = Project::new(&source);
-    assert!(
-        labels(
-            &p.index(),
-            &p.path(PROJECT),
-            after(&source, "acquisition: {type: single, source: ")
-        )
-        .iter()
-        .all(|x| !x.chars().any(char::is_control))
-    );
+    assert!(labels(
+        &p.index(),
+        &p.path(PROJECT),
+        after(&source, "acquisition: {type: single, source: ")
+    )
+    .iter()
+    .all(|x| !x.chars().any(char::is_control)));
 }
 #[test]
 fn output_completion_never_offers_private_facts() {

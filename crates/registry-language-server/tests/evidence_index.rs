@@ -26,12 +26,10 @@ fn named_sources_navigate_in_both_directions() {
             .start,
         at
     );
-    assert!(
-        index
-            .references_at(&p.path(PROJECT), at, false)
-            .iter()
-            .any(|x| x.range.start == reference)
-    );
+    assert!(index
+        .references_at(&p.path(PROJECT), at, false)
+        .iter()
+        .any(|x| x.range.start == reference));
 }
 #[test]
 fn named_functions_and_their_assets_navigate() {
@@ -74,12 +72,10 @@ fn release_output_references_resolve_to_definition_owned_outputs() {
             .start,
         declared
     );
-    assert!(
-        index
-            .references_at(&p.path(PROJECT), declared, false)
-            .iter()
-            .any(|x| x.path == p.path(DERIVE))
-    );
+    assert!(index
+        .references_at(&p.path(PROJECT), declared, false)
+        .iter()
+        .any(|x| x.path == p.path(DERIVE)));
 }
 #[test]
 fn authority_grants_use_normalized_definitions_and_selectors() {
@@ -121,19 +117,15 @@ fn output_schema_and_fixture_assets_navigate() {
 fn assertion_definitions_and_outputs_are_distinct_symbol_kinds() {
     let p = Project::new(SOURCE);
     let index = p.index();
-    assert!(
-        index
-            .symbols()
-            .iter()
-            .any(|x| x.kind == SymbolKind::Evidence(EvidenceKind::AssertionDefinition))
-    );
-    assert!(
-        index
-            .symbols()
-            .iter()
-            .any(|x| x.kind == SymbolKind::Evidence(EvidenceKind::Output)
-                && x.container_name.as_deref() == Some("active-status"))
-    );
+    assert!(index
+        .symbols()
+        .iter()
+        .any(|x| x.kind == SymbolKind::Evidence(EvidenceKind::AssertionDefinition)));
+    assert!(index
+        .symbols()
+        .iter()
+        .any(|x| x.kind == SymbolKind::Evidence(EvidenceKind::Output)
+            && x.container_name.as_deref() == Some("active-status")));
 }
 #[test]
 fn canonical_standalone_project_uses_the_same_editor_model() {
@@ -141,12 +133,10 @@ fn canonical_standalone_project_uses_the_same_editor_model() {
         .join("../../products/evidence/examples/standalone");
     let index = registry_language_server::ProjectIndex::load_evidence(&root).unwrap();
     assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
-    assert!(
-        index
-            .workspace_symbols("adult-status")
-            .iter()
-            .any(|x| x.kind == SymbolKind::Evidence(EvidenceKind::AssertionDefinition))
-    );
+    assert!(index
+        .workspace_symbols("adult-status")
+        .iter()
+        .any(|x| x.kind == SymbolKind::Evidence(EvidenceKind::AssertionDefinition)));
 }
 #[test]
 fn missing_function_schema_and_fixture_files_report_at_their_paths() {
@@ -171,20 +161,18 @@ fn symlink_and_hard_link_function_assets_never_navigate() {
     std::fs::remove_file(p.path(DERIVE)).unwrap();
     p.write("private/function.rhai", "fn derive(a,b,c) {}\n");
     std::fs::hard_link(p.path("private/function.rhai"), p.path(DERIVE)).unwrap();
-    assert!(
-        p.index()
-            .definitions_at(&p.path(PROJECT), at(SOURCE, DERIVE))
-            .is_empty()
-    );
+    assert!(p
+        .index()
+        .definitions_at(&p.path(PROJECT), at(SOURCE, DERIVE))
+        .is_empty());
     #[cfg(unix)]
     {
         std::fs::remove_file(p.path(DERIVE)).unwrap();
         std::os::unix::fs::symlink(p.path("private/function.rhai"), p.path(DERIVE)).unwrap();
-        assert!(
-            p.index()
-                .definitions_at(&p.path(PROJECT), at(SOURCE, DERIVE))
-                .is_empty()
-        );
+        assert!(p
+            .index()
+            .definitions_at(&p.path(PROJECT), at(SOURCE, DERIVE))
+            .is_empty());
     }
 }
 

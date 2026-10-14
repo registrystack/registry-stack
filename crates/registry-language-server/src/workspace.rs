@@ -12,10 +12,10 @@ use anyhow::Result;
 use crate::{
     evidence,
     refs::{
-        DOCUMENT_CEILING_RULE, IndexedDiagnostic, IndexedProject, PROJECT_CEILING_RULE,
-        ProjectIndex, document_diagnostic, document_rule_diagnostic,
+        document_diagnostic, document_rule_diagnostic, IndexedDiagnostic, IndexedProject,
+        ProjectIndex, DOCUMENT_CEILING_RULE, PROJECT_CEILING_RULE,
     },
-    safety::{SecureFileRead, secure_regular_file},
+    safety::{secure_regular_file, SecureFileRead},
     yaml::ParsedDocument,
 };
 
@@ -954,11 +954,9 @@ mod tests {
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\n",
         )
         .unwrap();
-        assert!(
-            ProjectFamily::ALL
-                .iter()
-                .all(|family| !family.declares_root(temp.path()))
-        );
+        assert!(ProjectFamily::ALL
+            .iter()
+            .all(|family| !family.declares_root(temp.path())));
     }
     #[test]
     fn evidence_root_requires_the_normalized_project_file() {

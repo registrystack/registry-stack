@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Translate shared authoring reader locations to protocol UTF-16 ranges.
 use crate::{
-    refs::{DOCUMENT_START, IndexedDiagnostic, bounded_message},
+    refs::{bounded_message, IndexedDiagnostic, DOCUMENT_START},
     yaml::{ParsedDocument, SourceMap, YamlValue},
 };
 use registry_platform_yaml::{Diagnostic, Severity};
