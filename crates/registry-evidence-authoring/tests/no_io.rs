@@ -175,7 +175,7 @@ const FORBIDDEN: &[(&str, &str)] = &[
         "resolves an imported module by reading a file",
     ),
     // Every other way of getting an engine. `Engine::default` is `Engine::new`
-    // (rhai 1.25.1, `src/engine.rs`), so it arrives carrying the file-reading
+    // (rhai 1.26.1, `src/engine.rs`), so it arrives carrying the file-reading
     // resolver under a name the guard below does not read; the raw pair arrives
     // without one, which is safe but equally unread. Leaving one spelling is
     // what lets the guard speak for every engine this crate builds.
@@ -752,7 +752,7 @@ fn the_source_sweep_reads_an_import_however_it_is_wrapped() {
 ///
 /// With the default features this workspace pins, a new engine carries a
 /// `FileModuleResolver`, which opens whatever path an `import` statement names,
-/// and a print and a debug handler that are `println!` (rhai 1.25.1,
+/// and a print and a debug handler that are `println!` (rhai 1.26.1,
 /// `src/engine.rs:305-318`). The resolver turns an editor into a file reader
 /// driven by an author's own text; the other two put author-controlled text on
 /// the file descriptor the editor's JSON-RPC conversation runs over. Nothing in
@@ -1179,7 +1179,7 @@ fn the_lint_disallows_the_engine_and_every_way_of_running_one() {
 fn the_source_sweep_reads_prose_as_prose() {
     // The comment above `parser` names the handler an engine arrives with,
     // because saying which one is the point of it.
-    assert!(refusals("/// arrives carrying `println!` (rhai 1.25.1)").is_empty());
+    assert!(refusals("/// arrives carrying `println!` (rhai 1.26.1)").is_empty());
     assert!(refusals("// let bytes = fs::read(path)?;").is_empty());
     // A comment at the end of a line does not cover the line.
     assert!(!refusals("let bytes = fs::read(path)?; // the hazard").is_empty());

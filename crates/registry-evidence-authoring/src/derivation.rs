@@ -18,7 +18,7 @@ use crate::finding::{FieldPath, Finding};
 ///
 /// `Engine::new` hands out three capabilities this crate must not have. Its
 /// module resolver opens the file an `import` statement names. Its print and
-/// debug handlers are `println!` (rhai 1.25.1, `src/engine.rs:305-318`), so an
+/// debug handlers are `println!` (rhai 1.26.1, `src/engine.rs:305-318`), so an
 /// authored `print` or `debug` writes to file descriptor 1, which in the editor
 /// process this crate is linked into is the JSON-RPC channel itself. Parsing
 /// asks for none of the three, so the engine as built would reach nothing, but
@@ -36,10 +36,11 @@ use crate::finding::{FieldPath, Finding};
 #[expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
-    reason = "the crate's one engine, disarmed on the next three lines"
+    reason = "the crate's one engine, bounded and disarmed on the next four lines"
 )]
 fn parser() -> rhai::Engine {
     let mut engine = rhai::Engine::new();
+    engine.set_max_expr_depths(64, 64);
     engine.set_module_resolver(DummyModuleResolver::new());
     engine.on_print(|_| {});
     engine.on_debug(|_, _, _| {});

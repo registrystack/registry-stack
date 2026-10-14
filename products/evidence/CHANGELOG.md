@@ -17,6 +17,8 @@
 - Target reading validates secret references, digest pins, issuer identifiers,
   direct claim names and assertion-issuer admission bounds before runtime
   delegation. Extract-only targets retain explicit empty HTTP bindings.
+- Authoring Function checks use the same 64-level expression-depth ceiling as
+  startup and evaluation, consistently across debug and release builds.
 - `evidencectl check --file` accepts the standard `--deny-warnings` policy,
   as project checks do. Source suggestions name the actual project file and
   require authored fixtures before recommending fixture evaluation.
