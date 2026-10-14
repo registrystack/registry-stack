@@ -6,6 +6,8 @@
 //! value-free recorder. They pin the adopter tool's responsibilities without
 //! copying bundle or fixture semantics out of the runtime.
 
+use serde_json::{json, Value};
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -103,14 +105,11 @@ fn build_rejects_symlinked_project_target_output_parent_and_artifact() {
                 output = linked.join("candidate");
             }
             "artifact" => {
-                let derivation = fixture.project.join("derivations/answer.rhai");
+                let derivation = fixture.project.join("functions/answer.rhai");
                 fs::remove_file(&derivation).expect("remove regular derivation");
                 let outside = fixture.root.join("outside.rhai");
-                fs::write(
-                    &outside,
-                    "fn answer(facts, selectors, context) { #{allowed: true} }\n",
-                )
-                .expect("outside derivation");
+                fs::write(&outside, "fn derive(facts, selectors, context) { [#{output: \"allowed\", value: true}] }\n")
+                    .expect("outside derivation");
                 symlink(outside, derivation).expect("artifact symlink");
             }
             _ => unreachable!(),
@@ -261,17 +260,21 @@ fn successful_package_excludes_runtime_local_state_and_validation_secrets() {
     assert_eq!(
         snapshot.keys().cloned().collect::<Vec<_>>(),
         vec![
-            PathBuf::from("SHA256SUMS"),
-            PathBuf::from("adapters/source-extract.rhai"),
-            PathBuf::from("adapters/source-prepare.rhai"),
-            PathBuf::from("catalog.jsonld"),
-            PathBuf::from("derivations/answer.rhai"),
-            PathBuf::from("evidence.yaml"),
-            PathBuf::from("fixtures/answer.yaml"),
-            PathBuf::from("public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json",),
-            PathBuf::from("schemas/facts.schema.yaml"),
-            PathBuf::from("schemas/parameters.schema.yaml"),
-            PathBuf::from("schemas/response.schema.yaml"),
+            PathBuf::from("bundle/SHA256SUMS"),
+            PathBuf::from("bundle/adapters/source-extract.rhai"),
+            PathBuf::from("bundle/adapters/source-prepare.rhai"),
+            PathBuf::from("bundle/catalog.jsonld"),
+            PathBuf::from("bundle/derivations/answer.rhai"),
+            PathBuf::from("bundle/evidence.yaml"),
+            PathBuf::from("bundle/fixtures/answer.yaml"),
+            PathBuf::from(
+                "bundle/public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json"
+            ),
+            PathBuf::from("bundle/schemas/registry-facts.schema.json"),
+            PathBuf::from("bundle/schemas/registry-parameters.schema.json"),
+            PathBuf::from("bundle/schemas/registry-response.schema.json"),
+            PathBuf::from("compiled-authority.yaml"),
+            PathBuf::from("runtime.yaml"),
         ]
     );
     for (path, bytes) in snapshot {
@@ -322,103 +325,54 @@ fn a_bundle_without_publication_carries_no_catalog_description() {
         .expect("evidencectl build starts");
 
     assert_success(&output, "build of a bundle that declares no publication");
-    assert!(!fixture.output.join("catalog.jsonld").exists());
+    assert!(!fixture.output.join("bundle/catalog.jsonld").exists());
     fixture.assert_no_staging_residue();
 }
 
 #[test]
-fn package_refuses_a_local_target_without_publishing_or_exposing_values() {
+fn package_accepts_local_targets_with_the_same_complete_grant_model() {
     for format in ["human", "json"] {
         let fixture = Fixture::new();
-        fs::write(
-            &fixture.governance,
-            GOVERNANCE
-                .replace("assuranceProfile: production", "assuranceProfile: local")
-                .replace("urn:example:providers:evidence", SECRET_CANARY),
-        )
-        .expect("local target governance");
-        fs::write(
-            fixture.project.join("sources/registry.yaml"),
-            SOURCE
-                .replace(
-                    "baseUrl: https://registry.invalid",
-                    "baseUrl: http://127.0.0.1:8088",
-                )
-                .replace(
-                    "authentication: {type: static-authorization, tokenRef: 'secret:file/source-token'}",
-                    "authentication: {type: none}",
-                ),
-        )
-        .expect("local source");
-
+        edit_json(&fixture.target, |target| {
+            target["assuranceProfile"] = json!("local");
+            target["connections"]["registry-http"]["origin"] = json!("http://127.0.0.1:8088");
+            target["connections"]["registry-http"]["authentication"] = json!({"type":"none"});
+        });
         let output = fixture.package(format);
-
-        assert_eq!(output.status.code(), Some(1), "{format} domain refusal");
-        assert!(!fixture.output.exists());
-        assert!(fixture.invocations().is_empty());
+        assert_success(&output, "local candidate with explicit grants");
+        assert!(fixture.output.join("bundle/evidence.yaml").is_file());
+        assert!(fixture.output.join("compiled-authority.yaml").is_file());
+        assert!(fixture.output.join("runtime.yaml").is_file());
+        assert_eq!(fixture.steps(), ["check", "evaluate:fixtures/answer.yaml"]);
         assert_value_free(&output);
-        match format {
-            "human" => {
-                assert!(output.stdout.is_empty());
-                let message = stderr(&output);
-                assert!(message.contains("evidence.package.production-profile-required"));
-                assert!(message.contains("governance.yaml:/assuranceProfile"));
-            }
-            "json" => {
-                assert!(output.stderr.is_empty());
-                let report: serde_json::Value =
-                    serde_json::from_slice(&output.stdout).expect("JSON refusal report");
-                assert_eq!(report["status"], "domain-refusal");
-                assert_eq!(
-                    report["diagnostics"][0]["code"],
-                    "evidence.package.production-profile-required"
-                );
-                assert_eq!(
-                    report["diagnostics"][0]["path"],
-                    "governance.yaml:/assuranceProfile"
-                );
-            }
-            _ => unreachable!(),
-        }
         fixture.assert_no_staging_residue();
     }
 }
 
-/// The assurance profile is a property of the target alone, so a local
-/// target is named as such whatever the output location, instead of the
-/// generic package failure an output inside the project, an existing output,
-/// or a missing output parent would otherwise produce first.
 #[test]
-fn package_names_a_local_target_before_judging_the_output_location() {
+fn local_targets_obey_the_same_create_only_output_boundaries() {
     let fixture = Fixture::new();
-    fs::write(
-        &fixture.governance,
-        GOVERNANCE.replace("assuranceProfile: production", "assuranceProfile: local"),
-    )
-    .expect("local target governance");
+    edit_json(&fixture.target, |target| {
+        target["assuranceProfile"] = json!("local")
+    });
     let existing = fixture.output.with_file_name("existing-candidate");
     fs::create_dir(&existing).expect("existing output");
+    fs::write(existing.join("owned.txt"), "preserve me").expect("existing sentinel");
     let outputs = [
         fixture.project.join("dist"),
-        existing,
+        existing.clone(),
         fixture.output.with_file_name("missing").join("candidate"),
     ];
-
     for output in &outputs {
         let result = fixture.package_to("json", output);
-
-        assert_eq!(result.status.code(), Some(1), "{}", output.display());
-        let report: serde_json::Value =
-            serde_json::from_slice(&result.stdout).expect("JSON refusal report");
-        assert_eq!(
-            report["diagnostics"][0]["code"],
-            "evidence.package.production-profile-required",
-            "{}: {report}",
-            output.display()
-        );
+        assert_failed(&result, "unsafe local output location");
         assert!(fixture.invocations().is_empty());
     }
     assert!(!fixture.project.join("dist").exists());
+    assert_eq!(
+        fs::read_to_string(existing.join("owned.txt")).unwrap(),
+        "preserve me"
+    );
 }
 
 #[test]
@@ -429,7 +383,7 @@ fn package_accepts_a_stable_package_root_outside_the_output() {
         let output = fixture.package(format);
 
         assert_success(&output, "stable package root");
-        assert!(fixture.output.join("evidence.yaml").is_file());
+        assert!(fixture.output.join("bundle/evidence.yaml").is_file());
         match format {
             "human" => {
                 assert!(stderr(&output).is_empty());
@@ -455,24 +409,18 @@ fn package_accepts_a_stable_package_root_outside_the_output() {
 fn package_refuses_a_package_root_inside_the_output() {
     let fixture = Fixture::new();
     let unstable_package_directory = fixture.output.join("nested").display().to_string();
-    fs::write(
-        &fixture.runtime,
-        TARGET_RUNTIME.replacen(
-            "root: /srv/evidence/candidate/bundle",
-            &format!("root: {unstable_package_directory}"),
-            1,
-        ),
-    )
-    .expect("self-consistent target runtime");
-
+    edit_json(&fixture.target, |target| {
+        target["package"]["root"] = json!(unstable_package_directory)
+    });
     let output = fixture.package("human");
-
     assert_failed(&output, "unstable package root");
     assert!(!fixture.output.exists());
     let message = stderr(&output);
-    assert!(message.contains("evidence.package.root-unstable"));
-    assert!(message.contains("runtime.yaml:/package/root"));
-    // The refusal names the member, never the value written there.
+    assert!(
+        message.contains("evidence.package.root-unstable"),
+        "{message}"
+    );
+    assert!(message.contains("runtime.yaml:/package/root"), "{message}");
     assert!(!message.contains(&unstable_package_directory), "{message}");
     fixture.assert_no_staging_residue();
 }
@@ -486,18 +434,28 @@ fn sqlite_extract_build_copies_the_statement_without_http_only_artifacts() {
 
     assert_success(&output, "SQLite extract production build");
     assert_eq!(
-        fs::read_to_string(fixture.output.join("queries/source.sql")).unwrap(),
+        fs::read_to_string(fixture.output.join("bundle/queries/source.sql")).unwrap(),
         "SELECT :reference <> '' AS allowed;\n"
     );
     assert!(fixture
         .output
-        .join("adapters/source-extract.rhai")
+        .join("bundle/adapters/source-extract.rhai")
         .is_file());
-    assert!(!fixture.output.join("adapters/source-prepare.rhai").exists());
     assert!(!fixture
         .output
-        .join("schemas/parameters.schema.yaml")
+        .join("bundle/adapters/source-prepare.rhai")
         .exists());
+    let bundle = registry_platform_yaml::Reader::new("bundle/evidence.yaml")
+        .scan(&fs::read(fixture.output.join("bundle/evidence.yaml")).unwrap())
+        .expect("compiled bundle")
+        .expect("nonempty compiled bundle")
+        .to_json_value();
+    assert!(bundle["sources"]["registry"]["request"]
+        .get("prepareScript")
+        .is_none());
+    assert!(bundle["sources"]["registry"]["request"]
+        .get("adapterParametersSchema")
+        .is_none());
     assert_eq!(fixture.steps(), ["check", "evaluate:fixtures/answer.yaml"]);
     fixture.assert_no_staging_residue();
 }
@@ -505,8 +463,8 @@ fn sqlite_extract_build_copies_the_statement_without_http_only_artifacts() {
 #[test]
 fn governed_public_keys_are_owned_by_the_complete_deployment_target() {
     let fixture = Fixture::new();
-    let relative = Path::new("public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json");
-    let target_key = fixture.target.join(relative);
+    let relative = Path::new("public-keys/active.jwk.json");
+    let target_key = fixture.target.parent().unwrap().join(relative);
     let bytes = fs::read(&target_key).expect("target public key");
     fs::remove_file(&target_key).expect("remove target public key");
     fs::create_dir(fixture.project.join("public-keys")).expect("project public key directory");
@@ -524,83 +482,75 @@ fn governed_public_keys_are_owned_by_the_complete_deployment_target() {
 }
 
 #[test]
-fn a_missing_target_public_key_is_reported_by_explain_before_compilation() {
+fn a_missing_target_public_key_refuses_packaging_before_delegation() {
     let fixture = Fixture::new();
-    let relative = "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json";
-    fs::remove_file(fixture.target.join(relative)).expect("remove target public key");
-
-    let output = fixture.explain();
-
-    assert_failed(&output, "a missing target public key must fail explain");
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "a missing key refuses the target"
-    );
-    let report: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("explain JSON report");
+    fs::remove_file(
+        fixture
+            .target
+            .parent()
+            .unwrap()
+            .join("public-keys/active.jwk.json"),
+    )
+    .expect("remove target key");
+    let output = fixture.package("json");
+    assert_failed(&output, "missing target public key");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON refusal report");
     assert_eq!(report["ok"], false, "{report}");
-    assert_eq!(report["status"], "refused", "{report}");
-    assert_eq!(
-        report["diagnostics"][0]["code"],
-        "evidencectl.target.public-key-missing"
-    );
     assert!(
-        report["diagnostics"][0]["suggestedAction"]
-            .as_str()
-            .is_some_and(|action| action.contains("evidencectl target explain")),
+        report["diagnostics"]
+            .as_array()
+            .is_some_and(|diagnostics| !diagnostics.is_empty()),
         "{report}"
     );
-    assert_eq!(
-        report["missingPublicKeyFiles"],
-        serde_json::json!([relative])
-    );
-    assert!(
-        report["publicKeyFiles"]
-            .as_array()
-            .expect("publicKeyFiles array")
-            .iter()
-            .any(|value| value == relative),
-        "publicKeyFiles still reports the missing key: {report}"
-    );
-    assert_eq!(report["fixturePaths"], serde_json::json!([]));
-    assert!(
-        fixture.invocations().is_empty(),
-        "a missing target public key reached Evidence delegation"
-    );
+    assert!(fixture.invocations().is_empty());
+    assert!(!fixture.output.exists());
+    assert_value_free(&output);
+    fixture.assert_no_staging_residue();
 }
 
 #[test]
-fn explain_reports_the_fixture_paths_when_every_public_key_is_present() {
+fn target_explain_reports_complete_grants_without_runtime_secret_resolution() {
     let fixture = Fixture::new();
-
     let output = fixture.explain();
-
-    assert_success(&output, "explain with every governed public key present");
-    let report: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("explain JSON report");
-    assert_eq!(report["missingPublicKeyFiles"], serde_json::json!([]));
+    assert_success(&output, "target grant inspection");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("explain JSON report");
+    assert_eq!(report["offline"], true, "{report}");
+    assert_eq!(report["secretResolution"], false, "{report}");
+    assert_eq!(report["target"], "production", "{report}");
+    assert_eq!(report["project"], "production-fixture", "{report}");
     assert!(
-        !report["fixturePaths"]
+        report["accessProfiles"]["requester"]["grants"]
             .as_array()
-            .expect("fixturePaths array")
-            .is_empty(),
-        "fixturePaths reports the compiled fixture: {report}"
+            .is_some_and(|grants| grants.len() == 1),
+        "{report}"
     );
+    assert!(fixture.invocations().is_empty());
 }
 
 #[test]
-fn production_metadata_and_fixture_completeness_fail_before_runtime_delegation() {
+fn definition_metadata_and_referenced_fixtures_fail_before_runtime_delegation() {
     for label in [
-        "missing-governance",
+        "missing-grant-ceiling",
         "missing-stable-concept",
         "missing-fixture",
     ] {
         let fixture = Fixture::new();
         match label {
-            "missing-governance" => fixture.remove_governance(),
+            "missing-grant-ceiling" => {
+                edit_json(&fixture.project.join("evidence.yaml"), |project| {
+                    project["assertionDefinitions"]["answer"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("grantCeiling");
+                })
+            }
             "missing-stable-concept" => {
-                fixture.replace_in_question("    uri: urn:example:concepts:allowed\n", "")
+                edit_json(&fixture.project.join("evidence.yaml"), |project| {
+                    project["assertionDefinitions"]["answer"]["outputs"]["allowed"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("concept");
+                })
             }
             "missing-fixture" => fs::remove_file(fixture.project.join("fixtures/answer.yaml"))
                 .expect("remove fixture"),
@@ -616,15 +566,19 @@ fn production_metadata_and_fixture_completeness_fail_before_runtime_delegation()
 
 #[test]
 fn disposable_local_identifiers_fail_before_runtime_delegation() {
-    for original in [
-        "urn:example:requirements:allowed:v1",
-        "urn:example:frameworks:allowed:v1",
-        "urn:example:evidence-types:allowed:v1",
-        "urn:example:disclosure-families:allowed",
-        "urn:example:concepts:allowed",
+    for field in [
+        "/semantics/requirement",
+        "/semantics/referenceFrameworks/0",
+        "/semantics/evidenceType",
+        "/disclosureGuard/families/0",
+        "/outputs/allowed/concept",
     ] {
         let fixture = Fixture::new();
-        fixture.replace_in_question(original, LOCAL_URI);
+        edit_json(&fixture.project.join("evidence.yaml"), |project| {
+            *project["assertionDefinitions"]["answer"]
+                .pointer_mut(field)
+                .expect("semantic field") = json!(LOCAL_URI);
+        });
         let output = fixture.build();
         assert_failed(&output, "local identifier");
         assert!(!fixture.output.exists());
@@ -634,13 +588,16 @@ fn disposable_local_identifiers_fail_before_runtime_delegation() {
 }
 
 #[test]
-fn plain_http_and_unauthenticated_sources_fail_before_runtime_delegation() {
-    for (from, to) in [
-        ("https://registry.invalid", "http://127.0.0.1:8088"),
-        ("type: static-authorization", "type: none"),
-    ] {
+fn plain_http_and_unauthenticated_production_connections_fail_before_runtime_delegation() {
+    for field in ["origin", "authentication"] {
         let fixture = Fixture::new();
-        fixture.replace_in_source(from, to);
+        edit_json(&fixture.target, |target| {
+            target["connections"]["registry-http"][field] = if field == "origin" {
+                json!("http://127.0.0.1:8088")
+            } else {
+                json!({"type":"none"})
+            };
+        });
         let output = fixture.build();
         assert_failed(&output, "insecure source");
         assert!(!fixture.output.exists());
@@ -664,9 +621,9 @@ fn unresolved_review_markers_and_unknown_target_fields_fail_closed() {
     assert_value_free(&marker_output);
 
     let unknown = Fixture::new();
-    let mut governance = fs::read_to_string(&unknown.governance).unwrap();
-    governance.push_str("deploymentGenerator: forbidden\n");
-    fs::write(&unknown.governance, governance).unwrap();
+    edit_json(&unknown.target, |target| {
+        target["deploymentGenerator"] = json!("forbidden")
+    });
     let unknown_output = unknown.build();
     assert_failed(&unknown_output, "unknown target field");
     assert!(unknown.invocations().is_empty());
@@ -726,11 +683,6 @@ fn package_names_the_file_and_rule_of_an_unresolved_review_marker() {
 fn check_production_reports_the_same_review_marker_package_would_refuse() {
     let fixture = Fixture::new();
     fs::write(
-        fixture.project.join("evidence-project.yaml"),
-        registry_evidence_authoring::default_project_marker_document(),
-    )
-    .expect("project marker");
-    fs::write(
         fixture.project.join("fixtures/answer.yaml"),
         "fixture: TODO(evidencectl)\n",
     )
@@ -748,27 +700,21 @@ fn check_production_reports_the_same_review_marker_package_would_refuse() {
     assert!(
         diagnostics.iter().any(
             |diagnostic| diagnostic["code"] == "evidence.package.review-marker"
-                && diagnostic["source"]["file"] == "bundle/fixtures/answer.yaml"
+                && diagnostic["path"] == "bundle/fixtures/answer.yaml"
         ),
         "{report}"
     );
 }
 
 #[test]
-fn semantic_authority_completeness_is_delegated_to_evidence() {
+fn incomplete_target_authority_is_refused_before_runtime_delegation() {
     let fixture = Fixture::new();
-    let mut governance = fs::read_to_string(&fixture.governance).unwrap();
-    let start = governance
-        .find("authorityProfiles:")
-        .expect("authority profile section");
-    governance.truncate(start);
-    governance.push_str("authorityProfiles:\n  incomplete: {}\n");
-    fs::write(&fixture.governance, governance).unwrap();
-
-    let output = fixture.build_failing("check");
-
-    assert_failed(&output, "runtime-owned authority validation");
-    assert_eq!(fixture.steps(), ["check"]);
+    edit_json(&fixture.authority, |authority| {
+        authority["accessProfiles"] = json!({"incomplete":{}})
+    });
+    let output = fixture.build();
+    assert_failed(&output, "complete authored authority is required");
+    assert!(fixture.steps().is_empty());
     assert!(!fixture.output.exists());
     assert_value_free(&output);
     fixture.assert_no_staging_residue();
@@ -777,7 +723,7 @@ fn semantic_authority_completeness_is_delegated_to_evidence() {
 #[test]
 fn every_referenced_fixture_is_delegated_and_one_failure_prevents_publication() {
     let fixture = Fixture::new();
-    fixture.add_second_question();
+    fixture.add_second_definition();
 
     let passed = fixture.build();
     assert_success(&passed, "two-fixture build");
@@ -791,7 +737,7 @@ fn every_referenced_fixture_is_delegated_and_one_failure_prevents_publication() 
     );
 
     let failed = Fixture::new();
-    failed.add_second_question();
+    failed.add_second_definition();
     let output = failed.build_failing("fixture:fixtures/second.yaml");
     assert_failed(&output, "one rejected fixture");
     assert_eq!(
@@ -819,8 +765,8 @@ fn identical_inputs_produce_identical_package_bytes_digest_and_stable_report_sha
     assert_success(&first, "first deterministic build");
     assert_success(&second, "second deterministic build");
     assert_eq!(snapshot(&first_output), snapshot(&second_output));
-    assert_report(&first, &first_output, &fixture.target);
-    assert_report(&second, &second_output, &fixture.target);
+    assert_report(&first, &first_output);
+    assert_report(&second, &second_output);
     assert_eq!(reported_revision(&first), reported_revision(&second));
 }
 
@@ -897,8 +843,7 @@ struct Fixture {
     root: PathBuf,
     project: PathBuf,
     target: PathBuf,
-    governance: PathBuf,
-    runtime: PathBuf,
+    authority: PathBuf,
     output: PathBuf,
     evidence: PathBuf,
     log: PathBuf,
@@ -914,81 +859,33 @@ impl Fixture {
             .expect("test tempdir");
         let root = temporary.path().to_path_buf();
         let project = root.join("project");
-        let target = project.join("deployment-targets/production");
-        for directory in [
-            "selectors",
-            "sources",
-            "adapters",
-            "schemas",
-            "questions",
-            "derivations",
-            "fixtures",
-        ] {
+        let target_directory = root.join("production-target");
+        let target = target_directory.join("target.yaml");
+        for directory in ["functions", "fixtures"] {
             fs::create_dir_all(project.join(directory)).expect("project directory");
         }
-        fs::create_dir_all(target.join("public-keys")).expect("target directory");
-
+        fs::create_dir_all(target_directory.join("public-keys")).expect("target directory");
+        write_json(&project.join("evidence.yaml"), &project_document());
         fs::write(
-            project.join("source.openapi.yaml"),
-            "openapi: 3.1.0\ninfo: {title: Neutral source, version: 1.0.0}\npaths: {}\n",
-        )
-        .expect("retained OpenAPI");
-        fs::write(
-            project.join("selectors/subject-reference-v1.yaml"),
-            "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
-kind: EvidenceSelector
-maximumAggregateBytes: 128\nfields:\n  reference: {type: string, minimumBytes: 1, maximumBytes: 128}\n",
-        )
-        .expect("selector profile");
-        fs::write(project.join("sources/registry.yaml"), SOURCE).expect("source");
-        fs::write(
-            target.join(
-                "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json",
-            ),
+            target_directory.join("public-keys/active.jwk.json"),
             r#"{"kty":"EC","crv":"P-256","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#,
         )
         .expect("governed public key");
-        fs::write(
-            project.join("adapters/source-prepare.rhai"),
-            "fn prepare(selectors, context) { #{query: [], body: #{reference: selectors[\"subject\"][\"values\"][\"reference\"]}} }\n",
-        )
-        .expect("prepare script");
-        fs::write(
-            project.join("adapters/source-extract.rhai"),
-            "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"allowed\"]}} }\n",
-        )
-        .expect("extract script");
-        fs::write(
-            project.join("schemas/parameters.schema.yaml"),
-            "type: object\nadditionalProperties: false\nproperties: {}\n",
-        )
-        .expect("parameters schema");
-        fs::write(
-            project.join("schemas/response.schema.yaml"),
-            "type: object\nadditionalProperties: false\nrequired: [allowed]\nproperties:\n  allowed: {type: boolean}\n",
-        )
-        .expect("response schema");
-        fs::write(
-            project.join("schemas/facts.schema.yaml"),
-            "type: object\nadditionalProperties: false\nrequired: [allowed]\nproperties:\n  allowed: {type: boolean}\n",
-        )
-        .expect("facts schema");
-        fs::write(project.join("questions/answer.yaml"), question("answer")).expect("question");
-        fs::write(
-            project.join("derivations/answer.rhai"),
-            "fn answer(facts, selectors, context) { #{allowed: facts[\"allowed\"]} }\n",
-        )
-        .expect("derivation");
+        for (name, script) in [
+            ("source-prepare", "fn prepare(selectors, context) { #{query: [], body: #{reference: selectors[\"subject\"][\"values\"][\"reference\"]}} }\n"),
+            ("source-extract", "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"allowed\"]}} }\n"),
+            ("answer", "fn derive(facts, selectors, context) { [#{output: \"allowed\", value: facts[\"allowed\"]}] }\n"),
+        ] {
+            fs::write(project.join(format!("functions/{name}.rhai")), script).expect("named Function");
+        }
         fs::write(
             project.join("fixtures/answer.yaml"),
             "fixture: neutral.answer/v1\n",
         )
         .expect("fixture");
-
-        let governance = target.join("governance.yaml");
-        fs::write(&governance, GOVERNANCE).expect("target governance");
-        let runtime = target.join("runtime.yaml");
-        fs::write(&runtime, TARGET_RUNTIME).expect("target runtime");
+        let authority = target_directory.join("authority.yaml");
+        write_json(&authority, &authority_document());
+        write_json(&target, &target_document());
 
         let evidence = root.join("evidence");
         fs::write(&evidence, FAKE_EVIDENCE).expect("fake Evidence");
@@ -1003,8 +900,7 @@ maximumAggregateBytes: 128\nfields:\n  reference: {type: string, minimumBytes: 1
             root,
             project,
             target,
-            governance,
-            runtime,
+            authority,
             evidence,
         }
     }
@@ -1127,14 +1023,6 @@ maximumAggregateBytes: 128\nfields:\n  reference: {type: string, minimumBytes: 1
             .collect()
     }
 
-    fn replace_in_question(&self, from: &str, to: &str) {
-        replace(&self.project.join("questions/answer.yaml"), from, to);
-    }
-
-    fn replace_in_source(&self, from: &str, to: &str) {
-        replace(&self.project.join("sources/registry.yaml"), from, to);
-    }
-
     fn use_sqlite_source(&self) {
         fs::create_dir(self.project.join("queries")).expect("query directory");
         fs::write(
@@ -1142,53 +1030,58 @@ maximumAggregateBytes: 128\nfields:\n  reference: {type: string, minimumBytes: 1
             "SELECT :reference <> '' AS allowed;\n",
         )
         .expect("statement");
-        fs::write(self.project.join("sources/registry.yaml"), SQLITE_SOURCE)
-            .expect("SQLite source");
-        fs::write(
-            self.project.join("adapters/source-extract.rhai"),
-            "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"rows\"][0][\"allowed\"]}} }\n",
-        )
-        .expect("SQLite extract script");
-        fs::write(
-            self.project.join("schemas/response.schema.yaml"),
-            "type: object\nadditionalProperties: false\nrequired: [rows]\nproperties:\n  rows:\n    type: array\n    minItems: 1\n    maxItems: 1\n    items:\n      type: object\n      additionalProperties: false\n      required: [allowed]\n      properties:\n        allowed: {type: boolean}\n",
-        )
-        .expect("SQLite response schema");
-        let mut runtime = fs::read_to_string(&self.runtime).expect("target runtime");
-        runtime.push_str(
-            "sourceExtracts:\n  registry-snapshot:\n    path: /var/lib/evidence/registry.sqlite\n",
+        edit_json(&self.project.join("evidence.yaml"), |project| {
+            project["functions"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|function| function["id"] != "source-prepare");
+            let source = &mut project["sources"]["registry"];
+            source["type"] = json!("sqlite-extract");
+            source["acquisitionPosture"] = json!("source-derived");
+            source["extractProfile"] = json!("registry-snapshot");
+            source["maximumExtractAgeSeconds"] = json!(86400);
+            for key in [
+                "connection",
+                "prepare",
+                "adapterParameters",
+                "adapterParametersSchema",
+                "preparationLimits",
+            ] {
+                source.as_object_mut().unwrap().remove(key);
+            }
+            source["request"] = json!({"statement":"queries/source.sql","columns":[{"name":"allowed","type":"boolean"}],"parameterBindings":{"reference":{"selector":{"role":"subject","profile":"subject-reference-v1","field":"reference"}}},"maximumRows":1,"maximumCellBytes":8,"maximumStatementSteps":10000});
+            source["response"] = json!({"projection":["/rows/*/allowed"],"shape":{"type":"object","required":["rows"],"properties":{"rows":{"type":"array","minimumItems":1,"maximumItems":1,"items":{"type":"object","required":["allowed"],"properties":{"allowed":{"type":"boolean"}}}}}},"maximumBytes":4096});
+        });
+        fs::write(self.project.join("functions/source-extract.rhai"), "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"rows\"][0][\"allowed\"]}} }\n").expect("SQLite extract Function");
+        edit_json(
+            &self.target,
+            |target| {
+                target["extracts"] =
+                    json!({"registry-snapshot":{"path":"/var/lib/evidence/registry.sqlite"}})
+            },
         );
-        fs::write(&self.runtime, runtime).expect("runtime extract binding");
     }
 
-    /// Declare a provider publication in the deployment target, the shape
-    /// that makes `evidence render-discovery-description` produce a catalog
-    /// description rather than nothing.
+    /// Publication remains an optional deployment contract.
     fn declare_publication(&self) {
-        let mut governance = fs::read_to_string(&self.governance).expect("target governance");
-        governance.push_str(PUBLICATION);
-        fs::write(&self.governance, governance).expect("target governance with publication");
+        edit_json(
+            &self.target,
+            |target| target["publication"] = json!({"serviceId":"urn:example:services:evidence","title":"Governed Evidence service","description":"Governed minimum-disclosure Evidence service","endpointUrl":"https://evidence.invalid","jurisdictions":["urn:example:jurisdictions:governed"]}),
+        );
     }
 
-    fn remove_governance(&self) {
-        let path = self.project.join("questions/answer.yaml");
-        let mut contents = fs::read_to_string(&path).expect("question reads");
-        let start = contents.find("governance:\n").expect("governance section");
-        contents.truncate(start);
-        fs::write(path, contents).expect("question without governance writes");
-    }
-
-    fn add_second_question(&self) {
-        fs::write(
-            self.project.join("questions/second.yaml"),
-            question("second"),
-        )
-        .expect("second question");
-        fs::write(
-            self.project.join("derivations/second.rhai"),
-            "fn answer(facts, selectors, context) { #{allowed: facts[\"allowed\"]} }\n",
-        )
-        .expect("second derivation");
+    fn add_second_definition(&self) {
+        edit_json(&self.project.join("evidence.yaml"), |project| {
+            project["assertionDefinitions"]["second"] = definition_document("second")
+        });
+        edit_json(&self.authority, |authority| {
+            let mut grant = authority["accessProfiles"]["requester"]["grants"][0].clone();
+            grant["definition"] = json!("second");
+            authority["accessProfiles"]["requester"]["grants"]
+                .as_array_mut()
+                .unwrap()
+                .push(grant);
+        });
         fs::write(
             self.project.join("fixtures/second.yaml"),
             "fixture: neutral.second/v1\n",
@@ -1255,43 +1148,88 @@ fn make_tree_writable(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn question(id: &str) -> String {
-    format!(
-        r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: {id}
-question: Is the governed condition satisfied?
-purpose: eligibility
-subject:
-  role: subject
-  selector: reference
-  profile: subject-reference-v1
-source:
-  ref: registry
-answers:
-  - concept: allowed
-    uri: urn:example:concepts:allowed
-    type: boolean
-derivation: derivations/{id}.rhai
-disclosure:
-  allow: [allowed]
-governance:
-  requirement: urn:example:requirements:allowed:v1
-  kind: criterion
-  referenceFrameworks: [urn:example:frameworks:allowed:v1]
-  evidenceType: urn:example:evidence-types:allowed:v1
-  validitySeconds: 300
-  observationTimezone: UTC
-  fixtures: fixtures/{id}.yaml
-  disclosureFamilies: [urn:example:disclosure-families:allowed]
-"#
-    )
+fn project_document() -> Value {
+    json!({
+        "apiVersion":"id.registrystack.org/formats/evidence/project/v1alpha1",
+        "kind":"EvidenceProject", "id":"production-fixture",
+        "selectorProfiles":{"subject-reference-v1":{"maximumAggregateBytes":128,"fields":{"reference":{"type":"string","minimumBytes":1,"maximumBytes":128}}}},
+        "functions":[
+            {"id":"source-prepare","interface":"source-prepare/v1","source":"functions/source-prepare.rhai"},
+            {"id":"source-extract","interface":"source-extract/v1","source":"functions/source-extract.rhai"},
+            {"id":"answer","interface":"assertion-derive/v1","source":"functions/answer.rhai"}
+        ],
+        "sources":{"registry":{
+            "type":"http-json", "connection":"registry-http", "acquisitionPosture":"field-projected",
+            "selectors":[{"role":"subject","profiles":["subject-reference-v1"]}],
+            "request":{"method":"POST","path":"/v1/facts","fixedHeaders":[{"name":"Accept","value":"application/json"}]},
+            "prepare":{"function":"source-prepare"}, "extract":{"function":"source-extract"},
+            "response":{"projection":["/allowed"],"shape":{"type":"object","required":["allowed"],"properties":{"allowed":{"type":"boolean"}}},"maximumBytes":4096},
+            "facts":{"allowed":{"type":"boolean"}},
+            "limits":{"attemptTimeoutMilliseconds":1000,"maximumConcurrency":1},
+            "adapterParameters":{},"adapterParametersSchema":{"type":"object","additionalProperties":false,"required":[],"properties":{}},
+            "preparationLimits":{"query":"forbidden","jsonBody":"required","maximumJsonDepth":4,"maximumCollectionItems":8,"maximumStringBytes":128,"maximumNormalizedBytes":1024}
+        }},
+        "assertionDefinitions":{"answer":definition_document("answer")}
+    })
 }
 
-fn replace(path: &Path, from: &str, to: &str) {
-    let contents = fs::read_to_string(path).expect("replace source reads");
-    assert!(contents.contains(from), "replacement source was present");
-    fs::write(path, contents.replacen(from, to, 1)).expect("replacement writes");
+fn definition_document(id: &str) -> Value {
+    json!({
+        "question":"Is the governed condition satisfied?",
+        "semantics":{"requirement":format!("urn:example:requirements:{id}:v1"),"kind":"criterion","referenceFrameworks":["urn:example:frameworks:allowed:v1"],"evidenceType":"urn:example:evidence-types:allowed:v1"},
+        "purpose":"eligibility",
+        "grantCeiling":{"authorities":["statutory"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audience:relying"]},
+        "subjects":[{"role":"subject","selectors":["subject-reference-v1"]}],
+        "acquisition":{"type":"single","source":"registry"},"derive":{"function":"answer"},
+        "outputs":{"allowed":{"concept":"urn:example:concepts:allowed","type":"boolean"}},
+        "validitySeconds":300,"observationTimezone":"UTC","subjectBinding":"audience-scoped","representations":["signed-jws"],
+        "disclosureGuard":{"families":["urn:example:disclosure-families:allowed"]},
+        "fixtures":format!("fixtures/{id}.yaml")
+    })
+}
+
+fn authority_document() -> Value {
+    json!({
+        "apiVersion":"id.registrystack.org/formats/evidence/target-authority/v1alpha1",
+        "kind":"EvidenceTargetAuthority", "target":"production", "project":"production-fixture",
+        "accessProfiles":{"requester":{"authority":"statutory","actorKind":"service","requesterTags":["requester"],"grants":[{
+            "definition":"answer","purpose":"eligibility","audienceFrom":"authenticated-requester","representations":["signed-jws"],"subjectBinding":"audience-scoped",
+            "subjects":[{"role":"subject","selectorProfile":"subject-reference-v1","valueOrigin":"request"}]
+        }]}}
+    })
+}
+
+fn target_document() -> Value {
+    json!({
+        "apiVersion":"id.registrystack.org/formats/evidence/target/v1alpha1", "kind":"EvidenceTarget",
+        "id":"production","project":"production-fixture","authority":"authority.yaml","assuranceProfile":"production",
+        "package":{"root":"/srv/evidence/candidate/bundle"},
+        "service":{"providerId":"urn:example:providers:evidence","issuer":"urn:example:issuers:evidence","trustDomain":"urn:example:trust-domains:evidence"},
+        "authentication":{"oidc":{"issuer":"https://issuer.invalid","audience":"evidence","jwksSource":{"type":"uri","uri":"https://issuer.invalid/.well-known/jwks.json"},"tokenTypes":["at+jwt"],"algorithms":["ES256"],"principalClaim":"sub","requesterTagsClaim":"evidence_tags","evidenceAudienceClaim":"evidence_audience","allowedClients":"unrestricted","requiredScopes":"unrestricted","maximumTokenLifetimeSeconds":300,"revokedKeyIds":[]}},
+        "connections":{"registry-http":{"origin":"https://registry.invalid","authentication":{"type":"bearer","tokenRef":"secret:file/source-token"}}},
+        "secretProviders":{"file":{"root":"/run/secrets/evidence"}},
+        "signer":{"type":"transit","algorithm":"ES256","publicJwkFile":"public-keys/active.jwk.json","unixSocketPath":"/run/registry-evidence/transit-proxy.sock","mount":"transit","keyName":"evidence-signing","keyVersion":7,"attemptTimeoutMilliseconds":2000},
+        "listener":{"bind":"127.0.0.1:8080","tlsTermination":"operator-controlled-upstream","trustProxyIdentityHeaders":false,"maximumRequestBytes":65536,"maximumConcurrentRequests":8,"requestTimeoutMilliseconds":10000,"shutdownGraceMilliseconds":10000},
+        "audit":{"path":"/var/lib/evidence/audit.jsonl","hashKeyRef":"secret:file/audit-hmac-key","hashKeyVersion":1},
+        "subjectBinding":{"secretRef":"secret:file/subject-binding-hmac-key","keyVersion":1},
+        "rateLimits":{"requestsPerPrincipalPerMinute":60,"burstPerPrincipal":10,"failedSelectorAttemptsPerPrincipalAuthorityPerMinute":10},
+        "responseFormats":["signed-jws"],"outboundTls":{"systemRoots":true,"trustProfiles":{}}
+    })
+}
+
+fn write_json(path: &Path, value: &Value) {
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(value).expect("fixture JSON"),
+    )
+    .expect("write fixture");
+}
+
+fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) {
+    let mut value =
+        serde_json::from_slice(&fs::read(path).expect("fixture reads")).expect("fixture JSON");
+    edit(&mut value);
+    write_json(path, &value);
 }
 
 fn assert_success(output: &Output, label: &str) {
@@ -1332,14 +1270,16 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-fn assert_report(output: &Output, candidate: &Path, target: &Path) {
+fn assert_report(output: &Output, candidate: &Path) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
         stdout,
         format!(
-            "Package digest: {REVISION}\nPackage: {}\nProvision secret:file/audit-hmac-key\nProvision secret:file/source-token\nProvision secret:file/subject-binding-hmac-key\nTarget runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config {}/runtime.yaml`.\n",
-            candidate.display(),
-            target.display(),
+            "Package digest: {REVISION}\nPackage: {}\nRuntime: {}\nAuthority: {}\nProvision secret:file/audit-hmac-key\nProvision secret:file/source-token\nProvision secret:file/subject-binding-hmac-key\nTarget runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config {}`.\n",
+            candidate.join("bundle").display(),
+            candidate.join("runtime.yaml").display(),
+            candidate.join("compiled-authority.yaml").display(),
+            candidate.join("runtime.yaml").display(),
         )
     );
 }
@@ -1384,138 +1324,6 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
         .to_path_buf()
 }
-
-const SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
-kind: EvidenceSource
-type: http-json
-baseUrl: https://registry.invalid
-posture: field-projected
-authentication: {type: static-authorization, tokenRef: 'secret:file/source-token'}
-request:
-  method: POST
-  path: /v1/facts
-  fixedHeaders: [{name: Accept, value: application/json}]
-  selectorInputs:
-    - role: subject
-      alternatives:
-        - {profile: subject-reference-v1, fields: [reference]}
-  prepareScript: adapters/source-prepare.rhai
-  adapterParameters: {}
-  adapterParametersSchema: schemas/parameters.schema.yaml
-  preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 4, maximumCollectionItems: 8, maximumStringBytes: 128, maximumNormalizedBytes: 1024}
-  projection: [/allowed]
-  redirects: deny
-  attemptTimeoutMilliseconds: 1000
-  maximumResponseBytes: 4096
-  maximumConcurrency: 1
-responseSchema: schemas/response.schema.yaml
-extractScript: adapters/source-extract.rhai
-factSchema: schemas/facts.schema.yaml
-"#;
-
-const SQLITE_SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
-kind: EvidenceSource
-type: sqlite-extract
-posture: source-derived
-extractProfile: registry-snapshot
-maximumExtractAgeSeconds: 86400
-request:
-  statement: queries/source.sql
-  columns: [{name: allowed, type: boolean}]
-  selectorInputs:
-    - role: subject
-      alternatives:
-        - {profile: subject-reference-v1, fields: [reference]}
-  parameterBindings:
-    reference: {type: selector, role: subject, profile: subject-reference-v1, field: reference}
-  projection: [/rows/*/allowed]
-  maximumRows: 1
-  maximumCellBytes: 8
-  maximumStatementSteps: 10000
-  attemptTimeoutMilliseconds: 1000
-  maximumResponseBytes: 4096
-  maximumConcurrency: 1
-responseSchema: schemas/response.schema.yaml
-extractScript: adapters/source-extract.rhai
-factSchema: schemas/facts.schema.yaml
-"#;
-
-const GOVERNANCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
-kind: EvidenceTargetGovernance
-assuranceProfile: production
-service: {providerId: urn:example:providers:evidence, trustDomain: urn:example:trust-domains:evidence}
-issuer: {uri: urn:example:issuers:evidence}
-authentication:
-  oidc:
-    issuer: https://issuer.invalid
-    audience: evidence
-    jwksSource: {type: uri, uri: https://issuer.invalid/.well-known/jwks.json}
-    tokenTypes: [at+jwt]
-    algorithms: [ES256]
-    principalClaim: sub
-    requesterTagsClaim: evidence_tags
-    evidenceAudienceClaim: evidence_audience
-    allowedClients: unrestricted
-    requiredScopes: unrestricted
-    maximumTokenLifetimeSeconds: 300
-    revokedKeyIds: []
-audit: {hashKeyRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1}
-subjectBinding: {secretRef: 'secret:file/subject-binding-hmac-key', keyVersion: 1}
-rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
-signing:
-  format: flattened-jws-json
-  algorithm: ES256
-  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
-  publishedPublicJwkFiles: []
-  revokedKeyIds: []
-  jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 300
-  verifierClockSkewSeconds: 30
-responseFormats: [signed-jws]
-authorityProfiles:
-  requester:
-    kind: statutory
-    requesterTags: [requester]
-    grants:
-      - requirement: urn:example:requirements:allowed:v1
-        purpose: eligibility
-        audienceFrom: authenticated-requester
-        responseFormats: [signed-jws]
-        subjects: [{role: subject, selectorProfile: subject-reference-v1, valueOrigin: request}]
-"#;
-
-const PUBLICATION: &str = r#"publication:
-  serviceId: urn:example:services:evidence
-  title: Governed Evidence service
-  description: Governed minimum-disclosure Evidence service
-  endpointUrl: https://evidence.invalid
-  jurisdictions: [urn:example:jurisdictions:governed]
-"#;
-
-const TARGET_RUNTIME: &str = r#"apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
-kind: EvidenceRuntimeConfig
-package:
-  root: /srv/evidence/candidate/bundle
-listener:
-  bind: 127.0.0.1:8080
-  tlsTermination: operator-controlled-upstream
-  trustProxyIdentityHeaders: false
-  maximumRequestBytes: 65536
-  maximumConcurrentRequests: 8
-  requestTimeoutMilliseconds: 10000
-  shutdownGraceMilliseconds: 10000
-secretProviders:
-  file: {root: /run/secrets/evidence}
-signer:
-  type: transit
-  unixSocketPath: /run/registry-evidence/transit-proxy.sock
-  mount: transit
-  keyName: evidence-signing
-  keyVersion: 7
-  attemptTimeoutMilliseconds: 2000
-audit: {path: /var/lib/evidence/audit.jsonl}
-outboundTls: {systemRoots: true, trustProfiles: {}}
-"#;
 
 const FAKE_EVIDENCE: &str = r#"#!/bin/sh
 set -eu
