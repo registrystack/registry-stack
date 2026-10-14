@@ -231,9 +231,14 @@ fn a_restrictive_umask_still_publishes_a_world_readable_jwk() {
     let input = write(dir.path(), "signing.pem", &ec_public_pem(&key, PRIME256V1));
     let output_path = dir.path().join("signing.jwk.json");
 
-    let output = Command::new("sh")
+    let loader_path = std::env::var_os("DYLD_FALLBACK_LIBRARY_PATH");
+    let mut command = Command::new("sh");
+    if let Some(loader_path) = loader_path {
+        command.env("EVIDENCECTL_TEST_DYLD_FALLBACK_LIBRARY_PATH", loader_path);
+    }
+    let output = command
         .arg("-c")
-        .arg("umask 077 && exec \"$0\" \"$@\"")
+        .arg("umask 077; export DYLD_FALLBACK_LIBRARY_PATH=\"$EVIDENCECTL_TEST_DYLD_FALLBACK_LIBRARY_PATH\"; exec \"$0\" \"$@\"")
         .arg(env!("CARGO_BIN_EXE_evidencectl"))
         .args(["jwk", "from-pem", "--output"])
         .arg(&output_path)

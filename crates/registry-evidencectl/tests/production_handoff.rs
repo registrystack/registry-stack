@@ -867,11 +867,20 @@ impl Fixture {
                 "facts":{"date-of-birth":{"type":"date"}},
                 "limits":{"attemptTimeoutMilliseconds":3000,"maximumConcurrency":8}
             }},
-            "assertionDefinitions":{"adult-status": assertion_definition(
-                "Is the person at least 18 years old?", REQUIREMENT, "criterion", EVIDENCE_TYPE,
-                PURPOSE, "people", "adult-status-derive", "adult", CONCEPT, json!({"type":"boolean"}),
-                vec![("subject", "person-reference-v1")], "fixtures/adult-status.yaml"
-            )}
+            "assertionDefinitions":{"adult-status": assertion_definition(AssertionDefinitionInput {
+                question: "Is the person at least 18 years old?",
+                requirement: REQUIREMENT,
+                kind: "criterion",
+                evidence_type: EVIDENCE_TYPE,
+                purpose: PURPOSE,
+                source: "people",
+                derive: "adult-status-derive",
+                output: "adult",
+                concept: CONCEPT,
+                output_constraints: json!({"type":"boolean"}),
+                subjects: vec![("subject", "person-reference-v1")],
+                fixture: "fixtures/adult-status.yaml",
+            })}
         });
         write_json_document(&self.project.join("evidence.yaml"), &project);
         fs::write(self.project.join("functions/people-prepare.rhai"), r#"fn prepare(selectors, context) {
@@ -991,51 +1000,55 @@ privacy_expectation:
                 ],
             );
             project["assertionDefinitions"]["age-bracket"] = assertion_definition(
-                "Which governed age bracket contains this person?",
-                AGE_REQUIREMENT,
-                "information-requirement",
-                "urn:example:evidence-types:age-bracket:v1",
-                "service-path-selection",
-                "people",
-                "age-bracket-derive",
-                "age-bracket",
-                AGE_CONCEPT,
-                json!({"type":"controlled-category","values":["under-18","18-to-24","25-to-64","65-or-older"]}),
-                vec![("subject", "person-reference-v1")],
-                "fixtures/age-bracket.yaml",
+                AssertionDefinitionInput {
+                    question: "Which governed age bracket contains this person?",
+                    requirement: AGE_REQUIREMENT,
+                    kind: "information-requirement",
+                    evidence_type: "urn:example:evidence-types:age-bracket:v1",
+                    purpose: "service-path-selection",
+                    source: "people",
+                    derive: "age-bracket-derive",
+                    output: "age-bracket",
+                    concept: AGE_CONCEPT,
+                    output_constraints: json!({"type":"controlled-category","values":["under-18","18-to-24","25-to-64","65-or-older"]}),
+                    subjects: vec![("subject", "person-reference-v1")],
+                    fixture: "fixtures/age-bracket.yaml",
+                },
             );
-            project["assertionDefinitions"]["immunization-summary"] = assertion_definition(
-                "Is the schedule complete, and how many doses are recorded?",
-                IMMUNIZATION_REQUIREMENT,
-                "information-requirement",
-                "urn:example:evidence-types:immunization-summary:v1",
-                "care-coordination",
-                "immunizations",
-                "immunization-summary-derive",
-                "schedule-complete",
-                SCHEDULE_CONCEPT,
-                json!({"type":"boolean"}),
-                vec![("subject", "person-reference-v1")],
-                "fixtures/immunization-summary.yaml",
-            );
+            project["assertionDefinitions"]["immunization-summary"] =
+                assertion_definition(AssertionDefinitionInput {
+                    question: "Is the schedule complete, and how many doses are recorded?",
+                    requirement: IMMUNIZATION_REQUIREMENT,
+                    kind: "information-requirement",
+                    evidence_type: "urn:example:evidence-types:immunization-summary:v1",
+                    purpose: "care-coordination",
+                    source: "immunizations",
+                    derive: "immunization-summary-derive",
+                    output: "schedule-complete",
+                    concept: SCHEDULE_CONCEPT,
+                    output_constraints: json!({"type":"boolean"}),
+                    subjects: vec![("subject", "person-reference-v1")],
+                    fixture: "fixtures/immunization-summary.yaml",
+                });
             project["assertionDefinitions"]["immunization-summary"]["outputs"]["dose-count"] = json!({"concept":DOSE_COUNT_CONCEPT,"type":"bounded-integer","minimum":0,"maximum":20});
-            project["assertionDefinitions"]["parent-relationship"] = assertion_definition(
-                "Is the candidate registered as a parent of the child?",
-                RELATIONSHIP_REQUIREMENT,
-                "criterion",
-                "urn:example:evidence-types:parent-relationship:v1",
-                "relationship-check",
-                "relationships",
-                "parent-relationship-derive",
-                "relationship-confirmed",
-                RELATIONSHIP_CONCEPT,
-                json!({"type":"boolean"}),
-                vec![
-                    ("child", "child-reference-v1"),
-                    ("candidate-parent", "candidate-reference-v1"),
-                ],
-                "fixtures/parent-relationship.yaml",
-            );
+            project["assertionDefinitions"]["parent-relationship"] =
+                assertion_definition(AssertionDefinitionInput {
+                    question: "Is the candidate registered as a parent of the child?",
+                    requirement: RELATIONSHIP_REQUIREMENT,
+                    kind: "criterion",
+                    evidence_type: "urn:example:evidence-types:parent-relationship:v1",
+                    purpose: "relationship-check",
+                    source: "relationships",
+                    derive: "parent-relationship-derive",
+                    output: "relationship-confirmed",
+                    concept: RELATIONSHIP_CONCEPT,
+                    output_constraints: json!({"type":"boolean"}),
+                    subjects: vec![
+                        ("child", "child-reference-v1"),
+                        ("candidate-parent", "candidate-reference-v1"),
+                    ],
+                    fixture: "fixtures/parent-relationship.yaml",
+                });
         });
         for (name, script) in [
             (
@@ -1865,20 +1878,36 @@ fn edit_json_document(path: &Path, edit: impl FnOnce(&mut Value)) {
     write_json_document(path, &document);
 }
 
-fn assertion_definition(
-    question: &str,
-    requirement: &str,
-    kind: &str,
-    evidence_type: &str,
-    purpose: &str,
-    source: &str,
-    derive: &str,
-    output: &str,
-    concept: &str,
+struct AssertionDefinitionInput<'a> {
+    question: &'a str,
+    requirement: &'a str,
+    kind: &'a str,
+    evidence_type: &'a str,
+    purpose: &'a str,
+    source: &'a str,
+    derive: &'a str,
+    output: &'a str,
+    concept: &'a str,
     output_constraints: Value,
-    subjects: Vec<(&str, &str)>,
-    fixture: &str,
-) -> Value {
+    subjects: Vec<(&'a str, &'a str)>,
+    fixture: &'a str,
+}
+
+fn assertion_definition(input: AssertionDefinitionInput<'_>) -> Value {
+    let AssertionDefinitionInput {
+        question,
+        requirement,
+        kind,
+        evidence_type,
+        purpose,
+        source,
+        derive,
+        output,
+        concept,
+        output_constraints,
+        subjects,
+        fixture,
+    } = input;
     let mut governed_output = json!({"concept": concept});
     governed_output
         .as_object_mut()

@@ -314,6 +314,7 @@ impl SourceDetachArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_yaml::Reader;
     use sha2::{Digest as _, Sha256};
     use std::fs;
 
@@ -488,8 +489,12 @@ assertionDefinitions:
         let project_file = fixture
             .project
             .join(registry_evidence_authoring::project::PROJECT_FILE);
-        let mut project: Value =
-            serde_norway::from_slice(&fs::read(&project_file).unwrap()).unwrap();
+        let project_bytes = fs::read(&project_file).unwrap();
+        let mut project: Value = Reader::new(project_file.to_string_lossy().into_owned())
+            .scan(&project_bytes)
+            .expect("scan EvidenceProject")
+            .expect("EvidenceProject document")
+            .to_json_value();
         project["functions"]
             .as_array_mut()
             .unwrap()

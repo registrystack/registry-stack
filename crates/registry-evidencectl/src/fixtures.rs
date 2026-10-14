@@ -254,7 +254,11 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
         // is compiled or any step is delegated, so a file it refuses is
         // reported with its own diagnostics and nothing runs against it.
         let fixture_paths = project_fixture_paths(&args.project)?;
-        if fixture_paths.is_empty() {
+        if fixture_paths.is_empty()
+            || fixture_paths
+                .iter()
+                .any(|fixture| !args.project.join(fixture).is_file())
+        {
             return Err(no_fixture_report().into());
         }
         reader_warnings = read_fixture_files(

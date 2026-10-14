@@ -36,6 +36,8 @@ pub(crate) struct NewArgs {
     #[arg(long, required_unless_present = "local")]
     pub settings: Option<PathBuf>,
     /// Evidence project directory; defaults to the current directory with --local.
+    ///
+    /// This command needs an editable project holding evidence.yaml.
     #[arg(long, requires = "local")]
     pub project: Option<PathBuf>,
     /// Generate a complete disposable local target from the EvidenceProject ceilings.
@@ -47,7 +49,7 @@ pub(crate) struct NewArgs {
 pub(crate) struct ExplainArgs {
     /// Normalized target.yaml, or a directory containing target.yaml.
     pub target: PathBuf,
-    /// Evidence project directory.
+    /// Evidence project directory; defaults to the current directory.
     ///
     /// This command needs an editable project holding evidence.yaml.
     #[arg(value_name = "PROJECT", default_value = ".")]
@@ -207,7 +209,8 @@ pub(crate) fn create_local_target(
             "target destination parent",
         )?)
     };
-    let (public_key, _) = crate::authoring::ensure_local_signing_public_jwk(&project_root)?;
+    let (public_key, public_key_bytes) =
+        crate::authoring::ensure_local_signing_public_jwk(&project_root)?;
     let target_value = json!({
         "apiVersion": target::TARGET_API_VERSION,
         "kind": target::TARGET_KIND,
@@ -253,6 +256,7 @@ pub(crate) fn create_local_target(
     let expected = [
         ("target.yaml", target_yaml.as_bytes()),
         ("authority.yaml", authority_yaml.as_bytes()),
+        (public_key.as_str(), public_key_bytes.as_slice()),
     ];
     let Some(parent) = parent else {
         for (name, bytes) in expected {
@@ -275,6 +279,7 @@ pub(crate) fn create_local_target(
         &staging.path().join("authority.yaml"),
         authority_yaml.as_bytes(),
     )?;
+    write_new_file(&staging.path().join(&public_key), &public_key_bytes)?;
     publish(staging, directory)
 }
 
