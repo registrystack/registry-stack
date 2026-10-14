@@ -52,6 +52,8 @@ pub use registry_evidence_verifier::{
 pub use cli::command;
 
 #[cfg(test)]
+mod normalized_tests;
+#[cfg(test)]
 mod runtime_tests;
 
 pub const EVIDENCE_DEFINITIONS_SCHEMA_V1: &str = "registry.evidence-definitions/v1";
