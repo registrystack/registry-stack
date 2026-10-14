@@ -129,6 +129,7 @@ struct CasesFixture {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CaseEntry {
     id: String,
     /// A companion bundle name is how an anti-reconstruction case is addressed

@@ -29,7 +29,9 @@ use files::{
 };
 use resolution::{decode_resolution_file, MAX_ARTIFACTS};
 #[cfg(feature = "schema")]
-pub(crate) use resolution::{resolution_schema, RESOLUTION_API_VERSION, RESOLUTION_SCHEMA_ID};
+pub(crate) use resolution::{
+    resolution_schema, RESOLUTION_API_VERSION, RESOLUTION_KIND, RESOLUTION_SCHEMA_ID,
+};
 pub(crate) use resolution::{Resolution, RESOLUTION_FORMAT};
 
 /// The largest file `evidencectl check --file` reads: the importer's own
