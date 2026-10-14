@@ -458,6 +458,27 @@ mod tests {
     }
 
     #[test]
+    fn omitted_profile_actor_retains_the_per_definition_actor_ceiling() {
+        let (config, mut document, _) = fixture();
+        for profile in document.access_profiles.values_mut() {
+            profile.actor_kind = None;
+        }
+        document
+            .validate_for("local", &config)
+            .expect("an omitted profile actor leaves request-time ceiling checks intact");
+        for profile in document.access_profiles.values_mut() {
+            profile.actor_kind = Some(registry_platform_oidc::ActorKind::Human);
+        }
+        assert!(
+            matches!(
+                document.validate_for("local", &config),
+                Err(AuthorityError::OutsideCeiling)
+            ),
+            "an explicit actor outside the definition ceiling is still refused"
+        );
+    }
+
+    #[test]
     fn authority_activation_is_atomic_idempotent_and_keeps_durable_history() {
         let (config, document, package) = fixture();
         let root = tempfile::tempdir().unwrap();
@@ -651,7 +672,7 @@ mod tests {
         };
         mutate(|profile| profile.kind = AuthorityKind::Organizational);
         mutate(|profile| profile.actor_kind = Some(registry_platform_oidc::ActorKind::Agent));
-        mutate(|profile| profile.actor_kind = None);
+        mutate(|profile| profile.actor_kind = Some(registry_platform_oidc::ActorKind::Human));
         mutate(|profile| profile.grants[0].purpose = "another-purpose".to_owned());
         mutate(|profile| profile.grants[0].response_formats = vec![ResponseFormat::UnsignedJson]);
         mutate(|profile| {

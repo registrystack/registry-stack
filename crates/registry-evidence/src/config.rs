@@ -1674,7 +1674,7 @@ impl EvidenceConfig {
                     if !ceiling.authorities.contains(&authority.kind)
                         || authority
                             .actor_kind
-                            .is_none_or(|kind| !ceiling.actor_kinds.contains(&kind))
+                            .is_some_and(|kind| !ceiling.actor_kinds.contains(&kind))
                         || grant
                             .subjects
                             .iter()
