@@ -23,25 +23,17 @@ pub enum RecoverySemantics {
     HoldAfterDispatch,
 }
 
-#[allow(non_upper_case_globals)]
+macro_rules! operation_constants {
+    ($($name:ident => $id:literal, $metadata:expr, $schema:ident;)+) => {
+        #[allow(non_upper_case_globals)]
+        impl Operation {
+            $(pub const $name: Self = Self($id);)+
+        }
+    };
+}
+crate::operations::operation_catalog!(operation_constants);
+
 impl Operation {
-    // Preserve the existing call-site names and portable operation spellings.
-    pub const ReadRecord: Self = Self("breg.read-record/v1");
-    pub const SubmitMessage: Self = Self("messaging.submit-message/v1");
-    pub const ReadScheduling: Self = Self("scheduling.read-service/v1");
-    pub const ReadAvailability: Self = Self("scheduling.read-availability/v1");
-    pub const CreateAppointment: Self = Self("scheduling.create-appointment/v1");
-    pub const InvokeBregAction: Self = Self("breg.invoke-action/v1");
-    pub const ExternalGet: Self = Self("external.get/v1");
-    pub const EvaluateDecision: Self = Self("evaluation.evaluate/v1");
-    pub const SubmitReviewRequest: Self = Self("casework.submit-review-request/v1");
-    pub const CancelReviewRequest: Self = Self("casework.cancel-review-request/v1");
-
-    pub const SubmitBregProposal: Self = Self("breg.submit-proposal/v1");
-    pub const ApplyBregProposal: Self = Self("breg.apply-proposal/v1");
-    pub const RetryBregProposal: Self = Self("breg.retry-proposal/v1");
-    pub const CancelBregProposal: Self = Self("breg.cancel-proposal/v1");
-
     pub fn from_catalog_id(identifier: &str) -> Option<Self> {
         Self::parse(identifier)
     }

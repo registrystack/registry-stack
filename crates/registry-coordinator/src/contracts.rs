@@ -555,89 +555,12 @@ pub fn contract(operation: Operation) -> &'static OperationContract {
 /// Schemas derived from the owning wire models and adapter inputs.
 #[cfg(feature = "schema")]
 fn derived_contracts() -> BTreeMap<&'static str, (Value, Value)> {
-    use crate::{
-        adapters::{AvailabilityRequest, ReadRequest, SchedulingReadRequest},
-        breg_action::ActionInput,
-        decision::DecisionResult,
-        external_http::{ExternalResponse, GetRequest},
-        review::CancelReviewInput,
-    };
-    use registry_breg_client::{BRegActionReceipt, BRegProposal, RegistryRecordSingleResponse};
-    use registry_casework_client::{
-        ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted,
-    };
-    use registry_messaging_core::MessageReceipt;
-    use registry_scheduling_core::{
-        AppointmentDocument, AvailabilityEntry, PageDocument, SchedulingServiceDocument,
-    };
-
-    let mut contracts = BTreeMap::new();
-    let mut add = |operation: Operation, input: Value, output: Value| {
-        contracts.insert(operation.as_str(), (input, output));
-    };
-    add(
-        Operation::ReadRecord,
-        derived::input::<ReadRequest>(),
-        derived::output::<RegistryRecordSingleResponse>(),
-    );
-    add(
-        Operation::SubmitMessage,
-        derived::submit_message_input(),
-        derived::output::<MessageReceipt>(),
-    );
-    add(
-        Operation::ReadScheduling,
-        derived::input::<SchedulingReadRequest>(),
-        derived::output::<SchedulingServiceDocument>(),
-    );
-    add(
-        Operation::ReadAvailability,
-        derived::input::<AvailabilityRequest>(),
-        derived::output::<PageDocument<AvailabilityEntry>>(),
-    );
-    add(
-        Operation::CreateAppointment,
-        derived::create_appointment_input(),
-        derived::output::<AppointmentDocument>(),
-    );
-    add(
-        Operation::InvokeBregAction,
-        derived::input::<ActionInput>(),
-        derived::output::<BRegActionReceipt>(),
-    );
-    add(
-        Operation::ExternalGet,
-        derived::input::<GetRequest>(),
-        derived::output::<ExternalResponse>(),
-    );
-    add(
-        Operation::EvaluateDecision,
-        derived::evaluation_input(),
-        derived::output::<DecisionResult>(),
-    );
-    add(
-        Operation::SubmitReviewRequest,
-        derived::input::<ReviewCreateRequest>(),
-        derived::output::<ReviewRequestAccepted>(),
-    );
-    add(
-        Operation::CancelReviewRequest,
-        derived::input::<CancelReviewInput>(),
-        derived::output::<ReviewCancelResponse>(),
-    );
-    for operation in [
-        Operation::SubmitBregProposal,
-        Operation::ApplyBregProposal,
-        Operation::RetryBregProposal,
-        Operation::CancelBregProposal,
-    ] {
-        add(
-            operation,
-            derived::input::<BRegProposal>(),
-            derived::output::<BRegProposal>(),
-        );
+    macro_rules! schema_catalog {
+        ($($name:ident => $id:literal, $metadata:expr, $factory:ident;)+) => {
+            BTreeMap::from([$(($id, derived::$factory())),+])
+        };
     }
-    contracts
+    crate::operations::operation_catalog!(schema_catalog)
 }
 
 /// Generated contract files and their reference, keyed by file name.
@@ -715,8 +638,82 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
 mod derived {
     use std::collections::BTreeMap;
 
+    use crate::{
+        adapters::{AvailabilityRequest, ReadRequest, SchedulingReadRequest},
+        breg_action::ActionInput,
+        decision::DecisionResult,
+        external_http::{ExternalResponse, GetRequest},
+        review::CancelReviewInput,
+    };
+    use registry_breg_client::{BRegActionReceipt, BRegProposal, RegistryRecordSingleResponse};
+    use registry_casework_client::{
+        ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted,
+    };
+    use registry_messaging_core::MessageReceipt;
+    use registry_scheduling_core::{
+        AppointmentDocument, AvailabilityEntry, PageDocument, SchedulingServiceDocument,
+    };
     use schemars::{generate::SchemaSettings, JsonSchema};
     use serde_json::{json, Value};
+
+    pub(super) fn read_record() -> (Value, Value) {
+        (
+            input::<ReadRequest>(),
+            output::<RegistryRecordSingleResponse>(),
+        )
+    }
+
+    pub(super) fn submit_message() -> (Value, Value) {
+        (submit_message_input(), output::<MessageReceipt>())
+    }
+
+    pub(super) fn read_scheduling() -> (Value, Value) {
+        (
+            input::<SchedulingReadRequest>(),
+            output::<SchedulingServiceDocument>(),
+        )
+    }
+
+    pub(super) fn read_availability() -> (Value, Value) {
+        (
+            input::<AvailabilityRequest>(),
+            output::<PageDocument<AvailabilityEntry>>(),
+        )
+    }
+
+    pub(super) fn create_appointment() -> (Value, Value) {
+        (create_appointment_input(), output::<AppointmentDocument>())
+    }
+
+    pub(super) fn invoke_breg_action() -> (Value, Value) {
+        (input::<ActionInput>(), output::<BRegActionReceipt>())
+    }
+
+    pub(super) fn external_get() -> (Value, Value) {
+        (input::<GetRequest>(), output::<ExternalResponse>())
+    }
+
+    pub(super) fn evaluate() -> (Value, Value) {
+        (evaluation_input(), output::<DecisionResult>())
+    }
+
+    pub(super) fn submit_review_request() -> (Value, Value) {
+        (
+            input::<ReviewCreateRequest>(),
+            output::<ReviewRequestAccepted>(),
+        )
+    }
+
+    pub(super) fn cancel_review_request() -> (Value, Value) {
+        (
+            input::<CancelReviewInput>(),
+            output::<ReviewCancelResponse>(),
+        )
+    }
+
+    pub(super) fn breg_proposal() -> (Value, Value) {
+        (input::<BRegProposal>(), output::<BRegProposal>())
+    }
 
     /// What the adapter accepts: the deserialization contract of its input type.
     pub(super) fn input<T: JsonSchema>() -> Value {

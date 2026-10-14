@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::RecoverySemantics;
+use crate::protocol::{Operation, RecoverySemantics};
 
 // These are host policy, consumed by Dispatch and by the compiled contract.
 // A local Operation alias cannot increase them or claim stronger recovery.
@@ -78,7 +78,7 @@ impl OperationDescriptor {
     pub fn host_contract(&self) -> serde_json::Value {
         use serde_json::json;
         let mut observation = match self.id {
-            "casework.submit-review-request/v1" => json!({
+            id if id == Operation::SubmitReviewRequest.as_str() => json!({
                 "name":"result", "profile":"casework-result",
                 "acceptedBinding":["requestId","subject","policy","submissionDigest"],
                 "authority":"current-review-producer",
@@ -86,7 +86,7 @@ impl OperationDescriptor {
                 "authenticatedWake":true,
                 "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
             }),
-            "breg.submit-proposal/v1" => json!({
+            id if id == Operation::SubmitBregProposal.as_str() => json!({
                 "name":"application", "profile":"breg-application",
                 "acceptedBinding":["id","actionId","actionRevision","submissionVersion","effectDigest"],
                 "authority":"current-proposal-get-profile",
@@ -94,7 +94,7 @@ impl OperationDescriptor {
                 "authenticatedWake":false,
                 "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
             }),
-            "external.get/v1" => json!({
+            id if id == Operation::ExternalGet.as_str() => json!({
                 "profile":"bounded-poll", "specializationRequired":true,
                 "acceptedBinding":["saved-command"],
                 "authority":"bound-read-only-connection",
@@ -219,50 +219,62 @@ const fn mutation(
     }
 }
 
-static CATALOG: &[OperationDescriptor] = &[
-    read("breg.read-record/v1", "breg"),
-    mutation("messaging.submit-message/v1", "messaging", true, false),
-    read("scheduling.read-service/v1", "scheduling"),
-    read("scheduling.read-availability/v1", "scheduling"),
-    mutation(
-        "scheduling.create-appointment/v1",
-        "scheduling",
-        true,
-        false,
-    ),
+const fn declared_mutation(
+    id: &'static str,
+    product: &'static str,
+    read_receipt: bool,
+    requires_preparation: bool,
+) -> OperationDescriptor {
     OperationDescriptor {
         declared_refusal: true,
-        ..mutation("breg.invoke-action/v1", "breg", false, true)
-    },
-    read("external.get/v1", "external-http"),
+        ..mutation(id, product, read_receipt, requires_preparation)
+    }
+}
+
+const fn evaluation(id: &'static str, product: &'static str) -> OperationDescriptor {
     OperationDescriptor {
-        id: "evaluation.evaluate/v1",
+        id,
         version: 1,
-        product: "evaluation",
+        product,
         effect: EffectKind::Evaluation,
         key_requirement: KeyRequirement::None,
         requires_preparation: true,
         recovery: RecoverySemantics::HoldAfterDispatch,
         read_receipt: false,
         declared_refusal: false,
-    },
-    mutation(
-        "casework.submit-review-request/v1",
-        "casework",
-        false,
-        false,
-    ),
-    mutation(
-        "casework.cancel-review-request/v1",
-        "casework",
-        false,
-        false,
-    ),
-    mutation("breg.submit-proposal/v1", "breg", false, true),
-    mutation("breg.apply-proposal/v1", "breg", false, true),
-    mutation("breg.retry-proposal/v1", "breg", false, true),
-    mutation("breg.cancel-proposal/v1", "breg", false, true),
-];
+    }
+}
+
+// One registration feeds the public Operation constants, execution catalog and
+// schema factories. Keep this order stable: identities and schema enums expose it.
+macro_rules! operation_catalog {
+    ($consumer:ident) => {
+        $consumer! {
+            ReadRecord => "breg.read-record/v1", read("breg"), read_record;
+            SubmitMessage => "messaging.submit-message/v1", mutation("messaging", true, false), submit_message;
+            ReadScheduling => "scheduling.read-service/v1", read("scheduling"), read_scheduling;
+            ReadAvailability => "scheduling.read-availability/v1", read("scheduling"), read_availability;
+            CreateAppointment => "scheduling.create-appointment/v1", mutation("scheduling", true, false), create_appointment;
+            InvokeBregAction => "breg.invoke-action/v1", declared_mutation("breg", false, true), invoke_breg_action;
+            ExternalGet => "external.get/v1", read("external-http"), external_get;
+            EvaluateDecision => "evaluation.evaluate/v1", evaluation("evaluation"), evaluate;
+            SubmitReviewRequest => "casework.submit-review-request/v1", mutation("casework", false, false), submit_review_request;
+            CancelReviewRequest => "casework.cancel-review-request/v1", mutation("casework", false, false), cancel_review_request;
+            SubmitBregProposal => "breg.submit-proposal/v1", mutation("breg", false, true), breg_proposal;
+            ApplyBregProposal => "breg.apply-proposal/v1", mutation("breg", false, true), breg_proposal;
+            RetryBregProposal => "breg.retry-proposal/v1", mutation("breg", false, true), breg_proposal;
+            CancelBregProposal => "breg.cancel-proposal/v1", mutation("breg", false, true), breg_proposal;
+        }
+    };
+}
+pub(crate) use operation_catalog;
+
+macro_rules! execution_catalog {
+    ($($name:ident => $id:literal, $builder:ident($($argument:expr),*), $schema:ident;)+) => {
+        static CATALOG: &[OperationDescriptor] = &[$($builder($id, $($argument),*)),+];
+    };
+}
+operation_catalog!(execution_catalog);
 
 pub fn descriptors() -> &'static [OperationDescriptor] {
     CATALOG
@@ -337,8 +349,9 @@ mod tests {
     use crate::protocol::Operation;
 
     #[test]
-    fn existing_portable_names_round_trip_through_catalog() {
-        for (operation, name) in [
+    fn existing_portable_names_and_registration_order_are_stable() {
+        // Keep this wire-compatibility fixture independent of the registration macro.
+        let expected = [
             (Operation::ReadRecord, "breg.read-record/v1"),
             (Operation::SubmitMessage, "messaging.submit-message/v1"),
             (Operation::ReadScheduling, "scheduling.read-service/v1"),
@@ -361,7 +374,19 @@ mod tests {
                 Operation::CancelReviewRequest,
                 "casework.cancel-review-request/v1",
             ),
-        ] {
+            (Operation::SubmitBregProposal, "breg.submit-proposal/v1"),
+            (Operation::ApplyBregProposal, "breg.apply-proposal/v1"),
+            (Operation::RetryBregProposal, "breg.retry-proposal/v1"),
+            (Operation::CancelBregProposal, "breg.cancel-proposal/v1"),
+        ];
+        assert_eq!(
+            descriptors()
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            expected.iter().map(|(_, name)| *name).collect::<Vec<_>>()
+        );
+        for (operation, name) in expected {
             let encoded = serde_json::to_value(operation).unwrap();
             assert_eq!(encoded, name);
             assert_eq!(
