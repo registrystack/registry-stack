@@ -20,7 +20,7 @@ not change the registry or create an access permission.
 ```sh
 mkdir exports
 bregctl generate evidence-source ./registry \
-  --access-profile evidence-source --entity record \
+  --access-profile evidence-source --record-type record \
   --selector by-code --selector by-registration-number \
   --fields status --source-id registry-status --connection registry \
   --output ./exports/registry-status
@@ -32,7 +32,7 @@ Use another export with another `--source-id` when the selected facts, authority
 or intended maintenance boundary differ. Several Evidence questions can reuse
 one source without exporting it again.
 
-`--fields` names logical BReg fields, as does `--entity`. API property aliases
+`--fields` names logical BReg fields, as does `--record-type`. API property aliases
 are resolved by the compiler. A `registration-number` field can therefore
 become the `registrationNumber` property on the wire while keeping its logical
 name in Evidence selectors and facts.

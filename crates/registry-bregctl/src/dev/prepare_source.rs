@@ -7,8 +7,8 @@ pub(super) struct PrepareSourceArgs {
     /// Existing registry project with a retained development session.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
-    /// Entity authored directly in registry.yaml; omit to inspect available fields.
-    #[arg(long)]
+    /// Record type authored directly in registry.yaml; omit to inspect available fields.
+    #[arg(long = "record-type", value_name = "ID")]
     entity: Option<String>,
     /// Existing required scalar identifier with an exact single-field unique constraint.
     #[arg(long)]
@@ -16,7 +16,7 @@ pub(super) struct PrepareSourceArgs {
     /// Comma-separated selection of 1 to 16 readable fact fields; the identifier is also readable for identity verification.
     #[arg(long, value_delimiter = ',')]
     readable_fields: Vec<String>,
-    /// Explicitly authorize lookup across all records of the selected entity.
+    /// Explicitly authorize lookup across all records of the selected Record type.
     #[arg(long, conflicts_with = "row_field")]
     all_records: bool,
     /// Existing string, text or vocabulary-code field that bounds permitted records.
@@ -31,7 +31,7 @@ pub(super) struct PrepareSourceArgs {
     /// Fresh dedicated local client ID; identical prepared requests reuse its credentials.
     #[arg(long, default_value = "evidence-source")]
     client: String,
-    /// Fresh lookup-only access profile ID for the selected entity and facts.
+    /// Fresh lookup-only access profile ID for the selected Record type and facts.
     #[arg(long, default_value = "evidence-source")]
     access_profile: String,
     /// Fresh selector profile ID for the selected unique identifier.
@@ -442,7 +442,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             || args.all_records
             || args.row_field.is_some()
         {
-            bail!("select --entity, --selector-field, --readable-fields and explicit row authority to preview or apply");
+            bail!("select --record-type, --selector-field, --readable-fields and explicit row authority to preview or apply");
         }
         return Ok(report);
     };

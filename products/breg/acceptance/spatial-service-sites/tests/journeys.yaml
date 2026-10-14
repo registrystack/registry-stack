@@ -1,217 +1,407 @@
-apiVersion: id.registrystack.org/formats/breg/journeys/v1
-kind: BRegJourneys
-journeys:
-  - id: service-site-source-profile-smoke
-    steps:
-      - id: create-central-service-site
-        entity: service-site
-        accessProfile: service-site-admin
-        claims:
-          principal: synthetic-service-site-admin
-          purpose: service-site-administration
-          scopes: [service-sites:seed]
-        request:
-          type: create
-          data:
-            native-id: 11111111-1111-4111-8111-111111111111
-            site-code: SVC-SYNTH-CENTRAL-001
-            label: Synthetic central clinic
-            zone: central
-            service-kind: clinic
-            installation-client-id: qgis-installation-central
-            location: {type: Point, coordinates: [100.550000000, 13.750000000]}
-        expect:
-          outcome: success
-          status: 201
-          fields:
-            site-code: SVC-SYNTH-CENTRAL-001
-            label: Synthetic central clinic
-            zone: central
-            service-kind: clinic
-            location: {type: Point, coordinates: [100.550000000, 13.750000000]}
-        capture: central-site
-      - id: create-null-geometry-service-site
-        entity: service-site
-        accessProfile: service-site-admin
-        claims:
-          principal: synthetic-service-site-admin
-          purpose: service-site-administration
-          scopes: [service-sites:seed]
-        request:
-          type: create
-          data:
-            native-id: 22222222-2222-4222-8222-222222222222
-            site-code: SVC-SYNTH-NULL-001
-            label: Synthetic call-in desk
-            zone: central
-            service-kind: depot
-            installation-client-id: qgis-installation-central
-        expect:
-          outcome: success
-          status: 201
-          fields:
-            site-code: SVC-SYNTH-NULL-001
-            label: Synthetic call-in desk
-            zone: central
-            service-kind: depot
-        capture: null-geometry-site
-      - id: create-edge-service-site
-        entity: service-site
-        accessProfile: service-site-admin
-        claims:
-          principal: synthetic-service-site-admin
-          purpose: service-site-administration
-          scopes: [service-sites:seed]
-        request:
-          type: create
-          data:
-            native-id: 33333333-3333-4333-8333-333333333333
-            site-code: SVC-SYNTH-EDGE-001
-            label: Synthetic exact edge water point
-            zone: edge
-            service-kind: water-point
-            installation-client-id: qgis-installation-edge
-            location: {type: Point, coordinates: [100.700000000, 13.900000000]}
-        expect:
-          outcome: success
-          status: 201
-          fields:
-            site-code: SVC-SYNTH-EDGE-001
-            zone: edge
-            location: {type: Point, coordinates: [100.700000000, 13.900000000]}
-        capture: edge-site
-      - id: public-map-reader-lists-public-point-fields
-        entity: service-site
-        accessProfile: map-reader
-        claims:
-          principal: synthetic-public-map
-          purpose: service-site-public-map
-          scopes: [service-sites:public.read]
-        request:
-          type: query
-          count: true
-          top: 10
-          select: [native-id, site-code, label, zone, service-kind, location]
-        expect:
-          outcome: success
-          status: 200
-          count: 3
-      - id: public-map-reader-bbox-finds-central-site
-        entity: service-site
-        accessProfile: map-reader
-        claims:
-          principal: synthetic-public-map
-          purpose: service-site-public-map
-          scopes: [service-sites:public.read]
-        request:
-          type: query
-          count: true
-          top: 10
-          bbox: {west: "100.540000000", south: "13.740000000", east: "100.560000000", north: "13.760000000"}
-          select: [native-id, site-code, label, zone, service-kind, location]
-        expect:
-          outcome: success
-          status: 200
-          count: 1
-      - id: directory-reader-lists-without-geometry
-        entity: service-site
-        accessProfile: directory-reader
-        claims:
-          principal: synthetic-public-directory
-          purpose: service-site-public-directory
-          scopes: [service-sites:public.read]
-        request:
-          type: query
-          count: true
-          top: 10
-          select: [native-id, site-code, label, zone, service-kind]
-        expect:
-          outcome: success
-          status: 200
-          count: 3
-      - id: directory-reader-bbox-is-refused
-        entity: service-site
-        accessProfile: directory-reader
-        claims:
-          principal: synthetic-public-directory
-          purpose: service-site-public-directory
-          scopes: [service-sites:public.read]
-        request:
-          type: query
-          bbox: {west: "100.540000000", south: "13.740000000", east: "100.560000000", north: "13.760000000"}
-          select: [native-id, site-code, label, zone, service-kind]
-        expect:
-          outcome: refusal
-          status: 400
-          problemCode: query.invalid
-      - id: installation-client-sees-own-central-row
-        entity: service-site
-        accessProfile: installation-map-reader
-        claims:
-          principal: synthetic-qgis-installation
-          purpose: service-site-map
-          scopes: [service-sites:map.read]
-          directClaims: {service_zones: central}
-        request: {type: get, recordCapture: central-site}
-        expect:
-          outcome: success
-          status: 200
-          fields: {site-code: SVC-SYNTH-CENTRAL-001, zone: central}
-      - id: installation-client-cannot-see-other-installation-row
-        entity: service-site
-        accessProfile: installation-map-reader
-        claims:
-          principal: synthetic-qgis-installation
-          purpose: service-site-map
-          scopes: [service-sites:map.read]
-          directClaims: {service_zones: central}
-        request: {type: get, recordCapture: edge-site}
-        expect:
-          outcome: refusal
-          status: 404
-          problemCode: resource.not_found
-      - id: hidden-geometry-profile-gets-directory-fields
-        entity: service-site
-        accessProfile: hidden-geometry-reader
-        claims:
-          principal: synthetic-directory-reader
-          purpose: service-site-directory
-          scopes: [service-sites:directory.read]
-        request: {type: get, recordCapture: central-site}
-        expect:
-          outcome: success
-          status: 200
-          fields: {site-code: SVC-SYNTH-CENTRAL-001, label: Synthetic central clinic}
-      - id: get-only-profile-gets-site
-        entity: service-site
-        accessProfile: get-only-map-reader
-        claims:
-          principal: synthetic-site-reader
-          purpose: service-site-map
-          scopes: [service-sites:site.read]
-        request: {type: get, recordCapture: central-site}
-        expect:
-          outcome: success
-          status: 200
-          fields: {site-code: SVC-SYNTH-CENTRAL-001, location: {type: Point, coordinates: [100.550000000, 13.750000000]}}
-      - id: admin-refuses-coordinate-outside-authored-bounds
-        entity: service-site
-        accessProfile: service-site-admin
-        claims:
-          principal: synthetic-service-site-admin
-          purpose: service-site-administration
-          scopes: [service-sites:seed]
-        request:
-          type: create
-          data:
-            native-id: 44444444-4444-4444-8444-444444444444
-            site-code: SVC-SYNTH-OUTSIDE-001
-            label: Synthetic outside point
-            zone: edge
-            service-kind: depot
-            installation-client-id: qgis-installation-edge
-            location: {type: Point, coordinates: [100.700000001, 13.900000000]}
-        expect:
-          outcome: refusal
-          status: 400
-          problemCode: request.invalid
+{
+  "apiVersion": "id.registrystack.org/formats/breg/journeys/v1",
+  "kind": "BRegJourneys",
+  "journeys": [
+    {
+      "id": "service-site-source-profile-smoke",
+      "steps": [
+        {
+          "id": "create-central-service-site",
+          "accessProfile": "service-site-admin",
+          "claims": {
+            "principal": "synthetic-service-site-admin",
+            "purpose": "service-site-administration",
+            "scopes": [
+              "service-sites:seed"
+            ]
+          },
+          "request": {
+            "type": "create",
+            "data": {
+              "native-id": "11111111-1111-4111-8111-111111111111",
+              "site-code": "SVC-SYNTH-CENTRAL-001",
+              "label": "Synthetic central clinic",
+              "zone": "central",
+              "service-kind": "clinic",
+              "installation-client-id": "qgis-installation-central",
+              "location": {
+                "type": "Point",
+                "coordinates": [
+                  100.55,
+                  13.75
+                ]
+              }
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201,
+            "fields": {
+              "site-code": "SVC-SYNTH-CENTRAL-001",
+              "label": "Synthetic central clinic",
+              "zone": "central",
+              "service-kind": "clinic",
+              "location": {
+                "type": "Point",
+                "coordinates": [
+                  100.55,
+                  13.75
+                ]
+              }
+            }
+          },
+          "capture": "central-site",
+          "recordType": "service-site"
+        },
+        {
+          "id": "create-null-geometry-service-site",
+          "accessProfile": "service-site-admin",
+          "claims": {
+            "principal": "synthetic-service-site-admin",
+            "purpose": "service-site-administration",
+            "scopes": [
+              "service-sites:seed"
+            ]
+          },
+          "request": {
+            "type": "create",
+            "data": {
+              "native-id": "22222222-2222-4222-8222-222222222222",
+              "site-code": "SVC-SYNTH-NULL-001",
+              "label": "Synthetic call-in desk",
+              "zone": "central",
+              "service-kind": "depot",
+              "installation-client-id": "qgis-installation-central"
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201,
+            "fields": {
+              "site-code": "SVC-SYNTH-NULL-001",
+              "label": "Synthetic call-in desk",
+              "zone": "central",
+              "service-kind": "depot"
+            }
+          },
+          "capture": "null-geometry-site",
+          "recordType": "service-site"
+        },
+        {
+          "id": "create-edge-service-site",
+          "accessProfile": "service-site-admin",
+          "claims": {
+            "principal": "synthetic-service-site-admin",
+            "purpose": "service-site-administration",
+            "scopes": [
+              "service-sites:seed"
+            ]
+          },
+          "request": {
+            "type": "create",
+            "data": {
+              "native-id": "33333333-3333-4333-8333-333333333333",
+              "site-code": "SVC-SYNTH-EDGE-001",
+              "label": "Synthetic exact edge water point",
+              "zone": "edge",
+              "service-kind": "water-point",
+              "installation-client-id": "qgis-installation-edge",
+              "location": {
+                "type": "Point",
+                "coordinates": [
+                  100.7,
+                  13.9
+                ]
+              }
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201,
+            "fields": {
+              "site-code": "SVC-SYNTH-EDGE-001",
+              "zone": "edge",
+              "location": {
+                "type": "Point",
+                "coordinates": [
+                  100.7,
+                  13.9
+                ]
+              }
+            }
+          },
+          "capture": "edge-site",
+          "recordType": "service-site"
+        },
+        {
+          "id": "public-map-reader-lists-public-point-fields",
+          "accessProfile": "map-reader",
+          "claims": {
+            "principal": "synthetic-public-map",
+            "purpose": "service-site-public-map",
+            "scopes": [
+              "service-sites:public:read"
+            ]
+          },
+          "request": {
+            "type": "query",
+            "count": true,
+            "top": 10,
+            "select": [
+              "native-id",
+              "site-code",
+              "label",
+              "zone",
+              "service-kind",
+              "location"
+            ]
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "count": 3
+          },
+          "recordType": "service-site"
+        },
+        {
+          "id": "public-map-reader-bbox-finds-central-site",
+          "accessProfile": "map-reader",
+          "claims": {
+            "principal": "synthetic-public-map",
+            "purpose": "service-site-public-map",
+            "scopes": [
+              "service-sites:public:read"
+            ]
+          },
+          "request": {
+            "type": "query",
+            "count": true,
+            "top": 10,
+            "bbox": {
+              "west": "100.540000000",
+              "south": "13.740000000",
+              "east": "100.560000000",
+              "north": "13.760000000"
+            },
+            "select": [
+              "native-id",
+              "site-code",
+              "label",
+              "zone",
+              "service-kind",
+              "location"
+            ]
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "count": 1
+          },
+          "recordType": "service-site"
+        },
+        {
+          "id": "directory-reader-lists-without-geometry",
+          "accessProfile": "directory-reader",
+          "claims": {
+            "principal": "synthetic-public-directory",
+            "purpose": "service-site-public-directory",
+            "scopes": [
+              "service-sites:public:read"
+            ]
+          },
+          "request": {
+            "type": "query",
+            "count": true,
+            "top": 10,
+            "select": [
+              "native-id",
+              "site-code",
+              "label",
+              "zone",
+              "service-kind"
+            ]
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "count": 3
+          },
+          "recordType": "service-site"
+        },
+        {
+          "id": "directory-reader-bbox-is-refused",
+          "accessProfile": "directory-reader",
+          "claims": {
+            "principal": "synthetic-public-directory",
+            "purpose": "service-site-public-directory",
+            "scopes": [
+              "service-sites:public:read"
+            ]
+          },
+          "request": {
+            "type": "query",
+            "bbox": {
+              "west": "100.540000000",
+              "south": "13.740000000",
+              "east": "100.560000000",
+              "north": "13.760000000"
+            },
+            "select": [
+              "native-id",
+              "site-code",
+              "label",
+              "zone",
+              "service-kind"
+            ]
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "query.invalid"
+          },
+          "recordType": "service-site"
+        },
+        {
+          "id": "installation-client-sees-own-central-row",
+          "accessProfile": "installation-map-reader",
+          "claims": {
+            "principal": "synthetic-qgis-installation",
+            "purpose": "service-site-map",
+            "scopes": [
+              "service-sites:map:read"
+            ],
+            "directClaims": {
+              "service_zones": "central"
+            }
+          },
+          "request": {
+            "type": "get",
+            "recordCapture": "central-site"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "site-code": "SVC-SYNTH-CENTRAL-001",
+              "zone": "central"
+            }
+          },
+          "recordType": "service-site"
+        },
+        {
+          "id": "installation-client-cannot-see-other-installation-row",
+          "accessProfile": "installation-map-reader",
+          "claims": {
+            "principal": "synthetic-qgis-installation",
+            "purpose": "service-site-map",
+            "scopes": [
+              "service-sites:map:read"
+            ],
+            "directClaims": {
+              "service_zones": "central"
+            }
+          },
+          "request": {
+            "type": "get",
+            "recordCapture": "edge-site"
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 404,
+            "problemCode": "resource.not_found"
+          },
+          "recordType": "service-site"
+        },
+        {
+          "id": "hidden-geometry-profile-gets-directory-fields",
+          "accessProfile": "hidden-geometry-reader",
+          "claims": {
+            "principal": "synthetic-directory-reader",
+            "purpose": "service-site-directory",
+            "scopes": [
+              "service-sites:directory:read"
+            ]
+          },
+          "request": {
+            "type": "get",
+            "recordCapture": "central-site"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "site-code": "SVC-SYNTH-CENTRAL-001",
+              "label": "Synthetic central clinic"
+            }
+          },
+          "recordType": "service-site"
+        },
+        {
+          "id": "get-only-profile-gets-site",
+          "accessProfile": "get-only-map-reader",
+          "claims": {
+            "principal": "synthetic-site-reader",
+            "purpose": "service-site-map",
+            "scopes": [
+              "service-sites:site:read"
+            ]
+          },
+          "request": {
+            "type": "get",
+            "recordCapture": "central-site"
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "fields": {
+              "site-code": "SVC-SYNTH-CENTRAL-001",
+              "location": {
+                "type": "Point",
+                "coordinates": [
+                  100.55,
+                  13.75
+                ]
+              }
+            }
+          },
+          "recordType": "service-site"
+        },
+        {
+          "id": "admin-refuses-coordinate-outside-authored-bounds",
+          "accessProfile": "service-site-admin",
+          "claims": {
+            "principal": "synthetic-service-site-admin",
+            "purpose": "service-site-administration",
+            "scopes": [
+              "service-sites:seed"
+            ]
+          },
+          "request": {
+            "type": "create",
+            "data": {
+              "native-id": "44444444-4444-4444-8444-444444444444",
+              "site-code": "SVC-SYNTH-OUTSIDE-001",
+              "label": "Synthetic outside point",
+              "zone": "edge",
+              "service-kind": "depot",
+              "installation-client-id": "qgis-installation-edge",
+              "location": {
+                "type": "Point",
+                "coordinates": [
+                  100.700000001,
+                  13.9
+                ]
+              }
+            }
+          },
+          "expect": {
+            "outcome": "refusal",
+            "status": 400,
+            "problemCode": "request.invalid"
+          },
+          "recordType": "service-site"
+        }
+      ]
+    }
+  ]
+}

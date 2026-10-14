@@ -1,0 +1,12 @@
+{
+  "operator": {"operatorCode":"OP-EXAMPLE","status":"active","jurisdiction":"zone-a"},
+  "facility": {
+    "facilityCode":"FAC-EXAMPLE",
+    "name":"Example facility",
+    "addressLine":"1 Example Road",
+    "city":"Example city",
+    "postalCode":"10200",
+    "operatorId":{"recordCapture":"operator"},
+    "jurisdiction":"zone-a"
+  }
+}

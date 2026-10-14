@@ -534,8 +534,8 @@ struct GenerateArgs {
     /// Existing registry lookup access profile (evidence-source only).
     #[arg(long)]
     access_profile: Option<String>,
-    /// Compiled entity to export (evidence-source only).
-    #[arg(long)]
+    /// Compiled Record type to export (evidence-source only).
+    #[arg(long = "record-type", value_name = "ID")]
     entity: Option<String>,
     /// Exact lookup alternatives; repeat to expose several selectors.
     #[arg(long = "selector", value_delimiter = ',')]
@@ -920,11 +920,11 @@ struct ImportAuthorityOpenArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
-    /// Entity the authority admits creates for.
-    #[arg(long, value_name = "ENTITY")]
+    /// Record type the authority admits creates for.
+    #[arg(long = "record-type", value_name = "ID")]
     entity: String,
 
-    /// Access profile holding the entity's `import` grant.
+    /// Access profile holding the Record type's `import` grant.
     #[arg(long, value_name = "PROFILE")]
     profile: String,
 
@@ -5063,14 +5063,16 @@ fn capture_candidate(
     command: &'static str,
     rehearse_successor: bool,
 ) -> Result<CapturedPackageCandidate, Refusal> {
-    let source = capture_project_source(&args.project).map_err(|diagnostic| {
+    let capture_failure = |diagnostic| {
         source_failure(
             command,
             diagnostic,
             DiagnosticArtifact::RegistryProject,
             SuggestedAction::CorrectAuthoringSource,
         )
-    })?;
+    };
+    let selected_project = canonicalize_project_path(&args.project).map_err(&capture_failure)?;
+    let source = capture_resolved_project_source(&selected_project).map_err(capture_failure)?;
     let compiled = compile_captured_project(&source, ProfileArg::Production, command)?;
     let identity = compiled.package().ok_or_else(|| {
         candidate_failure(
@@ -5110,7 +5112,7 @@ fn capture_candidate(
         })
         .collect();
     let fixture_journey_bytes = read_bounded_source_file(
-        &args.project.join(FIXTURE_JOURNEYS_PATH),
+        &selected_project.join(FIXTURE_JOURNEYS_PATH),
         "breg.source.fixture-journeys-missing",
         FIXTURE_JOURNEYS_PATH,
         MAX_PACKAGE_SOURCE_FILE_BYTES,
@@ -7097,53 +7099,19 @@ fn profile(production: bool) -> ProfileArg {
 }
 
 fn init(destination: &Path) -> Result<SuccessReport, FailureReport> {
-    let files = init_files();
-    write_source_files(destination, &files).map_err(|diagnostic| FailureReport {
-        ok: false,
-        command: "init",
-        diagnostics: vec![tool_diagnostic(
-            diagnostic,
-            DiagnosticArtifact::ProjectInitialization,
-            SuggestedAction::ChooseSafeOutputDirectory,
-        )],
-    })?;
-    let compiled = compile(destination, ProfileArg::Authoring, "init")?;
-    Ok(SuccessReport {
-        ok: true,
-        command: "init",
-        profile: ProfileArg::Authoring,
-        revision: Some(compiled.revision().to_owned()),
-        registry_revision: None,
-        package_digest: None,
-        findings: compiler_findings(&compiled),
-        artifacts: files
-            .iter()
-            .map(|(path, bytes)| artifact_report(path, init_media_type(path), bytes))
-            .collect(),
-        explanation: None,
-        next_steps: init_next_steps(destination),
-    })
-}
-
-/// What a reader does after `init`, named against the directory just written.
-///
-/// The example project reports findings and carries a reserved base IRI, both
-/// on purpose. A reader who is told neither reads a finding as a mistake and
-/// carries the reserved identity into a real package, so `init` says which of
-/// the two it left standing for teaching and which one has to go before a
-/// production package.
-fn init_next_steps(destination: &Path) -> Vec<String> {
-    vec![
-        format!("run 'bregctl check {}'", destination.display()),
-        format!(
-            "inspect the compiled contract with 'bregctl explain model {}'",
-            destination.display()
-        ),
-        "replace the example registry identity before preparing a production package".to_owned(),
-    ]
+    starters::run(destination, starters::DEFAULT_TEMPLATE)
 }
 
 fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, FailureReport> {
+    let selected_project = canonicalize_project_path(project_path).map_err(|diagnostic| {
+        source_failure(
+            "project lock",
+            diagnostic,
+            DiagnosticArtifact::RegistryProject,
+            SuggestedAction::CorrectAuthoringSource,
+        )
+    })?;
+    let project_path = selected_project.as_path();
     let mut source = capture_project_source_for_lock(project_path).map_err(|diagnostic| {
         source_failure(
             "project lock",
@@ -7239,7 +7207,18 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
     } else {
         Vec::new()
     };
-    let compiled = compile(project_path, ProfileArg::Authoring, "project lock")?;
+    let compiled = compile_captured_project(
+        &capture_resolved_project_source(project_path).map_err(|diagnostic| {
+            source_failure(
+                "project lock",
+                diagnostic,
+                DiagnosticArtifact::RegistryProject,
+                SuggestedAction::CorrectAuthoringSource,
+            )
+        })?,
+        ProfileArg::Authoring,
+        "project lock",
+    )?;
     Ok(SuccessReport {
         ok: true,
         command: "project lock",
@@ -7292,7 +7271,7 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
     };
     let options = registry_breg::evidence_source::EvidenceSourceOptions {
         access_profile: required(&args.access_profile, "--access-profile")?,
-        entity: required(&args.entity, "--entity")?,
+        entity: required(&args.entity, "--record-type")?,
         selectors: args.selectors.clone(),
         fields: args.fields.clone(),
         source_id: required(&args.source_id, "--source-id")?,
@@ -7759,6 +7738,15 @@ fn source_failure(
 }
 
 fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, Diagnostic> {
+    let selected_project = canonicalize_project_path(project_path)?;
+    capture_resolved_project_source(&selected_project)
+}
+
+/// Capture an already-selected physical project path without following aliases
+/// again if a component changes between the caller's reads.
+fn capture_resolved_project_source(
+    project_path: &Path,
+) -> Result<CapturedProjectSource, Diagnostic> {
     let project_directory = validate_project_directory(project_path)?;
     let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
@@ -8531,145 +8519,53 @@ fn module_asset_path_diagnostic(module_id: &str) -> Diagnostic {
         "derived SQL assets must be bounded module-relative .sql paths",
     )
 }
-
-/// The module digest placeholder the initialized project carries until this
-/// command computes it from the module it writes beside the project.
-const INIT_README: &[u8] = br#"# Local directory registry
-
-This project uses the native Record type model and generated CRUD. Its directory
-editor profile is bounded to the caller's jurisdiction.
-
-Run `bregctl check .`, `bregctl explain model .`, and
-`bregctl generate sdk . --output sdk` to inspect and generate its contracts.
-Replace the example registry identity before preparing a production package.
-"#;
-const INIT_REGISTRY_PROJECT: &[u8] =
-    include_bytes!("../../../products/breg/examples/refactor/minimal/registry.yaml");
-
-const INIT_RUNTIME_EXAMPLE: &[u8] =
-    br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json
-# An example runtime configuration. It is not read by any command: copy it to a
-# file the operator keeps outside this project, then replace every value below.
-# The runtime file is a deployment artifact. It binds one compiled package to
-# one database, one token issuer, and one listener. It never holds a credential:
-# a `secret:file/<name>` reference names an owner-only file under the file
-# provider root, and `secret:env/<NAME>` an environment variable.
-# Every host here is under `.example.invalid`, which never resolves.
-apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
-kind: BRegRuntimeConfig
-
-# Where the server listens. Client addresses and TLS termination belong to
-# whatever sits in front of it: the runtime reads neither peer addresses nor
-# forwarded headers.
-listener:
-  bind: 127.0.0.1:8080
-
-# The environment, instance, and database this file serves. A package names
-# none of them, so the same package directory is applied in every environment;
-# `bregctl apply` records this identity in the database it activates.
-identity:
-  environment: local
-  instanceId: generic-registry-1
-  databaseId: generic-registry-db-1
-  databaseInitializationEnvironment: local
-
-# The directory holding the owner-only files the references below name.
-secretProviders:
-  file:
-    root: /replace/me/secrets
-
-# Two connection URLs and the two PostgreSQL roles the package's policies are
-# written for: one role migrates, the other serves requests.
-database:
-  runtimeUrlRef: secret:file/runtime-database-url
-  migrationUrlRef: secret:file/migration-database-url
-  pool:
-    maximumConnections: 8
-  roles:
-    migration: registry_migration
-    runtime: registry_runtime
-
-# The activated package directory. The server starts only when the database
-# records this package's digest, the `packageDigest` `bregctl package` reports,
-# as its active package.
-package:
-  root: /replace/me/packages/build-1/package
-
-# The token issuer this deployment accepts, and the claim names that carry
-# Registry authority. `authorityClaims` must name the claims the access profiles
-# in registry.yaml read: `principalClaim`, and the claims row boundaries compare.
-authentication:
-  oidc:
-    issuer: https://issuer.example.invalid
-    audience: generic-registry
-    allowedAlgorithm: ES256
-    accessTokenType: at+jwt
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [generic-registry-client]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 30000
-    jwksSource:
-      type: discovery
-  authorityClaims:
-    principal: registry_principal
-    purpose: registry_purpose
-
-# The key that derives the keyed references in audit entries and the secret
-# that signs pagination cursors. Losing the audit key breaks the link between
-# references written before and after it; losing the cursor secret invalidates
-# issued cursors, so generate them once and keep them. The server appends audit
-# entries to the absolute JSON Lines file `path`, in an owner-only directory;
-# `bregctl` maintenance commands append to the sibling `audit.bregctl.jsonl`.
-audit:
-  hashKeyRef: secret:file/audit-key
-  destination: file
-  path: /var/lib/breg/audit/audit.jsonl
-cursor:
-  secretRef: secret:file/cursor-key
-
-# One binding for every webhook destination the package's events declare, and
-# no others: activation refuses a missing binding and an extra one alike. This
-# project declares no event, so the map is empty. A destination's URL, shared
-# HMAC key, and retry ceilings live only here, never in the project.
-eventDestinations: {}
-"#;
-
-fn init_files() -> BTreeMap<String, Vec<u8>> {
-    BTreeMap::from([
-        ("README.md".to_owned(), INIT_README.to_vec()),
-        ("registry.yaml".to_owned(), INIT_REGISTRY_PROJECT.to_vec()),
-    ])
-}
+/// Runtime configuration shared by PublicSchema initialization and the generic
+/// operator fixture. The minimal template owns its smaller runtime example.
+const INIT_RUNTIME_EXAMPLE: &[u8] = include_bytes!(
+    "../../../products/breg/fixtures/generic-operator-workflows/runtime.example.yaml"
+);
 
 /// Retained generic rehearsal coverage uses native governed files independently
 /// of the small public initializer. Only its ordinary module lock is filled in.
 #[cfg(test)]
 pub(crate) fn retained_native_fixture_files() -> BTreeMap<String, Vec<u8>> {
     let module = include_bytes!(
-        "../tests/fixtures/retained-native/generic/modules/record-notes/module.yaml"
+        "../../../products/breg/fixtures/generic-operator-workflows/modules/record-notes/module.yaml"
     );
     let parsed = parse_module_yaml(module).expect("retained native module parses");
-    let project = include_str!("../tests/fixtures/retained-native/generic/registry.yaml")
-        .replace("<module-digest>", &module_digest_with_assets(&parsed, &[]));
+    let project = render_project_with_module_locks(
+        include_bytes!("../../../products/breg/fixtures/generic-operator-workflows/registry.yaml"),
+        &[ModuleLockSource {
+            id: parsed.id.clone(),
+            version: parsed.version.clone(),
+            digest: Some(module_digest_with_assets(&parsed, &[])),
+        }],
+    )
+    .expect("retained native module lock renders");
     BTreeMap::from([
-        ("registry.yaml".to_owned(), project.into_bytes()),
+        ("registry.yaml".to_owned(), project),
         (
             "modules/record-notes/module.yaml".to_owned(),
             module.to_vec(),
         ),
         (
             "README.md".to_owned(),
-            include_bytes!("../tests/fixtures/retained-native/generic/README.md").to_vec(),
+            include_bytes!("../../../products/breg/fixtures/generic-operator-workflows/README.md")
+                .to_vec(),
         ),
         (
             "dev-clients.yaml".to_owned(),
-            include_bytes!("../tests/fixtures/retained-native/generic/dev-clients.yaml").to_vec(),
+            include_bytes!(
+                "../../../products/breg/fixtures/generic-operator-workflows/dev-clients.yaml"
+            )
+            .to_vec(),
         ),
         (
             FIXTURE_JOURNEYS_PATH.to_owned(),
-            include_bytes!("../tests/fixtures/retained-native/generic/tests/journeys.yaml")
-                .to_vec(),
+            include_bytes!(
+                "../../../products/breg/fixtures/generic-operator-workflows/tests/journeys.yaml"
+            )
+            .to_vec(),
         ),
         (
             "runtime.example.yaml".to_owned(),
@@ -8801,12 +8697,10 @@ fn module_locks_yaml(locks: &[ModuleLockSource]) -> String {
         rendered.push_str(&yaml_string(&lock.id));
         rendered.push_str("\n    version: ");
         rendered.push_str(&yaml_string(&lock.version));
-        rendered.push_str("\n    digest: ");
-        rendered.push_str(&yaml_string(
-            lock.digest
-                .as_deref()
-                .expect("project lock always writes module digests"),
-        ));
+        if let Some(digest) = &lock.digest {
+            rendered.push_str("\n    digest: ");
+            rendered.push_str(&yaml_string(digest));
+        }
         rendered.push('\n');
     }
     rendered
@@ -9455,6 +9349,25 @@ fn decimal_literal_order(left: &str, right: &str) -> Option<std::cmp::Ordering> 
     left.partial_cmp(&right)
 }
 
+/// Resolve the operator-selected project anchor. Aliases of this directory are
+/// allowed; governed source paths below it still use strict nofollow resolution.
+fn canonicalize_project_path(project_path: &Path) -> Result<PathBuf, Diagnostic> {
+    if project_path.as_os_str().is_empty() {
+        return Err(diagnostic(
+            "breg.source.project-path-unsafe",
+            "project",
+            "the project path must name a directory",
+        ));
+    }
+    fs::canonicalize(project_path).map_err(|_| {
+        diagnostic(
+            "breg.source.project-invalid",
+            "project",
+            "the project directory is not available",
+        )
+    })
+}
+
 /// Resolve the project directory to a held descriptor, refusing a symbolic link
 /// at every component. Callers that read the project's own files afterwards read
 /// them through the returned descriptor.
@@ -9715,14 +9628,18 @@ fn write_files_with_before_publish(
     // Only the shape of the path is judged here. Whether the destination is
     // already taken is decided below, through the parent descriptor this
     // resolves, rather than by reaching the pathname a second time.
-    if output.as_os_str().is_empty() || has_parent_component(output) || output.file_name().is_none()
-    {
+    let output_name = output.file_name().filter(|name| {
+        output
+            .parent()
+            .is_some_and(|parent| parent.join(name) == output)
+    });
+    let Some(output_name) = output_name else {
         return Err(diagnostic(
             "output.destination.invalid",
             "output",
-            "the output directory must be a new path without parent-directory components",
+            "the output directory must be a new path with a directory name",
         ));
-    }
+    };
     let write_failed = || {
         diagnostic(
             "output.write.failed",
@@ -9730,10 +9647,22 @@ fn write_files_with_before_publish(
             "a generated artifact could not be written",
         )
     };
-    // Resolving once yields the parent directory descriptor that every stage,
-    // write, cleanup, and publication below runs through, so replacing a
-    // component of `output` afterwards cannot redirect any of them.
-    let destination = SafeEntry::resolve(output).map_err(|error| {
+    // The caller selects the parent directory, so resolve its aliases once.
+    // The leaf is never canonicalized: every stage, write, cleanup, and
+    // publication uses the strict parent descriptor below.
+    let parent_path = output
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent_path = fs::canonicalize(parent_path).map_err(|_| {
+        diagnostic(
+            "output.parent.invalid",
+            "output.parent",
+            "the output parent directory is not available; create it, or give a destination inside a directory that exists",
+        )
+    })?;
+    let selected_output = parent_path.join(output_name);
+    let destination = SafeEntry::resolve(&selected_output).map_err(|error| {
         path_diagnostic(
             error,
             "output.parent.invalid",
@@ -9753,7 +9682,7 @@ fn write_files_with_before_publish(
         return Err(diagnostic(
             "output.destination.invalid",
             "output",
-            "the output directory must be a new path without parent-directory components",
+            "the output directory must be a new path with a directory name",
         ));
     }
 
@@ -12456,20 +12385,6 @@ mod tests {
     }
 
     #[test]
-    fn initialization_emits_the_small_canonical_project() {
-        let files = init_files();
-        assert_eq!(
-            files.keys().map(String::as_str).collect::<Vec<_>>(),
-            vec!["README.md", "registry.yaml"]
-        );
-        assert_eq!(
-            files["registry.yaml"],
-            include_bytes!("../../../products/breg/examples/refactor/minimal/registry.yaml")
-        );
-        assert!(registry_breg::contract::parse_project_yaml(&files["registry.yaml"]).is_ok());
-    }
-
-    #[test]
     fn a_validator_reason_that_repeats_the_value_is_not_the_usage_message() {
         let refused = |reason: fn(&str) -> Result<String, String>, value: &str| {
             let error = clap::Command::new("bregctl")
@@ -14394,6 +14309,38 @@ accessProfiles:
             mismatch.diagnostics[0].message.contains("is not named"),
             "the mismatch diagnostic says the refusal identifies no record"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_candidate_captures_the_complete_project_through_a_selected_alias() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let project = root.join("project");
+        assert!(init(&project).is_ok());
+        let alias = root.join("project-alias");
+        std::os::unix::fs::symlink(&project, &alias).unwrap();
+        let candidate = capture_candidate(
+            &PackageCandidateArgs {
+                project: alias,
+                baseline_package: None,
+                reviewed_migrations: None,
+            },
+            "package",
+            false,
+        )
+        .unwrap_or_else(|_| panic!("capture includes governed journeys through the selected root"));
+        assert_eq!(
+            candidate.project.bytes,
+            fs::read(project.join("registry.yaml")).unwrap()
+        );
+        assert_eq!(
+            candidate.fixture_journeys.bytes,
+            fs::read(project.join(FIXTURE_JOURNEYS_PATH)).unwrap()
+        );
+        candidate
+            .prevalidate()
+            .expect("the captured initial candidate is complete");
     }
 
     #[test]

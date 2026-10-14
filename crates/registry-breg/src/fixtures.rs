@@ -7259,7 +7259,7 @@ journeys:
     #[test]
     fn handler_and_pattern_problem_responses_are_closed_against_compiled_bindings() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/native-models/products/breg/acceptance/person-registration-rhai");
+            .join("../../products/breg/acceptance/person-registration-rhai");
         let mut project =
             parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
         project

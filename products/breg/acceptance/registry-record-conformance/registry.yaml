@@ -1,104 +1,223 @@
-apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
-kind: BRegProject
-project:
-  id: cross-product-conformance
-  canonicalBaseIri: https://cross-product.example.invalid
-  version: 0.1.0
-  defaultLanguage: en
-package:
-  sourceRevision: cross-product-conformance-0.1.0
-manifestProjection:
-  accessProfile: public-reader
-  classificationCeiling: public
-  catalog:
-    baseUrl: https://cross-product.example.invalid
-    title: Cross-product Registry Record conformance catalog
-    description: Synthetic public and protected datasets used for local conformance proof.
-    publisher:
-      id: cross-product-conformance-authority
-      name: Synthetic Conformance Authority
-      iri: https://cross-product.example.invalid/authority
-    conformsTo:
-      - https://www.w3.org/TR/vocab-dcat-3/
-    standards:
-      dcat: "3.0"
-      jsonSchema: 2020-12
-  datasets:
-    - id: public-units
-      title: Public synthetic units
-      description: Public semantic canary records.
-      owner: Synthetic Conformance Authority
-      status: active
-      version: "1"
-    - id: protected-units
-      title: Protected synthetic units
-      description: Protected semantic canary records.
-      owner: Synthetic Conformance Authority
-      status: active
-      version: "1"
-      accessProfile: protected-reader
-  dataServices:
-    - id: registry-record-api
-      title: Synthetic Registry Record API
-      endpointUrl: https://cross-product.example.invalid/v1
-      endpointDescription: https://cross-product.example.invalid/openapi.json
-      conformsTo: https://spec.openapis.org/oas/v3.1.0
-      servesDatasets: [public-units, protected-units]
-  distributions:
-    - id: public-units-json
-      dataset: public-units
-      accessService: registry-record-api
-      accessUrl: https://cross-product.example.invalid/v1/records/public-units
-      mediaType: application/json
-    - id: protected-units-json
-      dataset: protected-units
-      accessService: registry-record-api
-      accessUrl: https://cross-product.example.invalid/v1/records/protected-units
-      mediaType: application/json
-  publicService:
-    id: cross-product-conformance-service
-    title: Cross-product Registry Record conformance service
-modules:
-  - id: registry-record-conformance-core
-    version: 0.1.0
-    digest: "sha256:dc3e95960a379dba36ffe2d14610240a49a736c014fa16771c7ba1bc443f59d6"
-accessProfiles:
-  - id: public-reader
-    default: true
-    principalClaim: registry_principal
-    requiredScopes: [records:public:read]
-    requiredPurposes: [public-read]
-    permissions:
-      entities:
-        - entity: public-unit
-          rowBoundaries: unrestricted
-          operations: [get, list]
-          readableFields: [label]
-  - id: protected-reader
-    default: true
-    principalClaim: registry_principal
-    requiredScopes: [records:protected:read]
-    requiredPurposes: [bounded-read]
-    permissions:
-      entities:
-        - entity: protected-unit
-          rowBoundaries: unrestricted
-          operations: [get, list]
-          readableFields: [label]
-  - id: fixture-writer
-    default: true
-    principalClaim: registry_principal
-    requiredScopes: [records:fixture:write]
-    requiredPurposes: [fixture-setup]
-    permissions:
-      entities:
-        - entity: public-unit
-          rowBoundaries: unrestricted
-          operations: [create]
-          readableFields: [label]
-          writableFields: [label]
-        - entity: protected-unit
-          rowBoundaries: unrestricted
-          operations: [create]
-          readableFields: [label]
-          writableFields: [label]
+{
+  "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind": "BRegProject",
+  "project": {
+    "id": "cross-product-conformance",
+    "canonicalBaseIri": "https://cross-product.example.invalid",
+    "version": "0.1.0",
+    "defaultLanguage": "en"
+  },
+  "package": {
+    "sourceRevision": "cross-product-conformance-0.1.0"
+  },
+  "manifestProjection": {
+    "accessProfile": "public-reader",
+    "classificationCeiling": "public",
+    "catalog": {
+      "baseUrl": "https://cross-product.example.invalid",
+      "title": "Cross-product Registry Record conformance catalog",
+      "description": "Synthetic public and protected datasets used for local conformance proof.",
+      "publisher": {
+        "id": "cross-product-conformance-authority",
+        "name": "Synthetic Conformance Authority",
+        "iri": "https://cross-product.example.invalid/authority"
+      },
+      "conformsTo": [
+        "https://www.w3.org/TR/vocab-dcat-3/"
+      ],
+      "standards": {
+        "dcat": "3.0",
+        "jsonSchema": "2020-12"
+      }
+    },
+    "datasets": [
+      {
+        "id": "public-units",
+        "title": "Public synthetic units",
+        "description": "Public semantic canary records.",
+        "owner": "Synthetic Conformance Authority",
+        "status": "active",
+        "version": "1"
+      },
+      {
+        "id": "protected-units",
+        "title": "Protected synthetic units",
+        "description": "Protected semantic canary records.",
+        "owner": "Synthetic Conformance Authority",
+        "status": "active",
+        "version": "1",
+        "accessProfile": "protected-reader"
+      }
+    ],
+    "dataServices": [
+      {
+        "id": "registry-record-api",
+        "title": "Synthetic Registry Record API",
+        "endpointUrl": "https://cross-product.example.invalid/v1",
+        "endpointDescription": "https://cross-product.example.invalid/openapi.json",
+        "conformsTo": "https://spec.openapis.org/oas/v3.1.0",
+        "servesDatasets": [
+          "public-units",
+          "protected-units"
+        ]
+      }
+    ],
+    "distributions": [
+      {
+        "id": "public-units-json",
+        "dataset": "public-units",
+        "accessService": "registry-record-api",
+        "accessUrl": "https://cross-product.example.invalid/v1/records/public-units",
+        "mediaType": "application/json"
+      },
+      {
+        "id": "protected-units-json",
+        "dataset": "protected-units",
+        "accessService": "registry-record-api",
+        "accessUrl": "https://cross-product.example.invalid/v1/records/protected-units",
+        "mediaType": "application/json"
+      }
+    ],
+    "publicService": {
+      "id": "cross-product-conformance-service",
+      "title": "Cross-product Registry Record conformance service"
+    }
+  },
+  "accessProfiles": [
+    {
+      "id": "public-reader",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "records:public:read"
+      ],
+      "requiredPurposes": [
+        "public-read"
+      ],
+      "permissions": {
+        "records": [
+          {
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "get",
+              "list"
+            ],
+            "readableFields": [
+              "label"
+            ],
+            "recordType": "public-unit"
+          }
+        ]
+      }
+    },
+    {
+      "id": "protected-reader",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "records:protected:read"
+      ],
+      "requiredPurposes": [
+        "bounded-read"
+      ],
+      "permissions": {
+        "records": [
+          {
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "get",
+              "list"
+            ],
+            "readableFields": [
+              "label"
+            ],
+            "recordType": "protected-unit"
+          }
+        ]
+      }
+    },
+    {
+      "id": "fixture-writer",
+      "default": true,
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "records:fixture:write"
+      ],
+      "requiredPurposes": [
+        "fixture-setup"
+      ],
+      "permissions": {
+        "records": [
+          {
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create"
+            ],
+            "readableFields": [
+              "label"
+            ],
+            "writableFields": [
+              "label"
+            ],
+            "recordType": "public-unit"
+          },
+          {
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create"
+            ],
+            "readableFields": [
+              "label"
+            ],
+            "writableFields": [
+              "label"
+            ],
+            "recordType": "protected-unit"
+          }
+        ]
+      }
+    }
+  ],
+  "recordTypes": [
+    {
+      "id": "public-unit",
+      "primaryDataset": "public-units",
+      "route": "public-units",
+      "mutationMode": "mutable",
+      "classification": "public",
+      "fields": [
+        {
+          "id": "label",
+          "type": "string",
+          "required": true,
+          "maximumLength": 160,
+          "classification": "public"
+        }
+      ]
+    },
+    {
+      "id": "protected-unit",
+      "primaryDataset": "protected-units",
+      "route": "protected-units",
+      "mutationMode": "mutable",
+      "classification": "internal",
+      "fields": [
+        {
+          "id": "label",
+          "type": "string",
+          "required": true,
+          "maximumLength": 160,
+          "classification": "internal"
+        }
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "id": "public-units"
+    },
+    {
+      "id": "protected-units"
+    }
+  ]
+}

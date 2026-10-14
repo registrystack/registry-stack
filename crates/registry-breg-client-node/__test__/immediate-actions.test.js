@@ -16,9 +16,9 @@ const metadata = {
     conditionRoute: '/v1/actions/update-item/target-conditions',
     inputMode: 'handler', maximumInputStringBytes: 16384,
     inputs: [
-      { id: 'target', apiName: 'targetId', required: true, nullable: false, classification: 'internal', fieldType: { type: 'reference', target: 'item', onDelete: 'restrict' } },
-      { id: 'label', apiName: 'label', required: false, nullable: true, classification: 'internal', fieldType: { type: 'string', minimumLength: 1, maximumLength: 16 } },
-      { id: 'sequence', apiName: 'sequence', required: false, nullable: true, classification: 'internal', fieldType: { type: 'int64' } },
+      { id: 'target', apiName: 'targetId', required: true, nullable: false, classification: 'internal', schema: { type: 'string', format: 'uuid' }, fieldType: { type: 'reference', target: 'item', onDelete: 'restrict' } },
+      { id: 'label', apiName: 'label', required: false, nullable: true, classification: 'internal', schema: { anyOf: [{ type: 'string', minLength: 1, maxLength: 16 }, { type: 'null' }] }, fieldType: { type: 'string', minimumLength: 1, maximumLength: 16 } },
+      { id: 'sequence', apiName: 'sequence', required: false, nullable: true, classification: 'internal', schema: { anyOf: [{ type: 'integer', format: 'int64' }, { type: 'null' }] }, fieldType: { type: 'int64' } },
     ],
     referenceInputs: [{ input: 'target', apiName: 'targetId', targetRecordType: 'item' }],
     requiredConditionKeys: ['targetId'],
@@ -52,6 +52,7 @@ test('metadata-selected immediate action conditions and invocations use exact ca
     assert.equal(contract.actions[0].inputMode, 'handler');
     assert.equal(contract.actions[0].maximumInputStringBytes, 16384);
     assert.equal(contract.actions[0].inputs[1].nullable, true);
+    assert.deepEqual(JSON.parse(contract.actions[0].inputs[1].schemaJson), metadata.actions[0].inputs[1].schema);
     assert.match(contract.actionsJson, /"update-item"/);
     const binding = contract.selectAction('update-item', 'writer');
     const conditions = await client.actionTargetConditions(binding, { targetId });

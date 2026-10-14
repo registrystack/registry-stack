@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use jsonschema::{Draft, JSONSchema};
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use registry_platform_canonical_json::parse_json_preserving_integers;
 use serde_json::{Map, Number, Value};
 use time::{Date, Month};
 use uuid::Uuid;
@@ -780,7 +780,7 @@ pub struct BRegActionInputDescriptor {
     api_name: String,
     label: Option<String>,
     description: Option<String>,
-    schema: Option<Value>,
+    schema: Value,
     field_type: Value,
     required: bool,
     nullable: Option<bool>,
@@ -808,8 +808,8 @@ impl BRegActionInputDescriptor {
         self.description.as_deref()
     }
     #[must_use]
-    pub fn schema(&self) -> Option<&Value> {
-        self.schema.as_ref()
+    pub fn schema(&self) -> &Value {
+        &self.schema
     }
     #[must_use]
     pub fn field_type(&self) -> &Value {
@@ -3238,11 +3238,8 @@ fn parse_actions(value: Value) -> Result<Vec<BRegActionDescriptor>, BRegMetadata
 
 fn parse_action_input(value: Value) -> Result<BRegActionInputDescriptor, BRegMetadataError> {
     let mut input = object(value)?;
-    let schema = input.remove("schema");
-    if schema
-        .as_ref()
-        .is_some_and(|value| !value.is_object() && !value.is_boolean())
-    {
+    let schema = required(&mut input, "schema")?;
+    if !schema.is_object() && !schema.is_boolean() {
         return Err(metadata_error(BRegMetadataErrorKind::Shape));
     }
     let parsed = BRegActionInputDescriptor {
@@ -3410,129 +3407,13 @@ fn validate_metadata_references(
 }
 
 fn decode_unique_json(bytes: &[u8]) -> Result<Value, BRegMetadataError> {
-    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let value = UniqueValue::deserialize(&mut deserializer)
-        .map_err(|error| {
-            if error.to_string().contains("duplicate JSON object member") {
-                metadata_error(BRegMetadataErrorKind::DuplicateMember)
-            } else if error.to_string().contains("metadata resource bound") {
-                metadata_error(BRegMetadataErrorKind::Bound)
-            } else {
-                metadata_error(BRegMetadataErrorKind::Json)
-            }
-        })?
-        .0;
-    deserializer
-        .end()
-        .map_err(|_| metadata_error(BRegMetadataErrorKind::Json))?;
-    Ok(value)
-}
-
-struct UniqueValue(Value);
-
-impl<'de> Deserialize<'de> for UniqueValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(UniqueValueVisitor)
-    }
-}
-
-struct UniqueValueVisitor;
-
-impl<'de> Visitor<'de> for UniqueValueVisitor {
-    type Value = UniqueValue;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("one JSON value")
-    }
-
-    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::Bool(value)))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::Number(Number::from(value))))
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::Number(Number::from(value))))
-    }
-
-    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Number::from_f64(value)
-            .map(Value::Number)
-            .map(UniqueValue)
-            .ok_or_else(|| E::custom("invalid JSON number"))
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        self.visit_string(value.to_owned())
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        if value.len() > MAX_STRING_BYTES {
-            return Err(E::custom("metadata resource bound"));
+    parse_json_preserving_integers(bytes).map_err(|error| {
+        if error.to_string().contains("duplicate JSON object member") {
+            metadata_error(BRegMetadataErrorKind::DuplicateMember)
+        } else {
+            metadata_error(BRegMetadataErrorKind::Json)
         }
-        Ok(UniqueValue(Value::String(value)))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::Null))
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::Null))
-    }
-
-    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        UniqueValue::deserialize(deserializer)
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut values = Vec::new();
-        while let Some(value) = sequence.next_element::<UniqueValue>()? {
-            if values.len() >= MAX_ARRAY_ITEMS {
-                return Err(de::Error::custom("metadata resource bound"));
-            }
-            values.push(value.0);
-        }
-        Ok(UniqueValue(Value::Array(values)))
-    }
-
-    fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut values = Map::new();
-        while let Some(key) = object.next_key::<String>()? {
-            if key.len() > MAX_STRING_BYTES || values.len() >= MAX_OBJECT_MEMBERS {
-                return Err(de::Error::custom("metadata resource bound"));
-            }
-            if values.contains_key(&key) {
-                return Err(de::Error::custom("duplicate JSON object member"));
-            }
-            let value = object.next_value::<UniqueValue>()?;
-            values.insert(key, value.0);
-        }
-        Ok(UniqueValue(Value::Object(values)))
-    }
+    })
 }
 
 fn validate_value_bounds(value: &Value) -> Result<(), BRegMetadataError> {

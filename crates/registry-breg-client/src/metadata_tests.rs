@@ -470,6 +470,29 @@ fn duplicate_json_members_are_refused_at_every_depth() {
 }
 
 #[test]
+fn strict_metadata_refuses_trailing_documents_and_rounded_numbers_without_values() {
+    for invalid in [
+        br#"{"canary-sensitive-member":0.10000000000000001}"#.as_slice(),
+        br#"{"canary-sensitive-member":9007199254740993.0}"#,
+        br#"{"canary-sensitive-member":1e-9999}"#,
+        br#"{"canary-sensitive-member":1} {}"#,
+    ] {
+        let error = BRegMetadata::from_slice(invalid).unwrap_err();
+        assert_eq!(error.kind(), BRegMetadataErrorKind::Json);
+        assert!(!format!("{error:?} {error}").contains("canary-sensitive-member"));
+    }
+    let mut value = fixture();
+    value["extension"] = json!({"wide":9_007_199_254_740_993_u64});
+    assert!(BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_ok());
+    let error = BRegMetadata::from_slice(
+        br#"{"outer":{"canary-sensitive-member":1,"canary-sensitive-member":2}}"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), BRegMetadataErrorKind::DuplicateMember);
+    assert!(!format!("{error:?} {error}").contains("canary-sensitive-member"));
+}
+
+#[test]
 fn legacy_entity_summary_cannot_grant_operation_authority() {
     let legacy = json!({
         "registryId": "business-registry",
@@ -1025,8 +1048,7 @@ fn complete_descriptive_metadata_is_retained_and_spatial_is_optional() {
         .is_none());
 }
 
-#[test]
-fn get_only_proposal_metadata_promotes_get_without_list_or_start() {
+fn proposal_action_metadata() -> Value {
     let mut value = fixture();
     value["proposals"] = json!({"method":"GET","path":"/v1/proposals","accessProfiles":[],
         "get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["reviewer"]}});
@@ -1041,6 +1063,35 @@ fn get_only_proposal_metadata_promotes_get_without_list_or_start() {
         "access":{"selectedProfile":"reviewer"},"routes":{},
         "bounds":{"maximumTargets":4,"maximumFieldMutations":8,"maximumSnapshotBytes":1024}
     }]);
+    value
+}
+
+#[test]
+fn action_input_schema_is_required_and_retains_complex_constraints() {
+    let mut value = proposal_action_metadata();
+    let schema = json!({"type":"object", "additionalProperties":false,
+        "required":["recordedAt","amount"], "properties": {
+            "recordedAt":{"type":"string","format":"date-time"},
+            "amount":{"type":"string","pattern":"^[0-9]+\\.[0-9]{2}$"},
+            "category":{"enum":["one","two"]}},
+        "allOf":[{"if":{"required":["category"]},"then":{"required":["recordedAt"]}}]});
+    value["actions"][0]["inputs"][0]["schema"] = schema.clone();
+    assert_eq!(parse(&value).actions()[0].inputs()[0].schema(), &schema);
+    value["actions"][0]["inputs"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("schema");
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
+    );
+}
+
+#[test]
+fn get_only_proposal_metadata_promotes_get_without_list_or_start() {
+    let mut value = proposal_action_metadata();
     let metadata = parse(&value);
     assert!(metadata.select_proposal_get("reviewer").is_ok());
     assert!(metadata.select_proposal_get("author").is_err());
@@ -1049,7 +1100,7 @@ fn get_only_proposal_metadata_promotes_get_without_list_or_start() {
     assert_eq!(action.invoke_path(), None);
     assert_eq!(action.inputs()[0].label(), "New address line");
     assert_eq!(action.inputs()[0].description(), Some("Postal address"));
-    assert_eq!(action.inputs()[0].schema().unwrap()["maxLength"], 100);
+    assert_eq!(action.inputs()[0].schema()["maxLength"], 100);
     assert!(metadata
         .select_action("correct-address", "reviewer")
         .is_err());
@@ -1117,7 +1168,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         "conditionRoute": null,
         "apiName": "registerCompany", "revision": REVISION, "display": {}, "execution": {"mode":"immediate"},
         "inputMode": "fixed", "maximumInputStringBytes": null,
-        "inputs": [{"id": "legal-name", "apiName": "legalName", "fieldType": {
+        "inputs": [{"id": "legal-name", "apiName": "legalName", "schema": {"type":"string","minLength":0,"maxLength":100}, "fieldType": {
             "type": "string", "minimumLength": 0, "maximumLength": 100},
             "required": true, "nullable": false, "classification": "internal"}],
         "referenceInputs": [], "requiredConditionKeys": [],

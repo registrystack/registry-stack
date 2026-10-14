@@ -1487,12 +1487,6 @@ fn unchanged_rebuild_is_empty_over_a_same_compiler_predecessor_and_not_over_an_e
     assert!(registry_breg::migration::successor_plan_is_empty(
         &same_compiler
     ));
-    assert!(
-        registry_breg::migration::successor_plan_is_empty_for_predecessor(
-            &same_compiler,
-            &predecessor
-        )
-    );
 
     // A predecessor built before the digest existed states none, so the plan
     // cannot tell its installed DDL from this compiler's and refreshes it.
@@ -2346,7 +2340,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
             r#""id":"reader","requiredScopes":"unrestricted","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
             r#","constraints":[{"type":"temporal-non-overlap","id":"code-time","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]"#,
             "",
-            r#","temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["code"]}"#,
+            r#","temporal":{"startField":"valid-from","endField":"valid-to"}"#,
         ),
         Variant::TemporalRoleBase => asset_entity(
             r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}"#,

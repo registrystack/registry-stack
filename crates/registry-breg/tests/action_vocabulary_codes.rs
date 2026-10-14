@@ -14,20 +14,19 @@ use registry_breg::package::{
 };
 use registry_breg::CompiledRegistry;
 
-const CONSENT_PROJECT: &str = include_str!(
-    "fixtures/native-models/products/breg/fixtures/consent-person-registry/registry.yaml"
-);
+const CONSENT_PROJECT: &str =
+    include_str!("../../../products/breg/fixtures/consent-person-registry/registry.yaml");
 const CONSENT_MODULE: &str = include_str!(
-    "fixtures/native-models/products/breg/fixtures/consent-person-registry/modules/consent-person/module.yaml"
+    "../../../products/breg/fixtures/consent-person-registry/modules/consent-person/module.yaml"
 );
 const CONSENT_CORE_MODULE: &str = include_str!(
-    "fixtures/native-models/products/breg/fixtures/consent-person-registry/modules/consent-person-registry-core/module.yaml"
+    "../../../products/breg/fixtures/consent-person-registry/modules/consent-person-registry-core/module.yaml"
 );
 const ASSET_PROJECT: &str = include_str!(
-    "fixtures/native-models/products/breg/fixtures/asset-registration-actions-compact/registry.yaml"
+    "../../../products/breg/fixtures/asset-registration-actions-compact/registry.yaml"
 );
 const ASSET_MODULE: &str = include_str!(
-    "fixtures/native-models/products/breg/fixtures/asset-registration-actions-compact/modules/asset-registration-actions-core/module.yaml"
+    "../../../products/breg/fixtures/asset-registration-actions-compact/modules/asset-registration-actions-core/module.yaml"
 );
 
 const WITHDRAW_DECISION: &str = "{id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [withdrawn], required: true, classification: internal}";

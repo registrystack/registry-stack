@@ -439,7 +439,7 @@ fn the_dev_registry_serves_with_one_role_and_its_rehearsal_stays_split() {
     );
 }
 
-fn write_init_project() -> (tempfile::TempDir, PathBuf) {
+fn write_retained_project() -> (tempfile::TempDir, PathBuf) {
     let temporary = tempfile::tempdir().expect("temporary");
     let project = fs::canonicalize(temporary.path()).expect("canonical");
     for (path, bytes) in crate::retained_native_fixture_files() {
@@ -558,53 +558,51 @@ fn local_sub_runtime_resolves_only_its_private_captured_journey() {
 }
 
 #[test]
-fn a_fresh_init_project_starts_without_edits() {
-    // `bregctl dev` runs the local session as the registry's one instance and
-    // needs one client per profile the journeys use, so the project `bregctl
-    // init` writes must satisfy both with its own clients file: a reader's
-    // first start needs no edit between the two commands.
-    let (_temporary, project) = write_init_project();
+fn a_fresh_init_project_is_ready_for_the_native_dev_lifecycle() {
+    let temporary = tempfile::tempdir().expect("temporary");
+    let project = fs::canonicalize(temporary.path()).unwrap().join("project");
+    crate::init(&project).unwrap_or_else(|failure| {
+        panic!("init failed: {}", serde_json::to_string(&failure).unwrap())
+    });
     let client_bytes = fs::read(project.join("dev-clients.yaml")).expect("init writes clients");
-    let clients =
-        config::clients("dev-clients.yaml", &client_bytes).expect("the initialized clients parse");
-    let captured = capture(&project, &client_bytes).expect("a fresh init project is a dev project");
-    assert_eq!(captured.instance_id, "generic-registry");
+    let clients = config::clients("dev-clients.yaml", &client_bytes).expect("clients parse");
+    let captured = capture(&project, &client_bytes).expect("init writes a complete dev project");
+    assert_eq!(captured.instance_id, "local-directory");
     bind_journey_profiles(&captured.files["tests/journeys.yaml"], &clients)
-        .expect("every journey profile has a client");
+        .expect("each allowed and refused journey has an unambiguous client");
+    assert_eq!(
+        journey_client(
+            &clients,
+            "directory-contact",
+            "conceal-contact-outside-jurisdiction",
+            "directory-editor"
+        )
+        .unwrap()
+        .claims["jurisdiction"],
+        "zone-b"
+    );
 }
 
 #[test]
-fn the_professional_licences_submitter_is_a_person_a_paired_review_can_exclude() {
-    // The paired `professional-review` Casework template excludes a change
-    // request's initiator from its review, and BReg names an initiator only
-    // for a human caller. A service submitter would have its review refused.
-    let client_bytes = fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/starters/professional-licences/core/dev-clients.yaml"),
-    )
-    .expect("the starter's clients");
-    let clients =
-        config::clients("dev-clients.yaml", &client_bytes).expect("the starter's clients parse");
-    let submitter = clients
-        .clients
-        .iter()
-        .find(|client| {
-            client
-                .access_profiles
-                .iter()
-                .any(|profile| profile == "editor")
-        })
-        .expect("the editor profile has a local client");
-    assert_eq!(
-        submitter.claims.get("registry_actor_kind"),
-        Some(&serde_json::json!("human"))
-    );
-    assert!(submitter.allow_human_fixture);
+fn every_initialized_template_has_complete_local_clients_and_journeys() {
+    for template in crate::starters::ids() {
+        let temporary = tempfile::tempdir().expect("temporary");
+        let project = fs::canonicalize(temporary.path()).unwrap().join("project");
+        crate::starters::run(&project, template).unwrap_or_else(|failure| {
+            panic!("{template}: {}", serde_json::to_string(&failure).unwrap())
+        });
+        let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+        let clients = config::clients("dev-clients.yaml", &client_bytes).unwrap();
+        let captured = capture(&project, &client_bytes)
+            .unwrap_or_else(|error| panic!("{template}: {error:#}"));
+        bind_journey_profiles(&captured.files["tests/journeys.yaml"], &clients)
+            .unwrap_or_else(|error| panic!("{template}: {error:#}"));
+    }
 }
 
 #[test]
 fn a_journey_profile_without_a_client_is_refused_before_any_service_starts() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let client_bytes = br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
 kind: BRegDevClients
 clients:
@@ -1553,7 +1551,7 @@ clients:
 /// binds its profile.
 #[test]
 fn rehearsal_binding_still_resolves_each_journey_step_despite_an_unbound_client() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let client_bytes = fs::read(project.join("dev-clients.yaml")).expect("init writes clients");
     let mut clients =
         config::clients("dev-clients.yaml", &client_bytes).expect("the initialized clients parse");
@@ -2375,7 +2373,7 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
 
     // A start resolves the prerequisites and compares them before it inspects
     // a container or launches the supervisor.
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let prerequisites = project.join("prerequisites");
     fs::create_dir(&prerequisites).unwrap();
     for (name, reported) in [
@@ -3056,7 +3054,7 @@ fn start_without_binaries(project: &Path) -> Result<Value> {
 
 #[test]
 fn a_first_start_reads_the_projects_dev_clients_without_a_flag() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let expected = fs::canonicalize(project.join("dev-clients.yaml")).unwrap();
     assert_eq!(clients_file(None, None, &project).unwrap(), expected);
 
@@ -3108,7 +3106,7 @@ fn append_comment(path: &Path, comment: &str) {
 
 #[test]
 fn the_source_pin_follows_the_compiled_meaning_not_the_authored_bytes() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let pin = |client_bytes: &[u8]| capture(&project, client_bytes).unwrap().digest;
     let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
     let original = pin(&client_bytes);
@@ -3167,7 +3165,7 @@ fn a_comment_in_a_handler_script_is_a_change_because_the_package_ships_its_bytes
     // The compiled registry carries the digest of the exact script bytes it
     // runs, so the pin treats any script edit, a comment included, as a
     // change of what the session would ship.
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     edit_authored(
         &project.join("registry.yaml"),
         "    permissions:\n      records:\n        - recordType: record-group\n          \
@@ -3206,7 +3204,7 @@ fn a_comment_in_a_handler_script_is_a_change_because_the_package_ships_its_bytes
 
 #[test]
 fn changed_inputs_are_refused_while_the_session_holds_records() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let state = retained_session(&project, Some("c".repeat(64)));
     edit_authored(
         &project.join("registry.yaml"),
@@ -3232,7 +3230,7 @@ fn changed_inputs_are_refused_while_the_session_holds_records() {
 fn a_byte_only_edit_keeps_the_session_that_holds_records() {
     // A comment changes no compiled meaning, so the retained session and its
     // records stay; the start goes on to look for the breg binary.
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let state = retained_session(&project, Some("c".repeat(64)));
     append_comment(
         &project.join("registry.yaml"),
@@ -3267,7 +3265,7 @@ fn a_byte_only_edit_keeps_the_session_that_holds_records() {
 fn changed_inputs_replace_a_session_whose_records_were_discarded() {
     // After `dev stop --remove` nothing remains for the source pin to protect,
     // so an edited project starts a fresh session on the retained ports.
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let mut state = retained_session(&project, None);
     let ports = unused_ports();
     state.breg_port = ports[0];
@@ -3539,7 +3537,7 @@ fn export_client_reuses_readable_nonexecutable_credentials_only() {
 
 #[test]
 fn removed_successor_database_is_refused_before_any_prerequisite_or_recreation() {
-    let (_temporary, project) = write_init_project();
+    let (_temporary, project) = write_retained_project();
     let mut state = retained_session(&project, Some("a".repeat(64)));
     state.sequence = 2;
     state.baseline_runtime = Some(state.root().join("baseline-1/runtime.yaml"));
@@ -3647,33 +3645,9 @@ fn prepare_source_stays_runnable_while_dev_help_omits_it() {
     assert!(error.contains("local state path is missing"), "{error}");
 }
 
-/// Every published starter is a project a first `bregctl dev` starts with no
-/// clients flag, so each one carries the file name that start reads.
-#[test]
-fn every_published_starter_carries_the_clients_file_a_first_start_reads() {
-    let starters = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/starters");
-    let mut covered = 0;
-    for entry in fs::read_dir(&starters).expect("the published starters") {
-        let project = entry.expect("starter entry").path().join("core");
-        if !project.is_dir() {
-            continue;
-        }
-        let resolved = clients_file(None, None, &project).expect("a first start reads the file");
-        assert_eq!(
-            resolved,
-            fs::canonicalize(project.join("dev-clients.yaml")).unwrap()
-        );
-        config::clients("dev-clients.yaml", &fs::read(&resolved).unwrap())
-            .expect("starter clients parse");
-        covered += 1;
-    }
-    // Naming the starters here would hold their subjects in shipped source.
-    assert_eq!(covered, 4, "every published starter is covered");
-}
-
 #[test]
 fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
-    let (_project_temp, project) = write_init_project();
+    let (_project_temp, project) = write_retained_project();
     let module = project.join("registry.yaml");
     let mut source: Value = serde_norway::from_slice(&fs::read(&module).unwrap()).unwrap();
     let entity = source["recordTypes"]
@@ -3734,7 +3708,7 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
 
 #[test]
 fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
-    let (_project_temp, project) = write_init_project();
+    let (_project_temp, project) = write_retained_project();
     let module = project.join("registry.yaml");
     let mut source: Value = serde_norway::from_slice(&fs::read(&module).unwrap()).unwrap();
     let entity = source["recordTypes"]
@@ -3785,7 +3759,7 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
 
 #[test]
 fn local_event_destinations_refuse_an_origin_without_a_usable_port() {
-    let (_project_temp, project) = write_init_project();
+    let (_project_temp, project) = write_retained_project();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
     let mut clients = config::clients("dev-clients.yaml", &bytes).unwrap();
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
@@ -3824,7 +3798,7 @@ fn local_event_destinations_refuse_an_origin_without_a_usable_port() {
 
 #[test]
 fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
-    let (_project_temp, project) = write_init_project();
+    let (_project_temp, project) = write_retained_project();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
     let mut clients = config::clients("dev-clients.yaml", &bytes).unwrap();
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
@@ -3894,7 +3868,7 @@ fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
 
 #[test]
 fn local_event_destinations_refuse_hmac_key_bytes_the_runtime_cannot_load() {
-    let (_project_temp, project) = write_init_project();
+    let (_project_temp, project) = write_retained_project();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
     let mut clients = config::clients("dev-clients.yaml", &bytes).unwrap();
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();

@@ -480,7 +480,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
         .findings()
         .iter()
         .find(|d| d.code == "breg.access.profile-writable-row-boundary")
-        .expect("a create-bearing grant still reports the writable boundary for review");
+        .expect("a patch with a multi-value boundary reports possible moves for review");
     assert!(
         finding.path.contains("entry")
             && finding.path.contains("reader")
@@ -507,12 +507,29 @@ fn create_grants_keep_the_row_boundary_field_writable() {
     create_only["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
         json!(["create", "get", "list"]);
     let create_only = compile(&create_only).unwrap();
-    let finding = create_only
+    assert!(create_only
         .findings()
         .iter()
-        .find(|d| d.code == "breg.access.profile-writable-row-boundary")
-        .unwrap();
-    assert!(!finding.message.contains("patch"), "{}", finding.message);
+        .all(|d| d.code != "breg.access.profile-writable-row-boundary"));
+
+    let mut equality = value.clone();
+    equality["recordTypes"][0]["accessRequirements"]["rowBoundaries"][0]["operator"] =
+        json!("equals");
+    equality["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"][0]["operator"] =
+        json!("equals");
+    let equality = compile(&equality).unwrap();
+    assert!(equality
+        .findings()
+        .iter()
+        .all(|d| d.code != "breg.access.profile-writable-row-boundary"));
+    let profile = &equality.entities()["entry"].access_profiles["reader"];
+    assert_eq!(profile.row_boundaries.len(), 1);
+    assert_eq!(
+        profile.row_boundaries[0].operator,
+        registry_breg::contract::BoundaryOperator::Equals
+    );
+    assert_eq!(profile.row_boundaries[0].field, "district");
+    assert_eq!(profile.row_boundaries[0].claim, "districts");
 
     // Taking the patch-only advice on a create-bearing grant refuses every create.
     value["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] = json!(["code"]);

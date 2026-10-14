@@ -91,7 +91,6 @@ pub struct PackageEnvelope {
 pub struct PackageManifest {
     pub package_id: String,
     pub compiler: CompilerIdentity,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub engine_features: BTreeSet<PackageEngineFeature>,
     pub schema_fingerprint: String,
     pub sources: CapturedSources,
@@ -100,8 +99,8 @@ pub struct PackageManifest {
 }
 
 /// Engine-owned catalog capabilities installed by the package's compiler.
-/// The set is hash-covered package identity and defaults empty only for
-/// predecessor packages produced before capability declarations existed.
+/// The exact current set is mandatory hash-covered identity for every package
+/// reader, including read-only predecessor planning.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageEngineFeature {
@@ -116,6 +115,13 @@ fn current_engine_features() -> BTreeSet<PackageEngineFeature> {
         PackageEngineFeature::StatisticalReleaseStore,
         PackageEngineFeature::CallerScopedIdempotency,
     ])
+}
+
+fn validate_engine_features(manifest: &PackageManifest) -> Result<()> {
+    if manifest.engine_features != current_engine_features() {
+        return Err(PackageError::Derivation);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -650,13 +656,6 @@ impl VerifiedPredecessorPackage {
     /// runtime access, SQL execution, or successor activation.
     pub fn history_schema_descriptor(&self) -> HistorySchemaDescriptor {
         self.history_schema_descriptor.clone()
-    }
-
-    /// The engine-owned capabilities this predecessor's hash-covered manifest
-    /// declares. A successor declaring one this set lacks has apply work even
-    /// when its authored model is unchanged.
-    pub fn engine_features(&self) -> &BTreeSet<PackageEngineFeature> {
-        &self.manifest.engine_features
     }
 }
 
@@ -3824,6 +3823,7 @@ fn load_predecessor_closure(
 ) -> Result<(VerifiedPredecessorPackage, BTreeMap<String, Vec<u8>>)> {
     let production = context.database_initialization_environment != "local";
     let (manifest, loaded) = load_verified_closure(root, shared, production)?;
+    validate_engine_features(&manifest)?;
     validate_source_inventory(&manifest)?;
     let governed = package_predecessor_governed_model(&manifest, &loaded)?;
     validate_predecessor_registry_bindings(&manifest, &governed)?;
@@ -4354,9 +4354,7 @@ fn rederive(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(CompiledRegistry, Option<ValidatedReviewedMigrationPlan>)> {
-    if manifest.engine_features != current_engine_features() {
-        return Err(PackageError::Derivation);
-    }
+    validate_engine_features(manifest)?;
     let compiled = compile_package_sources(manifest, loaded)?;
     let expected_artifacts = expected_artifact_bytes(manifest, &compiled)?;
     let packaged_artifacts = manifest

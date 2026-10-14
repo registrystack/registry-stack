@@ -57,6 +57,8 @@ declare const snapshotContinuation: SnapshotListContinuation
 declare const relationshipContinuation: RelationshipListContinuation
 declare const geoJsonContinuation: GeoJsonListContinuation
 
+metadata.actions[0]?.inputs[0]?.schemaJson.toUpperCase()
+
 if (metadata.statisticalDatasets !== null) {
   const dataset = metadata.statisticalDatasets[0]
   dataset?.id.toUpperCase()

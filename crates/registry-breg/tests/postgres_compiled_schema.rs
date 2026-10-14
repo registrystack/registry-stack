@@ -1663,7 +1663,7 @@ async fn assert_catalog_drift_is_rejected(
 
 async fn install_asset_fixture() {
     let project = parse_project_yaml(include_bytes!(
-        "fixtures/native-models/products/breg/acceptance/asset-site-placement/registry.yaml"
+        "../../../products/breg/acceptance/asset-site-placement/registry.yaml"
     ))
     .expect("actual asset fixture parses");
     let registry = compile_project(&project, &[], CompileProfile::Authoring)

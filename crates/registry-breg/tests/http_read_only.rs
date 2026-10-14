@@ -255,7 +255,6 @@ recordTypes:
     temporal:
       startField: valid-from
       endField: valid-to
-      scopeFields: [classified-status]
     constraints:
       - {type: temporal-non-overlap, scopeFields: [classified-status], startField: valid-from, endField: valid-to}
     hooks:
@@ -387,7 +386,6 @@ recordTypes:
     temporal:
       startField: valid-from
       endField: valid-to
-      scopeFields: [permit-number]
     constraints:
       - {type: unique, fields: [hidden-permit-key]}
       - {type: unique, fields: [permit-number, valid-from]}
@@ -408,7 +406,6 @@ recordTypes:
     temporal:
       startField: valid-from
       endField: valid-to
-      scopeFields: [inspection-code]
     constraints:
       - {type: unique, fields: [hidden-inspection-key, valid-from]}
       - {type: unique, fields: [inspection-code, valid-from]}
@@ -3532,9 +3529,8 @@ fn operation_name(operation: Operation) -> &'static str {
 
 #[tokio::test]
 async fn runtime_openapi_contract_is_filtered_to_the_selected_acceptance_profile() {
-    let source = include_str!(
-        "fixtures/native-models/products/breg/acceptance/asset-site-placement/registry.yaml"
-    );
+    let source =
+        include_str!("../../../products/breg/acceptance/asset-site-placement/registry.yaml");
     let harness = Harness::from_project(source, true);
     let openapi = body_json(
         harness

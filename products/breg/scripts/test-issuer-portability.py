@@ -39,7 +39,7 @@ KEYCLOAK = "quay.io/keycloak/keycloak:26.7.3@sha256:ff4257d0d64efbe99ed1ddfaf077
 PRINCIPAL = "urn:institution:service-clerk"
 HUMAN_PRINCIPAL = "urn:institution:human-clerk"
 PURPOSE = "registry-administration"
-POSTGRES_TEST = "stock_to_keycloak_continues_persisted_review_with_stable_principal"
+POSTGRES_TEST = "stock_to_keycloak_preserves_native_proposal_issuer_isolation"
 ROUTER_TEST = "stock_and_keycloak_preserve_authority_and_cutover_rejects_the_old_issuer"
 
 
@@ -312,7 +312,7 @@ clients:
         subprocess.run([test_binaries["router"], ROUTER_TEST, "--ignored", "--exact", "--nocapture"],
                        cwd=ROOT / "crates/registry-breg", env=environment, check=True)
         if "postgres" in test_binaries:
-            print("Continuing a persisted PostgreSQL approval across the issuer change", flush=True)
+            print("Verifying native Proposal issuer isolation and same-issuer receipt recovery", flush=True)
             subprocess.run([test_binaries["postgres"], POSTGRES_TEST, "--ignored", "--exact", "--nocapture"],
                            cwd=ROOT / "crates/registry-breg", env=environment, check=True)
     finally:
@@ -330,7 +330,7 @@ def main() -> None:
     parser.add_argument("--breg", type=Path,
                         help="matching built breg executable; default: Cargo target debug/breg")
     parser.add_argument("--with-postgres", action="store_true",
-                        help="also exercise persisted approval cutover against an explicitly disposable BREG_TEST_DATABASE_URL")
+                        help="also exercise native Proposal issuer isolation and same-issuer receipt recovery on disposable PostgreSQL")
     args = parser.parse_args()
     docker = shutil.which("docker")
     if not docker:
@@ -347,7 +347,7 @@ def main() -> None:
     print("Building the focused BREG router test before issuing short-lived tokens", flush=True)
     test_binaries = {"router": build_test("issuer_portability", "runtime", ROUTER_TEST)}
     if args.with_postgres:
-        test_binaries["postgres"] = build_test("postgres_change_requests", "postgres-test,tooling", POSTGRES_TEST)
+        test_binaries["postgres"] = build_test("issuer_portability", "postgres-test,tooling,schema", POSTGRES_TEST)
     def stop(signum, _frame):
         raise SystemExit(128 + signum)
     for signum in (signal.SIGTERM, signal.SIGHUP):

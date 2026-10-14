@@ -400,8 +400,7 @@ mod tests {
     }
 
     fn acceptance_root() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/native-models/products/breg/acceptance")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/acceptance")
     }
 
     fn fixture(project: &str) -> Value {

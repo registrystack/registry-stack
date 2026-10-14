@@ -4,12 +4,14 @@
 # The members are documented at the top of the runner.
 formats:
   breg/module:
-    project: products/breg/examples/minimal
-    init: {command: "bregctl init {directory}", file: modules/record-notes/module.yaml}
+    project: products/breg/fixtures/generic-operator-workflows
+    prepare: ["bregctl project lock {project}"]
     removedKeys:
-      - /entities/0/hooks/0/handler/kind
-      - /extendEntities/0/hooks/0/handler/kind
-      - /actions/0/handler/kind
+      - /entities
+      - /extendEntities
+      - /extendRecordTypes/0/fields/0/minLength
+      - /extendRecordTypes/0/fields/0/maxLength
+      - /extendRecordTypes/0/fields/0/maxBytes
   # Journeys are checked against the project whose routes they call, and a
   # reviewed migration file at its place in the project tree.
   breg/journeys:
@@ -319,11 +321,11 @@ formats:
     init: {command: "bregctl init {directory}", file: registry.yaml, association: native-kind}
     removedKeys:
       - /registry
-      - /entities/0/fields/0/minLength
-      - /entities/0/fields/0/maxLength
-      - /entities/0/fields/0/maxBytes
-      - /entities/0/hooks/0/handler/kind
-      - /actions/0/handler/kind
+      - /recordTypes/0/fields/0/minLength
+      - /recordTypes/0/fields/0/maxLength
+      - /recordTypes/0/fields/0/maxBytes
+      - /recordTypes/0/hooks/0/handler/kind
+      - /actions/0/plan/kind
     retiredApiVersions:
       - registry.registrystack.org/v1alpha1
   breg/runtime:

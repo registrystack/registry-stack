@@ -3,7 +3,7 @@
 //! Tools derive their shape from the caller-filtered Action contract.
 
 use registry_breg_client::{BRegActionMode, BRegMetadata, BRegOperationKind};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,10 +107,7 @@ impl Contract {
             .map(|input| EditableField {
                 api_name: input.api_name().to_owned(),
                 label: input.label().to_owned(),
-                schema: input
-                    .schema()
-                    .cloned()
-                    .unwrap_or_else(|| input_schema(input.field_type())),
+                schema: input.schema().clone(),
                 required: input.required(),
             })
             .collect();
@@ -131,31 +128,10 @@ impl Contract {
         })
     }
 }
-fn input_schema(field_type: &Value) -> Value {
-    let mut schema = match field_type["type"].as_str() {
-        Some("string") => json!({"type":"string"}),
-        Some("reference") => json!({"type":"string","format":"uuid"}),
-        Some("boolean") => json!({"type":"boolean"}),
-        Some("integer") => json!({"type":"integer"}),
-        Some("structured") => return field_type["schema"].clone(),
-        _ => json!({"type":"string"}),
-    };
-    for (source, target) in [
-        ("minimumLength", "minLength"),
-        ("maximumLength", "maxLength"),
-        ("minimum", "minimum"),
-        ("maximum", "maximum"),
-        ("pattern", "pattern"),
-    ] {
-        if let Some(value) = field_type.get(source) {
-            schema[target] = value.clone();
-        }
-    }
-    schema
-}
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use serde_json::json;
     pub(crate) const FIXTURE: &[u8] =
         include_bytes!("../tests/fixtures/citizen-agent-metadata.json");
     pub(crate) fn spec() -> ContractSpec {
@@ -184,6 +160,22 @@ pub(crate) mod tests {
         let mut other = spec();
         other.access_profile = "other".into();
         assert!(Contract::derive(&BRegMetadata::from_slice(FIXTURE).unwrap(), &other).is_err());
+    }
+    #[test]
+    fn generated_schema_constraints_are_offered_without_reconstruction() {
+        let mut value: Value = serde_json::from_slice(FIXTURE).unwrap();
+        let schema = json!({"type":"object","required":["when"],
+            "properties":{"when":{"type":"string","format":"date-time"}},
+            "additionalProperties":false});
+        value["actions"][0]["inputs"][1]["schema"] = schema.clone();
+        let metadata = BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let contract = Contract::derive(&metadata, &spec()).unwrap();
+        assert_eq!(contract.editable[0].schema, schema);
+        value["actions"][0]["inputs"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("schema");
+        assert!(BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     }
     #[test]
     fn controlled_inputs_are_never_editable() {

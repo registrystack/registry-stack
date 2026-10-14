@@ -1327,10 +1327,8 @@ mod tests {
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             )
             .expect("contract fingerprint"),
-            PackageFingerprint::new(
-                "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-            )
-            .expect("package fingerprint"),
+            PackageFingerprint::new("3b0c7a52-5d1e-4f6a-8b9c-0d1e2f3a4b01")
+                .expect("package fingerprint"),
             CompiledProposalReview::None,
             FrozenPlanningBinding::new(
                 FrozenPlannerKind::Declarative,

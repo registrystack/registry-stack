@@ -15,6 +15,7 @@ fn lossy_literals_duplicates_and_unsupported_integer_writes_are_refused() {
     for bytes in [
         br#"{"n":0.10000000000000001}"#.as_slice(),
         br#"{"n":9007199254740993.0}"#,
+        br#"{"n":1} {"other":2}"#,
         br#"{"n":1e9999}"#,
         br#"{"n":1e-9999}"#,
         br#"{"outer":{"n":1,"n":2}}"#,
@@ -41,4 +42,11 @@ fn lookup_values_keep_wide_integer_and_decimal_precision() {
         .unwrap()
         .value("decimal", value["decimal"].clone())
         .unwrap();
+}
+
+#[test]
+fn strict_json_errors_never_disclose_values() {
+    let error =
+        decode_exact_json(br#"{"canary-sensitive-member":0.10000000000000001}"#).unwrap_err();
+    assert!(!format!("{error:?} {error}").contains("canary-sensitive-member"));
 }

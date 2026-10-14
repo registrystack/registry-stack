@@ -7,7 +7,7 @@ project:
   canonicalBaseIri: https://registry.example.test
 package:
   sourceRevision: issuer-portability-acceptance-0.1.0
-entities:
+recordTypes:
   - id: record
     primaryDataset: records
     route: records
@@ -24,9 +24,11 @@ accessProfiles:
     requiredScopes: [registry:read]
     requiredPurposes: [registry-administration]
     permissions:
-      entities:
-        - entity: record
+      records:
+        - recordType: record
           operations: [get, list]
           readableFields: [label]
           rowBoundaries:
             - {field: district, claim: districts, operator: equals}
+datasets:
+  - id: records

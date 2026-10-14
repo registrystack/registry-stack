@@ -447,80 +447,6 @@ pub async fn verify_migration_role(
     verify_schema_owner(client, expected_role).await
 }
 
-pub async fn verify_runtime_role(
-    client: &impl GenericClient,
-    migration_role: &SqlIdentifier,
-) -> Result<()> {
-    let row = client
-        .query_one(
-            "SELECT current_user,
-                    rolsuper,
-                    rolbypassrls,
-                    rolcreatedb,
-                    rolcreaterole,
-                    current_user = $1,
-                    pg_has_role(current_user, $1, 'MEMBER'),
-                    has_database_privilege(current_user, current_database(), 'CREATE'),
-                    has_schema_privilege(current_user, 'registry_internal', 'CREATE'),
-                    has_schema_privilege(current_user, 'registry_data', 'CREATE'),
-                    has_schema_privilege(current_user, 'registry_source', 'CREATE'),
-                    has_schema_privilege(current_user, 'registry_derived', 'CREATE'),
-                    has_schema_privilege(current_user, 'registry_context', 'CREATE'),
-                    EXISTS (
-                        SELECT 1
-                        FROM pg_catalog.pg_class c
-                        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                        WHERE n.nspname IN (
-                            'registry_internal',
-                            'registry_data',
-                            'registry_source',
-                            'registry_derived',
-                            'registry_context'
-                        )
-                          AND c.relowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)
-                    )
-             FROM pg_catalog.pg_roles
-             WHERE rolname = current_user",
-            &[&migration_role.as_str()],
-        )
-        .await?;
-    let forbidden = (1..=13).any(|index| row.get::<_, bool>(index));
-    if forbidden {
-        return Err(PostgresKernelError::RoleInvariant(
-            "runtime role has ownership, bypass, or DDL authority",
-        ));
-    }
-    let permissions = client
-        .query_one(
-            "SELECT
-                 has_table_privilege(current_user, 'registry_internal.registry_state', 'SELECT'),
-                 has_table_privilege(current_user, 'registry_internal.registry_state', 'INSERT'),
-                 has_table_privilege(current_user, 'registry_internal.registry_state', 'UPDATE'),
-                 has_table_privilege(current_user, 'registry_internal.registry_state', 'DELETE'),
-                 has_table_privilege(current_user, 'registry_data.kernel_records', 'SELECT'),
-                 has_table_privilege(current_user, 'registry_data.kernel_records', 'INSERT'),
-                 has_table_privilege(current_user, 'registry_data.kernel_records', 'UPDATE'),
-                 has_table_privilege(current_user, 'registry_data.kernel_records', 'DELETE'),
-                 has_table_privilege(current_user, 'registry_data.kernel_records', 'TRUNCATE'),
-                 has_table_privilege(current_user, 'registry_data.kernel_records', 'REFERENCES'),
-                 has_table_privilege(current_user, 'registry_data.kernel_records', 'TRIGGER')",
-            &[],
-        )
-        .await?;
-    let required = [0, 4, 5, 6, 7]
-        .into_iter()
-        .all(|index| permissions.get::<_, bool>(index));
-    let denied = [1, 2, 3, 8, 9, 10]
-        .into_iter()
-        .all(|index| !permissions.get::<_, bool>(index));
-    if !required || !denied {
-        return Err(PostgresKernelError::RoleInvariant(
-            "runtime role has an unexpected managed-table privilege set",
-        ));
-    }
-    Ok(())
-}
-
 /// One way a split-role runtime role could write the activation ledger or the
 /// registry state, with the statement that removes it.
 ///
@@ -873,7 +799,6 @@ const LEDGER_AND_STATE_TABLES: &[&str] = &[
     "registry_state",
     "registry_migrations",
     "registry_migration_steps",
-    "registry_pre_ledger_package_positions",
 ];
 
 async fn verify_schema_owner(

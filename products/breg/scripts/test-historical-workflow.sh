@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/../../.." && pwd)
 . "$repository_root/scripts/cargo-runtime-library-path.sh"
-fixture="$repository_root/crates/registry-breg/tests/fixtures/native-models/products/breg/acceptance/household-history"
+fixture="$repository_root/products/breg/acceptance/household-history"
 temporary_root=""
 breg_pid=""
 history_tls_ca_pem_path=""

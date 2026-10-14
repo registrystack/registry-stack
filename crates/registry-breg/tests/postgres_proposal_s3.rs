@@ -11,7 +11,7 @@ mod postgres_harness;
 use axum::{
     body::{Body, Bytes},
     extract::{OriginalUri, State},
-    http::{Method, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
     Router,
 };
@@ -216,13 +216,34 @@ struct Objects {
     deletes: AtomicUsize,
     // 1 unavailable, 2 corrupt body, 3 short body, 4 interrupted upload.
     mode: AtomicUsize,
+    // External verifier: approve, reject, or exceed its transport deadline.
+    verifier_mode: AtomicUsize,
+    verifier_bytes: tokio::sync::Mutex<Vec<Vec<u8>>>,
 }
 async fn object_request(
     State(state): State<Arc<Objects>>,
     OriginalUri(uri): OriginalUri,
     method: Method,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if uri.path() == "/verify" {
+        use sha2::{Digest, Sha256};
+        assert_eq!(method, Method::POST);
+        assert_eq!(headers["authorization"], "Bearer synthetic-verifier");
+        assert_eq!(headers["content-type"], "text/plain");
+        assert_eq!(
+            headers["x-content-sha256"].to_str().unwrap(),
+            hex::encode(Sha256::digest(&body))
+        );
+        state.verifier_bytes.lock().await.push(body.to_vec());
+        let mode = state.verifier_mode.load(Ordering::SeqCst);
+        if mode == 2 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        return axum::Json(json!({"verdict": if mode == 1 {"rejected"} else {"approved"}}))
+            .into_response();
+    }
     state.requests.fetch_add(1, Ordering::SeqCst);
     let mode = state.mode.load(Ordering::SeqCst);
     if mode == 1 {
@@ -304,7 +325,7 @@ impl S3Fixture {
             }
         }
         let raw = format!(
-            "{}\nattachmentStorage:\n  type: s3\n  endpoint: {endpoint}\n  bucket: synthetic-proposal\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 2000\nattachmentVerification:\n  type: http\n  endpoint: {endpoint}/verify\n  policyId: synthetic-policy\n  authorizationRef: secret:file/verifier\n",
+            "{}\nattachmentStorage:\n  type: s3\n  endpoint: {endpoint}\n  bucket: synthetic-proposal\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 2000\nattachmentVerification:\n  type: http\n  endpoint: {endpoint}/verify\n  policyId: synthetic-policy\n  authorizationRef: secret:file/verifier\n  attemptTimeoutMilliseconds: 100\n",
             valid_runtime(secrets.path(), secrets.path())
         );
         let config = parse_runtime_config(&raw).unwrap();
@@ -668,5 +689,180 @@ async fn interrupted_s3_put_retains_durable_staging_for_operator_cleanup() {
     assert_eq!(result.external_deletion_tombstones, 1);
     assert_eq!(s3.state.deletes.load(Ordering::SeqCst), 1);
     assert!(s3.state.bytes.lock().await.is_empty());
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_verifier_worker_releases_only_exact_approved_bytes() {
+    use registry_breg::attachment_verification_worker::AttachmentVerificationWorker;
+    use registry_breg::postgres::RegistryLockKey;
+    use registry_platform_audit::AuditProfile;
+    let s3 = S3Fixture::new().await;
+    let storage = s3.storage.clone();
+    let verification = s3.config.activate_attachment_verification().unwrap();
+    let configured_verification = verification.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry(false),
+        claims("synthetic-author", "zone-a"),
+        move |mutations| {
+            mutations
+                .with_attachment_storage(storage)
+                .with_attachment_verification(configured_verification)
+        },
+    )
+    .await;
+    let (audit, capture) = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x63; 32].into()).unwrap(),
+    );
+    let worker = AttachmentVerificationWorker::new(
+        fixture.pool.clone(),
+        fixture.identity.clone(),
+        RegistryLockKey::derive(fixture.registry.registry_id()).unwrap(),
+        Duration::from_secs(2),
+        audit,
+        s3.storage.clone(),
+        verification,
+    );
+    let draft = start(&fixture, "After", "verifier-start").await;
+    let client = &fixture.http.client;
+    let approved = client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            b"approved-exact-bytes",
+            &key("verifier-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(client
+        .download_proposal_attachment(&approved, "support")
+        .await
+        .is_err());
+    assert_eq!(
+        raw_download(&fixture.http, &approved).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(worker.run_once().await.unwrap());
+    let approved = client.read_proposal(&approved).await.unwrap().value;
+    assert_eq!(
+        client
+            .download_proposal_attachment(&approved, "support")
+            .await
+            .unwrap()
+            .value
+            .as_bytes(),
+        b"approved-exact-bytes"
+    );
+
+    assert_eq!(
+        fixture
+            .database
+            .admin
+            .query_one(
+                "SELECT verdict FROM registry_internal.registry_attachment_verification",
+                &[]
+            )
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        "approved"
+    );
+
+    // The previous approval cannot release replacement bytes in the same slot.
+    s3.state.verifier_mode.store(1, Ordering::SeqCst);
+    let rejected = client
+        .upload_proposal_attachment(
+            &approved,
+            "support",
+            "text/plain",
+            b"replacement-rejected",
+            &key("verifier-replace"),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(client
+        .download_proposal_attachment(&rejected, "support")
+        .await
+        .is_err());
+    assert!(worker.run_once().await.unwrap());
+    assert!(client
+        .download_proposal_attachment(&rejected, "support")
+        .await
+        .is_err());
+
+    assert_eq!(
+        raw_download(&fixture.http, &rejected).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    assert_eq!(
+        fixture
+            .database
+            .admin
+            .query_one(
+                "SELECT verdict FROM registry_internal.registry_attachment_verification",
+                &[]
+            )
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        "rejected"
+    );
+
+    // An eventual approval received after the transport deadline is no verdict.
+    s3.state.verifier_mode.store(2, Ordering::SeqCst);
+    let pending = client
+        .upload_proposal_attachment(
+            &rejected,
+            "support",
+            "text/plain",
+            b"replacement-timeout",
+            &key("verifier-timeout"),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(worker.run_once().await.unwrap());
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    assert!(client
+        .download_proposal_attachment(&pending, "support")
+        .await
+        .is_err());
+    assert_eq!(
+        raw_download(&fixture.http, &pending).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let rows = fixture.database.admin.query(
+        "SELECT verdict,attempts FROM registry_internal.registry_attachment_verification ORDER BY verdict", &[],
+    ).await.unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.get::<_, String>(0), row.get::<_, i64>(1)))
+            .collect::<Vec<_>>(),
+        vec![("pending".into(), 1)]
+    );
+    let requests = s3.state.verifier_bytes.lock().await;
+    assert_eq!(
+        *requests,
+        vec![
+            b"approved-exact-bytes".to_vec(),
+            b"replacement-rejected".to_vec(),
+            b"replacement-timeout".to_vec()
+        ]
+    );
+    drop(requests);
+    let audit = capture.entries();
+    assert!(audit
+        .iter()
+        .any(|record| record.to_string().contains("approved")));
+    assert!(audit
+        .iter()
+        .any(|record| record.to_string().contains("rejected")));
+    assert!(audit
+        .iter()
+        .any(|record| record.to_string().contains("retry-pending")));
     fixture.finish().await;
 }

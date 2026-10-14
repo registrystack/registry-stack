@@ -32,9 +32,20 @@ pub enum StrictJsonError {
 /// responsible for bounding `bytes` before parsing.
 pub fn parse_json_strict(bytes: &[u8]) -> Result<Value, StrictJsonError> {
     reject_inexact_raw_integer_tokens(bytes)?;
-    serde_json::from_slice::<DuplicateFreeJsonValue>(bytes)
-        .map(DuplicateFreeJsonValue::into_inner)
-        .map_err(StrictJsonError::from)
+    parse_json_preserving_integers(bytes).map_err(StrictJsonError::from)
+}
+
+/// Decode one complete JSON value without duplicate object members while
+/// preserving `serde_json`'s exact signed and unsigned 64-bit integer values.
+///
+/// This is the structural decoder for consumers with their own numeric policy.
+/// Fractional/exponent tokens and integers outside `i64`/`u64` retain serde's
+/// correctly rounded binary64 semantics. Callers requiring exact numeric
+/// literals must check those tokens before parsing. Callers hashing or signing
+/// JCS values should use [`parse_json_strict`] instead. The caller must bound
+/// `bytes`; syntax, recursion, duplicates and trailing documents are refused.
+pub fn parse_json_preserving_integers(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+    serde_json::from_slice::<DuplicateFreeJsonValue>(bytes).map(DuplicateFreeJsonValue::into_inner)
 }
 
 /// Reject integer lexemes that `serde_json` would otherwise round through an
@@ -379,6 +390,35 @@ fn write_canonical_object(map: &Map<String, Value>, out: &mut Vec<u8>) -> Result
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn preserving_integer_decoder_keeps_native_values_without_relaxing_jcs() {
+        let raw = br#"{"signed":-9007199254740993,"unsigned":18446744073709551615}"#;
+        let parsed = parse_json_preserving_integers(raw).unwrap();
+        assert_eq!(parsed["signed"].as_i64(), Some(-9_007_199_254_740_993));
+        assert_eq!(parsed["unsigned"].as_u64(), Some(u64::MAX));
+        assert!(matches!(
+            parse_json_strict(raw),
+            Err(StrictJsonError::IntegerNotExactlyRepresentable)
+        ));
+        assert!(canonicalize_json(&parsed).is_err());
+        // This entry point does not claim literal exactness for decimal tokens.
+        assert_eq!(
+            parse_json_preserving_integers(b"0.10000000000000001").unwrap(),
+            json!(0.1)
+        );
+    }
+
+    #[test]
+    fn preserving_integer_decoder_refuses_duplicates_and_trailing_documents() {
+        for raw in [
+            br#"{"outer":{"member":1,"member":2}}"#.as_slice(),
+            br#"{"member":1,"\u006dember":2}"#,
+            br#"{} []"#,
+        ] {
+            assert!(parse_json_preserving_integers(raw).is_err());
+        }
+    }
 
     #[test]
     fn strict_parser_accepts_every_unambiguous_json_shape() {

@@ -295,7 +295,7 @@ struct ExampleModule {
 impl ExampleSources {
     fn load(name: &str) -> Self {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/native-models/products/breg/fixtures")
+            .join("../../products/breg/fixtures")
             .join(name);
         let project_bytes = fs::read(root.join("registry.yaml"))
             .expect("action example registry source is readable");

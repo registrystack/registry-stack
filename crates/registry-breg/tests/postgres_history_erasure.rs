@@ -491,11 +491,11 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
     database.cleanup().await;
 }
 
-/// Generic record-history erasure does not erase change-request workflow
+/// Generic record-history erasure preserves native Proposal workflow
 /// records. Proposals, target snapshots, and application receipts have their
 /// own retention contract even when they refer to the erased record.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn erasure_preserves_change_request_target_and_proposal_payloads() {
+async fn erasure_preserves_native_proposal_target_and_submission_payloads() {
     let database = TestDatabase::create(4).await;
     let (mut migration, migration_task) = database.connect_migration().await;
     let registry = compiled_registry();
@@ -515,28 +515,28 @@ async fn erasure_preserves_change_request_target_and_proposal_payloads() {
     let fingerprint = format!("sha256:{}", "7".repeat(64));
     let request_a = Uuid::from_u128(0xA1);
     let request_b = Uuid::from_u128(0xB1);
-    for (request_id, target_record, canary) in [
+    for (proposal_id, target_record, canary) in [
         (request_a, erased_record, "cr-scrub-canary"),
         (request_b, kept_record, "cr-kept-canary"),
     ] {
         transaction
             .execute(
-                "INSERT INTO registry_internal.registry_request_state
-                     (request_entity_id, request_id, owner_reference, state,
-                      proposal_version, workflow_revision)
+                "INSERT INTO registry_internal.registry_proposal_state
+                     (action_id, proposal_id, owner_reference, state,
+                      submission_version, workflow_revision)
                  VALUES ('membership-request', $1, 'owner:hash', 'applied', 1, 1)",
-                &[&request_id],
+                &[&proposal_id],
             )
             .await
             .expect("change request state inserts");
         transaction
             .execute(
-                "INSERT INTO registry_internal.registry_request_proposals
-                     (request_entity_id, request_id, proposal_version, request_record_revision,
+                "INSERT INTO registry_internal.registry_proposal_submissions
+                     (action_id, proposal_id, submission_version, input_revision,
                       contract_fingerprint, effect_digest, snapshot)
                  VALUES ('membership-request', $1, 1, 1, $2, $2, $3)",
                 &[
-                    &request_id,
+                    &proposal_id,
                     &fingerprint,
                     &json!({
                         "reasonText": canary,
@@ -548,13 +548,13 @@ async fn erasure_preserves_change_request_target_and_proposal_payloads() {
             .expect("change Proposal inserts");
         transaction
             .execute(
-                "INSERT INTO registry_internal.registry_request_targets
-                     (request_entity_id, request_id, proposal_version, target_entity_id,
+                "INSERT INTO registry_internal.registry_proposal_targets
+                     (action_id, proposal_id, submission_version, target_entity_id,
                       target_record_id, operation, expected_revision, base_snapshot,
                       after_snapshot)
                  VALUES ('membership-request', $1, 1, $2, $3, 'patch', 1, $4, $5)",
                 &[
-                    &request_id,
+                    &proposal_id,
                     &ENTITY,
                     &target_record,
                     &json!({"household": format!("{canary}-base")}),
@@ -595,14 +595,14 @@ async fn erasure_preserves_change_request_target_and_proposal_payloads() {
             "SELECT
                  (SELECT base_snapshot ? 'household' AND after_snapshot ? 'household'
                                           AND erased_at IS NULL
-                    FROM registry_internal.registry_request_targets WHERE request_id = $1),
+                    FROM registry_internal.registry_proposal_targets WHERE proposal_id = $1),
                  (SELECT snapshot ? 'reasonText' AND erased_at IS NULL
-                    FROM registry_internal.registry_request_proposals WHERE request_id = $1),
+                    FROM registry_internal.registry_proposal_submissions WHERE proposal_id = $1),
                  (SELECT base_snapshot ? 'household' AND after_snapshot ? 'household'
                                           AND erased_at IS NULL
-                    FROM registry_internal.registry_request_targets WHERE request_id = $2),
+                    FROM registry_internal.registry_proposal_targets WHERE proposal_id = $2),
                  (SELECT snapshot ? 'reasonText' AND erased_at IS NULL
-                    FROM registry_internal.registry_request_proposals WHERE request_id = $2)",
+                    FROM registry_internal.registry_proposal_submissions WHERE proposal_id = $2)",
             &[&request_a, &request_b],
         )
         .await
@@ -644,11 +644,11 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
     let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x76; 32].into())
         .expect("test owns a keyed audit profile");
-    let request_id = Uuid::from_u128(0xCA11);
+    let proposal_id = Uuid::from_u128(0xCA11);
     let reserved_record_id = Uuid::from_u128(0xCA12);
-    let post_flip_request_id = Uuid::from_u128(0xCA13);
+    let post_flip_proposal_id = Uuid::from_u128(0xCA13);
     let post_flip_record_id = Uuid::from_u128(0xCA14);
-    let guard_request_id = Uuid::from_u128(0xCA15);
+    let guard_proposal_id = Uuid::from_u128(0xCA15);
     let guard_record_id = Uuid::from_u128(0xCA16);
     let fingerprint = format!("sha256:{}", "7".repeat(64));
 
@@ -658,22 +658,22 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         .expect("migration can begin transaction");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_state
-                 (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision)
+            "INSERT INTO registry_internal.registry_proposal_state
+                 (action_id, proposal_id, owner_reference, state,
+                  submission_version, workflow_revision)
              VALUES ('membership-request', $1, 'owner:hash', 'cancelled', 1, 1)",
-            &[&request_id],
+            &[&proposal_id],
         )
         .await
         .expect("canceled request state inserts");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_proposals
-                 (request_entity_id, request_id, proposal_version, request_record_revision,
+            "INSERT INTO registry_internal.registry_proposal_submissions
+                 (action_id, proposal_id, submission_version, input_revision,
                   contract_fingerprint, effect_digest, snapshot)
              VALUES ('membership-request', $1, 1, 1, $2, $2, $3)",
             &[
-                &request_id,
+                &proposal_id,
                 &fingerprint,
                 &json!({
                     "originatingPackage": OLD_PACKAGE,
@@ -700,13 +700,13 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         .expect("orphan proposal inserts");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_targets
-                 (request_entity_id, request_id, proposal_version, target_entity_id,
+            "INSERT INTO registry_internal.registry_proposal_targets
+                 (action_id, proposal_id, submission_version, target_entity_id,
                   target_record_id, operation, expected_revision, base_snapshot,
                   after_snapshot)
              VALUES ('membership-request', $1, 1, $2, $3, 'create', NULL, NULL, $4)",
             &[
-                &request_id,
+                &proposal_id,
                 &ENTITY,
                 &reserved_record_id,
                 &json!({"details": {
@@ -718,22 +718,22 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         .expect("orphan create target inserts");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_state
-                 (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision)
+            "INSERT INTO registry_internal.registry_proposal_state
+                 (action_id, proposal_id, owner_reference, state,
+                  submission_version, workflow_revision)
              VALUES ('membership-request', $1, 'owner:hash', 'cancelled', 1, 1)",
-            &[&guard_request_id],
+            &[&guard_proposal_id],
         )
         .await
         .expect("guard-only request state inserts");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_proposals
-                 (request_entity_id, request_id, proposal_version, request_record_revision,
+            "INSERT INTO registry_internal.registry_proposal_submissions
+                 (action_id, proposal_id, submission_version, input_revision,
                   contract_fingerprint, effect_digest, snapshot)
              VALUES ('membership-request', $1, 1, 1, $2, $2, $3)",
             &[
-                &guard_request_id,
+                &guard_proposal_id,
                 &fingerprint,
                 &json!({
                     "originatingPackage": OLD_PACKAGE,
@@ -752,41 +752,14 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         .expect("guard-only proposal inserts");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_state
-                 (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision)
+            "INSERT INTO registry_internal.registry_proposal_state
+                 (action_id, proposal_id, owner_reference, state,
+                  submission_version, workflow_revision)
              VALUES ('membership-request', $1, 'owner:hash', 'draft', 1, 1)",
-            &[&post_flip_request_id],
+            &[&post_flip_proposal_id],
         )
         .await
         .expect("pre-flip draft request state inserts");
-    insert_revision_snapshot(
-        &transaction,
-        "membership-request",
-        post_flip_request_id,
-        1,
-        OLD_PACKAGE,
-        &json!({"state": "draft"}),
-    )
-    .await;
-    allocate_revision_commit(
-        &transaction,
-        CommitAllocation {
-            package_revision: OLD_PACKAGE,
-            origin: CommitOrigin::Mutation {
-                actor_reference: "actor:hash",
-                request_reference: "request:hash",
-            },
-            change_context: None,
-            members: &[RevisionCommitMember {
-                entity_id: "membership-request",
-                record_id: post_flip_request_id,
-                record_revision: 1,
-            }],
-        },
-    )
-    .await
-    .expect("pre-flip draft revision commit allocates");
     transaction.commit().await.expect("orphan request commits");
 
     let transaction = migration
@@ -802,22 +775,22 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         .expect("migration can begin transaction");
     transaction
         .execute(
-            "UPDATE registry_internal.registry_request_state
+            "UPDATE registry_internal.registry_proposal_state
                 SET state = 'submitted', workflow_revision = 2,
                     updated_at = transaction_timestamp()
-              WHERE request_entity_id = 'membership-request' AND request_id = $1",
-            &[&post_flip_request_id],
+              WHERE action_id = 'membership-request' AND proposal_id = $1",
+            &[&post_flip_proposal_id],
         )
         .await
         .expect("pre-flip draft submits after the flip");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_proposals
-                 (request_entity_id, request_id, proposal_version, request_record_revision,
+            "INSERT INTO registry_internal.registry_proposal_submissions
+                 (action_id, proposal_id, submission_version, input_revision,
                   contract_fingerprint, effect_digest, snapshot)
              VALUES ('membership-request', $1, 1, 1, $2, $2, $3)",
             &[
-                &post_flip_request_id,
+                &post_flip_proposal_id,
                 &fingerprint,
                 &json!({
                     "originatingPackage": CURRENT_PACKAGE,
@@ -839,13 +812,13 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         .expect("post-flip proposal inserts");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_targets
-                 (request_entity_id, request_id, proposal_version, target_entity_id,
+            "INSERT INTO registry_internal.registry_proposal_targets
+                 (action_id, proposal_id, submission_version, target_entity_id,
                   target_record_id, operation, expected_revision, base_snapshot,
                   after_snapshot)
              VALUES ('membership-request', $1, 1, $2, $3, 'patch', 1, $4, $5)",
             &[
-                &post_flip_request_id,
+                &post_flip_proposal_id,
                 &ENTITY,
                 &post_flip_record_id,
                 &json!({"household": "old", "details": {
@@ -858,33 +831,6 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         )
         .await
         .expect("post-flip target inserts");
-    insert_revision_snapshot(
-        &transaction,
-        "membership-request",
-        post_flip_request_id,
-        2,
-        CURRENT_PACKAGE,
-        &json!({"state": "submitted"}),
-    )
-    .await;
-    allocate_revision_commit(
-        &transaction,
-        CommitAllocation {
-            package_revision: CURRENT_PACKAGE,
-            origin: CommitOrigin::Mutation {
-                actor_reference: "actor:hash",
-                request_reference: "request:hash",
-            },
-            change_context: None,
-            members: &[RevisionCommitMember {
-                entity_id: "membership-request",
-                record_id: post_flip_request_id,
-                record_revision: 2,
-            }],
-        },
-    )
-    .await
-    .expect("post-flip submission revision commit allocates");
     transaction
         .commit()
         .await
@@ -904,9 +850,9 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
                       WHERE effect -> 'target' ->> 'entityId' = $1
                         AND field_change ->> 'field' = 'details'
                  ))::bigint
-               FROM registry_internal.registry_request_proposals AS proposal
-              WHERE request_id = $2",
-            &[&ENTITY, &request_id],
+               FROM registry_internal.registry_proposal_submissions AS proposal
+              WHERE proposal_id = $2",
+            &[&ENTITY, &proposal_id],
         )
         .await
         .expect("nested proposal field count resolves");
@@ -1000,12 +946,12 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         .query_one(
             "SELECT
                  (SELECT snapshot IS NULL AND erased_at IS NOT NULL
-                    FROM registry_internal.registry_request_proposals WHERE request_id = $1),
+                    FROM registry_internal.registry_proposal_submissions WHERE proposal_id = $1),
                  (SELECT base_snapshot IS NULL AND after_snapshot IS NULL AND erased_at IS NOT NULL
-                    FROM registry_internal.registry_request_targets WHERE request_id = $1),
+                    FROM registry_internal.registry_proposal_targets WHERE proposal_id = $1),
                  (SELECT snapshot IS NULL AND erased_at IS NOT NULL
-                    FROM registry_internal.registry_request_proposals WHERE request_id = $2)",
-            &[&request_id, &guard_request_id],
+                    FROM registry_internal.registry_proposal_submissions WHERE proposal_id = $2)",
+            &[&proposal_id, &guard_proposal_id],
         )
         .await
         .expect("migration can inspect erased orphan snapshots");
@@ -1019,11 +965,11 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         .query_one(
             "SELECT
                  (SELECT snapshot IS NOT NULL AND erased_at IS NULL
-                    FROM registry_internal.registry_request_proposals WHERE request_id = $1),
+                    FROM registry_internal.registry_proposal_submissions WHERE proposal_id = $1),
                  (SELECT base_snapshot IS NOT NULL AND after_snapshot IS NOT NULL
                          AND erased_at IS NULL
-                    FROM registry_internal.registry_request_targets WHERE request_id = $1)",
-            &[&post_flip_request_id],
+                    FROM registry_internal.registry_proposal_targets WHERE proposal_id = $1)",
+            &[&post_flip_proposal_id],
         )
         .await
         .expect("post-flip request snapshots resolve");
@@ -1235,7 +1181,7 @@ async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x77; 32].into())
         .expect("test owns a keyed audit profile");
     let record_id = Uuid::from_u128(0xFA11);
-    let request_id = Uuid::from_u128(0xFA12);
+    let proposal_id = Uuid::from_u128(0xFA12);
     let fingerprint = format!("sha256:{}", "8".repeat(64));
     let transaction = migration
         .transaction()
@@ -1275,22 +1221,22 @@ async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
     .expect("pre-flip record revision commit allocates");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_state
-                 (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision)
+            "INSERT INTO registry_internal.registry_proposal_state
+                 (action_id, proposal_id, owner_reference, state,
+                  submission_version, workflow_revision)
              VALUES ('membership-request', $1, 'owner:hash', 'cancelled', 1, 1)",
-            &[&request_id],
+            &[&proposal_id],
         )
         .await
         .expect("retry request state inserts");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_proposals
-                 (request_entity_id, request_id, proposal_version, request_record_revision,
+            "INSERT INTO registry_internal.registry_proposal_submissions
+                 (action_id, proposal_id, submission_version, input_revision,
                   contract_fingerprint, effect_digest, snapshot)
              VALUES ('membership-request', $1, 1, 1, $2, $2, $3)",
             &[
-                &request_id,
+                &proposal_id,
                 &fingerprint,
                 &json!({"originatingPackage": OLD_PACKAGE, "effects": [{
                     "id": "patch-membership",
@@ -1309,13 +1255,13 @@ async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
         .expect("retry proposal inserts");
     transaction
         .execute(
-            "INSERT INTO registry_internal.registry_request_targets
-                 (request_entity_id, request_id, proposal_version, target_entity_id,
+            "INSERT INTO registry_internal.registry_proposal_targets
+                 (action_id, proposal_id, submission_version, target_entity_id,
                   target_record_id, operation, expected_revision, base_snapshot,
                   after_snapshot)
              VALUES ('membership-request', $1, 1, $2, $3, 'patch', 1, $4, $5)",
             &[
-                &request_id,
+                &proposal_id,
                 &ENTITY,
                 &record_id,
                 &json!({"household": "old"}),
@@ -1406,9 +1352,9 @@ async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
         .query_one(
             "SELECT
                  (SELECT count(*) FROM registry_internal.registry_field_encryption_lifecycle_progress)::bigint,
-                 (SELECT count(*) FROM registry_internal.registry_request_targets
+                 (SELECT count(*) FROM registry_internal.registry_proposal_targets
                    WHERE erased_at IS NULL AND base_snapshot IS NOT NULL)::bigint,
-                 (SELECT count(*) FROM registry_internal.registry_request_proposals
+                 (SELECT count(*) FROM registry_internal.registry_proposal_submissions
                    WHERE erased_at IS NULL AND snapshot IS NOT NULL)::bigint,
                  (SELECT count(*) FROM registry_internal.registry_revisions
                    WHERE erased_at IS NULL AND snapshot IS NOT NULL)::bigint,
@@ -1975,6 +1921,29 @@ async fn field_encryption_erasure_chunks_sparse_oversized_record_history() {
         )
         .await
         .expect("sparse flipped member inserts");
+    for first in (1..=10_001).step_by(1000) {
+        let members = (first..=std::cmp::min(first + 999, 10_001))
+            .map(|record_revision| RevisionCommitMember {
+                entity_id: ENTITY,
+                record_id,
+                record_revision,
+            })
+            .collect::<Vec<_>>();
+        allocate_revision_commit(
+            &transaction,
+            CommitAllocation {
+                package_revision: OLD_PACKAGE,
+                origin: CommitOrigin::Mutation {
+                    actor_reference: "actor:hash",
+                    request_reference: "request:hash",
+                },
+                change_context: None,
+                members: &members,
+            },
+        )
+        .await
+        .expect("oversized fixture history uses bounded current indexed commits");
+    }
     insert_erase_field_flip(&transaction, "details").await;
     transaction
         .commit()

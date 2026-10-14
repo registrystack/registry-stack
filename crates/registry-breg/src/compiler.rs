@@ -3021,43 +3021,6 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             ));
         }
     }
-    if let Some(temporal) = &entity.temporal {
-        validate_temporal_deprecated_scope_bridge(entity, temporal, errors);
-    }
-}
-
-fn validate_temporal_deprecated_scope_bridge(
-    entity: &EntitySource,
-    temporal: &crate::contract::TemporalSource,
-    errors: &mut Vec<Diagnostic>,
-) {
-    if temporal.scope_fields.is_empty() {
-        return;
-    }
-    let matched = entity.constraints.iter().any(|constraint| {
-        matches!(
-            constraint,
-            ConstraintSource::TemporalNonOverlap {
-                scope_fields,
-                start_field,
-                end_field,
-                ..
-            } if scope_fields == &temporal.scope_fields
-                && start_field
-                    .as_ref()
-                    .is_none_or(|field| field == &temporal.start_field)
-                && end_field
-                    .as_ref()
-                    .is_none_or(|field| field == &temporal.end_field)
-        )
-    });
-    if !matched {
-        errors.push(Diagnostic::error(
-            "breg.temporal.scope-fields-deprecated-mismatch",
-            "recordTypes[].temporal.scopeFields",
-            "deprecated temporal scopeFields must match an explicit temporal-non-overlap constraint during the predecessor transition",
-        ));
-    }
 }
 
 fn supports_temporal_non_overlap_scope(field_type: &FieldTypeSource) -> bool {

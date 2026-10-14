@@ -563,6 +563,7 @@ pub fn metadata() -> Value {
         .retain(|input| input["id"] != "owner");
     for (id, api) in [("reason", "reason"), ("unit", "unit")] {
         document["actions"][0]["inputs"].as_array_mut().unwrap().push(json!({"id":id,"apiName":api,
+            "schema":{"anyOf":[{"type":"string","minLength":0,"maxLength":200},{"type":"null"}]},
             "fieldType":{"type":"string","minimumLength":0,"maximumLength":200},"required":false,"nullable":true,"classification":"internal"}));
     }
     document

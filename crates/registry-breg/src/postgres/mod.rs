@@ -26,13 +26,11 @@ pub use baseline::{
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub use catalog::{
-    initialize_compiled_registry_state_for_test, initialize_kernel_registry_state_for_test,
-    initialize_registry_state_for_catalog_test, test_activation_id, test_package_digest,
-    RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test, initialize_registry_state_for_catalog_test,
+    test_activation_id, test_package_digest, RegistryStateTestIdentity,
 };
 pub use catalog::{
-    install_kernel_schema, kernel_schema_fingerprint, managed_schema_fingerprint,
-    verify_catalog_identity, verify_catalog_identity_for_catalog, CatalogIdentity,
+    managed_schema_fingerprint, verify_catalog_identity_for_catalog, CatalogIdentity,
     ExpectedManagedCatalog, ExpectedRegistryIdentity,
 };
 pub(crate) use catalog::{registry_state_shape, runtime_grants_missing, RegistryStateShape};
@@ -99,10 +97,45 @@ pub async fn install_statistics_store_for_test(
 ) -> std::result::Result<(), tokio_postgres::Error> {
     crate::statistics_store::install(migration, runtime_role).await
 }
+/// Index fixture revisions through the same allocator the runtime uses.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn index_revisions_for_test(
+    transaction: &tokio_postgres::Transaction<'_>,
+    package_revision: &str,
+    revisions: &[(&str, uuid::Uuid, i64)],
+) -> Result<i64> {
+    let members = revisions
+        .iter()
+        .map(|(entity_id, record_id, record_revision)| {
+            crate::history_commit::RevisionCommitMember {
+                entity_id,
+                record_id: *record_id,
+                record_revision: *record_revision,
+            }
+        })
+        .collect::<Vec<_>>();
+    crate::history_commit::allocate_revision_commit(
+        transaction,
+        crate::history_commit::CommitAllocation {
+            package_revision,
+            origin: crate::history_context::CommitOrigin::Mutation {
+                actor_reference: "fixture-actor",
+                request_reference: "fixture-request",
+            },
+            change_context: None,
+            members: &members,
+        },
+    )
+    .await
+    .map(|committed| committed.position)
+    .map_err(|_| PostgresKernelError::RegistryUnavailable)
+}
+
 pub use roles::{
     provision_managed_schemas, provision_postgis_prerequisites, provision_spatial_bbox_role,
     spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
-    verify_runtime_role, RuntimeWriteAuthority, SqlIdentifier,
+    RuntimeWriteAuthority, SqlIdentifier,
 };
 pub(crate) use schema::compiled_pattern_field;
 pub use schema::install_compiled_schema;

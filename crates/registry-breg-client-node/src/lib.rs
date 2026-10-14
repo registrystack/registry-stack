@@ -2028,7 +2028,7 @@ fn action_descriptor_value(value: &registry_breg_client::BRegActionDescriptor) -
         "inputs": value.inputs().iter().map(|input| json!({
             "id": input.identifier(), "apiName": input.api_name(),
             "label": input.label(), "description": input.description(),
-            "schemaJson": input.schema().map(Value::to_string),
+            "schemaJson": input.schema().to_string(),
             "fieldTypeJson": input.field_type().to_string(), "required": input.required(),
             "nullable": input.nullable(), "classification": input.classification(),
         })).collect::<Vec<_>>(),

@@ -7,7 +7,7 @@ and a safe way to evolve their schema without building a bespoke service.
 
 Start with the [standalone examples](examples/refactor/README.md) for the current
 Record type, Action, and Proposal model and its runnable PostgreSQL journeys.
-The older project and starter catalogue and its accompanying guides await conversion.
+The canonical projects include their local clients, journeys, and resumable scenarios.
 
 The runtime has no built-in business, facility, authority, permit, or asset model.
 A Record type, relationship, route, field, access profile, and event exists only
@@ -27,9 +27,7 @@ package review or the separate migration database role.
 
 ## First-hour local quickstart
 
-The documentation site has nine adopter pages: an overview, three tutorials, an
-authoring guide, an operating guide, a modeling-patterns explainer, and two
-reference pages.
+Use the adopter guides for authoring, local evaluation, and operation.
 
 - [Build a registry with Base Registry Engine](../../docs/site/src/content/docs/explanation/configuration-defined-registry.mdx)
 - [Create and query your first registry](../../docs/site/src/content/docs/tutorials/first-breg.mdx)
@@ -89,9 +87,9 @@ For a retained local loop that needs no checkout, Python launcher, or shell
 script, [Native local BReg lifecycle](DEV.md) documents `bregctl dev` against
 installed binaries and Docker PostgreSQL.
 
-For a ready-made registry instead of the generic quickstart project,
-[`starters/`](starters/) holds ordinary authored BReg projects with fixed
-scenarios. `bregctl examples list` describes a starter's scenarios without
+`bregctl init <destination>` writes the complete [minimal directory](examples/refactor/minimal/README.md).
+Use `--template facility-registry` for the complete [facility project](examples/refactor/facility/README.md).
+Both are ordinary authored projects with fixed scenarios. `bregctl examples list` describes a starter's scenarios without
 starting services or creating credentials, and `bregctl examples run
 <scenario> <project>` runs or resumes one against the project's ready local
 development instance. `bregctl init <destination> --from publicschema` derives
@@ -110,11 +108,9 @@ rollback paths.
 
 ## Pilot operator lifecycle
 
-For an offline permissions exercise, use [Review access configuration](examples/access-review/README.md).
-It includes a complete project, allowed and refused synthetic caller scenarios,
-and an omitted-row-restriction exercise. `explain access` shows effective field
+Inspect the canonical projects' explicit access profiles and synthetic journey callers. `explain access` shows effective field
 permissions; `check --deny-warnings` makes its access warnings blocking for automation.
-Entity `accessRequirements` are mandatory compiler checks, not additional grants.
+Record type `accessRequirements` are mandatory compiler checks, not additional grants.
 
 For configured atomic writes across records, see [Immediate actions](immediate-actions.md).
 
@@ -171,8 +167,7 @@ Each database records its activations in the activation ledger,
 `registry_internal.registry_migrations`: one row per activation, the initial
 one included, keyed by a UUID activation id and ordered by apply order. A row
 names the package digest, the predecessor package digest, the
-`registryRevision`, the plan kind (`initial` or `successor`, or `adopted` on a
-database an earlier release adopted from before the ledger), the role mode,
+`registryRevision`, the plan kind (`initial` or `successor`), the role mode,
 any backups a destructive migration was bound to, and the keyed hash of
 `--operator-reference`. `apply` accepts a successor only when its
 predecessor digest is the active package, and refuses the active package again
@@ -242,8 +237,7 @@ retention boundaries, see [Corrections and historical queries](HISTORY.md).
 For the opt-in log that lets a record subject see named reads of that record,
 including retention, intermediary attribution, and delayed disclosure, see
 [Subject-facing access logs](ACCESS-LOG.md).
-For the entity `events` to `hooks` rewrite, see
-[Breaking authoring change: entity hooks](HISTORY.md).
+See [Events and webhooks](EVENTS-AND-WEBHOOKS.md) for committed record and Proposal events.
 
 [Point queries and QGIS](SPATIAL-QUERIES.md) describes GeoJSON output and
 explicitly granted PostGIS-backed bbox queries. The spatial quickstart uses
@@ -327,18 +321,17 @@ it must add one resolving negative executable test in the same patch.
 The projects under `acceptance/` are authored configuration inputs for the same
 compiler and binary. The five baseline fixtures cover asset/site placement,
 business establishments, facility inspections, environmental facilities, and
-legal-entity registrations. Separate change-request fixtures exercise reviewed
-asset corrections and household contact registration without changing those
-baseline direct-write journeys. These are not generated output or implicit
+legal-entity registrations. The canonical [native projects](examples/refactor/README.md) exercise generated
+CRUD, immediate multi-record Actions, and reviewed or no-review Proposals. These are not generated output or implicit
 runtime models. The real-PostgreSQL pilot test executes the baseline fixtures,
 while the public-binary adopter workflow proves activation, authenticated
 data access, an additive upgrade, failure recovery, and unchanged server bytes
-for the asset project. See [change-request examples](CHANGE_REQUEST_EXAMPLES.md)
+for the asset project. See [Proposal configuration](proposals.md)
 for the approval workflows.
 For bounded institutional-agent authority and current-status checks, see
 [task grants for governed writes](TASK_GRANTS.md).
 For a chat assistant that reads a citizen's own data and prepares a
-change-request draft the citizen submits themselves, see the
+Proposal draft the citizen submits themselves, see the
 [citizen MCP gateway](MCP-GATEWAY.md).
 The separate `household-history` fixture proves correction batches and retained
 snapshot answers through the same compiler and runtime.
@@ -350,10 +343,6 @@ handler, declared business refusal, coordinated creates and an optional patch.
 See [native string patterns](native-patterns.md) for stored integrity rules.
 Its synthetic CLI cases assert computed effects and its PostgreSQL journeys
 verify stored values and existing action authority and concurrency contracts.
-The [citizen self-registration project](acceptance/citizen-self-registration/README.md)
-combines native ThunderID SMS signup, account-owned applications, Casework
-review, and automatic Person creation, account linking, and program enrollment.
-Its live driver uses the native products and separate disposable databases.
 
 Run the current deterministic contract checks with:
 
@@ -361,16 +350,14 @@ Run the current deterministic contract checks with:
 products/breg/scripts/check-contracts.sh
 ```
 
-For an interactive local business example backed by disposable PostgreSQL,
-the pinned stock ThunderID issuer, a real local package, and deterministic
-relational data, run:
+Run the durable receiver's independent behavioral tests with:
 
 ```bash
-products/breg/demo/run.sh
+python3 products/breg/examples/webhook-receiver/test_receiver.py -v
 ```
 
-The launcher retains every key and token in an ignored owner-only directory
-and prints a separate query helper rather than printing bearer credentials.
+The [receiver example](examples/webhook-receiver/README.md) provisions no registry
+or issuer. It demonstrates durable acceptance independently of BReg deployment.
 
 ## Portable metadata and composition
 

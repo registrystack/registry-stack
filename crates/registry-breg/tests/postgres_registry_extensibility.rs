@@ -37,11 +37,10 @@ use zeroize::Zeroizing;
 
 const AUDIENCE: &str = "urn:breg:facility-registry-actions";
 const REGISTRY_ID: &str = "facility-registry-actions";
-const PROJECT: &[u8] = include_bytes!(
-    "fixtures/native-models/products/breg/fixtures/facility-registry-actions/registry.yaml"
-);
+const PROJECT: &[u8] =
+    include_bytes!("../../../products/breg/fixtures/facility-registry-actions/registry.yaml");
 const MODULE: &[u8] = include_bytes!(
-    "fixtures/native-models/products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
+    "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
 );
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -54,7 +53,7 @@ async fn facility_registration_transfer_and_events_use_governed_actions() {
     );
     registry_breg::fixtures::validate_fixture_journeys(
         include_bytes!(
-            "fixtures/native-models/products/breg/fixtures/facility-registry-actions/tests/journeys.yaml"
+            "../../../products/breg/fixtures/facility-registry-actions/tests/journeys.yaml"
         ),
         &registry,
     )

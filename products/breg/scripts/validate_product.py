@@ -673,7 +673,8 @@ def validate_fixture(errors: list[str]) -> None:
             "package",
             "manifestProjection",
             "modules",
-            "entities",
+            "recordTypes",
+            "datasets",
             "accessProfiles",
             "vocabularies",
         },
@@ -705,7 +706,7 @@ def validate_fixture(errors: list[str]) -> None:
     }
     if package != expected_package:
         errors.append("asset fixture.package: must equal the committed acceptance package identity")
-    entities = as_list(document.get("entities"), "asset fixture.entities", errors)
+    entities = as_list(document.get("recordTypes"), "asset fixture.recordTypes", errors)
     entity_ids = {item.get("id") for item in entities if isinstance(item, dict)}
     required_entities = {"asset-item", "asset-site", "asset-placement", "inspection-event"}
     if entity_ids != required_entities:
@@ -741,7 +742,13 @@ def validate_fixture(errors: list[str]) -> None:
         errors.append("asset fixture: data service membership must resolve to the governed dataset")
     placement = next((item for item in entities if isinstance(item, dict) and item.get("id") == "asset-placement"), {})
     temporal = placement.get("temporal") if isinstance(placement, dict) else None
-    if not isinstance(temporal, dict) or temporal.get("scopeFields") != ["asset"]:
+    if (
+        temporal != {"startField": "valid-from", "endField": "valid-to"}
+        or not any(
+            constraint == {"type": "temporal-non-overlap", "scopeFields": ["asset"], "startField": "valid-from", "endField": "valid-to"}
+            for constraint in placement.get("constraints", [])
+        )
+    ):
         errors.append("asset fixture: placement must declare scoped valid-time")
     profiles = as_list(document.get("accessProfiles"), "asset fixture.accessProfiles", errors)
     if [profile.get("id") for profile in profiles if isinstance(profile, dict)] != [

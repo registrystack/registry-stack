@@ -10,13 +10,13 @@ Run from the repository root:
 ```sh
 cargo run --locked -p registry-bregctl -- check products/breg/acceptance/farmer-landholding-evidence
 for case in status-only with-category inactive blank; do
-  cargo run --locked -p registry-bregctl -- project planner-test \
+  cargo run --locked -p registry-bregctl -- project action-test \
     products/breg/acceptance/farmer-landholding-evidence \
     --action register-landholding \
     --input products/breg/acceptance/farmer-landholding-evidence/examples/$case.input.json \
     --expect products/breg/acceptance/farmer-landholding-evidence/examples/$case.expect.json
 done
-cargo run --locked -p registry-bregctl -- project planner-test \
+cargo run --locked -p registry-bregctl -- project action-test \
   products/breg/acceptance/farmer-landholding-evidence --action check-procedure \
   --input products/breg/acceptance/farmer-landholding-evidence/examples/zero-call.input.json \
   --expect products/breg/acceptance/farmer-landholding-evidence/examples/zero-call.expect.json

@@ -44,7 +44,7 @@ the reference wins.
 
 | Product | Configuration | HTTP API |
 | --- | --- | --- |
-| Base Registry Engine | [`registry.yaml`, `module.yaml`, and `runtime.yaml`](../breg-configuration/), including the Rhai action handler ABI `registry.action-handler/v1` | [Base Registry Engine API](../breg-api/) |
+| Base Registry Engine | [`registry.yaml`, `module.yaml`, and `runtime.yaml`](../breg-configuration/), including the Rhai action handler ABI `registry.action-plan/v1` | [Base Registry Engine API](../breg-api/) |
 | Evidence Gateway | [Bundle and runtime files](../evidence-configuration/) | [Evidence Gateway API](../apis/registry-evidence/) and [problem types](../evidence-problems/), including the signed JWS, unsigned JSON envelope, SD-JWT VC, and holder-bound issuance envelope response formats |
 | Registry Casework | [Casework policy](../../configure/casework/) and [runtime file](../../operate/casework/#write-the-runtime-file) | [Casework API](../apis/registry-casework/) |
 | Registry Discovery | [Origins, evidence-type mappings, and runtime file](../../configure/discovery/) | [`GET /v1/services` and `POST /v1/evidence-types/resolve`](../../configure/discovery/#verify-resolution-and-exact-search) |
@@ -55,7 +55,7 @@ Evidence Gateway's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/
 `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`.
 
 {/* Evidence: crates/registry-discovery/src/server.rs, SERVICES_ROUTE and EVIDENCE_TYPES_ROUTE;
-    crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V1;
+    crates/registry-breg/src/contract.rs, ACTION_PLAN_ABI_V1;
     products/evidence/contracts/bundle.schema.yaml, the response-formats enum;
     crates/registry-stack-client-node/breg/client.d.ts, statisticsLive and statisticsPublish;
     crates/registry-stack-client/src/lib.rs, TaskGrantBounds and SchedulingTaskPermission. */}
@@ -97,7 +97,7 @@ experimental surface.
 {/* Evidence: crates/registry-breg/src/api/statistics.rs; crates/registry-breg/src/api/gis.rs;
     crates/registry-casework-core/src/task_grant.rs, TaskGrantBounds;
     crates/registry-breg/src/action_handler.rs, compile_source_for_action;
-    products/breg/IMPLEMENTATION.md, Capability state within W5;
+    products/breg/IMPLEMENTATION.md;
     products/breg/contracts/definition-of-done.yaml, BREG-V1-ACTION-EVIDENCE-TRIAL;
     products/discovery/README.md, the published registry-discovery-v1alpha1 profile resources;
     crates/registry-discovery-profile/src/lib.rs, PROFILE_ID. */}
@@ -195,7 +195,7 @@ operation that names a capability it does not understand. The engine still autho
 at execution time.
 
 {/* Evidence: crates/registry-breg-client/src/metadata.rs,
-    operation_capabilities_are_understood and BRegMetadata::select_immediate_action. */}
+    operation_capabilities_are_understood and BRegMetadata::select_action. */}
 
 Servers stay strict on requests and configuration: an unknown request member or configuration key
 is refused, not ignored. A configuration file that uses a key a later release introduced fails to
@@ -218,7 +218,7 @@ A WASM action handler is promised within the limits the
 states:
 
 - the project keys `handler.type: wasm`, the `module` path, and handler ABI
-  `registry.action-handler/v1`
+  `registry.action-plan/v1`
 - the guest byte ABI: a wasm32 core module with zero imports; the exports `alloc`, `handle`,
   `result_ptr`, `result_len`, and `memory`; the `handle` status codes `0` (success), `1` (malformed
   request), and `2` (internal error); the `{"inputs": ...}` request document; and the one JSON
@@ -236,7 +236,11 @@ and the WASM handler SDK are outside the promise.
 
 ## Upgrades and state
 
-Each release reads the state its immediate predecessor wrote, with two exceptions: `v0.40.0` and
+The native BReg Record type, Action, and Proposal replacement is a fresh-install
+boundary. It provides no conversion of retired ChangeRequest state. Normal
+package evolution applies within the native model.
+
+For the other retained state contracts, each release reads the state its immediate predecessor wrote, with two exceptions: `v0.40.0` and
 `v1.0.0`. `v1.0.0` is a fresh install, and no upgrade from a `v0.x` release to it is supported. For
 a minor release, the immediate predecessor is the last release of the previous line. For a patch
 release, it is the previous release of its own line; a patch release promises no direct path from a
@@ -293,7 +297,7 @@ The promise is machine-checked where a checker exists:
   the same build; it does not demonstrate compatibility between releases. Once a release on the
   forward state path is published, the default run downloads it. Scheduling state is not rehearsed.
 
-{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), audit_stream_losses(), select_from_tag(), and check_forward_path(). */}
+{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), view_differences(), row_count_losses(), audit_stream_losses(), select_from_tag(), and check_forward_path(). */}
 
 A change that a gate flags as breaking lands only in a release whose version permits it, with the
 deprecation and migration steps this page requires.

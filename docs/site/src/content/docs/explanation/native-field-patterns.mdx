@@ -35,7 +35,7 @@ exactly 13 ASCII digits, preserves a leading zero, and rejects whitespace, Unico
 embedded or trailing newlines.
 
 A pattern is not a checksum and does not identify a national identifier scheme. When acceptance
-depends on another record, an immediate action's `requires` guard or a
+depends on another record, an Action's `commitGuards` requirement or a
 [governed registry action](../governed-registry-actions/) is the mechanism, because a CHECK constraint
 sees one row.
 
@@ -73,7 +73,7 @@ cannot establish PostgreSQL expression syntax or existing-data conformance, so i
 the expression and the raw database diagnostic.
 
 A rejected write returns `409 mutation.conflict`. Direct writes and immediate actions name the
-authored entity and field admitted by their write contract; change-request application returns the
+authored entity and field admitted by their write contract; Proposal application returns the
 generic conflict, because application authority does not grant target-field disclosure. No response
 includes stored values, physical table names, constraint names, or raw PostgreSQL diagnostics.
 Repair the submitted value before retrying: `409` here is not a transient condition.
@@ -86,7 +86,7 @@ expect:
   outcome: refusal
   status: 409
   problemCode: mutation.conflict
-  entityId: person
+  recordType: person
   fieldId: identifier
 ```
 

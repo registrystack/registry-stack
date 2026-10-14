@@ -10,7 +10,7 @@ use crate::proposal_workflow::{
 use serde_json::json;
 use std::time::{Duration, Instant};
 
-const PACKAGE: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const ACTIVATION_ID: &str = "3b0c7a52-5d1e-4f6a-8b9c-0d1e2f3a4b01";
 const TARGET: &str = "00000000-0000-4000-8000-000000000001";
 const OTHER_TARGET: &str = "00000000-0000-4000-8000-000000000003";
 
@@ -107,7 +107,7 @@ fn existing(
         action(registry),
         &input,
         1,
-        PACKAGE,
+        ACTIVATION_ID,
         &resolved,
         BTreeMap::from([(
             ("target".into(), Uuid::parse_str(TARGET).unwrap()),
@@ -219,7 +219,7 @@ fn preparation_requires_the_exact_guard_reference_snapshot_union() {
             action(&registry),
             &input,
             1,
-            PACKAGE,
+            ACTIVATION_ID,
             &resolved,
             BTreeMap::from([(
                 ("target".into(), Uuid::parse_str(TARGET).unwrap()),
@@ -383,7 +383,7 @@ fn create_references_reuse_reserved_ids_across_preparation_attempts() {
             action(&registry),
             &input,
             1,
-            PACKAGE,
+            ACTIVATION_ID,
             &resolved,
             BTreeMap::new(),
             BTreeMap::new(),

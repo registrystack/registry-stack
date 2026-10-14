@@ -25,7 +25,7 @@ use crate::migration_plan::{
 };
 use crate::package::{
     CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, MigrationPlan, PackageFileRole,
-    VerifiedPackage, VerifiedPredecessorPackage,
+    VerifiedPackage,
 };
 use crate::postgres::{
     statement_checksum, ActivationPlanKind, BackupReference, ConnectionConfig,
@@ -165,38 +165,6 @@ pub fn successor_plan_is_empty(package: &VerifiedPackage) -> bool {
     plan.statements.is_empty()
         && package.reviewed_migration_plan().is_none()
         && !verified_metadata_only_plan(plan)
-}
-
-/// Whether a verified successor remains empty after accounting for an
-/// engine-owned capability absent from its verified predecessor. The sole
-/// compatibility exception installs an engine capability, such as the
-/// statistical release store or caller-scoped idempotency, that the current
-/// compiler declares and the predecessor's manifest does not; every ordinary
-/// empty successor is still refused.
-pub fn successor_plan_is_empty_for_predecessor(
-    package: &VerifiedPackage,
-    predecessor: &VerifiedPredecessorPackage,
-) -> bool {
-    successor_plan_is_empty(package) && !installs_engine_capability(package, predecessor)
-}
-
-fn installs_engine_capability(
-    package: &VerifiedPackage,
-    predecessor: &VerifiedPredecessorPackage,
-) -> bool {
-    package.manifest().package_id == predecessor.package_id()
-        && package
-            .manifest()
-            .migration_plan
-            .from_package_digest
-            .as_deref()
-            == Some(predecessor.package_digest())
-        && package
-            .manifest()
-            .engine_features
-            .difference(predecessor.engine_features())
-            .next()
-            .is_some()
 }
 
 fn verified_metadata_only_plan(plan: &MigrationPlan) -> bool {
@@ -565,8 +533,7 @@ pub struct ActivationLedgerEntry {
     pub package_digest: String,
     pub predecessor_package_digest: Option<String>,
     pub registry_revision: String,
-    /// `initial` or `successor`, or `adopted` for the first activation of a
-    /// database an earlier release adopted from before the activation ledger.
+    /// `initial` or `successor`.
     pub plan_kind: String,
     /// `compiled-additive`, `metadata-only`, or `reviewed`.
     pub migration_kind: String,
@@ -676,7 +643,6 @@ pub struct ApplyVerifiedPackageRequest<'a> {
     backup_evidence: &'a [DestructiveBackupEvidence<'a>],
     predecessor_history_descriptor: Option<&'a HistorySchemaDescriptor>,
     predecessor_migration_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
-    predecessor_engine_capabilities: Option<&'a VerifiedPredecessorPackage>,
     event_destination_compatibility_inventory: Option<&'a EventDestinationCompatibilityInventory>,
     proposal_activation_compatibility_inventory:
         Option<&'a crate::proposal_retention::ProposalActivationCompatibilityInventory>,
@@ -725,7 +691,6 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             backup_evidence: &[],
             predecessor_history_descriptor: None,
             predecessor_migration_baseline: None,
-            predecessor_engine_capabilities: None,
             event_destination_compatibility_inventory: None,
             proposal_activation_compatibility_inventory: None,
             field_encryption: None,
@@ -756,7 +721,6 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             backup_evidence: &[],
             predecessor_history_descriptor: None,
             predecessor_migration_baseline: None,
-            predecessor_engine_capabilities: None,
             event_destination_compatibility_inventory: None,
             proposal_activation_compatibility_inventory: None,
             field_encryption: None,
@@ -816,19 +780,6 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
         baseline: &'a CompiledRegistryMigrationBaseline,
     ) -> Self {
         self.predecessor_migration_baseline = Some(baseline);
-        self
-    }
-
-    /// Bind engine-owned successor work to the hash-covered capabilities of
-    /// the verified predecessor package. This grants no predecessor SQL or
-    /// runtime authority; it only distinguishes a closed legacy capability
-    /// transition from an ordinary empty package plan.
-    #[must_use]
-    pub fn with_predecessor_engine_capabilities(
-        mut self,
-        predecessor: &'a VerifiedPredecessorPackage,
-    ) -> Self {
-        self.predecessor_engine_capabilities = Some(predecessor);
         self
     }
 
@@ -1084,13 +1035,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     } else {
         None
     };
-    let engine_capability_only_upgrade = successor_plan_is_empty(request.package)
-        && request
-            .predecessor_engine_capabilities
-            .is_some_and(|predecessor| installs_engine_capability(request.package, predecessor));
-    let empty_successor =
-        successor_plan_is_empty(request.package) && !engine_capability_only_upgrade;
-    if current.is_some() && !role_change && empty_successor {
+    if current.is_some() && !role_change && successor_plan_is_empty(request.package) {
         return Err(MigrationError::EmptyPlan);
     }
 
@@ -1101,14 +1046,6 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         }
         _ => package_ledger_entry(request.package, current, request.roles, &compiler_checksums)?,
     };
-    if engine_capability_only_upgrade {
-        // The package binds a successor activation but carries no authored
-        // compiler statement: the engine reconciles its own control plane and
-        // the final activation verifies the exact expanded catalog. Record it
-        // with the same no-statement ledger shape as other package-only
-        // capability changes, never with a synthetic DDL checksum.
-        ledger.migration_kind = MigrationKind::MetadataOnly;
-    }
     ledger
         .validate_plan()
         .map_err(|_| MigrationError::PackageBinding)?;
@@ -1354,45 +1291,6 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         }
     };
     if current.is_some() {
-        // Existing registries may have been initialized by a binary that
-        // predates newer product-owned control tables. Reconcile them while
-        // the verified migration session holds the apply lock and before the
-        // successor can enter durable maintenance. A role change reconciles
-        // them for the runtime role still serving: the role it activates
-        // receives its grants inside the activation transaction, so a
-        // refusal before maintenance leaves that role nothing. When the role
-        // the ledger names no longer exists, nothing serves to reconcile for.
-        let control_plane_role = match retired_runtime_role.as_ref() {
-            None => Some(request.roles.runtime),
-            Some(retired) => match connection.role_exists(retired).await {
-                Ok(true) => Some(retired),
-                Ok(false) => None,
-                Err(_) => {
-                    return refuse_and_release(
-                        connection,
-                        attempt,
-                        &target,
-                        MigrationError::ApplyFailed,
-                    )
-                    .await;
-                }
-            },
-        };
-        if let Some(control_plane_role) = control_plane_role {
-            if connection
-                .reconcile_successor_control_plane(control_plane_role)
-                .await
-                .is_err()
-            {
-                return refuse_and_release(
-                    connection,
-                    attempt,
-                    &target,
-                    MigrationError::ApplyFailed,
-                )
-                .await;
-            }
-        }
         // A role change keeps the compiled model, so no Proposal
         // needs a rebase.
         let proposals_guarded = if role_change {
@@ -1461,13 +1359,11 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         }
     }
 
-    if let Some((predecessor_baseline, predecessor_descriptor)) = successor_history {
+    if let Some((_, predecessor_descriptor)) = successor_history {
         if connection
             .ensure_successor_history_ready(
                 current.ok_or(MigrationError::PackageBinding)?,
-                predecessor_baseline,
                 predecessor_descriptor,
-                request.roles.runtime,
             )
             .await
             .is_err()
@@ -1697,8 +1593,7 @@ async fn rehearse_begin(
             .await
             .map_err(|_| MigrationError::ApplyFailed);
     };
-    // The guard reads only Proposal tables, which the control-plane
-    // reconciliation apply runs before it never changes.
+    // The guard reads current Proposal state before successor maintenance.
     if !role_change {
         crate::proposal_retention::guard_successor_activation(
             connection.client_for_proposal_retention_guard(),
@@ -1718,7 +1613,6 @@ async fn rehearse_begin(
             target,
             ledger,
             request.event_destination_compatibility_inventory,
-            request.roles.runtime,
         )
         .await
         .map_err(|error| match error {

@@ -185,12 +185,19 @@ fn cli_catalogue_exposes_only_current_action_and_proposal_commands() {
     assert!(help.contains("action-test"));
     assert!(!help.contains("planner-test"));
     assert!(!run(&["explain", "actions"]).status.success());
-    for operation in ["validate", "import", "export"] {
-        let output = run(&["data", operation, "--help"]);
+    for arguments in [
+        vec!["data", "validate", "--help"],
+        vec!["data", "import", "--help"],
+        vec!["data", "export", "--help"],
+        vec!["generate", "--help"],
+        vec!["import-authority", "open", "--help"],
+        vec!["dev", "prepare-source", "--help"],
+    ] {
+        let output = run(&arguments);
         assert!(output.status.success());
         let help = String::from_utf8(output.stdout).unwrap();
-        assert!(help.contains("--record-type"));
-        assert!(!help.contains("--entity"));
+        assert!(help.contains("--record-type"), "{help}");
+        assert!(!help.contains("--entity"), "{help}");
     }
 }
 #[test]

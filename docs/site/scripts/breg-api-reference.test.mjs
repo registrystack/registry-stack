@@ -32,15 +32,15 @@ test('breg-api tables are rectangular with non-empty columns and rows', () => {
   }
 });
 
-test('routes include governed access-log, attachment, and GIS surfaces with their gates', () => {
+test('routes include governed access-log, native Proposal attachment, and GIS surfaces with their gates', () => {
   const routes = table('routes');
   assert.ok(routes, 'breg-api.yaml has no routes table');
   const rows = new Map(routes.rows.map((row) => [row[0], row]));
   const expected = [
     ['`GET /v1/records/{route}/{recordId}/access-log`', ['declares `accessLog`', 'current subject']],
-    ['`GET /v1/records/{route}/{recordId}/attachments/{slot}`', ['declares the attachment slot', 'through `get`']],
-    ['`PATCH /v1/records/{route}/{recordId}/attachments/{slot}`', ['declares the attachment slot', 'mutations are enabled', 'through `patch`']],
-    ['`DELETE /v1/records/{route}/{recordId}/attachments/{slot}`', ['declares the attachment slot', 'mutations are enabled', 'through `patch`']],
+    ['`GET /v1/proposals/{proposalId}/attachments/{slot}`', ['declares the slot', 'caller-authorized download']],
+    ['`PATCH /v1/proposals/{proposalId}/attachments/{slot}`', ['Draft Proposal', 'caller-authorized upload']],
+    ['`DELETE /v1/proposals/{proposalId}/attachments/{slot}`', ['Draft Proposal', 'caller-authorized removal']],
     ['`GET /v1/gis`', ['`listener.publicOrigin` is configured']],
     ['`GET /v1/gis/api`', ['`listener.publicOrigin` is configured', 'visible to the caller']],
     ['`GET /v1/gis/conformance`', ['`listener.publicOrigin` is configured']],
@@ -63,4 +63,24 @@ test('routes include governed access-log, attachment, and GIS surfaces with thei
 
 test('breg-api.json is the generated output of breg-api.yaml', () => {
   assert.deepEqual(JSON.parse(read('../src/data/generated/breg-api.json')), tables);
+});
+
+test('native Action and Proposal route families agree with the canonical generated OpenAPI', () => {
+  const openapi = JSON.parse(read('../../../products/breg/generated/refactor/generated/openapi.json'));
+  const documented = new Set(table('routes').rows.map((row) => row[0]));
+  for (const [path, item] of Object.entries(openapi.paths)) {
+    if (!path.startsWith('/v1/actions/') && !path.startsWith('/v1/proposals')) continue;
+    for (const method of Object.keys(item).filter((key) => ['get', 'post', 'patch', 'delete'].includes(key))) {
+      let display = path.replace(/\{proposal_id\}/g, '{proposalId}');
+      display = display.replace(/\/attachments\/[^/]+$/, '/attachments/{slot}');
+      if (display.startsWith('/v1/actions/')) display = display.replace(/\/actions\/[^/]+/, '/actions/{action}');
+      if (/\/proposals\/\{proposalId\}\/(edit|submit|revise|rebase|retry|cancel|apply)$/.test(display)) {
+        display = display.replace(/\/[^/]+$/, '/{transition}');
+      }
+      assert.ok(documented.has(`\`${method.toUpperCase()} ${display}\``), `${method} ${path} is undocumented`);
+    }
+  }
+  assert.ok(!JSON.stringify(tables).includes('changeRequest'));
+  assert.ok(!JSON.stringify(tables).includes('submit-request'));
+  assert.ok(!table('routes').rows.some((row) => /records.*attachments/.test(row[0])));
 });

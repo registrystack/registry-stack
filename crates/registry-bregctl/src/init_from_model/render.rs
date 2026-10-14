@@ -446,9 +446,9 @@ fn registry(plan: &Plan) -> String {
          `breg.access.profile-unrestricted-collection` for it: it can list every record, and a \
          caller-supplied filter is not authorization. That is intended for a single \
          operations team; close it with a `rowBoundaries` entry or by removing `list`. \
-         `breg.access.profile-writable-row-boundary` follows for a bound field it can write: \
-         confirm that moving records between callers' rows is intended, or drop the field \
-         from `writableFields`.",
+         `breg.access.profile-writable-row-boundary` reports a patch that can move a record \
+         between values allowed by an `in` boundary. Keep boundary fields writable for \
+         create; use a separate patch permission if those fields must not change.",
     );
     if let Some(note) = sensitive_note(plan) {
         yaml.comment(0, &note);

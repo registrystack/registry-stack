@@ -1049,7 +1049,11 @@ pub struct ModuleLockSource {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub version: String,
-    #[serde(default, deserialize_with = "optional_digest_text")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_digest_text"
+    )]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Digest>"))]
     pub digest: Option<String>,
 }
@@ -1668,6 +1672,7 @@ impl ActionHandlerSource {
     }
 
     /// The WASM handler module path, declared by a wasm handler only.
+    #[cfg(feature = "wasm")]
     #[must_use]
     pub fn module(&self) -> Option<&str> {
         match &self.handler {
@@ -3477,10 +3482,6 @@ impl ConstraintSource {
 pub struct TemporalSource {
     pub start_field: String,
     pub end_field: String,
-    /// Deprecated bounded predecessor bridge. New authoring should declare
-    /// exclusivity only through `constraints[].scopeFields`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub scope_fields: Vec<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

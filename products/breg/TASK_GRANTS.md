@@ -5,10 +5,9 @@ own principal. It does not make the agent the human who approved the task.
 Base Registry Engine (BReg) verifies the exchanged access token and selected
 access profile, then
 checks current Casework status before each new governed mutation. Task agents
-use change-request drafts and lifecycle operations; a task grant does not
-authorize direct changes to the target records, including imports. A task-grant profile cannot
-hold `apply-request`: the compiler refuses it with
-`breg.access-profile.task-grant-operation-forbidden`.
+use named Actions and Proposals within their exact signed and compiled bounds.
+Direct target CRUD, imports, batches, and tombstones remain forbidden. A task
+grant cannot acquire an operation or target the profile does not grant.
 
 The authored access profile selects `actorKind: agent`, exact
 `requesterClients`, `requiredPurposes`, and a `taskGrant` containing the exact
@@ -54,23 +53,12 @@ without `actorKind` still accepts every kind of direct token. Custom contextual 
 names, when needed for an existing issuer, are configured together in the
 closed `contextual` object.
 
-A standing agent profile has a lower ceiling than a task-grant profile. A task
-grant carries the approval of the human who assigned the task; a standing
-agent carries none, so the human must confirm the change themselves by
-submitting it. A standing agent profile may read and may create, read, and
-patch change-request drafts. The compiler refuses it when it holds
-`submit-request`, `revise-request`, `cancel-request`, or `apply-request`,
-with `breg.access-profile.standing-agent-operation-forbidden`, and when it holds
-`create` or `patch` on an entity without a `changeRequest`, or `import`,
-`tombstone`, or `batch` on any entity, with
-`breg.access-profile.standing-agent-direct-mutation-forbidden`. Profiles
-contributed by modules meet the same ceiling. An immediate action commits its
-effects at once, with no draft for the human to confirm, so the compiler also
-refuses a standing agent profile that holds any action permission, with
-`breg.access-profile.standing-agent-action-forbidden`. Action permissions are
-authored only on project access profiles; a module contributes entity
-profiles, which cannot grant `invoke` at all. Give the lifecycle operations
-and immediate actions to a separate profile the citizen uses directly.
+A standing agent without a task grant may read, Start an authorized Proposal,
+and edit its own draft. It cannot commit immediate effects or acquire submitted
+lifecycle authority. A separately authorized human confirms the draft. Start,
+Proposal draft management, and committed transitions remain separate grants;
+`permissions.actions` and `permissions.proposals` never confer direct record CRUD.
+Modules remain subject to the same ceiling.
 
 Publishing or withdrawing a statistical release commits at once in the same
 way, so the compiler refuses a standing agent profile that holds `publish` on

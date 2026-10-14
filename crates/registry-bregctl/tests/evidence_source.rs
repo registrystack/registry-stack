@@ -22,7 +22,7 @@ fn export(output: &Path, fields: &str) -> Output {
         .args([
             "--access-profile",
             "evidence-source",
-            "--entity",
+            "--record-type",
             "record",
             "--selector",
             "by-code",
@@ -121,7 +121,7 @@ fn an_explicit_lookup_project_exports_an_evidence_source_without_edits() {
         .args([
             "--access-profile",
             "evidence-source",
-            "--entity",
+            "--record-type",
             "record",
             "--selector",
             "by-code",
@@ -158,7 +158,7 @@ fn an_explicit_lookup_project_exports_an_evidence_source_without_edits() {
 ///
 /// ```text
 /// bregctl generate evidence-source products/breg/evidence/registry \
-///   --access-profile evidence-source --entity record \
+///   --access-profile evidence-source --record-type record \
 ///   --selector by-code --selector by-registration-number --fields status \
 ///   --source-id registry-status --connection registry --output "$export"
 /// cp "$export/source-export.json" products/breg/examples/formats/

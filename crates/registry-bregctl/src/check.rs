@@ -30,10 +30,10 @@ use registry_platform_yaml::{
 use serde::Serialize;
 
 use super::{
-    capture_project_source, compile_captured_project, ensure_source_entry_identity, file_check,
-    has_parent_component, inspect_package_integrity, path_diagnostic, read_module_directory_names,
-    write_ctl_report, OutputFormat, ProfileArg, SafeDir, SafeEntry, SafePathError,
-    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
+    canonicalize_project_path, capture_resolved_project_source, compile_captured_project,
+    ensure_source_entry_identity, file_check, has_parent_component, inspect_package_integrity,
+    path_diagnostic, read_module_directory_names, write_ctl_report, OutputFormat, ProfileArg,
+    SafeDir, SafeEntry, SafePathError, DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
 };
 
 /// The registered kind of `registry.yaml`, named as the `artifact` of a
@@ -207,6 +207,21 @@ fn check_project(
     profile: ProfileArg,
     outcome: &mut Outcome,
 ) -> Option<CompiledRegistry> {
+    let selected_project = match canonicalize_project_path(project) {
+        Ok(path) => path,
+        Err(diagnostic) => {
+            outcome.unavailable = diagnostic.code == "breg.source.project-invalid";
+            outcome.report.push(file_diagnostic(
+                &diagnostic.code,
+                project,
+                Some(PROJECT_ARTIFACT),
+                &diagnostic.message,
+                FIND_PROJECT,
+            ));
+            return None;
+        }
+    };
+    let project = selected_project.as_path();
     let compiled = compile_project(project, profile, outcome);
     check_tool_files(project, compiled.as_ref(), outcome);
     compiled
@@ -281,7 +296,7 @@ fn compile_project(
     outcome: &mut Outcome,
 ) -> Option<CompiledRegistry> {
     let documents = read_documents(project, outcome)?;
-    let source = match capture_project_source(project) {
+    let source = match capture_resolved_project_source(project) {
         Ok(source) => source,
         Err(diagnostic) => {
             outcome

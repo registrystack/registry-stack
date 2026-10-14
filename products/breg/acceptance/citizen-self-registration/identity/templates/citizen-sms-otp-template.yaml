@@ -1,6 +1,0 @@
-id: citizen-sms-otp
-displayName: Citizen acceptance SMS OTP
-scenario: OTP
-type: sms
-contentType: text/plain
-body: 'Your verification code is: {{ctx(otpCode)}}. It expires in {{ctx(expiryTime)}}.'

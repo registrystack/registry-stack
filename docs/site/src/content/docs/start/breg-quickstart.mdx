@@ -16,7 +16,7 @@ compiled from a registry project. The runtime carries no built-in domain types: 
 permit, or an asset exists only when the active package declares it.
 
 A [registry project](../../reference/glossary/#registry-project) is a directory of YAML files that
-declares the entities, fields, relationships, access profiles, change requests, and events one
+declares the Record types, fields, relationships, access profiles, Actions, Proposals, and events one
 registry exposes. A [package](../../reference/glossary/#package) is the compiled and verified form
 of one project: `bregctl` builds it, and `breg` serves it. An
 [access profile](../../reference/glossary/#access-profile) is a named grant inside the project that
@@ -67,16 +67,16 @@ The local path keeps authentication, access profiles, row boundaries, and audit 
 substitute for production package review, operated database roles, TLS to the database,
 migration review, or secret custody; those arrive in the deploy phase.
 
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, start(); crates/registry-bregctl/src/lib.rs, init_files();
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, start(); crates/registry-bregctl/src/starters.rs;
     docs/site/src/content/docs/tutorials/first-breg.mdx. */}
 
 ## Choose your role
 
 ### Author a registry
 
-Start with [Author a registry project](../../configure/breg/) for `registry.yaml`, entities,
+Start with [Author a registry project](../../configure/breg/) for `registry.yaml`, Record types,
 fields, related records, and modules, then [Control access per profile](../../configure/breg-access/)
-and [Declare change requests and actions](../../configure/breg-change-control/). `bregctl check`,
+and [Declare Actions and Proposals](../../configure/breg-change-control/). `bregctl check`,
 `explain`, and `generate` open no database, so the modeling loop needs no infrastructure.
 [Test with journeys](../../configure/breg-journeys/) adds the scenario tests that `bregctl test`
 runs against a schema-test database before anything is packaged.
@@ -106,7 +106,7 @@ and the problem codes.
 
 ## Where the product stops
 
-Base Registry Engine ships no business, facility, authority, permit, or asset model: every entity,
+Base Registry Engine ships no business, facility, authority, permit, or asset model: every Record type,
 route, and profile comes from the active package. It issues no tokens and stores no users;
 identity belongs to your OpenID Connect provider. It is not a proxy over data
 held elsewhere: it owns its records in its own PostgreSQL database. Evidence Gateway answers

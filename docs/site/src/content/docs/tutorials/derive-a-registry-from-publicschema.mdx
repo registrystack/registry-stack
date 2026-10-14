@@ -166,7 +166,7 @@ collection, and the `operator` profile reads the two fields PublicSchema marks s
 README's "Access profiles" section names those two fields and says how to narrow either finding
 before you build a production package.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_files() and check(); crates/registry-breg/src/access.rs. */}
+{/* Evidence: crates/registry-bregctl/src/init_from_model/; crates/registry-bregctl/src/lib.rs, check(); crates/registry-breg/src/access.rs. */}
 
 ## Start the registry
 
@@ -183,9 +183,9 @@ a `reader`, matching this project's two access profiles.
 
 Before that report, `dev` replayed `household-registry/tests/journeys.yaml` against a throwaway
 database, then activated the package on an empty one, so the registry starts with no records. To
-make the journey's first record by hand, get a token the way
-[Create and query your first registry](../first-breg/#get-a-token) does, then send this body with
-the [create request](../first-breg/#create-a-record):
+make the journey's first record by hand, obtain an operator token with `bregctl dev token operator household-registry`,
+then use its protected header file with the
+[record Create contract](../../reference/breg-api/#create):
 
 ```json
 {
@@ -308,7 +308,7 @@ the selection and derived a second project with one fewer sensitive field.
 
 ## Troubleshooting
 
-[Create and query your first registry](../first-breg/#troubleshooting) covers the problems common to
+[Local registry startup](../first-breg/#start-the-registry) covers the problems common to
 every project: a binary that is not on `PATH`, a port already taken, and a `dev` start that never
 reaches `ready` because Docker is not running.
 

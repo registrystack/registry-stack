@@ -17,7 +17,7 @@ use registry_breg::compiler::{
     compile_project_with_assets, CompileProfile, AUTHORING_API_VERSION, AUTHORING_KIND,
 };
 use registry_breg::contract::{parse_project_yaml, ModuleAssetSource};
-use registry_breg::migration::{successor_plan_is_empty, successor_plan_is_empty_for_predecessor};
+use registry_breg::migration::successor_plan_is_empty;
 use registry_breg::package::{
     inspect_package_integrity, load_package, load_predecessor_package,
     prepare_package_with_project_assets, PackageBuildRequest, PackageEnvelope, PackageError,
@@ -292,42 +292,51 @@ fn package_manifest_refuses_unknown_engine_features() {
 }
 
 #[test]
-fn current_package_without_required_engine_feature_is_predecessor_only() {
-    let package = frozen_copy();
-    let manifest_path = package.path().join("package.json");
-    let mut envelope: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    envelope["manifest"]
-        .as_object_mut()
-        .unwrap()
-        .remove("engineFeatures");
-    fs::write(
-        &manifest_path,
-        canonicalize_json(&envelope).expect("mutated envelope canonicalizes"),
-    )
-    .unwrap();
-    fs::remove_file(package.path().join(SUM_FILE)).unwrap();
-    write_sum_file(
-        package.path(),
+fn packages_without_current_engine_features_are_refused_by_every_reader() {
+    for features in [
         None,
-        &PackageLimits {
-            max_files: 1_026,
-            max_file_bytes: 16 * 1024 * 1024,
-            max_total_bytes: 64 * 1024 * 1024,
-            max_depth: 16,
-            max_path_bytes: 512,
-        },
-        "test package",
-    )
-    .expect("mutated package envelope is closed");
+        Some(json!([])),
+        Some(json!(["statistical_release_store"])),
+    ] {
+        let package = frozen_copy();
+        let manifest_path = package.path().join("package.json");
+        let mut envelope: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        match features {
+            Some(features) => envelope["manifest"]["engineFeatures"] = features,
+            None => {
+                envelope["manifest"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("engineFeatures");
+            }
+        }
+        fs::write(
+            &manifest_path,
+            canonicalize_json(&envelope).expect("mutated envelope canonicalizes"),
+        )
+        .unwrap();
+        fs::remove_file(package.path().join(SUM_FILE)).unwrap();
+        write_sum_file(
+            package.path(),
+            None,
+            &PackageLimits {
+                max_files: 1_026,
+                max_file_bytes: 16 * 1024 * 1024,
+                max_total_bytes: 64 * 1024 * 1024,
+                max_depth: 16,
+                max_path_bytes: 512,
+            },
+            "test package",
+        )
+        .expect("mutated package envelope is closed");
 
-    let context = PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
-    };
-    assert!(matches!(
-        load_package(package.path(), &context),
-        Err(PackageError::Derivation)
-    ));
-    assert!(load_predecessor_package(package.path(), &context).is_ok());
+        let context = PackageLoadContext {
+            database_initialization_environment: ENVIRONMENT,
+        };
+        assert!(load_package(package.path(), &context).is_err());
+        assert!(load_predecessor_package(package.path(), &context).is_err());
+    }
 }
 
 #[test]
@@ -624,10 +633,6 @@ fn an_unchanged_rebuild_over_a_current_predecessor_is_an_empty_successor() {
         .expect("the current frozen package is a verified predecessor");
     let (_directory, successor) = verified_successor(&predecessor);
     assert!(successor_plan_is_empty(&successor));
-    assert!(successor_plan_is_empty_for_predecessor(
-        &successor,
-        &predecessor
-    ));
 }
 
 #[test]

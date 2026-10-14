@@ -1,334 +1,96 @@
 ---
-title: Review Base Registry Engine changes in Casework
-description: Connect Base Registry Engine (BReg) to Registry Casework, submit a frozen proposal for policy-owned review, and apply an exactly approved result under current source authority.
+title: Connect a review authority
+description: Bind an independently configured review authority to a native BReg Proposal Action without sharing application authority.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
 last_reviewed: "2026-09-20"
-doc_type: tutorial
+doc_type: how-to
+tutorial_test:
+  toolset: breg
+  skip: requires an independently operated review authority, policy, and producer credentials
 persona:
   - operator
 locale: en
 standards_referenced: []
-tutorial_test:
-  toolset: casework
-  skip: joins the BReg and Casework runtimes with direct HTTP calls into both; the Casework product contract gate replays the same journey
 ---
 
-import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+If you are connecting Base Registry Engine (BReg) to Registry Casework or another
+conforming review authority, bind one exact policy and authenticated producer
+connection. BReg retains the Proposal and applies its frozen effects; the
+authority owns policy and decisions.
 
-This journey joins two independent responsibilities. Base Registry Engine (BReg) authors and
-freezes a proposed registry change. Casework evaluates that proposal under its own policy. BReg
-applies only an exact approved result, and only through current source authorization and guards.
+## Prepare both contracts
 
-<QuickstartMeta
-  outcome="A BReg proposal reviewed under Casework policy and applied through BReg's guarded source action."
-  time="About 30 minutes after both local projects start"
-  level="Local evaluation only"
-  prerequisites={['Matching bregctl and caseworkctl releases', 'Running PostgreSQL', 'A shell, curl, and Python 3']}
-/>
+Start with a checked Proposal Action such as the generated `facility-registry`
+project. Prepare the authority independently with its admitted source namespace,
+producer identity, policy, and producer context schema. Obtain the immutable
+policy ID, version, and digest from that authority. Replace the example's synthetic
+pin in `execution.proposal.review.policy`; set the logical `authority` and
+`source` to the configured connection.
 
-## Create and connect the projects
+Keep both products' databases, credentials, and grants separate. A review result
+does not grant BReg target authority, and a BReg profile does not grant a Casework
+decision. Human context reads remain subject to current Proposal and record
+permissions. The authority receives the bound context, never raw attachment bytes.
 
-Use the paired starters. Their shared source namespace is `professional-licences`; Casework
-requires its source id to equal BReg's `project.id` so submission and source-context reads address
-the same record.
+## Bind the deployment
 
-```sh
-mkdir -p review-work
-bregctl init review-work/registry --template professional-licences
-caseworkctl init review-work/casework --template professional-review
+In BReg runtime configuration, map `reviewAuthorities.<authority>` to the exact
+endpoint, producer ID, requester profile, recovery window, and maintained
+credential. Use secret references. For local evaluation, the project's
+`dev-clients.yaml` accepts the same logical authority with a dedicated issuer
+client whose scopes and identity the authority admits. The client needs no BReg
+record profile.
 
-bregctl check review-work/registry
-bregctl explain change-requests review-work/registry
-caseworkctl source add review-work/registry \
-  --project review-work/casework --source-id professional-licences
-caseworkctl source add review-work/registry \
-  --project review-work/casework --source-id professional-licences --apply
+Automatic application is the default. BReg's built-in executor uses its compiled
+system grant for the exact frozen submission, so you configure no executor OAuth
+client or self-HTTP endpoint. For explicit manual application, author
+`execution.proposal.application.mode: manual` and grant the intended caller
+Proposal Apply separately.
 
-caseworkctl check review-work/casework
-caseworkctl explain review-work/casework
-caseworkctl test review-work/casework
-caseworkctl package review-work/casework --output review-work/casework-package
-```
+A missing review binding disables dependent operations while generated CRUD,
+immediate Actions, and no-review Proposals remain usable. Restore the exact
+binding to resume retained work. An outage never downgrades review to approval.
 
-The first `source add` is a preview. It shows the exact BReg authoring changes, the Casework
-source description, and a candidate BReg runtime fragment without writing them. The `--apply`
-run checks a staged BReg copy before it writes `registry.yaml`, `dev-clients.yaml`, the imported
-description, and the runtime fragment. It provisions no secrets and activates neither product.
-Review `review-work/casework/sources/professional-licences.breg-runtime.yaml`, replace its example
-endpoints and secret references, and merge it into the launcher-owned BReg runtime file.
-
-For the local evaluation, the applied `dev-clients.yaml` already binds BReg's authority client to
-Casework's default loopback port. Start BReg first so Casework can borrow its retained issuer:
+## Check before submitting
 
 ```sh
-bregctl dev start review-work/registry
-caseworkctl dev start review-work/casework \
-  --source-project review-work/registry
-curl --fail --silent http://127.0.0.1:8090/ready
-curl --fail --silent http://127.0.0.1:8092/ready
+bregctl check ./facility-registry
+bregctl --format json explain proposals ./facility-registry
 ```
 
-When you finish, preserve or remove each product's owned local database explicitly:
+Check the policy pin, source namespace, producer admission, current endpoint,
+and selected authority profile on both sides. Compilation proves the BReg
+configuration; it does not authenticate the external service or evaluate policy.
+Use your authority's maintained deployment and policy checks before admitting work.
 
-```sh
-caseworkctl dev stop review-work/casework
-bregctl dev stop review-work/registry
-```
+## Submit and observe
 
-The generated fragment includes both sides of the connection: the lifecycle event destination
-and read-only Casework source profile, plus `reviewAuthorities.casework`. The starter keeps
-`onApproved.mode: manual`, uses result polling, and has no completion destination. These defaults
-keep application authority in an explicit BReg operator action.
+Select the Action from BReg metadata, Start a draft, and use its promoted Submit
+link. The submission binds the exact plan, targets, Action revision, context,
+attachments, and policy. BReg correlates the authenticated result to that frozen
+binding and obtains fresh unexpired approval before an uncommitted application.
 
-## Author the BReg request
+Observe the Proposal through its authorized Get. Preserve `actionRevision`,
+`submissionVersion`, and `effectDigest`. Applied work includes retained local
+application evidence. Blocked work exposes safe recovery information and permitted
+transitions. Revise or Rebase requires a new submission; an earlier approval
+cannot authorize changed contents. Recover an uncertain command with its original
+prepared request rather than inferring execution from later state.
 
-The request binds to a logical authority and Casework policy. Application remains a separate
-source choice:
+If review cannot progress, inspect the exact Proposal and authority work under
+their separate grants. Repair the binding or use an authorized Cancel, Rebase,
+or recovery operation that the Proposal currently promotes. Never edit either
+product's work tables to force a result.
 
-```yaml
-changeRequest:
-  effects:
-    - target: {fromField: record}
-      operation: patch
-      set:
-        licensed-activities: {fromField: licensed-activities}
-  review:
-    type: required
-    authority: casework
-    policyId: scope-correction
-  onApproved:
-    mode: manual
-  retention:
-    mode: operator-erase
-```
+{/* Evidence: products/breg/examples/refactor/facility/registry.yaml;
+    crates/registry-breg/src/runtime_config.rs; crates/registry-breg/src/review_store.rs;
+    crates/registry-breg/src/api/proposals.rs; crates/registry-breg-client/src/proposal.rs. */}
 
-The submitter permission needs only source lifecycle operations. The application permission is
-ordinary BReg authority:
+## Next
 
-```yaml
-permissions:
-  entities:
-    - entity: scope-correction
-      operations: [create, get, patch, submit-request, revise-request, cancel-request]
-      readableFields: [record, licensed-activities]
-      writableFields: [record, licensed-activities]
-      requestVisibility: owner
-      rowBoundaries: unrestricted
-    - entity: scope-correction
-      operations: [get, apply-request]
-      readableFields: [record, licensed-activities]
-      readableRequestFields: [review-state]
-      applyTargets:
-        - entity: professional-license
-          rowBoundaries: unrestricted
-      rowBoundaries: unrestricted
-```
-
-Casework reviewer profiles and stages belong in the Casework project. Do not duplicate them as
-BReg permissions.
-
-{/* Evidence: products/breg/starters/professional-licences/core/registry.yaml;
-    products/casework/examples/professional-review/casework.yaml. */}
-
-## Bind the authority client
-
-For `bregctl dev`, `source add --apply` adds the paired local clients to the BReg project. The
-resulting authority binding has this shape:
-
-```yaml
-clients:
-  - id: casework-producer
-    accessProfiles: []
-    scopes: [casework:reviews:request]
-    claims: {}
-reviewAuthorities:
-  casework:
-    endpoint: http://127.0.0.1:8092/
-    profile: integration-requester
-    producerId: registry-breg
-    recoveryDays: 7
-    client: casework-producer
-```
-
-The local issuer provisions the service client and BReg uses maintained client-assertion token
-acquisition. If the client has no explicit resource mapping, local development uses the generated
-BReg audience; otherwise it uses the declared mapped resource. Scopes must belong to that resource.
-No access token or private key is embedded in generated runtime configuration.
-
-The Casework starter admits the stable subject derived from the professional-licences starter's
-instance id and `integration-requester` client. Before packaging for a deployment, replace that
-local issuer and subject in `reviewProducers` with the deployed BReg client identity, and replace
-the example authority endpoint and secret references in the generated BReg runtime fragment.
-
-In a deployed runtime, `reviewAuthorities.<id>` keeps `endpoint`, `profile`, `producerId`, and
-`recoveryDays`, and uses either maintained `privateKeyJwt` settings or an explicitly supported
-opaque `tokenRef`. `profile` is the Casework requester profile sent on every authority request.
-`producerId` is the independent protocol identity used in the submission digest.
-
-{/* Evidence: products/breg/DEV.md;
-    crates/registry-bregctl/src/dev/config.rs;
-    crates/registry-breg/src/runtime_config.rs;
-    crates/registry-review-client/src/client.rs. */}
-
-## Migrate, serve, and check readiness
-
-For an operated deployment, migrate both databases through the product commands, start both
-servers under their service managers, and check setup readiness:
-
-```sh
-bregctl --format json apply \
-  --runtime-config /etc/registry-breg/runtime.yaml \
-  --package /srv/registry/package --initial
-caseworkctl plan --runtime-config /etc/registry-casework/runtime.yaml
-caseworkctl apply --runtime-config /etc/registry-casework/runtime.yaml
-
-bregctl doctor --runtime-config /etc/registry-breg/runtime.yaml
-caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
-breg --runtime-config /etc/registry-breg/runtime.yaml
-casework --runtime-config /etc/registry-casework/runtime.yaml serve
-
-curl --fail --silent https://registry.example.org/ready
-curl --fail --silent https://casework.example.org/ready
-```
-
-`doctor` checks configuration, package, database, identity, source connectivity, and directory
-setup. It does not report the progress of a submitted review. Use the resources below for that.
-
-## Submit and observe the exact binding
-
-Create the request as its owner, read its advertised `submit-request` action, and send the returned
-`ifMatch` with a fresh `Idempotency-Key`. Submit as a person: the starter's `editor` client carries
-the human actor marker, because the review stage excludes the request's initiator and BReg names an
-initiator only for a human caller. A service or agent submission is refused with
-`review.initiator-required` when Casework admits it, and the submitter who tries to claim the review
-task is refused with `review.initiator-excluded`.
-Submission freezes:
-
-- the request and target facts used by the proposal;
-- the proposal version and effect digest;
-- `review.authority` and `review.policyId`;
-- application preconditions and `onApproved` behavior.
-
-BReg durably records the submission job before contacting Casework. The worker uses one stable
-idempotency key and expected submission digest until it receives the exact accepted binding.
-Ambiguous responses are recovered with the same request rather than creating a second review.
-
-A profile with `readableRequestFields: [review-state]` receives
-`data.request.review`. Its closed sections are `submission`, `result`, `delivery`, `application`,
-and `recovery`. Optional identifiers and timestamps are omitted until known. These fields report
-reconciliation state. They grant neither a Casework decision nor a BReg write.
-
-Follow the `submit-request` action advertised on the BReg request instead of constructing an
-internal route. Keep its `ifMatch` and use a new `Idempotency-Key`. Then follow the identifiers the
-response and request projection return.
-
-## Decide in Casework
-
-Open the task through the Casework profile authorized by the policy. Casework obtains source
-context with the caller's delegated credential and the configured source profile, then enforces
-its stage, queue, assignment, independence, and decision rules. Complete every stage required by
-the policy.
-
-Every Casework call carries two headers, and a source-backed call carries a third:
-
-| Header | Value in this starter | Which calls |
-| --- | --- | --- |
-| `Authorization` | `Bearer` and the caller's token | Every call except `/health` and `/ready`. |
-| `Registry-Casework-Profile` | `staff` for a reviewer; `supervisor` or `administrator` for those roles; `integration-requester` for BReg's producer calls | Every call except `/health` and `/ready`. |
-| `Registry-Source-Profile` | The BReg access profile that lets the reviewer read the change request | Every `/v1/review-tasks` call for a `source` review kind, which is every task in this starter: the list, a task, its `/context`, claim, assignment, draft, and decision. Producer calls to `/v1/review-requests` and `/v1/review-results` refuse it. |
-
-Casework presents the reviewer's own token to BReg under the source profile, so BReg decides what
-that person may read. A task list sent without `Registry-Source-Profile`, whose every task is
-source-backed, is refused with `source-profile.required` instead of returning an empty page. For
-the local `caseworkctl dev` session, `caseworkctl dev token staff` writes an owner-only header file
-that already carries `Authorization` and `Registry-Casework-Profile`; add the source header to it
-with a second `--header`.
-
-The starter's review stage excludes the submitter, so the person who submitted the request cannot
-claim, be assigned, or decide its review. A reviewer either approves or chooses the
-`changes-requested` outcome ("Request changes") with a reason. A send-back reaches BReg as a
-`changesRequested` review result. The request stays `submitted`, and BReg now offers its owner only
-`revise-request`, carrying `rebase: false`, and `cancel-request`. The submitter follows the
-`revise-request` action with the `rebase` value it carries, and BReg records the new draft as a
-revision. The submitter then patches the draft and submits it again, and Casework opens a fresh
-review for the new proposal version.
-
-The terminal result carries the exact review request id, subject binding, full policy binding, and
-submission digest. BReg accepts it only when every value matches the durable submission. An early
-or unmatched completion remains in the bounded inbox for reconciliation. Redelivery is idempotent.
-
-## Apply at BReg
-
-For manual application, read the request under the BReg applier profile and follow the advertised
-`apply-request` action. Send its `ifMatch`, a stable idempotency key, and the displayed proposal
-binding:
-
-```json
-{
-  "proposalVersion": 1,
-  "effectDigest": "sha256:<64 lower-case hex digits>"
-}
-```
-
-BReg verifies the exact approved Casework result, then rechecks the current applier grant, target
-authority, target revisions, and application preconditions. Effects and the source receipt commit
-atomically. If the HTTP response is lost, replay the exact request with the same idempotency key.
-BReg returns its stored receipt before any Casework or Evidence network call.
-
-For `onApproved.mode: automatic`, the reconciliation worker uses a separately configured ordinary
-executor credential against this same BReg HTTP action. Revoking that profile blocks the job. It
-does not borrow the submitter, reviewer, or completion sender's authority.
-
-Automatic application is opt-in. Change the authored request to
-`onApproved: {mode: automatic, executor: registry-automatic}`, grant one ordinary BReg
-`apply-request` profile, repeat `bregctl check`, `bregctl explain change-requests`, and both
-`source add` runs, then provision the generated `reviewExecutors.registry-automatic` credential.
-The executor still passes the current profile, target authority, revision, and precondition checks
-at the time it applies.
-
-## Choose result delivery explicitly
-
-Polling is the default. BReg polls the Casework result resource and treats `202` as pending, `200`
-as the retained terminal result, `410` as expired, and an empty `404` as concealed or unknown.
-The producer result feed provides the same terminal results in pages with a `nextCursor`.
-
-Completion delivery is optional. Add a Casework producer `completion` block and repeat the
-authoring loop to generate `completionTokenRef` and `completionRecipient` in the BReg authority
-binding. The completion receiver acknowledges delivery only with an empty HTTP `204 No Content`.
-Any other success status, or a `204` carrying response bytes, is not an acknowledgement and
-Casework retries the same bounded event. Completion is a wake-up signal; BReg still fetches and
-correlates the authoritative retained result before it records approval.
-
-## Diagnose one review
-
-Use each owning resource for its state:
-
-| Question | Owning observation |
-| --- | --- |
-| Was the request admitted and which policy is running? | `GET /v1/review-requests/{requestId}`: lifecycle, policy, active stage, and timestamps. |
-| Who can act and what context can they see? | `GET /v1/review-tasks`, the task resource, and `/context`: queue, task state, holder, revision, and the current source binding. |
-| Is a terminal result retained? | `GET /v1/review-requests/{requestId}/result`: `202` pending, `200` retained, `410` expired, or empty `404` concealed or unknown. |
-| Which terminal results have not been consumed? | `GET /v1/review-results?cursor=...&limit=...`: bounded items and `nextCursor`. |
-| Has BReg submitted, received, or applied it? | Read `data.request.review`: `submission`, `result`, `delivery`, `application`, and `recovery`, with identifiers and timestamps omitted until known. |
-
-The BReg projection reports the durable state and recovery code. After submission it also reports
-the fixed `submission.recoveryDeadline`. Automatic application jobs report bounded
-`application.attempts`; `application.nextAttemptAt` appears only while queued or applying and is
-omitted after the job is blocked or applied; do not query the database directly or treat `doctor`
-as a workflow console.
-
-## Verify the boundary
-
-After application, check all three observations:
-
-1. The target record has the expected new revision and values.
-2. The source request is `applied` and has the same proposal version and effect digest.
-3. The Casework result remains a review result, not the source application receipt.
-
-Also test a substituted digest, stale target, withdrawn request, and revoked applier. Each must
-fail without a partial target write. See [Base Registry Engine API reference](../../reference/breg-api/#change-requests),
-[Declare change requests and actions](../../configure/breg-change-control/), and
-[How Casework works](../../explanation/how-casework-works/) for the owning contracts.
+- [Declare Actions and Proposals](../../configure/breg-change-control/)
+- [Deploy a registry](../../operate/breg/)
+- [Base Registry Engine API reference](../../reference/breg-api/#proposals)

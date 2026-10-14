@@ -45,8 +45,7 @@ fn scratch() -> TestProject {
 
 #[test]
 fn every_registered_tool_example_checks_without_a_diagnostic() {
-    let project =
-        repository("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement");
+    let project = repository("products/breg/acceptance/asset-site-placement");
     for example in [
         "products/breg/examples/formats/schema-test-receipt.json",
         "products/breg/examples/formats/credentials.yaml",
@@ -70,7 +69,7 @@ fn every_registered_tool_example_checks_without_a_diagnostic() {
         assert_eq!(report["ok"], true, "{example}");
     }
 
-    let journeys = repository("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement/tests/journeys.yaml");
+    let journeys = repository("products/breg/acceptance/asset-site-placement/tests/journeys.yaml");
     let output = bregctl(&[
         "check",
         path(&project),
@@ -87,7 +86,7 @@ fn every_registered_tool_example_checks_without_a_diagnostic() {
 
 #[test]
 fn a_warning_passes_unless_warnings_are_denied_in_both_output_forms() {
-    let journeys = repository("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement/tests/journeys.yaml");
+    let journeys = repository("products/breg/acceptance/asset-site-placement/tests/journeys.yaml");
 
     let output = check_file(&journeys, &["--format", "json"]);
     let report = json_report(&output);
@@ -157,7 +156,7 @@ fn a_refusal_is_positioned_and_named_in_both_output_forms() {
 
     // A file of another product's kind is refused by the shared reader.
     let output = check_file(
-        &repository("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement/registry.yaml"),
+        &repository("products/breg/acceptance/asset-site-placement/registry.yaml"),
         &["--format", "json"],
     );
     let report = json_report(&output);
@@ -167,7 +166,7 @@ fn a_refusal_is_positioned_and_named_in_both_output_forms() {
 
 #[test]
 fn usage_errors_exit_two_and_an_unreadable_file_exits_three() {
-    let journeys = repository("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement/tests/journeys.yaml");
+    let journeys = repository("products/breg/acceptance/asset-site-placement/tests/journeys.yaml");
     for arguments in [
         vec![
             "check",
@@ -345,20 +344,24 @@ fn generic_fixture() -> (TestProject, PathBuf) {
     fs::create_dir_all(project.join("modules/record-notes")).unwrap();
     fs::create_dir(project.join("tests")).unwrap();
     let module =
-        include_bytes!("../fixtures/retained-native/generic/modules/record-notes/module.yaml");
-    let parsed = parse_module_yaml(module).unwrap();
-    let source = include_str!("../fixtures/retained-native/generic/registry.yaml")
-        .replace("<module-digest>", &module_digest_with_assets(&parsed, &[]));
+        include_bytes!("../../../../products/breg/fixtures/generic-operator-workflows/modules/record-notes/module.yaml");
+    let source = include_bytes!(
+        "../../../../products/breg/fixtures/generic-operator-workflows/registry.yaml"
+    );
     fs::write(project.join("registry.yaml"), source).unwrap();
     fs::write(project.join("modules/record-notes/module.yaml"), module).unwrap();
     fs::write(
         project.join("dev-clients.yaml"),
-        include_bytes!("../fixtures/retained-native/generic/dev-clients.yaml"),
+        include_bytes!(
+            "../../../../products/breg/fixtures/generic-operator-workflows/dev-clients.yaml"
+        ),
     )
     .unwrap();
     fs::write(
         project.join("tests/journeys.yaml"),
-        include_bytes!("../fixtures/retained-native/generic/tests/journeys.yaml"),
+        include_bytes!(
+            "../../../../products/breg/fixtures/generic-operator-workflows/tests/journeys.yaml"
+        ),
     )
     .unwrap();
     (scratch, project)

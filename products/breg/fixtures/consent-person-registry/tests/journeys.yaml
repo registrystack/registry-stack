@@ -9,7 +9,7 @@ journeys:
   - id: self-give-read-withdraw-and-backdated-regive
     steps:
       - id: publish-notice
-        entity: person-privacy-notice
+        recordType: person-privacy-notice
         accessProfile: person-consent-steward
         claims:
           principal: synthetic-consent-steward
@@ -29,7 +29,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: notice
       - id: publish-food-agency-clause
-        entity: person-notice-clause
+        recordType: person-notice-clause
         accessProfile: person-consent-steward
         claims:
           principal: synthetic-consent-steward
@@ -45,7 +45,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: food-agency-clause
       - id: register-amina
-        entity: person
+        recordType: person
         accessProfile: person-registry-operator
         claims:
           principal: synthetic-registry-operator
@@ -58,7 +58,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: amina
       - id: register-bruno
-        entity: person
+        recordType: person
         accessProfile: person-registry-operator
         claims:
           principal: synthetic-registry-operator
@@ -71,7 +71,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: bruno
       - id: link-amina
-        entity: person-consent-link
+        recordType: person-consent-link
         accessProfile: person-consent-link-steward
         claims:
           principal: synthetic-link-steward
@@ -82,7 +82,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: amina-link
       - id: food-agency-cannot-read-before-consent
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-food-agency
@@ -161,7 +161,7 @@ journeys:
             effectiveAt: "2026-09-01T01:00:00Z"
         expect: {outcome: refusal, status: 409, problemCode: idempotency.conflict}
       - id: food-agency-reads-after-consent
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-food-agency
@@ -175,7 +175,7 @@ journeys:
           status: 200
           fields: {personCode: P-AMINA, legalName: Amina Okafor}
       - id: food-agency-list-shows-only-consented-rows
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-food-agency
@@ -186,7 +186,7 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
       - id: health-ngo-cannot-read-food-agency-consent
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-health-ngo
@@ -219,7 +219,7 @@ journeys:
             effectiveAt: "2026-09-01T00:00:00Z"
         expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
       - id: food-agency-still-cannot-read-bruno
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-food-agency
@@ -252,7 +252,7 @@ journeys:
             effectiveAt: "2026-09-01T02:00:00Z"
         expect: {outcome: success, status: 200}
       - id: food-agency-cannot-read-after-withdrawal
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-food-agency
@@ -285,7 +285,7 @@ journeys:
             effectiveAt: "2026-09-01T01:00:00Z"
         expect: {outcome: success, status: 200}
       - id: backdated-give-stays-ineffective-after-withdrawal
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-food-agency
@@ -296,7 +296,7 @@ journeys:
         request: {type: get, recordCapture: amina}
         expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
       - id: food-agency-feed-shows-gives-and-the-withdrawal
-        entity: person-consent-decision
+        recordType: person-consent-decision
         accessProfile: person-consent-recipient
         claims:
           principal: synthetic-food-agency-feed
@@ -304,7 +304,7 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200, count: 3}
       - id: health-ngo-feed-is-empty
-        entity: person-consent-decision
+        recordType: person-consent-decision
         accessProfile: person-consent-recipient
         claims:
           principal: synthetic-health-ngo-feed
@@ -312,7 +312,7 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
       - id: amina-lists-her-own-decisions
-        entity: person-consent-decision
+        recordType: person-consent-decision
         accessProfile: person-consent-self
         claims:
           principal: amina-self
@@ -322,7 +322,7 @@ journeys:
   - id: refusal-future-give-and-expiry
     steps:
       - id: publish-notice
-        entity: person-privacy-notice
+        recordType: person-privacy-notice
         accessProfile: person-consent-steward
         claims:
           principal: synthetic-consent-steward
@@ -342,7 +342,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: notice
       - id: publish-health-ngo-clause
-        entity: person-notice-clause
+        recordType: person-notice-clause
         accessProfile: person-consent-steward
         claims:
           principal: synthetic-consent-steward
@@ -358,7 +358,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: health-ngo-clause
       - id: register-chen
-        entity: person
+        recordType: person
         accessProfile: person-registry-operator
         claims:
           principal: synthetic-registry-operator
@@ -371,7 +371,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: chen
       - id: register-dara
-        entity: person
+        recordType: person
         accessProfile: person-registry-operator
         claims:
           principal: synthetic-registry-operator
@@ -384,7 +384,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: dara
       - id: register-eli
-        entity: person
+        recordType: person
         accessProfile: person-registry-operator
         claims:
           principal: synthetic-registry-operator
@@ -397,7 +397,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: eli
       - id: register-farid
-        entity: person
+        recordType: person
         accessProfile: person-registry-operator
         claims:
           principal: synthetic-registry-operator
@@ -410,7 +410,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: farid
       - id: link-chen
-        entity: person-consent-link
+        recordType: person-consent-link
         accessProfile: person-consent-link-steward
         claims:
           principal: synthetic-link-steward
@@ -421,7 +421,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: chen-link
       - id: link-dara
-        entity: person-consent-link
+        recordType: person-consent-link
         accessProfile: person-consent-link-steward
         claims:
           principal: synthetic-link-steward
@@ -432,7 +432,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: dara-link
       - id: link-eli
-        entity: person-consent-link
+        recordType: person-consent-link
         accessProfile: person-consent-link-steward
         claims:
           principal: synthetic-link-steward
@@ -443,7 +443,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: eli-link
       - id: link-farid
-        entity: person-consent-link
+        recordType: person-consent-link
         accessProfile: person-consent-link-steward
         claims:
           principal: synthetic-link-steward
@@ -476,7 +476,7 @@ journeys:
             effectiveAt: "2026-09-01T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: health-ngo-cannot-read-after-refusal
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-health-ngo
@@ -487,7 +487,7 @@ journeys:
         request: {type: get, recordCapture: chen}
         expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
       - id: refusal-is-never-in-the-feed
-        entity: person-consent-decision
+        recordType: person-consent-decision
         accessProfile: person-consent-recipient
         claims:
           principal: synthetic-health-ngo-feed
@@ -517,7 +517,7 @@ journeys:
             effectiveAt: "2099-01-01T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: future-dated-give-is-not-yet-in-force
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-health-ngo
@@ -551,7 +551,7 @@ journeys:
             expiresAt: "2099-12-31T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: give-past-maximum-duration-is-not-in-force
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-health-ngo
@@ -585,7 +585,7 @@ journeys:
             expiresAt: "2026-09-01T00:30:00Z"
         expect: {outcome: success, status: 200}
       - id: give-past-its-end-is-not-in-force
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-health-ngo
@@ -598,7 +598,7 @@ journeys:
   - id: group-recipient-and-assisted-capture
     steps:
       - id: publish-notice
-        entity: person-privacy-notice
+        recordType: person-privacy-notice
         accessProfile: person-consent-steward
         claims:
           principal: synthetic-consent-steward
@@ -618,7 +618,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: notice
       - id: publish-referral-network-clause
-        entity: person-notice-clause
+        recordType: person-notice-clause
         accessProfile: person-consent-steward
         claims:
           principal: synthetic-consent-steward
@@ -634,7 +634,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: referral-network-clause
       - id: publish-food-agency-clause
-        entity: person-notice-clause
+        recordType: person-notice-clause
         accessProfile: person-consent-steward
         claims:
           principal: synthetic-consent-steward
@@ -650,7 +650,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: food-agency-clause
       - id: register-grace
-        entity: person
+        recordType: person
         accessProfile: person-registry-operator
         claims:
           principal: synthetic-registry-operator
@@ -663,7 +663,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: grace
       - id: register-hamid
-        entity: person
+        recordType: person
         accessProfile: person-registry-operator
         claims:
           principal: synthetic-registry-operator
@@ -676,7 +676,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: hamid
       - id: link-grace
-        entity: person-consent-link
+        recordType: person-consent-link
         accessProfile: person-consent-link-steward
         claims:
           principal: synthetic-link-steward
@@ -687,7 +687,7 @@ journeys:
         expect: {outcome: success, status: 201}
         capture: grace-link
       - id: link-hamid-inactive
-        entity: person-consent-link
+        recordType: person-consent-link
         accessProfile: person-consent-link-steward
         claims:
           principal: synthetic-link-steward
@@ -720,7 +720,7 @@ journeys:
             effectiveAt: "2026-09-01T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: food-agency-reads-through-the-group
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-food-agency
@@ -734,7 +734,7 @@ journeys:
           status: 200
           fields: {personCode: P-GRACE}
       - id: health-ngo-reads-through-the-group
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-health-ngo
@@ -790,7 +790,7 @@ journeys:
             evidence: signed paper form 2026-0042 held at the east district office
         expect: {outcome: success, status: 200}
       - id: food-agency-reads-after-assisted-capture
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-food-agency
@@ -804,7 +804,7 @@ journeys:
           status: 200
           fields: {personCode: P-HAMID}
       - id: health-ngo-cannot-read-food-agency-assisted-consent
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-health-ngo
@@ -818,7 +818,7 @@ journeys:
       # to health-ngo or its group so far: the three earlier gives (future,
       # expired, ended) and the group give, but never Chen's refusal.
       - id: health-ngo-feed-has-gives-but-no-refusal
-        entity: person-consent-decision
+        recordType: person-consent-decision
         accessProfile: person-consent-recipient
         claims:
           principal: synthetic-health-ngo-feed
@@ -845,7 +845,7 @@ journeys:
             sourceReference: legacy-consent-register-row-0042
         expect: {outcome: success, status: 200}
       - id: health-ngo-reads-after-import
-        entity: person
+        recordType: person
         accessProfile: food-targeting
         claims:
           principal: synthetic-health-ngo

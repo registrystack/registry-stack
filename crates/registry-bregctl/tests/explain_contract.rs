@@ -8,13 +8,10 @@ use std::process::{Command, Output};
 const FIXTURES: &[(&str, &str)] = &[
     ("minimal", "products/breg/examples/refactor/minimal"),
     ("facility", "products/breg/examples/refactor/facility"),
-    (
-        "asset",
-        "crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement",
-    ),
+    ("asset", "products/breg/acceptance/asset-site-placement"),
     (
         "membership",
-        "crates/registry-bregctl/tests/fixtures/retained-native/organization-membership-access",
+        "products/breg/fixtures/organization-membership-access",
     ),
 ];
 const ACCESS_SCENARIOS: &[(&str, &str)] = &[
@@ -237,7 +234,7 @@ fn explain_lifecycle_matches_contract() {
 #[test]
 fn queries_contract_refuses_a_bound_spelled_max() {
     let schema = load_schema("QueriesExplanation");
-    let fixture = "crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement";
+    let fixture = "products/breg/acceptance/asset-site-placement";
     let explanation = explain("queries", &fixture_path(fixture));
     assert_matches_contract(fixture, "QueriesExplanation", &explanation);
     let operations = explanation["operations"]
@@ -507,8 +504,7 @@ fn explain_actions_matches_the_current_closed_contract() {
 }
 #[test]
 fn module_and_record_identifiers_and_derived_routes_are_validated() {
-    let project =
-        fixture_path("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement");
+    let project = fixture_path("products/breg/acceptance/asset-site-placement");
     for (subject, contract, pointer) in [
         ("model", "ModelExplanation", "/moduleClosure/0/id"),
         ("model", "ModelExplanation", "/recordTypes/0/id"),

@@ -7,8 +7,8 @@ ThunderID is a local issuer chosen by this development tool; an operated BReg
 runtime remains an independent OAuth resource server.
 
 Prepare the project with `bregctl init ./registry`. The generated
-`dev-clients.yaml` binds three distinct local clients to `operator`,
-`record-reader`, and `evidence-source`, so the project starts unchanged. Review the model,
+`dev-clients.yaml` binds `editor` and `foreign-editor` to `directory-editor`
+with distinct jurisdiction claims, so the project starts unchanged. Review the model,
 access profiles, journey fixtures and local clients before the first start.
 A later dedicated Evidence source can be prepared explicitly on a stopped session.
 
@@ -137,7 +137,7 @@ compiled action requirements, and the runtime still resolves and validates
 every configured trust input before serving. Obtain the token after the shared
 issuer is ready, then start the action-bearing BREG borrower with this binding.
 
-For a change request whose `review.authority` names Casework, add one logical
+For a Proposal Action whose `execution.proposal.review.authority` names Casework, add one logical
 authority binding and one dedicated machine client before the first start:
 
 ```yaml
@@ -174,32 +174,17 @@ composition where Casework and BReg deliberately share that resource audience.
 If `issuer.clientResources` maps the client, the generated credential uses that
 declared resource instead.
 
-For a request that selects `onApproved: {mode: automatic, executor:
-automatic-applier}`, bind that exact executor to one service-only BReg profile
-and an existing local issuer client:
+Proposal application defaults to automatic. The built-in executor uses the
+compiled system grant for the exact frozen submission; it needs no local OAuth
+client, self-HTTP endpoint, or `reviewExecutors` binding. To require a separate
+caller, author `execution.proposal.application.mode: manual` and grant that
+caller Proposal Apply. External recovery of automatic work requires a verified
+human and an explicit operation grant.
 
-```yaml
-clients:
-  - id: automatic-applier
-    accessProfiles: [automatic-applier]
-    scopes: [registry:generic:apply]
-    claims:
-      registry_principal: automatic-applier
-      registry_purpose: registry-application
-reviewExecutors:
-  automatic-applier:
-    accessProfile: automatic-applier
-    client: automatic-applier
-```
-
-The profile must grant `apply-request` for every request entity that selects
-the executor, declare `actorKind: service`, and admit the client's exact ID,
-scopes, purpose, and principal claim. Dev derives the endpoint and registry ID
-from this BReg session. It copies the selected client's retained ID and
-assertion key into owner-only runtime secrets and emits a renewable
-`privateKeyJwt` executor credential for the local BReg audience. The executor
-map is required authoring: dev does not infer an executor from a profile and
-does not create a review-authority binding for it.
+A missing review-authority binding disables operations that require it. Generated
+CRUD, immediate Actions, and no-review Proposals remain available. Restore the
+exact binding to resume dependent work; an unavailable authority never implies
+approval.
 
 Polling needs no callback credential. To test authenticated completion delivery,
 add both optional fields; declaring only one is refused:
@@ -334,7 +319,7 @@ clients:
 seed:
   - id: first-record
     client: operator
-    entity: record
+    recordType: record
     accessProfile: operator
     data:
       code: synthetic-dev-record
@@ -342,7 +327,7 @@ seed:
       status: active
   - id: reference-record
     client: operator
-    entity: reference-record
+    recordType: reference-record
     accessProfile: reference-loader
     operation: import
     data:

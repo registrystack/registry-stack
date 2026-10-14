@@ -93,11 +93,11 @@ formats:
       function: parse_project_yaml
       type: RegistryProject
     check: bregctl check {project}
-    example: products/breg/examples/minimal/registry.yaml
+    example: products/breg/acceptance/asset-site-placement/registry.yaml
     conformance:
       requiredText: /project/id
       optionalText: /manifestProjection/catalog/description
-      integer: /recordTypes/0/batch/maximumItems
+      integer: /recordTypes/0/fields/0/maximumLength
       boolean: /accessProfiles/0/default
       idList: /recordTypes
       set: /accessProfiles/0/requiredPurposes
@@ -140,7 +140,7 @@ formats:
       function: parse_module_yaml
       type: RegistryModule
     check: bregctl check {project}
-    example: products/breg/examples/minimal/modules/minimal-core/module.yaml
+    example: products/breg/fixtures/generic-operator-workflows/modules/record-notes/module.yaml
     conformance:
       requiredText: /id
       optionalText: none
@@ -176,7 +176,7 @@ formats:
       function: load_runtime_config
       type: RuntimeConfig
     check: bregctl check {project} --runtime-config {file}
-    example: products/breg/examples/minimal/runtime.yaml
+    example: products/breg/examples/refactor/minimal/runtime.example.yaml
     conformance:
       requiredText: /identity/instanceId
       optionalText: /authentication/authorityClaims/purpose
@@ -620,7 +620,7 @@ formats:
       function: catalogue
       type: Catalogue
     check: bregctl check --file {file}
-    example: products/breg/starters/seed-lots/core/examples/scenarios.json
+    example: products/breg/examples/refactor/minimal/examples/scenarios.json
     conformance:
       requiredText: /scenarios/0/id
       optionalText: /scenarios/0/steps/0/input
@@ -4010,6 +4010,8 @@ formats:
     restrictingMembers: []
 
 outOfScope:
+  - files: products/breg/generated/event-schemas/proposal-lifecycle.schema.json
+    reason: Native Proposal lifecycle event payload, governed by the BReg API contract.
   - files: products/breg/generated/*/generated/**
     reason: Compiled package content; the registry/package format governs the envelope.
   - files: products/evidence/contracts/{audit-event,authority-context,definitions,evidence,request,request-batch,request-batch-response,request-batch-audit-event}.schema.yaml

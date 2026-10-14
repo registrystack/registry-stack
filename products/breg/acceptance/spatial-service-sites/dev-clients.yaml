@@ -1,0 +1,27 @@
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: operator
+    accessProfiles: [service-site-admin]
+    scopes: [service-sites:seed]
+    claims: {registry_principal: synthetic-service-site-admin, registry_purpose: service-site-administration}
+  - id: installation-map-reader
+    accessProfiles: [installation-map-reader]
+    scopes: [service-sites:map:read]
+    claims: {registry_principal: synthetic-qgis-installation, registry_purpose: service-site-map, service_zones: central}
+  - id: hidden-geometry-reader
+    accessProfiles: [hidden-geometry-reader]
+    scopes: [service-sites:directory:read]
+    claims: {registry_principal: synthetic-directory-reader, registry_purpose: service-site-directory}
+  - id: get-only-map-reader
+    accessProfiles: [get-only-map-reader]
+    scopes: [service-sites:site:read]
+    claims: {registry_principal: synthetic-site-reader, registry_purpose: service-site-map}
+  - id: public-map-reader
+    accessProfiles: [map-reader]
+    scopes: [service-sites:public:read]
+    claims: {registry_principal: synthetic-public-map, registry_purpose: service-site-public-map}
+  - id: public-directory-reader
+    accessProfiles: [directory-reader]
+    scopes: [service-sites:public:read]
+    claims: {registry_principal: synthetic-public-directory, registry_purpose: service-site-public-directory}

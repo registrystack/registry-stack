@@ -701,9 +701,8 @@ pub async fn erase_field_encryption_history(
 
 /// Clear whole request snapshots when their frozen originating package
 /// predates a recorded erase-and-rebaseline flip and they mention its field.
-/// Package order comes from the migration ledger, and for the revisions a
-/// pre-ledger database named, from the order an earlier release's adoption
-/// kept; it never comes from request revision timing: a draft can predate the flip while its frozen
+/// Package order comes from the current migration ledger; it never comes from
+/// request revision timing: a draft can predate the flip while its frozen
 /// proposal and target snapshots are created afterward. This also reaches canceled and rejected creates
 /// whose target never produced a retained record revision.
 async fn scrub_plaintext_proposal_snapshots(
@@ -721,6 +720,7 @@ async fn scrub_plaintext_proposal_snapshots(
     let head = lock_history_head(&transaction)
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    verify_retained_revision_indexes(&transaction).await?;
     let flip_state = transaction
         .query_one(
             "SELECT
@@ -733,7 +733,9 @@ async fn scrub_plaintext_proposal_snapshots(
                      SELECT 1
                        FROM registry_internal.registry_field_encryption_flips
                       WHERE history_choice = 'erase-and-rebaseline'
-                        AND history_commit_position IS NULL
+                        AND (history_commit_position IS NULL
+                            OR NOT EXISTS (SELECT 1 FROM registry_internal.registry_migrations AS activation
+                                WHERE activation.activation_id::text = boundary_package_revision))
                  )",
             &[],
         )
@@ -769,12 +771,8 @@ async fn scrub_plaintext_proposal_snapshots(
         .query_one(
             "WITH package_positions AS (
                  SELECT activation_id::text AS package_revision,
-                        apply_order AS package_sequence,
-                        1::bigint AS inferred_count
+                        apply_order AS package_sequence
                    FROM registry_internal.registry_migrations
-                 UNION ALL
-                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
-                   FROM registry_internal.registry_pre_ledger_package_positions
              )
              SELECT EXISTS (
                  SELECT 1
@@ -827,9 +825,7 @@ async fn scrub_plaintext_proposal_snapshots(
                     AND (
                         proposal.snapshot ->> 'originatingPackage' IS NULL
                         OR boundary.package_revision IS NULL
-                        OR boundary.inferred_count <> 1
                         OR origin.package_revision IS NULL
-                        OR origin.inferred_count <> 1
                     )
              )",
             &[],
@@ -847,12 +843,8 @@ async fn scrub_plaintext_proposal_snapshots(
         .execute(
             "WITH package_positions AS (
                  SELECT activation_id::text AS package_revision,
-                        apply_order AS package_sequence,
-                        1::bigint AS inferred_count
+                        apply_order AS package_sequence
                    FROM registry_internal.registry_migrations
-                 UNION ALL
-                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
-                   FROM registry_internal.registry_pre_ledger_package_positions
              )
              UPDATE registry_internal.registry_proposal_targets AS target
                 SET base_snapshot = NULL,
@@ -864,7 +856,6 @@ async fn scrub_plaintext_proposal_snapshots(
                       FROM registry_internal.registry_field_encryption_flips AS flip
                       JOIN package_positions AS boundary
                         ON boundary.package_revision = flip.boundary_package_revision
-                       AND boundary.inferred_count = 1
                       JOIN registry_internal.registry_proposal_submissions AS proposal
                         ON proposal.action_id = target.action_id
                        AND proposal.proposal_id = target.proposal_id
@@ -872,7 +863,6 @@ async fn scrub_plaintext_proposal_snapshots(
                       JOIN package_positions AS origin
                         ON origin.package_revision =
                            proposal.snapshot ->> 'originatingPackage'
-                       AND origin.inferred_count = 1
                      WHERE flip.history_choice = 'erase-and-rebaseline'
                        AND target.target_entity_id = flip.entity_id
                        AND (
@@ -890,12 +880,8 @@ async fn scrub_plaintext_proposal_snapshots(
         .execute(
             "WITH package_positions AS (
                  SELECT activation_id::text AS package_revision,
-                        apply_order AS package_sequence,
-                        1::bigint AS inferred_count
+                        apply_order AS package_sequence
                    FROM registry_internal.registry_migrations
-                 UNION ALL
-                 SELECT package_revision, package_sequence, 1::bigint AS inferred_count
-                   FROM registry_internal.registry_pre_ledger_package_positions
              )
              UPDATE registry_internal.registry_proposal_submissions AS proposal
                 SET snapshot = NULL,
@@ -907,11 +893,9 @@ async fn scrub_plaintext_proposal_snapshots(
                       FROM registry_internal.registry_field_encryption_flips AS flip
                       JOIN package_positions AS boundary
                         ON boundary.package_revision = flip.boundary_package_revision
-                       AND boundary.inferred_count = 1
                       JOIN package_positions AS origin
                         ON origin.package_revision =
                            proposal.snapshot ->> 'originatingPackage'
-                       AND origin.inferred_count = 1
                      WHERE flip.history_choice = 'erase-and-rebaseline'
                        AND origin.package_sequence < boundary.package_sequence
                        AND (
@@ -953,7 +937,7 @@ async fn scrub_plaintext_proposal_snapshots(
                    FROM registry_internal.registry_field_encryption_flips AS flip
                    JOIN registry_internal.registry_revisions AS revision
                      ON revision.entity_id = flip.entity_id
-                   LEFT JOIN registry_internal.registry_revision_commit_members AS member
+                   JOIN registry_internal.registry_revision_commit_members AS member
                      ON member.entity_id = revision.entity_id
                     AND member.record_id = revision.record_id
                     AND member.record_revision = revision.record_revision
@@ -962,10 +946,7 @@ async fn scrub_plaintext_proposal_snapshots(
                     AND revision.erased_at IS NULL
                     AND revision.package_revision <> flip.boundary_package_revision
                     AND convert_from(revision.snapshot, 'UTF8')::jsonb ? flip.field_id
-                    AND (
-                        member.commit_position < flip.history_commit_position
-                        OR member.commit_position IS NULL
-                    )
+                    AND member.commit_position < flip.history_commit_position
              )",
             &[],
         )
@@ -1021,13 +1002,41 @@ async fn scrub_plaintext_proposal_snapshots(
     ))
 }
 
+/// Every retained revision belongs to its committed mutation. Missing members
+/// must refuse erasure rather than disappear from indexed target selection.
+async fn verify_retained_revision_indexes(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<(), FieldEncryptionHistoryErasureError> {
+    let missing: bool = transaction
+        .query_one(
+            "SELECT EXISTS (
+            SELECT 1 FROM registry_internal.registry_revisions AS revision
+            WHERE revision.snapshot IS NOT NULL AND revision.erased_at IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM registry_internal.registry_revision_commit_members AS member
+                    WHERE member.entity_id = revision.entity_id
+                        AND member.record_id = revision.record_id
+                        AND member.record_revision = revision.record_revision
+                )
+        )",
+            &[],
+        )
+        .await
+        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?
+        .get(0);
+    if missing {
+        return Err(FieldEncryptionHistoryErasureError::Unavailable);
+    }
+    Ok(())
+}
+
 /// Enumerate the records whose retained history still carries a plaintext
 /// member a flip declared erase-and-rebaseline for.
 ///
 /// A revision qualifies from durable flip provenance, never from value shape.
-/// Indexed revisions precede the flip's exclusive history position. Unindexed
-/// revisions are legacy pre-commit-index rows because post-install writes add
-/// their commit member atomically. The boundary package itself is excluded, as
+/// Indexed revisions precede the flip's exclusive history position. Retained
+/// revisions without a commit member are corrupt and refused. The boundary
+/// package itself is excluded, as
 /// are later indexed encrypted revisions from subsequent packages.
 async fn pending_erase_targets(
     client: &mut Client,
@@ -1040,6 +1049,7 @@ async fn pending_erase_targets(
     set_local_timeouts(&transaction, request.timeouts).await?;
     lock_registry(&transaction, request.lock_key).await?;
     verify_ready_identity(&transaction, request.expected).await?;
+    verify_retained_revision_indexes(&transaction).await?;
     let rows = transaction
         .query(
             "WITH pending_boundaries AS (
@@ -1048,7 +1058,7 @@ async fn pending_erase_targets(
                    FROM registry_internal.registry_field_encryption_flips AS flip
                    JOIN registry_internal.registry_revisions AS revision
                      ON revision.entity_id = flip.entity_id
-                   LEFT JOIN registry_internal.registry_revision_commit_members AS member
+                   JOIN registry_internal.registry_revision_commit_members AS member
                      ON member.entity_id = revision.entity_id
                     AND member.record_id = revision.record_id
                     AND member.record_revision = revision.record_revision
@@ -1057,10 +1067,7 @@ async fn pending_erase_targets(
                     AND revision.erased_at IS NULL
                     AND revision.package_revision <> flip.boundary_package_revision
                     AND convert_from(revision.snapshot, 'UTF8')::jsonb ? flip.field_id
-                    AND (
-                        member.commit_position < flip.history_commit_position
-                        OR member.commit_position IS NULL
-                    )
+                    AND member.commit_position < flip.history_commit_position
                   GROUP BY flip.entity_id, revision.record_id
              ), ranked AS (
                  SELECT boundary.entity_id, boundary.record_id,

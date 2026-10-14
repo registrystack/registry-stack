@@ -1044,7 +1044,7 @@ impl MutationCoordinator {
                             action,
                             &values,
                             previous,
-                            &self.expected.package_digest,
+                            &self.expected.activation_id,
                             &resolved,
                             bases,
                             guards,

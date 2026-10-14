@@ -32,7 +32,7 @@ Evidence project and export the explicitly selected source contract:
 ```sh
 evidencectl new ./evidence --starter <this-directory>/starter --profile local
 bregctl generate evidence-source ./registry \
-  --access-profile evidence-source --entity record \
+  --access-profile evidence-source --record-type record \
   --selector by-code --selector by-registration-number \
   --fields status --source-id registry-status --connection registry \
   --output ./exports/registry-status

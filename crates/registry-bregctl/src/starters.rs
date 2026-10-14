@@ -19,23 +19,35 @@ use crate::{
 
 /// One starter's embedded files: the path it is written at, relative to the
 /// project root, paired with its contents exactly as checked in under
-/// `core/`.
+/// `products/breg/examples/refactor/`.
 struct Starter {
     id: &'static str,
     files: &'static [(&'static str, &'static [u8])],
 }
 
+pub(crate) const DEFAULT_TEMPLATE: &str = "minimal-directory";
+
 const STARTERS: &[Starter] = &[
     Starter {
-        id: "minimal-directory",
-        files: &[(
-            "registry.yaml",
-            include_bytes!("../../../products/breg/examples/refactor/minimal/registry.yaml"),
-        )],
+        id: DEFAULT_TEMPLATE,
+        files: &[
+            ("README.md", include_bytes!("../../../products/breg/examples/refactor/minimal/README.md")),
+            ("registry.yaml", include_bytes!("../../../products/breg/examples/refactor/minimal/registry.yaml")),
+            ("runtime.example.yaml", include_bytes!("../../../products/breg/examples/refactor/minimal/runtime.example.yaml")),
+            ("dev-clients.yaml", include_bytes!("../../../products/breg/examples/refactor/minimal/dev-clients.yaml")),
+            ("tests/journeys.yaml", include_bytes!("../../../products/breg/examples/refactor/minimal/tests/journeys.yaml")),
+            ("examples/scenarios.json", include_bytes!("../../../products/breg/examples/refactor/minimal/examples/scenarios.json")),
+            ("examples/inputs/contact.json", include_bytes!("../../../products/breg/examples/refactor/minimal/examples/inputs/contact.json")),
+        ],
     },
     Starter {
         id: "facility-registry",
         files: &[
+            ("README.md", include_bytes!("../../../products/breg/examples/refactor/facility/README.md")),
+            ("dev-clients.yaml", include_bytes!("../../../products/breg/examples/refactor/facility/dev-clients.yaml")),
+            ("tests/journeys.yaml", include_bytes!("../../../products/breg/examples/refactor/facility/tests/journeys.yaml")),
+            ("examples/scenarios.json", include_bytes!("../../../products/breg/examples/refactor/facility/examples/scenarios.json")),
+            ("examples/inputs/facility.json", include_bytes!("../../../products/breg/examples/refactor/facility/examples/inputs/facility.json")),
             (
                 "registry.yaml",
                 include_bytes!("../../../products/breg/examples/refactor/facility/registry.yaml"),
@@ -131,9 +143,11 @@ fn next_steps(destination: &Path, id: &str) -> Vec<String> {
             destination.display()
         ),
         format!(
-            "inspect its Actions with 'bregctl explain actions {}'",
+            "inspect the compiled contract with 'bregctl explain model {}'",
             destination.display()
         ),
+        format!("start the local registry with 'bregctl dev start {}'", destination.display()),
+        "replace the example registry identity and source revision before preparing a production package".to_owned(),
     ]
 }
 
@@ -188,7 +202,7 @@ mod tests {
             assert_eq!(
                 written.keys().collect::<Vec<_>>(),
                 expected.keys().collect::<Vec<_>>(),
-                "{id}: the written files must match the checked-in core/ directory exactly"
+                "{id}: the written files must match the checked-in project exactly"
             );
             for (path, contents) in &expected {
                 assert_eq!(
@@ -230,16 +244,10 @@ mod tests {
                 "facility-registry" => "facility",
                 _ => panic!("unregistered template"),
             });
-        lookup(id)
-            .unwrap()
-            .files
-            .iter()
-            .map(|(path, _)| {
-                (
-                    (*path).to_owned(),
-                    fs::read(root.join(path)).expect("canonical authored input"),
-                )
-            })
+        // The optional console is a separate application, not project input.
+        walk_files(&root)
+            .into_iter()
+            .filter(|(path, _)| !path.starts_with("console/"))
             .collect()
     }
 

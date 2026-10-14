@@ -1195,7 +1195,7 @@ journeys:
 #[test]
 fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contract() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/native-models/products/breg/acceptance/person-registration-rhai");
+        .join("../../products/breg/acceptance/person-registration-rhai");
     let mut project =
         parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
     project

@@ -1986,7 +1986,7 @@ async fn an_action_invocation_with_an_unknown_outcome_is_resent_byte_identically
         "conditionRoute": null,
         "apiName": "registerCompany", "revision": REVISION, "display": {}, "execution": {"mode":"immediate"},
         "inputMode": "fixed", "maximumInputStringBytes": null,
-        "inputs": [{"id": "legal-name", "apiName": "legalName", "fieldType": {
+        "inputs": [{"id": "legal-name", "apiName": "legalName", "schema":{"type":"string","minLength":0,"maxLength":100}, "fieldType": {
             "type": "string", "minimumLength": 0, "maximumLength": 100},
             "required": true, "nullable": false, "classification": "internal"}],
         "referenceInputs": [], "requiredConditionKeys": [],

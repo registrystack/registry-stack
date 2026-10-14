@@ -38,7 +38,7 @@ boundary joins them inside the facility's read grant:
 ```yaml
 permissions:
   entities:
-    - entity: facility
+    - recordType: facility
       rowBoundaries: unrestricted
       operations: [get, list, lookup, snapshot, revisions]
       readableFields: [label]
@@ -70,16 +70,14 @@ The refusals keep a membership boundary from being read as broader authority tha
 
 | Combination | Diagnostic |
 | --- | --- |
-| Writes, actions, reviewed changes, or request lifecycle grants | `breg.access.membership-read-only` |
+| Writes, actions, Proposal lifecycle grants | `breg.access.membership-read-only` |
 | A spatial bbox permission, which uses a separate database authority role | `breg.access.membership-spatial-unsupported` |
-| A membership entity with a change-request lifecycle | `breg.access.membership-request-unsupported` |
 | More than eight boundaries on one grant | `breg.access.membership-limit` |
 
 A membership-bounded grant supports get, lookup, list, snapshot, and revisions, plus counts when it
 sets `allowCount`. It can protect the root of a relationship read path, and a target permission that
 would reach the same entity through a separate root is rejected rather than silently bypassing the
-rule. A membership source stays a leaf entity: no boundaries of its own, no change-request
-lifecycle, and no incoming relationship read paths, which is what keeps row-security policies from
+rule. A membership source stays a leaf entity: no boundaries of its own, no incoming relationship read paths, which is what keeps row-security policies from
 recursing. A membership entity with mandatory `rowBoundaries` is rejected at compilation, because
 the boundary carries no additional direct row requirement from that source. Use a separate,
 explicitly authorized steward profile for membership administration and record mutation, and
@@ -157,7 +155,7 @@ codes, so a recipient is retired by removing its clients, not its entry.
 
 | Combination | Diagnostic |
 | --- | --- |
-| Writes, actions, reviewed changes, or request lifecycle grants on a gated permission | `breg.consent.require-read-only` |
+| Writes, actions, Proposal lifecycle grants on a gated permission | `breg.consent.require-read-only` |
 | A gated profile without `requesterClients`, or with a client no recipient organization lists | `breg.consent.require-clients` |
 | A spatial bbox permission, which uses a separate database authority role | `breg.consent.require-spatial-unsupported` |
 | Bulk data export of a gated permission | `breg.consent.require-export-unsupported` |

@@ -42,7 +42,7 @@ fn asset_project() -> registry_breg::contract::RegistryProject {
 
 fn asset_modules() -> Vec<RegistryModule> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/native-models/products/breg/acceptance/asset-site-placement/modules")
+        .join("../../products/breg/acceptance/asset-site-placement/modules")
         .join("asset-site-placement-core/module.yaml");
     let bytes = fs::read(path).expect("committed acceptance module is readable");
     vec![parse_module_yaml(&bytes).expect("acceptance module follows the authoring contract")]
@@ -50,7 +50,7 @@ fn asset_modules() -> Vec<RegistryModule> {
 
 fn acceptance_project(domain: &str) -> registry_breg::contract::RegistryProject {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/native-models/products/breg/acceptance")
+        .join("../../products/breg/acceptance")
         .join(domain)
         .join("registry.yaml");
     let bytes = fs::read(path).expect("committed acceptance fixture is readable");
@@ -1745,10 +1745,15 @@ fn a_read_project_or_module_serializes_to_source_the_reader_reads_again() {
         &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg"),
         &mut files,
     );
-    assert!(
-        files.len() > 40,
-        "the product ships its projects and modules"
-    );
+    for canonical in [
+        "examples/refactor/minimal/registry.yaml",
+        "acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml",
+    ] {
+        assert!(
+            files.iter().any(|path| path.ends_with(canonical)),
+            "the product ships its canonical project and module: {canonical}"
+        );
+    }
     for path in files {
         let bytes = fs::read(&path).expect("the shipped source file reads");
         let display = path.display();
@@ -1816,7 +1821,7 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
         let mut assets = Vec::new();
         for lock in &mut project.modules {
             let module_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/native-models/products/breg/acceptance")
+                .join("../../products/breg/acceptance")
                 .join(domain)
                 .join("modules")
                 .join(&lock.id);
@@ -2494,9 +2499,8 @@ recordTypes:
 
 #[test]
 fn project_urls_and_module_digests_are_read_as_url_and_digest() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
-        "tests/fixtures/native-models/products/breg/acceptance/asset-site-placement/registry.yaml",
-    );
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/asset-site-placement/registry.yaml");
     let fixture: Value =
         serde_norway::from_slice(&fs::read(path).expect("the fixture is readable"))
             .expect("the fixture is YAML");
@@ -2579,7 +2583,7 @@ fn project_urls_and_module_digests_are_read_as_url_and_digest() {
 fn integer_members_are_read_within_their_stated_bounds() {
     let fixture = |project: &str| -> Value {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/native-models/products/breg/acceptance")
+            .join("../../products/breg/acceptance")
             .join(project)
             .join("registry.yaml");
         serde_norway::from_slice(&fs::read(path).expect("the fixture is readable"))
@@ -2765,7 +2769,7 @@ fn a_set_written_as_a_list_refuses_a_repeated_item_when_the_project_is_read() {
     ];
     for (project, pointer, path) in cases {
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/native-models/products/breg/acceptance")
+            .join("../../products/breg/acceptance")
             .join(project)
             .join("registry.yaml");
         let mut source: Value =
@@ -2896,9 +2900,8 @@ fn provenance_fields_are_read_as_a_set_in_a_project_and_a_module() {
         "{failure:?}"
     );
 
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
-        "tests/fixtures/native-models/products/breg/acceptance/asset-site-placement/registry.yaml",
-    );
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/asset-site-placement/registry.yaml");
     let mut source: Value =
         serde_norway::from_slice(&fs::read(fixture).expect("the fixture is readable"))
             .expect("the fixture is YAML");
@@ -2943,8 +2946,8 @@ fn a_module_profile_task_grant_issuer_is_read_as_a_url() {
 
 #[test]
 fn a_repeated_entity_id_is_refused_at_the_second_id_when_the_file_is_read() {
-    let acceptance = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/native-models/products/breg/acceptance");
+    let acceptance =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/acceptance");
     let repeated = |file: &str| {
         let mut source: Value = serde_norway::from_slice(
             &fs::read(acceptance.join(file)).expect("the fixture is readable"),
@@ -2999,7 +3002,7 @@ fn a_repeated_entity_id_is_refused_at_the_second_id_when_the_file_is_read() {
 fn an_entity_two_files_contribute_is_refused_by_the_compiler() {
     let mut project = acceptance_project("inspection");
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/native-models/products/breg/acceptance/inspection/modules")
+        .join("../../products/breg/acceptance/inspection/modules")
         .join("inspection-core/module.yaml");
     let module = parse_module_yaml(&fs::read(path).expect("the module is readable"))
         .expect("the module follows the authoring contract");
@@ -3443,7 +3446,7 @@ fn geojson_and_bbox_compile_only_for_direct_current_lists() {
               {"id":"scope","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "geojson":{"geometryField":"location"},
-            "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["scope"]},
+            "temporal":{"startField":"valid-from","endField":"valid-to"},
             "constraints":[{
               "id":"scope-time",
               "type":"temporal-non-overlap",
@@ -3791,7 +3794,7 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
                 {"id":"valid-from","type":"timestamp","validTimeRole":"valid-from","required":true,"classification":"internal"},
                 {"id":"valid-to","type":"timestamp","validTimeRole":"valid-to","classification":"internal"}
               ],
-              "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["scope"]},
+              "temporal":{"startField":"valid-from","endField":"valid-to"},
               "constraints":[
                 {"id":"composite-key","type":"unique","fields":["jurisdiction","code"]},
                 {"id":"active-code","type":"unique","fields":["code"],"when":[
@@ -4350,7 +4353,7 @@ fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
           {"id":"temporal-end","type":"date","classification":"public"},
           {"id":"temporal-scope","type":"string","maximumLength":32,"required":true,"classification":"public"}
         ],
-        "temporal":{"startField":"temporal-start","endField":"temporal-end","scopeFields":["temporal-scope"]},
+        "temporal":{"startField":"temporal-start","endField":"temporal-end"},
         "constraints":[
           {"type":"unique","fields":["unique-field"]},
           {"type":"unique","fields":["partial-field"],"when":[{"type":"field-is-not-null","field":"predicate-field"}]},
@@ -5595,8 +5598,8 @@ fn temporal_validity_compiles_without_non_overlap_constraint() {
 }
 
 #[test]
-fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
-    let failure = compile_json(
+fn temporal_scope_fields_predecessor_spelling_is_refused() {
+    let failure = parse_project_json(
         br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
@@ -5623,10 +5626,10 @@ fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
           }]
         }"#,
     )
-    .expect_err("deprecated bridge scope must not silently override the constraint scope");
+    .expect_err("temporal scopeFields is no longer an authoring member");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.temporal.scope-fields-deprecated-mismatch"
-            && diagnostic.path == "recordTypes[].temporal.scopeFields"
+        diagnostic.code == "config.unknown-key"
+            && diagnostic.path.ends_with(".temporal.scopeFields")
     }));
 }
 

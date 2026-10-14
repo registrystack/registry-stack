@@ -40,10 +40,10 @@ use registry_breg::package::{
     PreparedPackage, VerifiedPackage,
 };
 use registry_breg::postgres::{
-    install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
-    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    MigrationRehearsalError, PostgresFailure, PostgresKernelError, RehearsalAssertionPhase,
-    RehearsalOutcome, SuccessorMigrationRehearsal,
+    index_revisions_for_test, install_compiled_schema, managed_schema_fingerprint,
+    rehearse_successor_migration, verify_catalog_identity_for_catalog, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, MigrationRehearsalError, PostgresFailure, PostgresKernelError,
+    RehearsalAssertionPhase, RehearsalOutcome, SuccessorMigrationRehearsal,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
@@ -2864,131 +2864,6 @@ async fn real_postgres_an_activation_keeps_a_claim_that_names_another_database()
     );
 }
 
-/// A field an earlier release encrypted before it adopted a pre-ledger
-/// database keeps its erase-history lifecycle: the flip boundary and the
-/// originating package of a pre-flip proposal name revisions only the order
-/// that adoption kept, and erasure still orders them and scrubs the plaintext
-/// the proposal holds.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_erasure_orders_the_revisions_an_adoption_kept() {
-    let (database, package) = initial_package_database().await;
-    let current = apply(&database, &package, ApplyPrecondition::InitialActivation)
-        .await
-        .expect("the package the deployed release installed activates");
-    let request_id = Uuid::from_u128(0xAD01);
-    database
-        .admin
-        .execute(
-            "INSERT INTO registry_internal.registry_request_state
-                 (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision)
-             VALUES ('asset-request', $1, 'owner:hash', 'cancelled', 1, 1)",
-            &[&request_id],
-        )
-        .await
-        .expect("a pre-flip request state inserts");
-    database
-        .admin
-        .execute(
-            "INSERT INTO registry_internal.registry_request_proposals
-                 (request_entity_id, request_id, proposal_version, request_record_revision,
-                  contract_fingerprint, effect_digest, snapshot)
-             VALUES ('asset-request', $1, 1, 1, $2, $2, $3)",
-            &[
-                &request_id,
-                &format!("sha256:{}", "7".repeat(64)),
-                &serde_json::json!({
-                    "originatingPackage": "pre-ledger-origin",
-                    "effects": [{
-                        "id": "create-asset",
-                        "operation": "create",
-                        "target": {"kind": "ReservedCreate", "entityId": "asset"},
-                        "fieldChanges": [{
-                            "field": "code",
-                            "before": {"kind": "Missing"},
-                            "after": {"kind": "Present", "value": "pre-flip-plaintext"}
-                        }]
-                    }]
-                }),
-            ],
-        )
-        .await
-        .expect("a pre-flip proposal inserts");
-    database
-        .admin
-        .execute(
-            "INSERT INTO registry_internal.registry_field_encryption_flips
-                 (entity_id, field_id, boundary_package_revision, history_choice,
-                  history_commit_position,
-                  sealed_row_count, sealed_journal_row_count,
-                  accepted_plaintext_journal_row_count,
-                  accepted_proposal_target_row_count,
-                  accepted_proposal_submission_row_count,
-                  accepted_idempotency_row_count, accepted_outbox_row_count)
-             SELECT 'asset', 'code', 'pre-ledger-revision', 'erase-and-rebaseline',
-                    latest_position + 1, 0, 0, 0, 0, 0, 0, 0
-               FROM registry_internal.registry_commit_head
-              WHERE singleton",
-            &[],
-        )
-        .await
-        .expect("the pre-adoption flip inserts");
-    // The adoption ordered the flip's boundary after the revision the
-    // proposal originated under, both before the ledger's first activation.
-    database
-        .admin
-        .execute(
-            "INSERT INTO registry_internal.registry_pre_ledger_package_positions
-                 (package_revision, package_sequence)
-             VALUES ('pre-ledger-origin', -1), ('pre-ledger-revision', 0)",
-            &[],
-        )
-        .await
-        .expect("the order the adoption kept inserts");
-
-    let (mut migration, migration_task) = database.connect_migration().await;
-    let registry = compile_variant(Variant::Base);
-    let outcome = registry_breg::field_encryption_backfill::erase_field_encryption_history(
-        &mut migration,
-        registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureRequest {
-            expected: &current,
-            migration_role: &database.migration_role,
-            lock_key: registry_breg::postgres::RegistryLockKey::derive(&current.package_id)
-                .expect("lock key derives"),
-            timeouts: registry_breg::history_erasure::HistoryErasureTimeouts::new(
-                Duration::from_secs(5),
-                Duration::from_secs(5),
-            )
-            .expect("erasure timeouts are bounded"),
-            audit: &database.audit(
-                AuditProfile::production_from_secret_bytes(vec![0x76; 32].into())
-                    .expect("test owns a keyed audit profile"),
-            ),
-            operator_reference: "field-encryption-operator",
-            reason: "destroy pre-flip request snapshots",
-            registry: &registry,
-        },
-    )
-    .await
-    .expect("erasure orders the revisions the adoption kept");
-
-    assert_eq!(outcome.scrubbed_proposal_submission_count, 1);
-    let erased: bool = database
-        .admin
-        .query_one(
-            "SELECT snapshot IS NULL AND erased_at IS NOT NULL
-               FROM registry_internal.registry_request_proposals
-              WHERE request_id = $1",
-            &[&request_id],
-        )
-        .await
-        .expect("the proposal reads")
-        .get(0);
-    assert!(erased, "the pre-flip proposal's plaintext is scrubbed");
-    migration_task.abort();
-    database.cleanup().await;
-}
-
 /// Threat: a database whose registry state this release does not recognise,
 /// such as one a release before the activation ledger installed, could be
 /// served, applied over, planned, or read as though the ledger recorded it.
@@ -3289,135 +3164,6 @@ async fn real_postgres_status_reads_the_ledger_without_the_apply_lock() {
     assert_eq!(active.registry_revision, package.registry().revision());
     assert!(active.applied_at.is_some());
     OffsetDateTime::parse(&active.started_at, &Rfc3339).expect("started_at is RFC 3339");
-    database.cleanup().await;
-}
-
-/// A database an earlier release adopted keeps an `adopted` row at the head
-/// of its ledger, and no release rewrites it. Status reports the row as
-/// recorded, the recorded state binds the active package and its catalog
-/// verifies as startup verifies it, and a successor activates over it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_a_ledger_an_earlier_release_adopted_is_served_and_succeeded() {
-    let (database, initial) = initial_package_database().await;
-    let base = compile_variant(Variant::Base);
-    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
-        .await
-        .expect("the initial package activates");
-    let adopted_activation =
-        Uuid::parse_str(&active.activation_id).expect("the activation id is a UUID");
-    let adopted = database
-        .admin
-        .execute(
-            "UPDATE registry_internal.registry_migrations
-             SET plan_kind = 'adopted'
-             WHERE activation_id = $1 AND predecessor_package_digest IS NULL",
-            &[&adopted_activation],
-        )
-        .await
-        .expect("administrator records the activation as an adoption");
-    assert_eq!(adopted, 1);
-
-    let status = read_activation_status(
-        &database.migration_config,
-        &database.migration_role,
-        timeouts(),
-    )
-    .await
-    .expect("status reads")
-    .expect("the database is activated");
-    assert_eq!(status.identity, active);
-    assert_eq!(status.maintenance_status, "ready");
-    assert_eq!(status.ledger.len(), 1);
-    let entry = status.active_entry().expect("the active entry is recorded");
-    assert_eq!(entry.plan_kind, "adopted");
-    assert_eq!(entry.predecessor_package_digest, None);
-    assert_eq!(entry.package_digest, initial.package_digest());
-
-    let recorded = recorded_state(&database, &initial)
-        .await
-        .expect("the recorded state reads")
-        .expect("an adopted database records its state");
-    assert_eq!(
-        recorded,
-        RecordedRegistryState {
-            identity: active.clone(),
-            ready: true,
-            activation_applied: true,
-        }
-    );
-    bind_active_package(&recorded.identity, initial.package_digest(), deployment())
-        .expect("the adopted active package binds");
-    let pool = database.runtime_config.build_pool().unwrap();
-    let runtime = pool.get_for_test().await.unwrap();
-    verify_catalog_identity_for_catalog(
-        &**runtime,
-        &active,
-        &ExpectedManagedCatalog::compiled(&base),
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await
-    .expect("the adopted catalog verifies");
-    drop(runtime);
-    drop(pool);
-
-    let candidate = compile_variant(Variant::BatchAddedRequired);
-    let target_fingerprint = added_required_target_fingerprint(&database, &candidate).await;
-    let source = added_required_source(
-        "add-required-over-adoption",
-        &active,
-        &base,
-        &candidate,
-        &target_fingerprint,
-        0,
-    );
-    let package = prepare_and_load_reviewed(
-        &active,
-        &base,
-        Variant::BatchAddedRequired,
-        &target_fingerprint,
-        source,
-    );
-    let activated = apply(
-        &database,
-        &package,
-        ApplyPrecondition::Successor { current: &active },
-    )
-    .await
-    .expect("a successor activates over the adopted package");
-    assert_eq!(activated.package_digest, package.package_digest());
-
-    let rows = database
-        .admin
-        .query(
-            "SELECT plan_kind, predecessor_package_digest, outcome
-             FROM registry_internal.registry_migrations
-             ORDER BY apply_order",
-            &[],
-        )
-        .await
-        .expect("the ledger reads");
-    let ledger = rows
-        .iter()
-        .map(|row| {
-            (
-                row.get::<_, String>(0),
-                row.get::<_, Option<String>>(1),
-                row.get::<_, String>(2),
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        ledger,
-        vec![
-            ("adopted".to_owned(), None, "applied".to_owned()),
-            (
-                "successor".to_owned(),
-                Some(initial.package_digest().to_owned()),
-                "applied".to_owned()
-            ),
-        ]
-    );
     database.cleanup().await;
 }
 
@@ -4342,18 +4088,6 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
     assert!(field.duplicate_record_ids.is_empty());
     let keys = flip_key_source();
 
-    // Model an existing deployment initialized before field-encryption control
-    // tables shipped. Successor apply must install and reconcile these tables
-    // before it changes maintenance state or activates key material.
-    database
-        .admin
-        .batch_execute(
-            "DROP TABLE registry_internal.registry_field_encryption_flips;
-             DROP TABLE registry_internal.registry_field_encryption_keys;",
-        )
-        .await
-        .expect("legacy deployment has no field-encryption control tables");
-
     database
         .admin
         .execute(
@@ -4498,9 +4232,9 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
     database
         .admin
         .execute(
-            "INSERT INTO registry_internal.registry_request_state
-                 (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision)
+            "INSERT INTO registry_internal.registry_proposal_state
+                 (action_id, proposal_id, owner_reference, state,
+                  submission_version, workflow_revision)
              VALUES ('encryption-request', $1, 'owner:hash', 'cancelled', 1, 1)",
             &[&request_id],
         )
@@ -4509,8 +4243,8 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
     database
         .admin
         .execute(
-            "INSERT INTO registry_internal.registry_request_proposals
-                 (request_entity_id, request_id, proposal_version, request_record_revision,
+            "INSERT INTO registry_internal.registry_proposal_submissions
+                 (action_id, proposal_id, submission_version, input_revision,
                   contract_fingerprint, effect_digest, snapshot)
              VALUES ('encryption-request', $1, 1, 1, $2, $2, $3)",
             &[
@@ -4547,9 +4281,9 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
     database
         .admin
         .execute(
-            "UPDATE registry_internal.registry_request_proposals
+            "UPDATE registry_internal.registry_proposal_submissions
                 SET snapshot = NULL, erased_at = transaction_timestamp()
-              WHERE request_entity_id = 'encryption-request' AND request_id = $1",
+              WHERE action_id = 'encryption-request' AND proposal_id = $1",
             &[&request_id],
         )
         .await
@@ -5993,6 +5727,13 @@ async fn seed_flip_rows(
             .await
             .expect("null flip seed revision inserts");
     }
+    let count = secrets.len() + usize::from(include_null_secret);
+    let members = (0..count)
+        .map(|index| ("asset", Uuid::from_u128(index as u128 + 1), 1))
+        .collect::<Vec<_>>();
+    index_revisions_for_test(&transaction, &active_revision, &members)
+        .await
+        .expect("flip fixture journals use the current commit allocator");
     transaction
         .commit()
         .await
@@ -6718,6 +6459,15 @@ async fn seed_backfill_rows(database: &TestDatabase, registry: &CompiledRegistry
             )
             .await
             .expect("backfill seed revision inserts");
+    }
+    for page in (0..count).collect::<Vec<_>>().chunks(1_000) {
+        let members = page
+            .iter()
+            .map(|index| ("asset", Uuid::from_u128(*index as u128 + 1), 1))
+            .collect::<Vec<_>>();
+        index_revisions_for_test(&transaction, &active_revision, &members)
+            .await
+            .expect("backfill fixture journals use the current commit allocator");
     }
     transaction
         .commit()
@@ -7824,6 +7574,171 @@ async fn native_patterns_invalid_successors_report_the_field_for_additive_and_re
             .unwrap(),
             fingerprint,
             "syntax refusal preserves the pre-activation catalog on an empty table"
+        );
+        task.abort();
+        database.cleanup().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_retired_activation_plan_kind_is_refused_without_status_mutation() {
+    let (database, package) = initial_package_database().await;
+    let active = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("current initial activation applies");
+    let constraints = database
+        .admin
+        .query(
+            "SELECT conname FROM pg_catalog.pg_constraint
+         WHERE conrelid = 'registry_internal.registry_migrations'::regclass AND contype = 'c'
+            AND pg_catalog.pg_get_constraintdef(oid) LIKE '%plan_kind%'",
+            &[],
+        )
+        .await
+        .expect("fixture finds the current ledger shape checks");
+    for constraint in constraints {
+        let name: String = constraint.get(0);
+        database
+            .admin
+            .batch_execute(&format!(
+                "ALTER TABLE registry_internal.registry_migrations DROP CONSTRAINT {}",
+                quote(&name)
+            ))
+            .await
+            .expect("fixture corrupts only its disposable ledger constraints");
+    }
+    database.admin.execute(
+        "UPDATE registry_internal.registry_migrations SET plan_kind = 'adopted' WHERE activation_id = $1::text::uuid",
+        &[&active.activation_id],
+    ).await.expect("fixture writes a retired plan kind");
+    assert!(read_activation_status(
+        &database.migration_config,
+        &database.migration_role,
+        timeouts()
+    )
+    .await
+    .is_err());
+    let unchanged: bool = database
+        .admin
+        .query_one(
+            "SELECT maintenance_status = 'ready' AND maintenance_target_package_digest IS NULL
+            AND active_activation_id = $1::text::uuid
+         FROM registry_internal.registry_state WHERE singleton",
+            &[&active.activation_id],
+        )
+        .await
+        .expect("current state remains readable")
+        .get(0);
+    assert!(unchanged);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_encryption_erasure_refuses_missing_indexes_and_activation_provenance() {
+    for corruption in ["member", "flip-activation", "proposal-activation"] {
+        let database = TestDatabase::create(1).await;
+        let registry = compile_variant(Variant::EncryptedBase);
+        let fingerprint = initial_fingerprint(&database, &registry).await;
+        let package =
+            prepare_and_load_initial_variant(Variant::EncryptedBase, &registry, &fingerprint);
+        let active = apply(&database, &package, ApplyPrecondition::InitialActivation)
+            .await
+            .expect("current initial activation applies");
+        seed_flip_rows(
+            &database,
+            &registry,
+            &["retained-history-canary".to_owned()],
+            false,
+        )
+        .await;
+        let revision_snapshot: Vec<u8> = database
+            .admin
+            .query_one(
+                "SELECT snapshot FROM registry_internal.registry_revisions",
+                &[],
+            )
+            .await
+            .expect("fixture retains one exact journal snapshot")
+            .get(0);
+        let boundary = if corruption == "flip-activation" {
+            Uuid::from_u128(0xAD02).to_string()
+        } else {
+            active.activation_id.clone()
+        };
+        database.admin.execute(
+            "INSERT INTO registry_internal.registry_field_encryption_flips
+                (entity_id, field_id, boundary_package_revision, history_choice, history_commit_position,
+                 sealed_row_count, sealed_journal_row_count, accepted_plaintext_journal_row_count,
+                 accepted_proposal_target_row_count, accepted_proposal_submission_row_count,
+                 accepted_idempotency_row_count, accepted_outbox_row_count)
+             SELECT 'asset', 'secret', $1, 'erase-and-rebaseline', latest_position + 1, 0, 0, 0, 0, 0, 0, 0
+             FROM registry_internal.registry_commit_head WHERE singleton", &[&boundary],
+        ).await.expect("fixture records a flip boundary");
+        let proposal_id = Uuid::from_u128(0xAD03);
+        let origin = if corruption == "proposal-activation" {
+            Uuid::from_u128(0xAD04).to_string()
+        } else {
+            active.activation_id.clone()
+        };
+        let snapshot = serde_json::json!({"originatingPackage":origin,"effects":[],
+            "applicationPreconditions":{"targets":[{"entityId":"asset","values":{"secret":"retained-proposal-canary"}}]}});
+        database.admin.execute(
+            "INSERT INTO registry_internal.registry_proposal_state
+                (action_id, proposal_id, owner_reference, state, submission_version, workflow_revision)
+             VALUES ('fixture-action', $1, 'fixture-owner', 'cancelled', 1, 1)", &[&proposal_id],
+        ).await.expect("fixture records a cancelled native Proposal");
+        database.admin.execute(
+            "INSERT INTO registry_internal.registry_proposal_submissions
+                (action_id, proposal_id, submission_version, input_revision, contract_fingerprint, effect_digest, snapshot)
+             VALUES ('fixture-action', $1, 1, 1, $2, $2, $3)",
+            &[&proposal_id, &format!("sha256:{}", "7".repeat(64)), &snapshot],
+        ).await.expect("fixture retains native Proposal plaintext");
+        if corruption == "member" {
+            database.admin.execute(
+                "DELETE FROM registry_internal.registry_revision_commit_members WHERE entity_id = 'asset'", &[],
+            ).await.expect("fixture removes mandatory retained revision membership");
+        }
+        let (mut migration, task) = database.connect_migration().await;
+        let audit = database
+            .audit(AuditProfile::production_from_secret_bytes(vec![0x76; 32].into()).unwrap());
+        let refusal = registry_breg::field_encryption_backfill::erase_field_encryption_history(
+            &mut migration,
+            registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureRequest {
+                expected: &active,
+                migration_role: &database.migration_role,
+                lock_key: registry_breg::postgres::RegistryLockKey::derive(&active.package_id)
+                    .unwrap(),
+                timeouts: registry_breg::history_erasure::HistoryErasureTimeouts::new(
+                    Duration::from_secs(5),
+                    Duration::from_secs(5),
+                )
+                .unwrap(),
+                audit: &audit,
+                operator_reference: "fixture-operator",
+                reason: "fixture-refusal",
+                registry: &registry,
+            },
+        )
+        .await
+        .expect_err("corrupt current history/provenance must refuse erasure");
+        assert!(!format!("{refusal:?} {refusal}").contains("canary"));
+        let unchanged = database.admin.query_one(
+            "SELECT (SELECT count(*) FROM registry_internal.registry_revisions WHERE snapshot IS NOT NULL AND erased_at IS NULL),
+                    (SELECT snapshot FROM registry_internal.registry_proposal_submissions WHERE proposal_id = $1),
+                    (SELECT coverage_ready FROM registry_internal.registry_commit_head WHERE singleton),
+                    (SELECT snapshot FROM registry_internal.registry_revisions)", &[&proposal_id],
+        ).await.expect("retained bytes and coverage remain readable after refusal");
+        assert_eq!(unchanged.get::<_, i64>(0), 1, "{corruption}");
+        assert_eq!(
+            unchanged.get::<_, serde_json::Value>(1),
+            snapshot,
+            "{corruption}"
+        );
+        assert!(unchanged.get::<_, bool>(2), "{corruption}");
+        assert_eq!(
+            unchanged.get::<_, Vec<u8>>(3),
+            revision_snapshot,
+            "{corruption}"
         );
         task.abort();
         database.cleanup().await;

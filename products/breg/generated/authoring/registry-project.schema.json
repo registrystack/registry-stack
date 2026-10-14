@@ -4793,13 +4793,6 @@
         "endField": {
           "type": "string"
         },
-        "scopeFields": {
-          "description": "Deprecated bounded predecessor bridge. New authoring should declare\nexclusivity only through `constraints[].scopeFields`.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "startField": {
           "type": "string"
         }

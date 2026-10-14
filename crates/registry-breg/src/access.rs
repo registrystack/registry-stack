@@ -7,9 +7,9 @@ use serde::Serialize;
 
 use crate::compiler::operation_id;
 use crate::contract::{
-    AccessProfileSource, AccessRequirementsSource, ActorKindSource, Classification,
-    ConsentIssuerSource, EntitySource, FieldTypeSource, MembershipBoundarySource, Operation,
-    ProjectAccessProfileSource, RegistryProject, RowBoundarySource,
+    AccessProfileSource, AccessRequirementsSource, ActorKindSource, BoundaryOperator,
+    Classification, ConsentIssuerSource, EntitySource, FieldTypeSource, MembershipBoundarySource,
+    Operation, ProjectAccessProfileSource, RegistryProject, RowBoundarySource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{CompiledActionInventory, CompiledEntity, CompiledRegistry};
@@ -178,26 +178,20 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 .map(|b| b.field.as_str())
                 .filter(|field| *field != "id")
                 .collect::<BTreeSet<_>>();
-            if creates
-                && boundary_fields
-                    .iter()
-                    .any(|field| profile.writable_fields.contains(*field))
+            // Equality binds both the old and new row to one claim value. Only
+            // an `in` boundary allows a patch to move between authorized values.
+            if patches
+                && profile.row_boundaries.iter().any(|b| {
+                    b.operator == BoundaryOperator::In && profile.writable_fields.contains(&b.field)
+                })
             {
-                let patch_review = if patches {
-                    ". Review separately that patch can move a record within the caller's allowed values"
+                let advice = if creates {
+                    "keep it writable for create, and use a separate patch permission without it if moving records is not intended"
                 } else {
-                    ""
+                    "remove it from writableFields unless moving records is intended"
                 };
                 findings.push(Diagnostic::finding("breg.access.profile-writable-row-boundary", format!("{path}.writableFields"),
-                    &format!("create needs this authorization-bound field in writableFields, because the row policy pins it to the caller's claim on insert; keep it writable, and expect a create naming any other value to be refused{patch_review}")));
-            } else if patches
-                && profile
-                    .row_boundaries
-                    .iter()
-                    .any(|b| profile.writable_fields.contains(&b.field))
-            {
-                findings.push(Diagnostic::finding("breg.access.profile-writable-row-boundary", format!("{path}.writableFields"),
-                    "patch can change an authorization-bound field within the caller's allowed values; remove it from writableFields unless moving records is intended"));
+                    &format!("patch can change an authorization-bound field within the caller's allowed values; {advice}")));
             }
             if creates {
                 for field in boundary_fields

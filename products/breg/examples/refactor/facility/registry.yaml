@@ -9,6 +9,9 @@ project:
     label: Facility Registry
     description: Facilities, operators, assignments, and an administrative directory.
 
+package:
+  sourceRevision: facility-registry-0.1.0
+
 datasets:
   - id: facility-registry
     display:
@@ -205,6 +208,18 @@ actions:
             status: {value: inactive}
 
 accessProfiles:
+  - id: operator-editor
+    principalClaim: registry_principal
+    requiredScopes: ["registry:operator:write"]
+    requiredPurposes: [facility-administration]
+    permissions:
+      records:
+        - recordType: operator
+          operations: [create, get, list, patch]
+          readableFields: [operator-code, status, jurisdiction]
+          writableFields: [operator-code, status, jurisdiction]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
   - id: facility-reader
     principalClaim: registry_principal
     requiredScopes: ["registry:facility:read"]

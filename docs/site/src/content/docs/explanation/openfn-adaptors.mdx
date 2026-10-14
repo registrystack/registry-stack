@@ -90,7 +90,7 @@ failure. The adaptor requests signed JWS only and publishes no native handles in
 ### BReg: governed reads and writes
 
 The BReg adaptor covers metadata discovery, exact lookups, single-page lists with explicit
-continuation, record creation, patching, change-request creation, and lifecycle actions. It follows
+continuation, record creation, patching, Proposal Start and promoted lifecycle transitions. It follows
 the same rules a careful direct client would:
 
 - **Writes select their authority from metadata.** Every write fetches caller-filtered metadata
@@ -175,8 +175,7 @@ regresses state.
 
 {/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs defines
 SIGNATURE_DOMAIN as breg-webhook-signature-v1 and crates/registry-breg/tests/postgres_webhook_delivery.rs exercises the
-outbox delivery the pilot's event bridge verifies. products/breg/starters/agricultural-holdings/core/registry.yaml
-is the starter the pilot adapts. */}
+outbox delivery the pilot's event bridge verifies. The preserved pilot used a former agricultural starter. */}
 
 ## What the pilot does not establish
 

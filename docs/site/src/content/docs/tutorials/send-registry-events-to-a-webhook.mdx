@@ -1,6 +1,6 @@
 ---
 title: Send registry events to a webhook
-description: Run the business demo with its supervised receiver, cause a signed CloudEvents delivery, and inspect the receipt without exposing credentials.
+description: Add a native contact event, cause a committed delivery, and inspect the supervised receiver acceptance receipt.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,116 +13,103 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: breg
-  skip: needs the business demo launcher and its webhook receiver
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-This tutorial uses the maintained Base Registry Engine (BReg) business demo and the receiver supervised by
-`bregctl dev`. You will read the event declaration, create a record, and inspect
-the value-redacted delivery receipt.
+If you are evaluating Base Registry Engine (BReg) event delivery, add a committed
+contact event to a local directory, run its create/read scenario, and inspect the
+supervised receiver's value-redacted receipt.
 
 <QuickstartMeta
-  outcome="One signed CloudEvents delivery caused by your authenticated write, with a receipt from the supervised receiver."
-  time="About 15 minutes"
+  outcome="A signed contact-created delivery accepted by the local receiver."
+  time="About 15 minutes, plus image downloads"
   level="Local evaluation only"
-  prerequisites={['Docker', 'Python 3', 'Rust and Cargo, or installed breg and bregctl binaries', 'curl 7.76 or later', 'Two terminals']}
+  prerequisites={['Matching breg and bregctl binaries', 'Running Docker', 'A shell and an editor']}
 />
 
-## Start the demo receiver
-
-From the Registry Stack checkout, run:
+## Create a directory with an event
 
 ```sh
-products/breg/demo/run.sh --webhook
+mkdir -p tutorial-work
+bregctl init tutorial-work/webhooks
 ```
 
-The launcher creates a disposable project under `products/breg/demo/.run`,
-starts PostgreSQL, the stock ThunderID issuer, Base Registry Engine, and the
-loopback receiver. Leave it running in this terminal.
+Open `tutorial-work/webhooks/registry.yaml` and add this `hooks` member to the
+`contact` Record type, beside `fields`:
 
-## Read the declaration
+```diff lang="yaml" title="tutorial-work/webhooks/registry.yaml" test-edit
+     mutationMode: mutable
++    hooks:
++      - id: contact-created-v1
++        phase: after
++        trigger: created
++        projection: [name]
++        handler:
++          type: url
++          destinationId: contact-events
+```
 
-In another terminal:
+The projection authorizes only `name` to leave the registry. The destination is a
+logical ID; development binds it to its supervised HMAC-verifying receiver.
 
 ```sh
-webhook_run="$PWD/products/breg/demo/.run"
-grep -A20 '^    hooks:' \
-  "$webhook_run/project/modules/business-establishment-summary/module.yaml"
+bregctl check tutorial-work/webhooks
+bregctl --format json explain events tutorial-work/webhooks
 ```
 
-The `operating-created-v1` event selects the establishment entity, the created
-trigger, and the projected `establishment-code` and `operating-status` values.
-The compiled destination binding, retry policy, and disclosure can be inspected
-without opening runtime secrets:
+Inspect the event ID, projection, derived classification, and destination before
+starting. Repair a named diagnostic before proceeding.
+
+## Start and cause a delivery
+
+:::caution[Use synthetic records]
+The local receiver retains projected values in the owner-only `.breg/dev/` state.
+Keep that directory out of version control and support messages.
+:::
 
 ```sh
-bregctl explain events "$webhook_run/project"
+bregctl dev start tutorial-work/webhooks
+bregctl examples run contact tutorial-work/webhooks
 ```
 
-## Cause a delivery
+The scenario creates and reads its synthetic contact. Delivery happens after
+commit. Give the worker time to attempt delivery before inspecting the receiver.
+A repeated scenario resumes retained work; it does not create a fresh event each time.
 
-Acquire a fresh token through the retained dev session and copy its protected
-header file:
+## Inspect acceptance
 
 ```sh
-umask 077
-bregctl --format json dev token business-demo "$webhook_run/project" \
-  > tutorial-work/webhook-token.json
-python3 -c 'import json,shutil,sys; shutil.copyfile(json.load(open(sys.argv[1]))["headerFile"], sys.argv[2])' \
-  tutorial-work/webhook-token.json tutorial-work/webhook-authorization.header
-chmod 600 tutorial-work/webhook-authorization.header
+bregctl --format json dev events tutorial-work/webhooks
 ```
 
-Create an operating establishment:
+The report identifies the event, destination, generation, attempt, and accepted
+receipt. Projected values are omitted unless you explicitly add `--include-payload`.
+An empty report can mean delivery is still pending; inspect the runtime diagnostics
+and the queue with `bregctl webhook list --help` before creating another record.
+
+Acceptance means the receiver accepted that attempt. An adopting service owns
+durable inbox storage, processing, retention, and reconciliation. Its retry and
+operator-replay handling must deduplicate the event before an external effect.
+[Operate BReg webhooks](../../operate/breg-webhooks/) covers the separate outbox.
+
+## Stop the session
 
 ```sh
-webhook_url=$(cat "$webhook_run/breg-origin")
-curl --silent --show-error --fail-with-body \
-  --header @tutorial-work/webhook-authorization.header \
-  --header 'Content-Type: application/json' \
-  --header 'Idempotency-Key: tutorial-establishment-9' \
-  --data '{"data":{"establishmentCode":"ESTABLISHMENT-TUTORIAL-009","siteName":"North Quay Annex","establishmentKind":"warehouse","operatingStatus":"operating"}}' \
-  --output tutorial-work/establishment.json --write-out 'HTTP %{http_code}\n' \
-  "$webhook_url/v1/records/establishments?accessProfile=business-operator"
+bregctl dev stop tutorial-work/webhooks
 ```
 
-The response is `201`. Delivery runs after the transaction commits, so allow a
-few seconds before reading the receiver report.
+This retains records and receiver receipts for inspection. To discard this
+synthetic session, use `dev stop --remove`; that removes its owned database and
+receipt journal. Keep any required evidence before removing it.
 
-## Inspect the receipt
-
-```sh
-bregctl --format json dev events "$webhook_run/project" \
-  > tutorial-work/webhook-events.json
-python3 -m json.tool tutorial-work/webhook-events.json
-```
-
-The report identifies the compiled event and destination, generation, attempt,
-and receipt time. Payloads are omitted unless you explicitly add
-`--include-payload`. A receipt means the receiver accepted that attempt. Operated
-deployments inspect pending and dead-letter work through the separate webhook
-operations described in [Operate BReg webhooks](../../operate/breg-webhooks/).
-
-## Stop the demo
-
-Press `Ctrl+C` in the first terminal. A successful run removes its owned dev
-session. An interrupted or failed run retains `.run/` for diagnosis. Stop that
-owned session before removing the directory and retrying.
-
-Keep `tutorial-work/webhook-authorization.header` out of support messages. The
-checkout ignores it, but it remains a bearer credential until it expires.
-
-## Troubleshooting
-
-| Symptom | Next move |
-| --- | --- |
-| A request returns `401` | Rerun `bregctl dev token business-demo "$webhook_run/project"` while the demo remains active and copy the new `headerFile`. |
-| The new receipt is not visible yet | Wait a few seconds and rerun `bregctl dev events`. |
-| The launcher stops before its ready line | Read the bounded diagnostics it prints. Preserve the failed `.run/` directory until you have diagnosed the owned session. |
+{/* Evidence: crates/registry-bregctl/src/dev/events.rs;
+    crates/registry-bregctl/src/dev/mod.rs;
+    products/breg/examples/refactor/minimal/examples/scenarios.json;
+    products/breg/examples/webhook-receiver/receiver.py. */}
 
 ## Next
 
-- [Author a registry project](../../configure/breg/) to declare events on your own entities.
-- [Operate BReg webhooks](../../operate/breg-webhooks/) to configure operated destinations, retry limits, and dead-letter recovery.
-- [Base Registry Engine API reference](../../reference/breg-api/) for the delivery contract a receiver validates and deduplicates.
+- [Operate BReg webhooks](../../operate/breg-webhooks/)
+- [Base Registry Engine event contract](../../reference/breg-api/#events-and-webhooks)
+- [Declare Actions and Proposals](../../configure/breg-change-control/)

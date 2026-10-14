@@ -4,7 +4,6 @@
   rows:
     - ['`created`', 'Not allowed', 'Not allowed', 'Allowed', 'After']
     - ['`patched`', 'Allowed', 'Allowed', 'Allowed', 'After']
-    - ['`request-lifecycle`', 'Not allowed', 'Not allowed', 'Not allowed', 'Request at transition']
     - ['`tombstoned`', 'Not allowed', 'Allowed', 'Not allowed', 'Before']
 - id: headers
   title: Webhook request headers
@@ -15,9 +14,9 @@
     - ['`ce-specversion`', '`1.0`', 'CloudEvents version.']
     - ['`ce-id`', 'UUID', 'Captured event identity; unchanged by retry or replay.']
     - ['`ce-source`', '`urn:registrystack:registry:<registry-id>:instance:<instance-id>`', 'Registry instance identity.']
-    - ['`ce-type`', 'Authored event ID', 'External event contract, such as `record-labelled-v1`.']
+    - ['`ce-type`', 'Captured event type', 'Configured record event ID or native `proposal.<transition>` event type.']
     - ['`ce-time`', 'RFC 3339 timestamp', 'Mutation capture time; unchanged by retry or replay.']
-    - ['`ce-dataschema`', '`urn:breg:event-schema:<registry-id>:<entity-id>:<event-id>:sha256:<digest>`', 'Generated event payload schema identity and fingerprint.']
+    - ['`ce-dataschema`', '`urn:breg:event-schema:<registry-id>:<record-type-id>:<event-id>:sha256:<digest>`', 'Record payload schema identity and fingerprint; Proposal events use `https://id.registrystack.org/contracts/breg/proposal-event/v1`.']
     - ['`Idempotency-Key`', '`sha256:<digest>`', 'Opaque key for deduplicating automatic retries.']
     - ['`X-Registry-Event-Generation`', 'Positive integer, initially `1`', 'Increments on operator replay.']
     - ['`X-Registry-Delivery-Attempt`', 'Positive integer, initially `1`', 'Attempt number within the generation.']
@@ -32,20 +31,29 @@
     - ['`source`', '`urn:registrystack:registry:<registry-id>:instance:<instance-id>`', 'Registry instance identity; equals `ce-source`.']
     - ['`time`', 'RFC 3339 timestamp, UTC, whole milliseconds', 'Mutation capture time; equals `ce-time`.']
     - ['`subject`', 'Object with `recordReference` and `recordRevision`', 'Hashed record reference and the revision the change produced. The reference is `hmac-sha256:<64-hex>`, never the raw record id.']
-    - ['`dataschema`', '`urn:breg:event-schema:<registry-id>:<entity-id>:<event-id>:sha256:<digest>`', 'Generated event data schema identity; equals `ce-dataschema`.']
+    - ['`dataschema`', '`urn:breg:event-schema:<registry-id>:<record-type-id>:<event-id>:sha256:<digest>`', 'Captured payload schema identity; equals `ce-dataschema`. Proposal events use their dedicated closed schema.']
     - ['`data`', 'Object', 'The captured event data, described below.']
     - ['`causation`', 'Object with `root`, `hop`, and optional `parent`', 'Chain position. A captured registry mutation is a root event: `root` equals `id`, `hop` is 0, and `parent` is absent.']
 - id: payload
   title: Required event data fields
   columns: [Field, Type, Meaning]
   rows:
-    - ['`entity`', 'String', 'Authored entity ID.']
+    - ['`recordType`', 'String', 'Authored Record type ID.']
     - ['`recordId`', 'UUID string', 'Record identity.']
     - ['`revision`', 'Positive integer', 'Record revision after the mutation.']
-    - ['`trigger`', '`created`, `patched`, `request-lifecycle`, or `tombstoned`', 'Captured mutation or request-transition trigger.']
+    - ['`trigger`', '`created`, `patched`, or `tombstoned`', 'Captured record mutation trigger.']
     - ['`packageRevision`', '`sha256:<digest>` string', 'Package active at capture time.']
     - ['`values`', 'Object', 'Exactly the declared projection, using authored field IDs; unset optional fields are null.']
-    - ['`request`', 'Object; required only for `request-lifecycle`', 'Proposal and workflow identity, transition, states, optional stage and effect digest, stable deduplication key, and reasonPresent. Rejection and request-revision may include the reviewer explanation as reason.']
+- id: proposal-payload
+  title: Required Proposal event data fields
+  columns: [Field, Type, Meaning]
+  rows:
+    - ['`actionId`, `actionRevision`', 'String and digest', 'Exact governed Action binding.']
+    - ['`proposalId`, `submissionVersion`, `revision`', 'UUID and positive integers', 'Exact durable work and transition revision.']
+    - ['`fromState`, `state`, `transition`', 'Closed strings', 'Native lifecycle transition and its states.']
+    - ['`effectDigest`', 'Digest or null', 'Frozen plan identity when available.']
+    - ['`authorityKind`', 'Closed string', 'Authority used for the transition.']
+    - ['`systemApplyGrantRevision`', 'Digest or null', 'Restricted system grant binding for automatic application.']
 - id: delivery
   title: Delivery limits and outcomes
   columns: [Property, Contract]

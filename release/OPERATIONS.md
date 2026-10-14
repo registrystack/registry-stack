@@ -747,32 +747,32 @@ published historical exception and must not be modified after publication.
 
 ### Rehearse the upgrade from the previous release
 
-Before 1.0, a release reads only the state its immediate predecessor wrote, and
-promises a forward state path from that predecessor alone. An operator on an
-older release upgrades one release at a time.
+BReg starts from the native Record, Dataset, Action, and Proposal model. State
+and packages from the retired entity/Request model have no in-place upgrade
+path; pilot operators start a new native registry. Native package successors,
+history, activation recovery, and backup/restore remain covered by the BReg
+operator workflow gates. The previous-release rehearsal does not select BReg.
+
+For Casework, Evidence, and Messaging before 1.0, a release reads only the state
+its immediate predecessor wrote and promises a forward state path from that
+predecessor alone. An operator on an older release upgrades one release at a time.
 A patch release does not move the floor of its minor line, so its rehearsal
 may still start from the release before that line. The workflow does not do
 that by itself: it starts from the newest published release, which for a patch
 release is the previous release of the same line. To rehearse a patch release
 from the floor, dispatch the workflow with `-f from_tag=<floor tag>`.
 The release PR adds its manifest under `release/manifests/`, which starts
-`release-upgrade-rehearsal.yml` on that PR. The workflow builds BReg, Casework,
-Evidence, and Messaging from the PR and runs `release/scripts/rehearse-upgrade.py`. The
+`release-upgrade-rehearsal.yml` on that PR. The workflow builds Casework,
+Evidence, and Messaging from the PR and runs `release/scripts/rehearse-upgrade.py`.
+The
 script downloads the previous published release's binaries for those products,
 authenticates `SHA256SUMS` with its protected-main Sigstore identity, and checks
-each asset against it as `release/VERIFY.md` describes. It writes a
-registry package with records and revisions, a Casework queue with answered
-and in-flight work, and an Evidence audit stream with the old binaries, using a
+each asset against it as `release/VERIFY.md` describes. It writes a Casework
+queue with answered and in-flight work, and an Evidence audit stream with the old binaries, using a
 disposable loopback PostgreSQL container. It then points the PR's binaries at
 that state and the same files, runs the upgrade an operator runs, and fails
 when any captured view is served differently or any retained table holds fewer
-rows. BReg rebuilds its package
-with the current compiler and applies it as a successor when the rebuilt digest
-changes, serves, then applies an additive successor and serves again; its
-package-bound ETags may change, while record data and stored revisions must
-remain identical. Require
-that run to succeed before
-merging the release PR. To rehearse without a release PR, dispatch it by hand:
+rows. Require that run to succeed before merging the release PR. To rehearse without a release PR, dispatch it by hand:
 
 ```sh
 gh workflow run release-upgrade-rehearsal.yml \
@@ -795,11 +795,6 @@ is published the same run downloads it, with no change to the script or the
 workflow.
 Scheduling state is not rehearsed: `PRODUCTS` in the script names no
 Scheduling leg.
-
-v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
-Fresh installations create the current verified-creator and caller-scoped
-replay structures directly, without conversion or discard of earlier rows.
-The rehearsal keeps its row comparison active for every populated BReg table.
 
 Messaging joins the rehearsal from `v0.38.0`, which is earlier than the floor.
 `MESSAGING_FIRST_RELEASE` in `release/scripts/release_roster.py` owns that

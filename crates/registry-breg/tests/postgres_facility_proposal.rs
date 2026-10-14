@@ -62,16 +62,9 @@ fn registry() -> registry_breg::CompiledRegistry {
         !correction.contains("application:"),
         "exercise the canonical omitted application default"
     );
-    let mut source = parse_project_yaml(yaml.as_bytes()).unwrap();
-    // Only the fixture's initial operator row needs an additional native grant.
-    // Facility creation uses the actual register-facility Action and its guards.
-    source.access_profiles.push(serde_json::from_value(json!({"id":"fixture-seeder",
-        "principalClaim":"registry_principal","requiredScopes":["fixture:seed"],
-        "requiredPurposes":["facility-administration"],"permissions":{"records":[{
-            "recordType":"operator","operations":["create","get"],
-            "readableFields":["operator-code","status","jurisdiction"],
-            "writableFields":["operator-code","status","jurisdiction"],
-            "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}})).unwrap());
+    // Use the exact authored grants, including operator maintenance. The test
+    // must not give itself a seeding permission an adopter's project lacks.
+    let source = parse_project_yaml(yaml.as_bytes()).unwrap();
     let registry = compile_project_with_assets(
         &source,
         &[],
@@ -192,7 +185,7 @@ async fn fixture() -> (client_http::ClientFixture, Arc<SyntheticApproval>) {
     let injected = review.clone();
     let fixture = client_http::ClientFixture::start_with_mutations(
         registry(),
-        claims("fixture:seed", "facility-administration"),
+        claims("registry:operator:write", "facility-administration"),
         move |mutations| {
             mutations.with_proposal_review_substitute_for_test(review_binding(), injected)
         },
@@ -210,12 +203,12 @@ async fn start(
     let seed = fixture
         .http
         .client
-        .registry_contract(Some("fixture-seeder"))
+        .registry_contract(Some("operator-editor"))
         .await
         .unwrap();
     let BRegDirectWrite::Create(create) = seed
         .value
-        .select_direct_write("records.operator.create", "fixture-seeder")
+        .select_direct_write("records.operator.create", "operator-editor")
         .unwrap()
     else {
         panic!("operator create grant")

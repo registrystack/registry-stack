@@ -1897,9 +1897,7 @@ impl ContractFingerprint {
     }
 }
 
-/// The activation a proposal was prepared under: its activation id, or the
-/// package digest a proposal prepared before the database kept an activation
-/// ledger recorded.
+/// The canonical non-nil activation id a proposal was prepared under.
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PackageFingerprint(String);
@@ -1921,16 +1919,18 @@ impl PackageFingerprint {
 
     fn check(value: &str) -> Result<(), WorkflowError> {
         if is_activation_id(value) {
-            return Ok(());
+            Ok(())
+        } else {
+            Err(WorkflowError::InvalidDigest)
         }
-        ValidatedToken::new(value, TokenKind::Digest).map(|_| ())
     }
 }
 
 /// An activation id is a UUID in its lowercase hyphenated form, the form the
 /// database renders `activation_id::text` in.
 fn is_activation_id(value: &str) -> bool {
-    uuid::Uuid::try_parse(value).is_ok_and(|parsed| parsed.hyphenated().to_string() == value)
+    uuid::Uuid::try_parse(value)
+        .is_ok_and(|parsed| !parsed.is_nil() && parsed.hyphenated().to_string() == value)
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -2547,7 +2547,8 @@ mod source_owned_review_tests {
         PreparedProposal::new_with_binding(
             revision(7),
             ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
-            PackageFingerprint::new("sha256:package").expect("package fingerprint"),
+            PackageFingerprint::new("3b0c7a52-5d1e-4f6a-8b9c-0d1e2f3a4b01")
+                .expect("package fingerprint"),
             review,
             FrozenPlanningBinding::new(
                 FrozenPlannerKind::Declarative,
@@ -2631,14 +2632,14 @@ mod source_owned_review_tests {
     }
 
     #[test]
-    fn originating_package_is_an_activation_id_or_a_pre_ledger_digest() {
+    fn originating_package_requires_a_canonical_non_nil_activation_id() {
         PackageFingerprint::new("3b0c7a52-5d1e-4f6a-8b9c-0d1e2f3a4b01")
             .expect("activation id is an originating package");
-        PackageFingerprint::new(format!("sha256:{}", "a".repeat(64)))
-            .expect("a pre-ledger package digest is an originating package");
+        assert!(PackageFingerprint::new(format!("sha256:{}", "a".repeat(64))).is_err());
         for refused in [
             "",
             "package-1",
+            "00000000-0000-0000-0000-000000000000",
             "3B0C7A52-5D1E-4F6A-8B9C-0D1E2F3A4B01",
             "3b0c7a525d1e4f6a8b9c0d1e2f3a4b01",
         ] {

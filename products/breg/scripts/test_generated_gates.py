@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -162,6 +163,33 @@ class GeneratedGateTests(unittest.TestCase):
                 with self.subTest(workflow=workflow.name, retired=retired):
                     self.assertNotIn(retired, source)
 
+    def test_operator_project_edits_resolve_against_the_native_fixture(self) -> None:
+        import yaml
+        fixture = SCRIPT_DIR.parent / "fixtures/generic-operator-workflows"
+        for script, variable in (("test-promotion.sh", "project_1"), ("test-backup-restore.sh", "project")):
+            with self.subTest(script=script), tempfile.TemporaryDirectory() as temporary:
+                project = Path(temporary) / "project"
+                shutil.copytree(fixture, project)
+                source = (SCRIPT_DIR / script).read_text()
+                marker = f'python3 - "${variable}/registry.yaml" <<\'PY\'\n'
+                snippet = source.split(marker, 1)[1].split("\nPY\n", 1)[0]
+                subprocess.run([sys.executable, "-", str(project / "registry.yaml")], input=snippet, text=True, check=True)
+                model = yaml.safe_load((project / "registry.yaml").read_text())
+                self.assertNotIn("entities", model)
+                records = {item["id"]: item for item in model["recordTypes"]}
+                self.assertEqual({"record", "record-group"}, records.keys())
+                if script == "test-promotion.sh":
+                    self.assertIn("legacy-note", {item["id"] for item in records["record"]["fields"]})
+                    self.assertIn('model["recordTypes"]["record"]', source)
+                else:
+                    grants = next(item for item in model["accessProfiles"] if item["id"] == "loader")["permissions"]["records"]
+                    self.assertEqual("record-group", grants[0]["recordType"])
+                    self.assertEqual(["import"], grants[0]["operations"])
+                    self.assertEqual(10, records["record-group"]["batch"]["maximumItems"])
+                    self.assertEqual("record-created-v1", records["record"]["hooks"][0]["id"])
+                self.assertIn("project lock", source)
+                self.assertNotIn("--entity", source)
+
     def test_promotion_workflow_moves_one_package_through_two_environments(self) -> None:
         promotion = SCRIPT_DIR / "test-promotion.sh"
         self.assertTrue(os.access(promotion, os.X_OK))
@@ -257,7 +285,7 @@ class GeneratedGateTests(unittest.TestCase):
             "--production",
             "for selector in openapi schemas manifest metadata sql; do",
             '"$bregctl" generate "$selector" "$fixture" --output "./$selector"',
-            "crates/registry-breg/tests/fixtures/native-models/products/breg/acceptance/asset-site-placement",
+            "products/breg/acceptance/asset-site-placement",
             "--record-type asset-item",
             'source["recordTypes"]',
             'profile["permissions"]["records"]',

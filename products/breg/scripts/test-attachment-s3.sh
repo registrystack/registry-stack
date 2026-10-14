@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${BREG_TEST_DATABASE_URL:?Set BREG_TEST_DATABASE_URL to a disposable PostgreSQL server}"
-
 # This test owns only the container it starts. Credentials are synthetic and
 # the published port is loopback-only; no operator storage is used.
 export BREG_TEST_S3_ACCESS_KEY=breg960test
@@ -58,10 +56,7 @@ curl --fail --silent --show-error --aws-sigv4 "aws:amz:us-east-1:s3" \
 
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
-# The two feature sets match test-postgres.sh, so running after it reuses
-# its registry-breg builds.
+# The real backend case proves storage semantics. Native Proposal transport,
+# quarantine and recovery run separately in test-postgres.sh with loopback S3.
 cargo test --locked -p registry-breg --features runtime,tooling,schema --lib \
   attachment_storage -- --include-ignored
-cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
-  --test postgres_change_requests \
-  real_s3_http_attachments_preserve_proposals_and_complete_operator_erasure -- --ignored --exact

@@ -10,6 +10,9 @@ project:
     label: Local directory
     description: A small registry maintained through generated CRUD.
 
+package:
+  sourceRevision: local-directory-0.1.0
+
 datasets:
   - id: directory
     display: {label: Directory, description: Institutional contact records.}

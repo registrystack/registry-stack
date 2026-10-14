@@ -65,8 +65,8 @@ Changing the blocklist is a boundary decision: record it in this file.
   and `products/breg/wasm-action-handlers.md`.
 - Local loops: `products/breg/DEV.md` for the native `bregctl dev` lifecycle,
   `products/breg/quickstart/` for the scripted first hour, and
-  `products/breg/starters/` for the resumable starter journeys `bregctl
-  examples` lists and runs.
+  `products/breg/examples/refactor/` for the canonical projects and resumable
+  scenarios `bregctl examples` lists and runs.
 - Model-derived projects: the embedded PublicSchema snapshot in
   `crates/registry-linkml`, the reference model behind `bregctl init --from
   publicschema`.

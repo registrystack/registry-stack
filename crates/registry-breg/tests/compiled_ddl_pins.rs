@@ -38,7 +38,7 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         name: "organization-membership-access",
         project: include_bytes!(
-            "fixtures/native-models/products/breg/fixtures/organization-membership-access/registry.yaml"
+            "../../../products/breg/fixtures/organization-membership-access/registry.yaml"
         ),
         module: None,
         ddl_sha256: "da05fb62cb07ea689d7351c76d609a552a5a8fb9e1e5231877d103dd1e33fe88",
@@ -47,10 +47,10 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         name: "asset-registration-actions",
         project: include_bytes!(
-            "fixtures/native-models/products/breg/fixtures/asset-registration-actions/registry.yaml"
+            "../../../products/breg/fixtures/asset-registration-actions/registry.yaml"
         ),
         module: Some(include_bytes!(
-            "fixtures/native-models/products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
+            "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "dfb8cefaa8059cda62c5d2d39bb14fcbf33f589061ca6fe81402e948048caaf6",
         revision: "sha256:b216dca850f889856d075e105d1004ac26bcfa3f10c854a3e6fa327f3dad04ea",
@@ -58,10 +58,10 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         name: "facility-registry-actions",
         project: include_bytes!(
-            "fixtures/native-models/products/breg/fixtures/facility-registry-actions/registry.yaml"
+            "../../../products/breg/fixtures/facility-registry-actions/registry.yaml"
         ),
         module: Some(include_bytes!(
-            "fixtures/native-models/products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
+            "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "603a8c6c8ab8500fe5beff9b78657c667de7e90c91578700091086e2f1a82380",
         revision: "sha256:624f1d72563e3db646118b922f50d4c37db99e550ec9669f1f17d1e0a830b3a8",
@@ -69,10 +69,10 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         name: "household-contact-actions",
         project: include_bytes!(
-            "fixtures/native-models/products/breg/fixtures/household-contact-actions/registry.yaml"
+            "../../../products/breg/fixtures/household-contact-actions/registry.yaml"
         ),
         module: Some(include_bytes!(
-            "fixtures/native-models/products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
+            "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "451d62c09089364c81f343acfbc175f82db449f00446886fedc6e8cc03ef86ad",
         revision: "sha256:9fa5ad05c85cb03808de910b917ff0f877dcb2446f5e2e89072c145e2b45924d",

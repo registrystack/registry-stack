@@ -409,13 +409,8 @@ impl DedicatedApplyConnection {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
 
-        self.ensure_successor_history_ready(
-            current,
-            predecessor_baseline,
-            predecessor_history_descriptor,
-            runtime_role,
-        )
-        .await?;
+        self.ensure_successor_history_ready(current, predecessor_history_descriptor)
+            .await?;
 
         self.execute_reviewed_assertion_phase(plan, ledger, prior_tables, false)
             .await?;
@@ -1449,41 +1444,17 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
-    /// Establishes or verifies successor history readiness while the durable
-    /// maintenance boundary and dedicated session-level apply lock are held.
+    /// Verifies current successor history under the dedicated apply lock.
     pub(crate) async fn ensure_successor_history_ready(
         &mut self,
         current: &ExpectedRegistryIdentity,
-        predecessor_baseline: Option<&CompiledRegistryMigrationBaseline>,
         predecessor_history_descriptor: Option<&HistorySchemaDescriptor>,
-        runtime_role: &SqlIdentifier,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         let transaction = self.client.transaction().await?;
-        let predecessor_tables = predecessor_baseline
-            .map(|baseline| {
-                baseline
-                    .entities
-                    .values()
-                    .map(|entity| entity.physical_table.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if !predecessor_tables.is_empty() {
-            set_force_row_security(&transaction, &predecessor_tables, false).await?;
-        }
-        let readiness = ensure_successor_history_ready_state(
-            &transaction,
-            current,
-            predecessor_baseline,
-            predecessor_history_descriptor,
-            runtime_role,
-        )
-        .await;
-        if !predecessor_tables.is_empty() {
-            set_force_row_security(&transaction, &predecessor_tables, true).await?;
-        }
-        readiness.map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        ensure_successor_history_ready_state(&transaction, current, predecessor_history_descriptor)
+            .await
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         transaction.commit().await?;
         Ok(())
     }
@@ -1659,24 +1630,6 @@ impl DedicatedApplyConnection {
         super::runtime_grants_missing(&self.client, runtime_role, expected_catalog).await
     }
 
-    /// Reconciles product-owned control tables before a successor enters
-    /// maintenance. This upgrades registries initialized by an older binary,
-    /// including installations that predate field-encryption key and flip
-    /// state, without giving the runtime role write authority.
-    pub(crate) async fn reconcile_successor_control_plane(
-        &mut self,
-        runtime_role: &SqlIdentifier,
-    ) -> Result<()> {
-        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
-        let transaction = self.client.transaction().await?;
-        install_registry_state_schema(&transaction, runtime_role).await?;
-        install_history_schema_store(&transaction, runtime_role)
-            .await
-            .map_err(|_| PostgresKernelError::Connection)?;
-        transaction.commit().await?;
-        Ok(())
-    }
-
     /// Records or resumes a successor only when the durable source identity,
     /// exact target, ordered checksums, and activation all agree.
     pub(crate) async fn begin_successor_package(
@@ -1713,17 +1666,14 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
-    /// Runs every check and write [`Self::reconcile_successor_control_plane`]
-    /// and [`Self::begin_successor_package`] run, in one transaction it rolls
-    /// back, so a plan reports what the begin would refuse and leaves the
-    /// database as it was.
+    /// Rehearses successor begin in a transaction it rolls back, leaving the
+    /// current catalog and state unchanged when planning.
     pub(crate) async fn rehearse_successor_package(
         &mut self,
         current: &ExpectedRegistryIdentity,
         target: &ExpectedRegistryIdentity,
         ledger: &MigrationLedgerEntry,
         event_destination_compatibility_inventory: Option<&EventDestinationCompatibilityInventory>,
-        runtime_role: &SqlIdentifier,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         current.validate()?;
@@ -1741,10 +1691,6 @@ impl DedicatedApplyConnection {
         }
         let transaction = self.client.transaction().await?;
         let rehearsed = async {
-            install_registry_state_schema(&transaction, runtime_role).await?;
-            install_history_schema_store(&transaction, runtime_role)
-                .await
-                .map_err(|_| PostgresKernelError::Connection)?;
             begin_successor_in(
                 &transaction,
                 current,
@@ -1845,23 +1791,6 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
-    /// Explicit W2 compatibility wrapper for the feasibility kernel catalog.
-    #[cfg(feature = "postgres-test")]
-    pub async fn activate(
-        &mut self,
-        target: &ExpectedRegistryIdentity,
-        migration_role: &SqlIdentifier,
-        runtime_role: &SqlIdentifier,
-    ) -> Result<()> {
-        self.activate_for_catalog(
-            target,
-            &ExpectedManagedCatalog::kernel(),
-            migration_role,
-            runtime_role,
-        )
-        .await
-    }
-
     /// Atomically records the immutable applied-ledger outcome and makes the
     /// exact package digest and its activation ready only after closed
     /// catalog, RLS, ACL, ownership, and schema-fingerprint verification
@@ -1891,7 +1820,8 @@ impl DedicatedApplyConnection {
     /// Activates the target only after exact package-catalog verification in
     /// the same transaction as the Registry state transition.
     #[cfg(feature = "postgres-test")]
-    pub(crate) async fn activate_for_catalog(
+    #[doc(hidden)]
+    pub async fn activate_for_catalog(
         &mut self,
         target: &ExpectedRegistryIdentity,
         expected_catalog: &ExpectedManagedCatalog,
@@ -2034,17 +1964,6 @@ impl DedicatedApplyConnection {
             )
             .await?;
         Ok(row.map(|row| (row.get(0), row.get(1))))
-    }
-
-    /// Whether a role of this name exists. A runtime role the ledger records
-    /// can be dropped or renamed by an administrator after its activation.
-    pub(crate) async fn role_exists(&mut self, role: &SqlIdentifier) -> Result<bool> {
-        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
-        Ok(self
-            .client
-            .query_one("SELECT to_regrole($1) IS NOT NULL", &[&role.as_str()])
-            .await?
-            .try_get(0)?)
     }
 
     /// Reads the durable maintenance state while this session holds the
@@ -2458,8 +2377,7 @@ async fn retire_runtime_role_in(
 }
 
 /// Refuse a successor unless history coverage is complete or narrowed only by
-/// a recorded standalone erasure. An absent commit head is refused here; only
-/// the begin check admits it.
+/// a recorded standalone erasure. An absent commit head is refused.
 async fn verify_complete_history_coverage(
     client: &impl tokio_postgres::GenericClient,
 ) -> Result<()> {
@@ -2518,7 +2436,7 @@ async fn begin_successor_in(
     // Refuse before maintenance or ledger state can start: otherwise a
     // successor could add new flip rows while an erase lifecycle is using
     // the current durable flip manifest for crash-resumable correlation.
-    verify_history_coverage_can_begin_successor(transaction).await?;
+    verify_complete_history_coverage(transaction).await?;
     verify_retained_webhook_delivery_bindings(
         transaction,
         event_destination_compatibility_inventory,
@@ -2551,21 +2469,6 @@ async fn begin_successor_in(
     } else {
         verify_successor_resumable_state(transaction, current, target).await?;
         verify_resumable(transaction, ledger).await?;
-    }
-    Ok(())
-}
-
-/// Permit a legacy registry with no commit head to enter the successor path
-/// that establishes its first baseline. Once a head exists, coverage that is
-/// not ready means an erase lifecycle may be active and must freeze successors.
-async fn verify_history_coverage_can_begin_successor(
-    client: &impl tokio_postgres::GenericClient,
-) -> Result<()> {
-    if !history_coverage_admits_successor(client)
-        .await?
-        .unwrap_or(true)
-    {
-        return Err(PostgresKernelError::HistoryCoverageIncomplete);
     }
     Ok(())
 }
@@ -3874,13 +3777,17 @@ async fn read_activation_status_in(
     let ledger = rows
         .iter()
         .map(|row| {
+            let plan_kind: String = row.try_get(5)?;
+            if !matches!(plan_kind.as_str(), "initial" | "successor") {
+                return Err(PostgresKernelError::RegistryUnavailable);
+            }
             Ok(RecordedLedgerEntry {
                 activation_id: row.try_get(0)?,
                 apply_order: row.try_get(1)?,
                 package_digest: row.try_get(2)?,
                 predecessor_package_digest: row.try_get(3)?,
                 registry_revision: row.try_get(4)?,
-                plan_kind: row.try_get(5)?,
+                plan_kind,
                 migration_kind: row.try_get(6)?,
                 outcome: row.try_get(7)?,
                 role_mode: row.try_get(8)?,

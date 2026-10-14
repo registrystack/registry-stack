@@ -224,6 +224,7 @@ def metadata() -> dict:
                         "required": True,
                         "nullable": False,
                         "classification": "internal",
+                        "schema": {"type": "string", "format": "uuid"},
                         "fieldType": {
                             "type": "reference",
                             "target": "company",
@@ -236,6 +237,7 @@ def metadata() -> dict:
                         "required": True,
                         "nullable": False,
                         "classification": "internal",
+                        "schema": {"type": "string", "minLength": 1, "maxLength": 120},
                         "fieldType": {"type": "string", "minimumLength": 1, "maximumLength": 120},
                     },
                 ],
@@ -414,6 +416,8 @@ class MutationParityTests(unittest.TestCase):
             "CRS84",
         )
         self.assertEqual(self.contract.actions[0]["input_mode"], "fixed")
+        self.assertEqual(self.contract.actions[0]["inputs"][1]["schema"],
+                         {"type": "string", "minLength": 1, "maxLength": 120})
         batch_operation = next(
             operation
             for operation in self.contract.operations

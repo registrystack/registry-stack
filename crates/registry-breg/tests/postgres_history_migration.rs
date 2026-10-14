@@ -42,7 +42,7 @@ use registry_breg::package::{
     PackageModuleSource, PackageSourceFile, VerifiedPackage,
 };
 use registry_breg::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema,
+    index_revisions_for_test, initialize_compiled_registry_state_for_test, install_compiled_schema,
     managed_schema_fingerprint, ExpectedManagedCatalog, ExpectedRegistryIdentity,
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
     RegistryLockKey, RegistryStateTestIdentity,
@@ -84,7 +84,7 @@ journeys:
 "#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn bounded_update_establishes_existing_baseline_and_appends_migration_revision() {
+async fn bounded_update_retains_current_history_and_appends_migration_revision() {
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -92,7 +92,7 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
         .await
         .expect("administrator installs required extension");
     let base = compile_registry(Variant::Base);
-    let current = install_old_active_database(
+    let current = install_current_active_database(
         &database,
         &base,
         &[SeedRow {
@@ -172,21 +172,24 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
         )
         .await
         .expect("administrator reads migration commits");
-    assert_eq!(commits.len(), 2);
+    assert_eq!(commits.len(), 3);
     assert_eq!(commits[0].get::<_, i64>(0), 0);
     assert_eq!(commits[0].get::<_, String>(1), "baseline");
-    assert_eq!(commits[0].get::<_, String>(4), "asset");
-    assert_eq!(commits[0].get::<_, i64>(6), 1);
+    assert!(commits[0].get::<_, Option<String>>(4).is_none());
     assert_eq!(commits[1].get::<_, i64>(0), 1);
-    assert_eq!(commits[1].get::<_, String>(1), "migration");
-    assert_eq!(commits[1].get::<_, String>(2), MIGRATION_SYSTEM_ORIGIN);
+    assert_eq!(commits[1].get::<_, String>(1), "mutation");
+    assert_eq!(commits[1].get::<_, String>(4), "asset");
+    assert_eq!(commits[1].get::<_, i64>(6), 1);
+    assert_eq!(commits[2].get::<_, i64>(0), 2);
+    assert_eq!(commits[2].get::<_, String>(1), "migration");
+    assert_eq!(commits[2].get::<_, String>(2), MIGRATION_SYSTEM_ORIGIN);
     assert_eq!(
-        commits[1].get::<_, Option<String>>(3),
+        commits[2].get::<_, Option<String>>(3),
         Some(migration_reference)
     );
-    assert_eq!(commits[1].get::<_, String>(4), "asset");
-    assert_eq!(commits[1].get::<_, Uuid>(5), Uuid::from_u128(1));
-    assert_eq!(commits[1].get::<_, i64>(6), 2);
+    assert_eq!(commits[2].get::<_, String>(4), "asset");
+    assert_eq!(commits[2].get::<_, Uuid>(5), Uuid::from_u128(1));
+    assert_eq!(commits[2].get::<_, i64>(6), 2);
 
     let app = mutation_revision_router(
         database
@@ -234,7 +237,7 @@ async fn bounded_update_establishes_existing_baseline_and_appends_migration_revi
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn predecessor_baseline_mismatch_refuses_before_successor_update() {
+async fn successor_without_history_head_refuses_before_maintenance() {
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -242,7 +245,7 @@ async fn predecessor_baseline_mismatch_refuses_before_successor_update() {
         .await
         .expect("administrator installs required extension");
     let base = compile_registry(Variant::Base);
-    let current = install_old_active_database(
+    let current = install_current_active_database(
         &database,
         &base,
         &[SeedRow {
@@ -252,21 +255,35 @@ async fn predecessor_baseline_mismatch_refuses_before_successor_update() {
         }],
     )
     .await;
-    overwrite_live_status(&database, &base, Uuid::from_u128(1), "drift").await;
+    database
+        .admin
+        .batch_execute(
+            "DELETE FROM registry_internal.registry_revision_commit_members;
+         DELETE FROM registry_internal.registry_revision_commits;
+         DELETE FROM registry_internal.registry_commit_head;",
+        )
+        .await
+        .expect("fixture removes the mandatory current history head");
     let candidate = compile_registry(Variant::StatusRestricted);
     let package = reviewed_package(&current, &base, &candidate, 1);
     let descriptor =
         HistorySchemaDescriptor::from_compiled_registry(&base, &current.package_digest);
 
     let refused = apply_with_descriptor(&database, &package, &current, &descriptor).await;
-    assert_value_free(refused.err(), MigrationError::ApplyFailed);
-    assert_live_status(&database, &base, Uuid::from_u128(1), "drift", 1).await;
+    assert_value_free(refused.err(), MigrationError::HistoryCoverage);
+    assert_live_status(&database, &base, Uuid::from_u128(1), "old", 1).await;
+    let unchanged: bool = database.admin.query_one(
+        "SELECT maintenance_status = 'ready' AND maintenance_target_package_digest IS NULL
+            AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_migrations WHERE package_digest = $1)
+         FROM registry_internal.registry_state WHERE singleton", &[&package.package_digest()],
+    ).await.expect("refused begin leaves current activation unchanged").get(0);
+    assert!(unchanged);
     assert_no_history_head(&database).await;
     database.cleanup().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn predecessor_baseline_refuses_revisions_from_unretained_package_descriptor() {
+async fn successor_refuses_missing_active_history_descriptor() {
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -274,7 +291,7 @@ async fn predecessor_baseline_refuses_revisions_from_unretained_package_descript
         .await
         .expect("administrator installs required extension");
     let base = compile_registry(Variant::Base);
-    let current = install_old_active_database(
+    let current = install_current_active_database(
         &database,
         &base,
         &[SeedRow {
@@ -284,7 +301,14 @@ async fn predecessor_baseline_refuses_revisions_from_unretained_package_descript
         }],
     )
     .await;
-    overwrite_revision_package(&database, Uuid::from_u128(1), "history-migration-base-0").await;
+    database
+        .admin
+        .execute(
+            "DELETE FROM registry_internal.registry_history_schemas WHERE package_revision = $1",
+            &[&current.activation_id],
+        )
+        .await
+        .expect("fixture removes active history descriptor");
     let candidate = compile_registry(Variant::StatusRestricted);
     let package = reviewed_package(&current, &base, &candidate, 1);
     let descriptor =
@@ -293,7 +317,7 @@ async fn predecessor_baseline_refuses_revisions_from_unretained_package_descript
     let refused = apply_with_descriptor(&database, &package, &current, &descriptor).await;
     assert_value_free(refused.err(), MigrationError::ApplyFailed);
     assert_live_status(&database, &base, Uuid::from_u128(1), "old", 1).await;
-    assert_no_history_head(&database).await;
+    assert_eq!(commit_head(&database).await, (true, None));
     assert_no_migration_revision(&database).await;
     database.cleanup().await;
 }
@@ -307,7 +331,7 @@ async fn bounded_update_refuses_when_table_exceeds_declared_budget_before_data_c
         .await
         .expect("administrator installs required extension");
     let base = compile_registry(Variant::Base);
-    let current = install_old_active_database(
+    let current = install_current_active_database(
         &database,
         &base,
         &[
@@ -349,11 +373,11 @@ async fn recorded_post_baseline_erasure_does_not_freeze_the_next_package() {
 
     let outcome = erase_first_revision(&database, &activated, erased).await;
     assert!(outcome.coverage_ready);
-    assert_eq!(outcome.unavailable_after_position, Some(1));
-    assert_eq!(commit_head(&database).await, (true, Some(1)));
+    assert_eq!(outcome.unavailable_after_position, Some(2));
+    assert_eq!(commit_head(&database).await, (true, Some(2)));
     assert_eq!(
         recorded_erasure_positions(&database).await,
-        vec![1],
+        vec![2],
         "the erasure records its position as registry state, not only as audit"
     );
 
@@ -374,7 +398,7 @@ async fn recorded_post_baseline_erasure_does_not_freeze_the_next_package() {
     assert_eq!(upgraded.package_digest, successor.package_digest());
     assert_eq!(
         commit_head(&database).await,
-        (true, Some(1)),
+        (true, Some(2)),
         "activation neither restores nor widens the erased coverage"
     );
     database.cleanup().await;
@@ -391,8 +415,8 @@ async fn unrecorded_coverage_gap_still_freezes_the_next_package() {
     create_asset(&database, &candidate, &activated, "B1").await;
     let erased = create_asset(&database, &candidate, &activated, "B2").await;
     let outcome = erase_first_revision(&database, &activated, erased).await;
-    assert_eq!(outcome.unavailable_after_position, Some(2));
-    assert_eq!(recorded_erasure_positions(&database).await, vec![2]);
+    assert_eq!(outcome.unavailable_after_position, Some(3));
+    assert_eq!(recorded_erasure_positions(&database).await, vec![3]);
     database
         .admin
         .execute(
@@ -443,7 +467,7 @@ async fn activate_reviewed_successor(
         .await
         .expect("administrator installs required extension");
     let base = compile_registry(Variant::Base);
-    let current = install_old_active_database(
+    let current = install_current_active_database(
         database,
         &base,
         &[SeedRow {
@@ -587,20 +611,20 @@ struct SeedRow<'a> {
     status: &'a str,
 }
 
-async fn install_old_active_database(
+async fn install_current_active_database(
     database: &TestDatabase,
     registry: &CompiledRegistry,
     rows: &[SeedRow<'_>],
 ) -> ExpectedRegistryIdentity {
     let fingerprint = initial_fingerprint(database, registry).await;
-    let (migration, migration_task) = database.connect_migration().await;
+    let (mut migration, migration_task) = database.connect_migration().await;
     install_compiled_schema(&migration, registry, &database.runtime_role)
         .await
-        .expect("old active database installs compiled schema");
-    let identity = initialize_registry_state_for_catalog_test(
+        .expect("current active database installs compiled schema");
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(registry),
+        registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             database_id: DATABASE_ID,
@@ -608,10 +632,27 @@ async fn install_old_active_database(
         },
     )
     .await
-    .expect("old active database records active package identity");
+    .expect("current database records active identity and empty history baseline");
     assert_eq!(identity.schema_fingerprint, fingerprint);
     for row in rows {
         seed_live_row_and_revision(&database.admin, registry, &identity.activation_id, row).await;
+    }
+    if !rows.is_empty() {
+        let transaction = migration
+            .transaction()
+            .await
+            .expect("fixture history transaction opens");
+        let members = rows
+            .iter()
+            .map(|row| ("asset", row.id, 1))
+            .collect::<Vec<_>>();
+        index_revisions_for_test(&transaction, &identity.activation_id, &members)
+            .await
+            .expect("fixture journals use the current commit allocator");
+        transaction
+            .commit()
+            .await
+            .expect("fixture history indexes commit");
     }
     migration_task.abort();
     identity
@@ -998,46 +1039,6 @@ fn publish_and_load(prepared: registry_breg::package::PreparedPackage) -> Verifi
         },
     )
     .expect("published package loads")
-}
-
-async fn overwrite_revision_package(
-    database: &TestDatabase,
-    record_id: Uuid,
-    package_revision: &str,
-) {
-    database
-        .admin
-        .execute(
-            "UPDATE registry_internal.registry_revisions
-                SET package_revision = $1
-              WHERE entity_id = 'asset'
-                AND record_id = $2
-                AND record_revision = 1",
-            &[&package_revision, &record_id],
-        )
-        .await
-        .expect("fixture points latest revision at an unavailable descriptor");
-}
-
-async fn overwrite_live_status(
-    database: &TestDatabase,
-    registry: &CompiledRegistry,
-    record_id: Uuid,
-    value: &str,
-) {
-    let entity = &registry.entities()["asset"];
-    database
-        .admin
-        .execute(
-            &format!(
-                "UPDATE registry_data.{} SET {} = $1 WHERE record_id = $2",
-                quote(&entity.physical_table),
-                quote(&entity.fields["status"].physical_name)
-            ),
-            &[&value, &record_id],
-        )
-        .await
-        .expect("fixture mutates live row without updating journal");
 }
 
 async fn assert_live_status(

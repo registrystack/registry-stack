@@ -91,8 +91,20 @@ Product names are always in English, including on future translated pages.
   <dt>caller</dt>
   <dd>The technical client that invokes a Registry Stack service.</dd>
 
+  <dt id="record-type">Record type</dt>
+  <dd>A BReg definition of stored records, fields, route, dataset, and mutation policy, authored under `recordTypes`. It carries no built-in institutional domain.</dd>
+
+  <dt id="action">Action</dt>
+  <dd>A BReg typed operation with one bounded plan and a fixed execution mode. Immediate execution commits its ordered effects atomically; Proposal execution Starts durable work. Invoke and Start require separate explicit grants.</dd>
+
+  <dt id="proposal">Proposal</dt>
+  <dd>BReg durable work created by a proposal-mode Action. Submission freezes inputs, effects, target revisions, Action revision, attachments, and review policy binding. BReg applies that exact plan automatically under restricted system authority by default, or manually when explicitly configured. The Proposal has independent lifecycle, disclosure, retention, and promoted transition links.</dd>
+
+  <dt id="function">Function</dt>
+  <dd>A project-local typed implementation asset used by an Action plan. Its runtime, source, entrypoint, ABI, capabilities, and limits are governed configuration. It computes effects within the Action's declared write ceiling and cannot grant authority or invent a review decision.</dd>
+
   <dt id="change-request">change request</dt>
-  <dd>In Base Registry Engine, a record of its own that proposes a change to another entity's record, waits for review, and is applied later by a profile that holds apply authority. A change-request entity declares its review stages, application policy, and retention, and it may declare a <a href="#planner">planner</a> in place of fixed effects. See <a href="../../configure/breg-change-control/">Declare change requests and actions</a>.</dd>
+  <dd>The retired BReg durable-change model. Current BReg durable work is a <a href="#proposal">Proposal</a> created by a proposal-mode <a href="#action">Action</a>. Historical release entries retain their original terminology.</dd>
 
   <dt id="claim">claim</dt>
   <dd>In Registry Casework, the act by which a Staff member takes a visible <a href="#work-item">work item</a> into their own holdings, under a revision the caller must echo with `If-Match`. A claimed item carries a <a href="#private-draft">private draft</a> for its holder, can be delegated or released, and is moved by a Supervisor through a review-then-apply caseload movement. Evidence Gateway uses the same word for a JWT claim, a named value inside a token.</dd>
@@ -155,7 +167,7 @@ Product names are always in English, including on future translated pages.
   <dd>Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence pack metadata and policy identity. It is metadata that Registry Manifest validates and publishes; no maintained runtime in the current release consumes it.</dd>
 
   <dt id="erasure">erasure</dt>
-  <dd>The irreversible removal of retained detail from a Base Registry Engine registry under an approved retention request. `bregctl history erase` removes the retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. `bregctl request-retention erase` removes the payload detail of one change-request proposal version. Neither touches the current record, later revisions, or the <a href="#audit-journal">audit journal</a>, and neither has a dry run. A <a href="#rebaseline">rebaseline</a> restores snapshot coverage afterwards. Registry Casework uses the same word for `caseworkctl retention erase`, which removes Casework's own retained payload copies of one source request, keeps payload-free tombstones, and makes no call to the source. See <a href="../../operate/casework-retention/">Retain, erase, and settle</a>.</dd>
+  <dd>The irreversible removal of retained detail from a Base Registry Engine registry under an approved retention request. `bregctl history erase` removes the retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. `bregctl proposal-retention erase` removes eligible payload detail of one exact Proposal submission. Its separate `dry-run` counts the proposed erasure. Neither touches the current record, later revisions, or the <a href="#audit-journal">audit journal</a>. History erasure has no dry run. A <a href="#rebaseline">rebaseline</a> restores snapshot coverage afterwards. Registry Casework uses the same word for `caseworkctl retention erase`, which removes Casework's own retained payload copies of one source request, keeps payload-free tombstones, and makes no call to the source. See <a href="../../operate/casework-retention/">Retain, erase, and settle</a>.</dd>
 
   <dt>eSignet</dt>
   <dd>Open-source identity and authentication service (part of MOSIP). No Registry Stack service integrates with it directly. Evidence Gateway authenticates callers against one configured OIDC issuer and key set named in its immutable bundle, and names no specific identity product. A separately maintained eSignet provider can authenticate citizens against a Base Registry Engine registry through one governed lookup; see <a href="../../explanation/esignet-authentication-over-breg/">Authenticate citizens with eSignet</a>.</dd>
@@ -248,7 +260,7 @@ Product names are always in English, including on future translated pages.
   <dd>A named policy decision point check, such as policy identity, ODRL terms, purpose, jurisdiction, assurance, source freshness, legal basis, consent, and redaction. Registry Manifest still validates the required-gate list a governed evidence pack declares; the gates are metadata that describes an intended enforcement, and no maintained runtime evaluates them.</dd>
 
   <dt id="planner">planner</dt>
-  <dd>A bounded <a href="#rhai">Rhai</a> script a Base Registry Engine <a href="#change-request">change-request</a> entity declares in place of fixed effects, which reads one submitted request and returns the record writes to apply and, where the project allows it, whether to apply the request or queue it.</dd>
+  <dd>A bounded implementation of an Action plan. Native BReg uses a fixed plan or a named <a href="#function">Function</a>; the Action owns its write ceiling, execution mode, review requirement, and application authority.</dd>
 
   <dt>policy hash</dt>
   <dd>Lowercase `sha256:` digest that binds a governed evidence policy identity to canonical policy bytes or an externally supplied policy artifact. Registry Manifest verifies it when an inline evidence pack policy object is present.</dd>
@@ -308,7 +320,7 @@ Product names are always in English, including on future translated pages.
   <dd>The neutral strict record representation used by Base Registry Engine clients and APIs.</dd>
 
   <dt id="registry-record-envelope">Registry Record envelope</dt>
-  <dd>The single shape every Base Registry Engine read, create, patch, tombstone, revision, and snapshot response returns. `data.recordIdentifier` is the record's stable UUID, `data.revisionIdentifier` a string revision counter starting at `1`, and `data.domainData` the entity's fields under their `apiName`, narrowed to the grant's readable fields and to `$select`. Mutation responses add `data.snapshot`, change-request records add `data.request`, and a grant declaring `requestPresence` adds `data.requestPresence`. `meta` carries the registry, dataset, and entity identifiers from the compiled <a href="#package">package</a>, and a collection read returns `items` and a `pageInfo` object instead of a single `data`. A field name that would collide with an envelope member is refused at compile time. See the <a href="../breg-api/#record-envelope">Base Registry Engine API reference</a>.</dd>
+  <dd>The single shape every Base Registry Engine read, create, patch, tombstone, revision, and snapshot response returns. `data.recordIdentifier` is the record's stable UUID, `data.revisionIdentifier` a string revision counter starting at `1`, and `data.domainData` the entity's fields under their `apiName`, narrowed to the grant's readable fields and to `$select`. Mutation responses add `data.snapshot`. Native Proposals and Action receipts have separate response contracts. `meta` carries the registry, dataset, and entity identifiers from the compiled <a href="#package">package</a>, and a collection read returns `items` and a `pageInfo` object instead of a single `data`. A field name that would collide with an envelope member is refused at compile time. See the <a href="../breg-api/#record-envelope">Base Registry Engine API reference</a>.</dd>
 
   <dt id="registry-project">registry project</dt>
   <dd>The directory of YAML files an adopter writes for one Base Registry Engine registry, `registry.yaml` plus optional <a href="#module">modules</a> and <a href="#journey">journeys</a>, declaring the entities, fields, relationships, access profiles, change requests, and events that registry exposes. `bregctl init` writes a starter project; `bregctl check`, `explain`, and `generate` compile and inspect it without opening a database; `bregctl test` replays its journeys against a throwaway database; `bregctl package` builds the <a href="#package">package</a> an operator activates. `bregctl --help` also calls it an <a href="#authoring-project">authoring project</a>. See <a href="../../configure/breg/">Author a registry project</a>.</dd>
@@ -329,7 +341,7 @@ Product names are always in English, including on future translated pages.
   <dd>A named collection in the retired Registry Relay read-only publication contract. Current Base Registry Engine projects declare entities and operations instead; Evidence Gateway projects declare fixed sources and requirements.</dd>
 
   <dt id="rhai">Rhai</dt>
-  <dd>The bounded scripting language both Evidence Gateway and Base Registry Engine embed for adopter-authored logic, reviewed with the rest of the configuration. Evidence Gateway uses it for requirement-specific derivations, which read the facts, selectors, and context the host gathered and return the answer. Base Registry Engine uses it for change-request <a href="#planner">planners</a>, which see only the submitted request's fields and may write only what the project's YAML declares.</dd>
+  <dd>The bounded scripting language both Evidence Gateway and Base Registry Engine embed for adopter-authored logic, reviewed with the rest of the configuration. Evidence Gateway uses it for requirement-specific derivations, which read the facts, selectors, and context the host gathered and return the answer. Base Registry Engine uses it for named Action plan Functions, which receive admitted inputs and compute effects within the declared write ceiling.</dd>
 
   <dt id="row-boundary">row boundary</dt>
   <dd>A rule in a Base Registry Engine <a href="#access-profile">access profile</a> that binds one record field to a verified claim in the caller's token with `equals` or `in`, so a request reaches only the rows whose field matches what the token carries.</dd>

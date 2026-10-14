@@ -29,8 +29,8 @@ use registry_breg::package::{
 };
 use registry_breg::postgres::{
     initialize_registry_state_for_catalog_test, install_compiled_schema,
-    managed_schema_fingerprint, verify_runtime_role, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, RegistryStateTestIdentity, RoleMode,
+    managed_schema_fingerprint, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    RegistryStateTestIdentity, RoleMode,
 };
 use registry_breg::startup::{
     check_with_connection_config_for_test, prepare_with_connection_and_key_source_for_test,
@@ -444,10 +444,6 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (mut migration, migration_task) = database.connect_migration().await;
-    verify_runtime_role(&migration, &database.migration_role)
-        .await
-        .expect_err("migration connection is not accepted as runtime");
-
     let fixture = StartupFixture::new();
     let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
     let provisional_context = provisional.context();
@@ -707,10 +703,6 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
-    verify_runtime_role(&migration, &database.migration_role)
-        .await
-        .expect_err("migration connection is not accepted as runtime");
-
     let fixture = StartupFixture::new();
     let provisional = PackageFixture::build(&fixture.root, fingerprint(1));
     let provisional_context = provisional.context();

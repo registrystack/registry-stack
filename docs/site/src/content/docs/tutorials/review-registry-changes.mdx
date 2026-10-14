@@ -1,6 +1,6 @@
 ---
-title: Review changes before updating a registry
-description: Author and inspect a Base Registry Engine (BReg) change request whose review is owned by Registry Casework, then verify that source application remains separately authorized.
+title: Inspect a reviewed Proposal
+description: Generate the native facility project and inspect its Proposal review, application, and authority contracts offline.
 status: current
 owner: registry-docs
 source_repos:
@@ -18,119 +18,72 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Base Registry Engine (BReg) owns the proposal, its frozen effects, source authorization,
-application guards, and the
-application receipt. Registry Casework owns reviewer stages and the review result. This tutorial
-checks the BReg half of that boundary before you connect the two services.
+If you are authoring reviewed Base Registry Engine (BReg) changes, inspect a
+complete native Proposal Action before connecting an external authority. You
+will check its frozen review binding and its separate start, management, and
+application grants without starting services.
 
 <QuickstartMeta
-  outcome="A checked BReg request type with a frozen external-review binding and separately authorized application."
+  outcome="A checked Proposal Action and an inspected authority boundary."
   time="About 15 minutes"
-  level="Local authoring"
-  prerequisites={[
-    { label: 'bregctl', href: '/tutorials/first-breg/#install-base-registry-engine' },
-    { label: 'A Registry Stack checkout at the same release as your bregctl', href: 'https://github.com/registrystack/registry-stack' },
-    'A shell and an editor',
-  ]}
+  level="Offline authoring"
+  prerequisites={['Matching bregctl binary', 'A shell and an editor']}
 />
 
-## Copy the maintained example
-
-From a Registry Stack checkout, copy the asset placement example:
+## Create the complete project
 
 ```sh
 mkdir -p tutorial-work
-cp -R products/breg/acceptance/asset-site-placement-change-requests \
-  tutorial-work/asset-corrections
-bregctl check tutorial-work/asset-corrections
+bregctl init tutorial-work/facility --template facility-registry
+bregctl check tutorial-work/facility
 ```
 
-Open `tutorial-work/asset-corrections/registry.yaml`. The request entity declares the effect BReg
-will freeze and the logical review authority and policy Casework will evaluate:
-
-```yaml test-excerpt="tutorial-work/asset-corrections/registry.yaml"
-changeRequest:
-  retention:
-    mode: operator-erase
-  effects:
-    - target: {fromField: placement}
-      operation: patch
-      set:
-        site: {fromField: proposed-site}
-  review:
-    type: required
-    authority: casework
-    policyId: asset-placement-correction
-  onApproved:
-    mode: manual
-```
-
-`review` is part of the immutable proposal binding. It is not a local BReg stage declaration.
-`onApproved.mode: manual` means an ordinary caller must still hold the current `apply-request`
-grant and every required `applyTargets` grant after BReg has reconciled an exact approved result.
-
-{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
-    crates/registry-breg/src/change_request.rs;
-    crates/registry-breg/src/request_workflow.rs. */}
+Open `tutorial-work/facility/registry.yaml`. Find `correct-address` under
+`actions`. Its execution mode is `proposal`, its plan calls `correct-address-plan`,
+and its review requirement names `casework` with an immutable policy binding.
+The policy digest is synthetic for a conforming test authority. Replace it with
+your own authority's compiled binding before deployment.
 
 ## Inspect the compiled boundary
 
 ```sh
-bregctl --format json explain change-requests tutorial-work/asset-corrections \
-  > tutorial-work/change-requests.json
+bregctl --format json explain actions tutorial-work/facility
+bregctl --format json explain proposals tutorial-work/facility
 ```
 
-Inspect `tutorial-work/change-requests.json`. The request has only four source lifecycle actions:
-`submit-request`, `revise-request`, `cancel-request`, and `apply-request`. It also carries the
-frozen review requirement, approved-application mode, effects, target entities, and application
-grants. It has no BReg reviewer action or stage route. The request's entry names the review
-authority and how an approved result is applied:
+Check the Action identity, typed inputs, write ceiling, commit guards, review
+binding, retention, and application mode. Omitting an explicit application mode
+selects automatic application by the restricted built-in executor. No executor
+client or self-HTTP endpoint is configured.
 
-```json test-excerpt="tutorial-work/change-requests.json"
-{
-  "requestEntity": "placement-correction-request",
-  "review": {
-    "type": "required",
-    "authority": "casework",
-    "policyId": "asset-placement-correction"
-  },
-  "onApproved": {
-    "mode": "manual"
-  }
-}
+Find `facility.mutationPolicy.patch: proposal-required`. This rule refuses a
+direct Patch or immediate Action even if a profile grants a write. The
+`register-facility` Action remains immediate; `deactivate-facility` shows explicit
+manual application without external review.
+
+## Review the grants
+
+```sh
+bregctl --format json explain access tutorial-work/facility
 ```
 
-Submission freezes request values, target identities and revisions, the effect digest, the review
-requirement, and application preconditions. A later package cannot silently change that proposal.
+Compare `facility-correction-author`, `facility-correction-applier`,
+`proposal-reviewer`, and `casework-review-status`. Start and Proposal transitions
+are separate grants. Review context and review status are separate disclosures.
+A review authority decides policy; BReg alone applies the exact frozen plan.
+External recovery of automatic work needs a verified human with an explicit grant.
 
-## Check source roles
+These commands prove that the configuration compiles and can be inspected. They
+make no external review decision and apply no records. If a diagnostic appears,
+repair its named member and rerun `check` before adding service configuration.
+No cleanup command is needed because this exercise starts no services.
 
-The example separates these BReg roles:
+{/* Evidence: crates/registry-bregctl/src/starters.rs;
+    products/breg/examples/refactor/facility/registry.yaml;
+    crates/registry-breg/src/compiler.rs. */}
 
-- The submitter creates and edits its own draft, then submits, revises, or cancels it.
-- A request reader may receive `review-state` when its `readableRequestFields` grants that
-  disclosure. Reading review state does not grant a Casework decision or BReg application.
-- The applier holds `apply-request` and the required `applyTargets`. BReg rechecks both at use.
+## Next
 
-Casework policy defines reviewer eligibility, stages, approval counts, and independence. Configure
-that policy in Casework rather than adding reviewer operations to BReg access profiles.
-
-To use an automatic source application, change the authored binding to:
-
-```yaml
-onApproved:
-  mode: automatic
-  executor: corrections-applier
-```
-
-The BReg runtime must separately bind `corrections-applier` to an ordinary credential and source
-profile. Automatic application follows the same authenticated HTTP action and guards as manual
-application. A completion notification is never authority to write the target.
-
-## Continue with the combined journey
-
-Follow [Review Base Registry Engine changes in Casework](../review-breg-changes-in-casework/) to
-configure the authority client, submit a proposal, decide it under Casework policy, and apply it at
-the source. Use [Declare change requests and actions](../../configure/breg-change-control/) for the
-complete authoring shape and [Base Registry Engine API reference](../../reference/breg-api/#change-requests)
-for the four source actions and review projection.
+- [Declare Actions and Proposals](../../configure/breg-change-control/)
+- [Connect a review authority](../review-breg-changes-in-casework/)
+- [Base Registry Engine API reference](../../reference/breg-api/#proposals)

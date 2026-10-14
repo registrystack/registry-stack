@@ -11,12 +11,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use registry_breg::compiler::{
-    compile_project, module_digest, module_digest_with_assets, CompileProfile,
-};
-use registry_breg::contract::{
-    parse_module_json, parse_module_yaml, parse_project_yaml, ModuleAssetSource,
-};
+#[cfg(feature = "wasm")]
+use registry_breg::compiler::module_digest_with_assets;
+use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
+#[cfg(feature = "wasm")]
+use registry_breg::contract::ModuleAssetSource;
+use registry_breg::contract::{parse_module_json, parse_module_yaml, parse_project_yaml};
 use registry_breg::fixtures::{
     validate_fixture_journeys, validate_schema_test_receipt_for_package,
 };
@@ -108,7 +108,7 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
 #[test]
 fn explain_access_names_membership_constraints_instead_of_unrestricted_rows() {
     let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/retained-native/organization-membership-access")
+        .join("../../products/breg/fixtures/organization-membership-access")
         .canonicalize()
         .unwrap();
     let output = bregctl(&["explain", "access", path(&project)]);
@@ -491,12 +491,12 @@ impl RuntimePackageFixture {
 }
 
 fn asset_fixture() -> &'static [u8] {
-    include_bytes!("fixtures/retained-native/asset-site-placement/registry.yaml")
+    include_bytes!("../../../products/breg/acceptance/asset-site-placement/registry.yaml")
 }
 
 fn asset_fixture_module() -> &'static [u8] {
     include_bytes!(
-        "fixtures/retained-native/asset-site-placement/modules/asset-site-placement-core/module.yaml"
+        "../../../products/breg/acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml"
     )
 }
 
@@ -1040,7 +1040,7 @@ fn generation_is_byte_stable_and_reports_the_exact_artifact_inventory() {
 }
 
 #[test]
-fn init_creates_a_domain_neutral_project_that_checks_immediately() {
+fn init_creates_the_complete_canonical_minimal_project_that_checks_immediately() {
     let project = TestProject::asset_fixture();
     let destination = project.path().join("initialized");
 
@@ -1052,13 +1052,22 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     ]);
 
     assert!(output.status.success(), "{output:?}");
-    for relative in ["README.md", "registry.yaml"] {
+    let files = [
+        ("README.md", "text/markdown"),
+        ("dev-clients.yaml", "text/yaml"),
+        ("examples/inputs/contact.json", "application/json"),
+        ("examples/scenarios.json", "application/json"),
+        ("registry.yaml", "text/yaml"),
+        ("runtime.example.yaml", "text/yaml"),
+        ("tests/journeys.yaml", "text/yaml"),
+    ];
+    for (relative, _) in files {
         assert!(
             destination.join(relative).is_file(),
             "init writes {relative}"
         );
     }
-    assert_eq!(fs::read_dir(&destination).unwrap().count(), 2);
+    assert_eq!(tree(&destination).len(), files.len());
     let bytes = fs::read(destination.join("registry.yaml")).unwrap();
     let registry = String::from_utf8(bytes.clone()).unwrap();
     let initialized_project = parse_project_yaml(&bytes).expect("initialized project parses");
@@ -1067,12 +1076,8 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert!(initialized_project.modules.is_empty());
     compile_project(&initialized_project, &[], CompileProfile::Authoring)
         .expect("initialized project compiles");
-    let production =
-        compile_project(&initialized_project, &[], CompileProfile::Production).unwrap_err();
-    assert!(production
-        .diagnostics()
-        .iter()
-        .any(|d| d.code == "breg.package.identity-required"));
+    compile_project(&initialized_project, &[], CompileProfile::Production)
+        .expect("the canonical project has an explicit example source identity");
     let report = json_stdout(&output);
     assert_eq!(report["ok"], true);
     assert_eq!(report["command"], "init");
@@ -1087,13 +1092,7 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
                 .to_owned()
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        findings,
-        vec![
-            "breg.access.profile-writable-row-boundary",
-            "breg.package.identity-missing"
-        ]
-    );
+    assert!(findings.is_empty(), "{findings:?}");
     let artifacts = report["artifacts"]
         .as_array()
         .expect("artifacts is an array")
@@ -1107,19 +1106,14 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        artifacts,
-        vec![
-            ("README.md", "text/markdown"),
-            ("registry.yaml", "text/yaml"),
-        ]
-    );
+    assert_eq!(artifacts, files);
 
     let check = bregctl(&[
         "--format",
         "json",
         "check",
         destination.to_str().expect("path is UTF-8"),
+        "--deny-warnings",
     ]);
     assert!(check.status.success(), "{check:?}");
     let check_report = json_stdout(&check);
@@ -1127,10 +1121,7 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     let warnings = check_report["diagnostics"]
         .as_array()
         .expect("diagnostics is an array");
-    assert_eq!(warnings.len(), 2, "{check_report}");
-    assert!(warnings
-        .iter()
-        .all(|warning| warning["severity"] == "warning"));
+    assert!(warnings.is_empty(), "{check_report}");
 
     let locked = bregctl(&[
         "--format",
@@ -1563,6 +1554,13 @@ fn deny_warnings_refuses_on_the_warnings_that_refused_it() {
     let project = TestProject::asset_fixture();
     let destination = project.path().join("initialized");
     assert!(bregctl(&["init", path(&destination)]).status.success());
+    // Multi-valued patch authority deserves review even though it compiles.
+    // The default equality boundary itself has no warning.
+    let registry = destination.join("registry.yaml");
+    let mut source: Value = serde_norway::from_slice(&fs::read(&registry).unwrap()).unwrap();
+    source["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"][0]["operator"] =
+        json!("in");
+    fs::write(&registry, serde_json::to_vec_pretty(&source).unwrap()).unwrap();
 
     let passed = bregctl(&["check", path(&destination)]);
     assert_eq!(passed.status.code(), Some(0), "{passed:?}");
@@ -1582,7 +1580,6 @@ fn deny_warnings_refuses_on_the_warnings_that_refused_it() {
             .starts_with("bregctl check refused the project: --deny-warnings refuses a warning.\n"),
         "a refusal names what refused it: {rendered}"
     );
-    let registry = destination.join("registry.yaml");
     assert!(
         rendered.contains(&format!(
             "\nwarning[breg.access.profile-writable-row-boundary] {}:",
@@ -1591,7 +1588,10 @@ fn deny_warnings_refuses_on_the_warnings_that_refused_it() {
         "{rendered}"
     );
     assert!(
-        rendered.ends_with("\n0 errors, 2 warnings in 1 file\n"),
+        rendered
+            .lines()
+            .last()
+            .is_some_and(|line| line.starts_with("0 errors, 1 warning in ")),
         "{rendered}"
     );
     // The warnings are the ones the passing check reported, in its words.
@@ -1607,7 +1607,8 @@ fn deny_warnings_refuses_on_the_warnings_that_refused_it() {
 fn every_json_report_names_the_ctl_report_format() {
     let minimal = minimal_example();
     let registry = minimal.join("registry.yaml");
-    let access_review = minimal.join("../access-review");
+    let access_review = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/retained-native/access-review");
     let scratch = TestProject::asset_fixture();
     let missing = scratch.path().join("no-such-project");
     let cases: [(&str, Vec<&str>); 6] = [
@@ -1645,7 +1646,7 @@ fn every_json_report_names_the_ctl_report_format() {
 /// The committed minimal example: a project and the runtime file that runs it.
 fn minimal_example() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/examples/minimal")
+        .join("../../products/breg/examples/refactor/minimal")
         .canonicalize()
         .expect("the minimal example exists")
 }
@@ -1662,7 +1663,7 @@ fn human_output(output: &std::process::Output) -> String {
 /// The minimal example's runtime file with `edit` applied, written into a
 /// scratch directory so the check reads it from a path the test chose.
 fn edited_runtime_config(scratch: &TestProject, edit: impl Fn(&str) -> String) -> PathBuf {
-    let source = fs::read_to_string(minimal_example().join("runtime.yaml"))
+    let source = fs::read_to_string(minimal_example().join("runtime.example.yaml"))
         .expect("the minimal runtime file reads");
     let edited = edit(&source);
     assert_ne!(edited, source, "the edit changes the runtime file");
@@ -1674,7 +1675,7 @@ fn edited_runtime_config(scratch: &TestProject, edit: impl Fn(&str) -> String) -
 #[test]
 fn check_reads_a_runtime_configuration_beside_the_project() {
     let example = minimal_example();
-    let runtime = example.join("runtime.yaml");
+    let runtime = example.join("runtime.example.yaml");
 
     let human = bregctl(&["check", path(&example), "--runtime-config", path(&runtime)]);
     assert_eq!(human.status.code(), Some(0), "{human:?}");
@@ -1683,9 +1684,9 @@ fn check_reads_a_runtime_configuration_beside_the_project() {
         rendered.starts_with("Authoring check passed; registry revision sha256:"),
         "{rendered}"
     );
-    // The project's two files and the runtime file.
+    // The project, local clients, journeys and separately checked runtime.
     assert!(
-        rendered.ends_with("\n0 errors, 0 warnings in 3 files\n"),
+        rendered.ends_with("\n0 errors, 0 warnings in 4 files\n"),
         "{rendered}"
     );
 
@@ -1749,7 +1750,7 @@ fn check_refuses_a_runtime_configuration_in_the_reader_words() {
         "{rendered}"
     );
     assert!(
-        rendered.ends_with("\n1 error, 0 warnings in 3 files\n"),
+        rendered.ends_with("\n1 error, 0 warnings in 4 files\n"),
         "{rendered}"
     );
 }
@@ -1760,18 +1761,11 @@ fn minimal_project_limited_to_portal(scratch: &TestProject) {
     let registry = fs::read_to_string(example.join("registry.yaml"))
         .expect("the minimal registry reads")
         .replace(
-            "    requiredPurposes: [record-administration]\n",
-            "    requiredPurposes: [record-administration]\n    actorKind: service\n    requesterClients: [portal]\n",
+            "    requiredPurposes: [directory-administration]\n",
+            "    requiredPurposes: [directory-administration]\n    actorKind: service\n    requesterClients: [portal]\n",
         );
     assert!(registry.contains("requesterClients: [portal]"));
     fs::write(scratch.path().join("registry.yaml"), registry).expect("the registry writes");
-    let module = scratch.path().join("modules/minimal-core");
-    fs::create_dir_all(&module).expect("module directory is created");
-    fs::copy(
-        example.join("modules/minimal-core/module.yaml"),
-        module.join("module.yaml"),
-    )
-    .expect("module source is copied");
 }
 
 #[test]
@@ -1780,7 +1774,7 @@ fn check_refuses_a_runtime_that_lists_none_of_the_clients_a_profile_names() {
     minimal_project_limited_to_portal(&scratch);
     let runtime = edited_runtime_config(&scratch, |source| {
         source.replace(
-            "allowedClients: [minimal-client]",
+            "allowedClients: [directory-client]",
             "allowedClients: unrestricted",
         )
     });
@@ -1917,7 +1911,7 @@ fn check_warns_of_a_wildcard_spelled_allowed_client_and_denies_it_on_request() {
     let scratch = TestProject::from_registry_source(b"");
     let runtime = edited_runtime_config(&scratch, |source| {
         source.replace(
-            "allowedClients: [minimal-client]",
+            "allowedClients: [directory-client]",
             "allowedClients: [\"*\"]",
         )
     });
@@ -1959,7 +1953,7 @@ fn check_accepts_a_runtime_that_lists_the_clients_a_profile_names() {
     minimal_project_limited_to_portal(&scratch);
     let runtime = edited_runtime_config(&scratch, |source| {
         source.replace(
-            "allowedClients: [minimal-client]",
+            "allowedClients: [directory-client]",
             "allowedClients: [portal]",
         )
     });
@@ -2423,7 +2417,6 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
 
     let registry =
         fs::read_to_string(destination.join("registry.yaml")).expect("derived project reads");
-    assert!(registry.contains("`breg.access.profile-writable-row-boundary` follows"));
     assert!(registry.contains("id: household-registry"));
     assert!(registry.contains("conceptUri: https://publicschema.org/Person"));
     assert!(registry.contains("route: group-memberships"));
@@ -2719,7 +2712,6 @@ fn init_emits_native_kind_for_editor_schema_inference() {
     let source = fs::read(destination.join("registry.yaml")).unwrap();
     let parsed = parse_project_yaml(&source).expect("native kind selects its authoring schema");
     assert_eq!(parsed.kind, "BRegProject");
-    assert_eq!(fs::read_dir(destination).unwrap().count(), 2);
 }
 
 #[test]
@@ -2761,7 +2753,9 @@ fn init_prints_the_next_command_and_what_the_example_leaves_open() {
     let stdout = String::from_utf8(output.stdout).expect("init stdout is UTF-8");
     assert_eq!(
         numbered_step(&stdout, 1),
-        format!("run 'bregctl check {destination_argument}'")
+        format!(
+            "wrote the `minimal-directory` template; run 'bregctl check {destination_argument}'"
+        )
     );
     assert_eq!(
         numbered_step(&stdout, 2),
@@ -2771,7 +2765,11 @@ fn init_prints_the_next_command_and_what_the_example_leaves_open() {
     );
     assert_eq!(
         numbered_step(&stdout, 3),
-        "replace the example registry identity before preparing a production package"
+        format!("start the local registry with 'bregctl dev start {destination_argument}'")
+    );
+    assert_eq!(
+        numbered_step(&stdout, 4),
+        "replace the example registry identity and source revision before preparing a production package"
     );
     let json_destination = project.path().join("initialized-json");
     let reported = bregctl(&["--format", "json", "init", path(&json_destination)]);
@@ -2783,7 +2781,7 @@ fn init_prints_the_next_command_and_what_the_example_leaves_open() {
         .iter()
         .map(|step| step.as_str().expect("step is a string").to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(steps.len(), 3, "{report}");
+    assert_eq!(steps.len(), 4, "{report}");
 
     let checked = bregctl(&["--format", "json", "check", &destination_argument]);
     assert!(checked.status.success(), "{checked:?}");
@@ -6682,9 +6680,13 @@ fn unknown_source_is_refused_without_echoing_source_values() {
     const SOURCE_VALUE_CANARY: &str = "bregctl-source-value-canary";
 
     let project = TestProject::asset_fixture();
-    let mut source = String::from_utf8(asset_fixture().to_vec()).expect("fixture is UTF-8");
-    source.push_str(&format!("\nunexpectedSetting: {SOURCE_VALUE_CANARY}\n"));
-    fs::write(project.path().join("registry.yaml"), source).expect("unknown source is written");
+    let mut source: Value = serde_norway::from_slice(asset_fixture()).unwrap();
+    source["unexpectedSetting"] = json!(SOURCE_VALUE_CANARY);
+    fs::write(
+        project.path().join("registry.yaml"),
+        serde_json::to_vec_pretty(&source).unwrap(),
+    )
+    .expect("unknown source is written");
 
     let output = bregctl(&[
         "--format",

@@ -698,7 +698,7 @@ class CiChangesTest(unittest.TestCase):
                 crates.add(node)
 
         collect(registry)
-        self.assertIn("products/breg/examples/minimal/registry.yaml", paths)
+        self.assertIn("products/breg/acceptance/asset-site-placement/registry.yaml", paths)
         self.assertIn("registry-bregctl", crates)
         self.assertEqual(config_format_inputs(root), (frozenset(paths), frozenset(crates)))
         self.assertLessEqual(crates, set(self.workspace.package_names))
@@ -1172,10 +1172,10 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(outputs["breg_contracts"])
                 self.assertIn("registry-breg", outputs["rust_packages"])
 
-    def test_starter_inputs_run_compiler_and_native_example_tests(self) -> None:
+    def test_native_example_inputs_run_compiler_and_native_example_tests(self) -> None:
         for path in (
-            "products/breg/starters/public-organizations/core/registry.yaml",
-            "products/breg/starters/agricultural-holdings/core/tests/journeys.yaml",
+            "products/breg/examples/refactor/minimal/registry.yaml",
+            "products/breg/examples/refactor/facility/registry.yaml",
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
@@ -1525,8 +1525,6 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/src/content/docs/tutorials/first-breg.mdx",
             "docs/site/src/content/docs/tutorials/extend-a-registry-with-a-module.mdx",
             "docs/site/package.json",
-            "products/breg/scripts/test-request-attachments.py",
-            "products/breg/acceptance/request-attachments/registry.yaml",
         )
         for path in infrastructure:
             with self.subTest(path=path):

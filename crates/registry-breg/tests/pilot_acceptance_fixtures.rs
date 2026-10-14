@@ -19,7 +19,7 @@ use registry_breg::model::{CompiledEntity, CompiledRegistry};
 
 fn fixture_root(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/native-models/products/breg/acceptance")
+        .join("../../products/breg/acceptance")
         .join(name)
 }
 
@@ -407,4 +407,41 @@ fn business_pilot_fixture_compiles_composite_identifiers_temporal_appointments_a
             && statement.sql.contains(" WHERE ")
             && statement.sql.contains("record_lifecycle = 'active'")
     }));
+}
+
+#[test]
+fn registry_record_conformance_keeps_public_and_protected_contracts_separate() {
+    let compiled = compile_fixture("registry-record-conformance");
+    assert_eq!(compiled.entities().len(), 2);
+    let public = entity(&compiled, "public-unit");
+    let protected = entity(&compiled, "protected-unit");
+    assert_eq!(public.classification, Classification::Public);
+    assert_eq!(protected.classification, Classification::Internal);
+    assert!(public.access_profiles.contains_key("public-reader"));
+    assert!(!public.access_profiles.contains_key("protected-reader"));
+    assert!(protected.access_profiles.contains_key("protected-reader"));
+    assert!(!protected.access_profiles.contains_key("public-reader"));
+    for record in [public, protected] {
+        assert_eq!(
+            record.access_profiles["fixture-writer"].operations,
+            BTreeSet::from([Operation::Create]).into()
+        );
+    }
+}
+
+#[test]
+fn issuer_portability_fixture_keeps_its_claim_bound_read_only_surface() {
+    let compiled = compile_fixture("issuer-portability");
+    let record = entity(&compiled, "record");
+    assert_eq!(record.access_profiles.len(), 1);
+    let clerk = &record.access_profiles["clerk"];
+    assert_eq!(
+        clerk.operations,
+        BTreeSet::from([Operation::Get, Operation::List]).into()
+    );
+    assert_eq!(clerk.row_boundaries.len(), 1);
+    assert_eq!(
+        clerk.readable_fields,
+        BTreeSet::from(["label".to_owned()]).into()
+    );
 }

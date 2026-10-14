@@ -218,6 +218,21 @@ async fn manual_no_review_attachments_cas_concealment_and_exact_receipt() {
             .available,
         "a manual no-review submission has no queued work to retry"
     );
+    let provenance = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT submission.snapshot ->> 'originatingPackage', state.active_activation_id::text
+         FROM registry_internal.registry_proposal_submissions AS submission
+         CROSS JOIN registry_internal.registry_state AS state
+         WHERE submission.proposal_id = $1 AND state.singleton",
+            &[&uuid::Uuid::parse_str(submitted.id()).unwrap()],
+        )
+        .await
+        .expect("native frozen submission retains its current activation provenance");
+    let origin: String = provenance.get(0);
+    assert_eq!(origin, provenance.get::<_, String>(1));
+    assert!(!uuid::Uuid::parse_str(&origin).unwrap().is_nil());
     let apply = client
         .prepare_proposal(
             &submitted,
@@ -1793,7 +1808,7 @@ async fn missing_review_binding_preserves_unrelated_builtin_work_and_fails_revie
     }
     let registry = compile(source);
     let runtime = registry_breg::runtime_config::parse_runtime_config(include_str!(
-        "../../../products/breg/examples/minimal/runtime.yaml"
+        "../../../products/breg/examples/refactor/minimal/runtime.example.yaml"
     ))
     .unwrap();
     assert!(

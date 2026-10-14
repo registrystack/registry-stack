@@ -9,16 +9,16 @@ case "$action" in
   create)
     shift
     if [[ $# -gt 2 ]]; then
-      printf '%s\n' 'usage: products/breg/quickstart/query.sh create [CODE [LABEL]]' >&2
+      printf '%s\n' 'usage: products/breg/quickstart/query.sh create [NAME [EMAIL]]' >&2
       exit 2
     fi
-    code="${1:-QS-$(date +%s)}"
-    label="${2:-Quickstart record $code}"
+    name="${1:-Quickstart contact}"
+    email="${2:-contact@example.test}"
     python3 "$quickstart_dir/support/quickstart.py" request \
       --root "$run_dir" \
       --action create \
-      --code "$code" \
-      --label "$label"
+      --name "$name" \
+      --email "$email"
     ;;
   get)
     shift
@@ -50,15 +50,15 @@ case "$action" in
     created_id=$(python3 "$quickstart_dir/support/quickstart.py" request \
       --root "$run_dir" \
       --action create \
-      --code "QS-$(date +%s)" \
-      --label "Quickstart record")
+      --name "Quickstart contact" \
+      --email "contact@example.test")
     python3 "$quickstart_dir/support/quickstart.py" request \
       --root "$run_dir" \
       --action get \
       --record-id "$created_id"
     ;;
   *)
-    printf '%s\n' 'usage: products/breg/quickstart/query.sh [list|all|create [CODE [LABEL]]|get RECORD_ID]' >&2
+    printf '%s\n' 'usage: products/breg/quickstart/query.sh [list|all|create [NAME [EMAIL]]|get RECORD_ID]' >&2
     exit 2
     ;;
 esac

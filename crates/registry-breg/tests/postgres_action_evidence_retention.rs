@@ -143,22 +143,22 @@ async fn count(database: &TestDatabase) -> i64 {
         .get(0)
 }
 
-async fn request_sentinel(database: &TestDatabase) {
-    database.admin.batch_execute("INSERT INTO registry_internal.registry_request_state
-        (request_entity_id,request_id,owner_reference,state,proposal_version,workflow_revision)
-        VALUES ('synthetic-request','00000000-0000-4000-8000-000000000002','synthetic-owner','applied',1,2);
-        INSERT INTO registry_internal.registry_request_proposals
-        (request_entity_id,request_id,proposal_version,request_record_revision,contract_fingerprint,effect_digest,snapshot)
-        VALUES ('synthetic-request','00000000-0000-4000-8000-000000000002',1,1,
+async fn proposal_sentinel(database: &TestDatabase) {
+    database.admin.batch_execute("INSERT INTO registry_internal.registry_proposal_state
+        (action_id,proposal_id,owner_reference,state,submission_version,workflow_revision)
+        VALUES ('synthetic-action','00000000-0000-4000-8000-000000000002','synthetic-owner','applied',1,2);
+        INSERT INTO registry_internal.registry_proposal_submissions
+        (action_id,proposal_id,submission_version,input_revision,contract_fingerprint,effect_digest,snapshot)
+        VALUES ('synthetic-action','00000000-0000-4000-8000-000000000002',1,1,
         'sha256:1111111111111111111111111111111111111111111111111111111111111111',
         'sha256:2222222222222222222222222222222222222222222222222222222222222222','{}');
-        INSERT INTO registry_internal.registry_request_applications
-        (request_entity_id,request_id,proposal_version,application_id,effect_digest,applied_by,applied_at)
-        VALUES ('synthetic-request','00000000-0000-4000-8000-000000000002',1,
+        INSERT INTO registry_internal.registry_proposal_applications
+        (action_id,proposal_id,submission_version,application_id,effect_digest,applied_by,applied_at)
+        VALUES ('synthetic-action','00000000-0000-4000-8000-000000000002',1,
         '00000000-0000-4000-8000-000000000003',
         'sha256:2222222222222222222222222222222222222222222222222222222222222222',
         'synthetic-applier',CURRENT_TIMESTAMP-INTERVAL '2 days');
-        INSERT INTO registry_internal.registry_request_evidence_uses
+        INSERT INTO registry_internal.registry_proposal_evidence_uses
         (application_id,ordinal,retained,created_at,expires_at) VALUES
         ('00000000-0000-4000-8000-000000000003',0,'{\"synthetic\":\"expired\"}',
         CURRENT_TIMESTAMP-INTERVAL '2 days',CURRENT_TIMESTAMP-INTERVAL '1 day'),
@@ -167,7 +167,7 @@ async fn request_sentinel(database: &TestDatabase) {
 }
 
 #[tokio::test]
-async fn expired_request_evidence_erases_only_retained_uses() {
+async fn expired_proposal_evidence_erases_only_retained_uses() {
     let database = TestDatabase::create(1).await;
     let registry = registry();
     let expected = install(
@@ -175,10 +175,10 @@ async fn expired_request_evidence_erases_only_retained_uses() {
         None,
         &registry,
         &database.runtime_role,
-        "request-retention",
+        "proposal-retention",
     )
     .await;
-    request_sentinel(&database).await;
+    proposal_sentinel(&database).await;
     let operator = service(
         &database,
         &registry,
@@ -195,7 +195,7 @@ async fn expired_request_evidence_erases_only_retained_uses() {
              BEGIN RAISE EXCEPTION 'test refuses this erasure commit'; END $$;
              GRANT EXECUTE ON FUNCTION public.test_refuse_evidence_commit() TO PUBLIC;
              CREATE CONSTRAINT TRIGGER test_refuse_evidence_commit
-               AFTER DELETE ON registry_internal.registry_request_evidence_uses
+               AFTER DELETE ON registry_internal.registry_proposal_evidence_uses
                DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
                EXECUTE FUNCTION public.test_refuse_evidence_commit();",
         )
@@ -209,7 +209,7 @@ async fn expired_request_evidence_erases_only_retained_uses() {
         .admin
         .batch_execute(
             "DROP TRIGGER test_refuse_evidence_commit
-               ON registry_internal.registry_request_evidence_uses;
+               ON registry_internal.registry_proposal_evidence_uses;
              DROP FUNCTION public.test_refuse_evidence_commit();",
         )
         .await
@@ -219,14 +219,24 @@ async fn expired_request_evidence_erases_only_retained_uses() {
         .admin
         .query_one(
             "SELECT
-           (SELECT count(*) FROM registry_internal.registry_request_evidence_uses),
-           (SELECT count(*) FROM registry_internal.registry_request_applications)",
+           (SELECT count(*) FROM registry_internal.registry_proposal_evidence_uses),
+           (SELECT count(*) FROM registry_internal.registry_proposal_applications),
+           (SELECT retained FROM registry_internal.registry_proposal_evidence_uses),
+           (SELECT effect_digest FROM registry_internal.registry_proposal_submissions),
+           (SELECT effect_digest FROM registry_internal.registry_proposal_applications)",
             &[],
         )
         .await
         .unwrap();
     assert_eq!(remaining.get::<_, i64>(0), 1);
     assert_eq!(remaining.get::<_, i64>(1), 1);
+    assert_eq!(
+        remaining.get::<_, serde_json::Value>(2),
+        serde_json::json!({"synthetic":"live"})
+    );
+    let expected_digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    assert_eq!(remaining.get::<_, String>(3), expected_digest);
+    assert_eq!(remaining.get::<_, String>(4), expected_digest);
     assert_eq!(operator.erase_expired(cutoff()).await.unwrap(), 0);
     assert_retention_audited(
         &database,

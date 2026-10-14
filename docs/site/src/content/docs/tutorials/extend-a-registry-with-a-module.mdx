@@ -1,6 +1,6 @@
 ---
 title: Extend a registry with a module
-description: Open the registry project you generated, change a field its module contributes, re-pin the module by content digest, and generate the JSON Schema and OpenAPI that carry the change.
+description: Extend the native contact Record type through a module, grant its field, pin the source, and generate its schema.
 status: current
 owner: registry-docs
 source_repos:
@@ -20,301 +20,100 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you finished [Create and query your first registry](../first-breg/), you are a data publisher with the
-installed binaries and a `tutorial-work` directory holding the project you generated.
-In this tutorial you change a field that a module in that project contributes, re-pin the module so the
-project accepts the change, and generate the JSON Schema and OpenAPI that applications read.
-Every command reads and writes files in `tutorial-work`, so the registry from the first tutorial may be stopped.
-The one place a running registry matters is a comparison at the end of the `explain` step,
-and that comparison holds whether the registry runs or not.
+If you completed the first BReg tutorial, add an optional contact note through a
+module, grant it explicitly, and pin the module's exact bytes before generating
+the updated schema. This exercise changes files without starting a registry.
 
 <QuickstartMeta
-  outcome="An edited module re-pinned by content digest, a passing project check, and generated JSON Schema and OpenAPI that carry the changed field."
-  time="About 20 minutes"
-  level="Local authoring with synthetic data"
-  prerequisites={[
-    { label: 'The binaries and tutorial-work directory from Create and query your first registry', href: '/tutorials/first-breg/' },
-    'An editor',
-    { label: 'Python 3', href: 'https://www.python.org/downloads/' },
-  ]}
+  outcome="A native module extending the contact Record type, with explicit field grants and a content lock."
+  time="About 15 minutes"
+  level="Offline authoring"
+  prerequisites={['The tutorial-work/project directory from the first BReg tutorial', 'Matching bregctl binary', 'An editor']}
 />
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_files(), project_lock(), and ExplainSubject;
-    crates/registry-breg/src/compiler.rs. */}
-
-## Before you start
-
-Open a terminal in the directory that holds `tutorial-work`, and confirm the binaries are still on
-your `PATH`:
+## Add a module
 
 ```sh
-bregctl --version
+mkdir -p tutorial-work/project/modules/contact-notes
 ```
 
-The version printed is the one the first tutorial installed.
-Nothing in this tutorial touches the registry's keys or data under `tutorial-work/project/.breg/`,
-and nothing here needs Docker.
+Create `tutorial-work/project/modules/contact-notes/module.yaml` with this content:
 
-## Open the project
-
-Check the project you generated:
-
-```sh
-bregctl check tutorial-work/project
-```
-
-```text test-expect
-Authoring check passed; registry revision sha256:<digest>.
-warning[breg.access.profile-unrestricted-collection] tutorial-work/project/registry.yaml:143:26 /accessProfiles/0/permissions/entities/1/rowBoundaries
-  this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] tutorial-work/project/registry.yaml:191:26 /accessProfiles/2/permissions/entities/0/rowBoundaries
-  this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-0 errors, 2 warnings in 4 files
-```
-
-This is the project the first tutorial started as a registry, so the entity, fields, and profiles are
-the ones you used over HTTP, in the files [init wrote](../first-breg/#what-init-wrote).
-The registry revision is the digest of the compiled project; it changes with every edit you make.
-
-Each diagnostic names its severity and code, the file, line, and column it is about, and the path inside
-that file, then says what it found and what to do next.
-A warning is advice attached to a check that passed: an error stops a command, a warning does not.
-`init` printed the same two, labelled `finding`.
-The first says the `operator` profile can list every row, which is intended for a registry-wide operations team,
-and the second says the `evidence-source` profile can look up any record by its code.
-Every command in this tutorial that succeeds repeats both, so treat them as expected and read past them to the result.
-A check that is refused prints its errors instead, and you will meet one when you change the module.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_files() and check(); crates/registry-breg/src/access.rs. */}
-
-## Read the module
-
-A module is a separate file that contributes to the model, so a reusable part of a registry can be reviewed
-and versioned apart from the project that adopts it.
-Open `tutorial-work/project/modules/record-notes/module.yaml` and find its version and the one field it
-declares on the entity the project owns:
-
-```yaml test-excerpt="tutorial-work/project/modules/record-notes/module.yaml"
+```yaml title="tutorial-work/project/modules/contact-notes/module.yaml" test-file
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: contact-notes
 version: 0.1.0
+extendRecordTypes:
+  - recordType: contact
+    fields:
+      - id: internal-note
+        type: text
+        required: false
+        maximumLength: 2000
+        classification: internal
 ```
 
-```yaml test-excerpt="tutorial-work/project/modules/record-notes/module.yaml"
-      - {id: internal-note, type: string, maximumLength: 500, classification: internal}
-```
-
-A field without `required: true` is optional, so existing records stay valid and a create may omit it.
-Its classification matches the entity's default, `internal`.
-
-Now open `tutorial-work/project/registry.yaml` and find the `modules` entry at the end of the file:
-
-```yaml test-excerpt="tutorial-work/project/registry.yaml"
-modules:
-  - id: "record-notes"
-    version: "0.1.0"
-    digest: "sha256:<digest>"
-```
-
-The digest is a content digest of the module file.
-The project pins the exact module content it was reviewed with, and the compiler refuses a module whose
-content or version no longer matches.
-
-{/* Evidence: crates/registry-breg/src/contract.rs, RegistryModule and EntityExtensionSource;
-    crates/registry-bregctl/src/lib.rs, init_files(). */}
-
-## Grant access to the field
-
-Adding a field to the model grants nobody access to it, and no profile lists `internal-note` yet.
-In `tutorial-work/project/registry.yaml`, find the `operator` grant for `record` and add the field to its
-readable and writable lists, keeping the indentation:
+Register the module in `tutorial-work/project/registry.yaml`, before `datasets`:
 
 ```diff lang="yaml" title="tutorial-work/project/registry.yaml" test-edit
--readableFields: [code, label, group, status]
--writableFields: [code, label, group, status]
-+readableFields: [code, label, group, status, internal-note]
-+writableFields: [code, label, group, status, internal-note]
- filterableFields: [code, status]
+-datasets:
++modules:
++  - id: contact-notes
++    version: 0.1.0
++
++datasets:
 ```
 
-Check the project:
+## Grant the field explicitly
 
-```sh
-bregctl check tutorial-work/project
+Adding a field grants no disclosure or write authority. Add it to the editor's
+record permission:
+
+```diff lang="yaml" title="tutorial-work/project/registry.yaml" test-edit
+-          readableFields: [name, email, jurisdiction]
+-          writableFields: [name, email, jurisdiction]
++          readableFields: [name, email, jurisdiction, internal-note]
++          writableFields: [name, email, jurisdiction, internal-note]
 ```
 
-The command prints `Authoring check passed;` with a new registry revision, and the same two warnings.
-`filterableFields` is unchanged on purpose: a note is something an operator reads and writes,
-not something a list is filtered by.
+The jurisdiction boundary is unchanged. The note receives no filter, sort, or
+other profile grant.
 
-## Change the module
-
-Now change the module itself.
-In `module.yaml`, raise `version` to `0.2.0`:
-
-```diff lang="yaml" title="tutorial-work/project/modules/record-notes/module.yaml" test-edit
--version: 0.1.0
-+version: 0.2.0
-```
-
-and raise the field's `maximumLength` to `1000`:
-
-```diff lang="yaml" title="tutorial-work/project/modules/record-notes/module.yaml" test-edit
- fields:
--  - {id: internal-note, type: string, maximumLength: 500, classification: internal}
-+  - {id: internal-note, type: string, maximumLength: 1000, classification: internal}
-```
-
-Then run the check again:
-
-```sh test-exit="1"
-bregctl check tutorial-work/project
-```
-
-```text test-expect
-bregctl check refused the project.
-error[breg.module.lock-digest-mismatch] tutorial-work/project/registry.yaml:204:13 /modules/0/digest
-  an authored module does not match its locked digest
-  next: Run bregctl project lock against this project, then review the module lock change it records.
-error[breg.module.lock-version-mismatch] tutorial-work/project/registry.yaml:203:14 /modules/0/version
-  an authored module does not match its locked version
-  next: Run bregctl project lock against this project, then review the module lock change it records.
-2 errors, 0 warnings in 4 files
-```
-
-A stale digest is an error, not a warning.
-The project still pins version `0.1.0` and the old content, and the compiler refuses to build a model from a
-module that differs from what was reviewed.
-
-## Re-pin the module
-
-Rewrite the lock entry from the module's current content, then check again:
+## Pin and check the source
 
 ```sh
 bregctl project lock tutorial-work/project
-bregctl check tutorial-work/project
+bregctl check tutorial-work/project --production
 ```
 
-`project lock` prints `Locked the project modules. 1 artifact written.`, the rewritten `registry.yaml`, the findings, and a report of what it rewrote:
+Inspect `registry.yaml` for the module digest. The lock binds its version and exact
+source bytes. A later module edit requires another deliberate lock and check;
+changing generated output cannot repair a source mismatch. Read a diagnostic's
+named file and member if the check refuses.
 
-```json test-excerpt
-{
-  "changed": true,
-  "modules": [
-    {
-      "digest": "sha256:<digest>",
-      "id": "record-notes",
-      "status": "updated",
-      "version": "0.2.0"
-    }
-  ]
-}
-```
-
-`check` then prints `Authoring check passed;` with the two warnings and nothing else.
-Open the `modules` entry in `registry.yaml` again: both the version and the digest changed.
-Rerun `project lock` after every module edit, and review a changed digest together with the module source it now pins.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, project_lock(); crates/registry-breg/src/compiler.rs. */}
-
-## Inspect the query permissions
-
-`explain` reports what the compiled project permits, without a database:
+## Generate the field contract
 
 ```sh
-bregctl explain queries tutorial-work/project
+bregctl generate schemas tutorial-work/project --output tutorial-work/contact-schemas
 ```
 
-After `Explained the compiled inventory.`, the report lists one operation per profile and entity.
-In `records.record.operator.list`, the operator's list operation over `record`, find `internalNote` among the `apiFields`:
+Open `tutorial-work/contact-schemas/generated/schemas/contact.schema.json`.
+The optional note uses its generated API name `internalNote` and maximum length.
+The existing required contact fields remain required. Generation needs a fresh
+output path; choose another path for the next candidate.
 
-```json test-excerpt
-{
-  "apiName": "internalNote",
-  "field": "internal-note",
-  "fieldType": {
-    "maximumLength": 1000,
-    "minimumLength": 0,
-    "type": "string"
-  },
-  "sourceKind": "stored"
-}
-```
+No database changed. Activating a successor over retained records requires the
+normal test, package, and operator lifecycle. The first tutorial's disposable
+session remains stopped; do not remove a serving database to apply this edit.
 
-The same operation's `filterable` entries name only `code` and `status`, each with examples such as `$filter=code eq 'example'`.
-That is the refusal you met in the first tutorial, explained from the project instead of by a `400`.
-This report describes your edited project; if the registry from the first tutorial is still running,
-it serves the package it started with and knows nothing of `internalNote`.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, ExplainSubject; crates/registry-breg/src/query.rs. */}
-
-## Generate the API schema
-
-Generate JSON Schema and OpenAPI from the edited project:
-
-```sh
-bregctl generate schemas tutorial-work/project --output tutorial-work/schemas
-bregctl generate openapi tutorial-work/project --output tutorial-work/api
-```
-
-Each command names what it wrote: two schema files, then one OpenAPI document.
-Read the record schema:
-
-```sh
-python3 -m json.tool tutorial-work/schemas/generated/schemas/record.schema.json
-```
-
-Find `internalNote` under `properties`.
-An optional field accepts `null`, so the generator wraps its type in `anyOf`:
-
-```json test-excerpt
-{
-  "internalNote": {
-    "anyOf": [
-      {
-        "maxLength": 1000,
-        "minLength": 0,
-        "type": "string"
-      },
-      {
-        "type": "null"
-      }
-    ]
-  }
-}
-```
-
-The authored `internal-note` becomes `internalNote` in JSON, and the length you raised in the module reached the schema.
-The `required` list still contains only `code` and `label`.
-Open `tutorial-work/api/generated/openapi.json` to see the same field in the create and PATCH request
-shapes under `/v1/records/records`.
-Generated files are outputs: edit YAML and regenerate into a fresh directory to change them,
-because `generate` refuses an output directory that already exists.
-
-{/* Evidence: crates/registry-breg/src/artifacts.rs; crates/registry-breg/src/logical_names.rs;
-    crates/registry-bregctl/src/lib.rs, generate(). */}
-
-## What you built
-
-You have a project of your own whose module contributes a longer `internal-note`, pinned by content digest,
-granted to the operator, and reflected in the JSON Schema and OpenAPI an application would read.
-You compiled an extension, not installed one: no database changed, and the registry from the first
-tutorial, if it is still running, serves the package it started with.
-Testing a project against a database and packaging it come next.
-
-## Troubleshooting
-
-| Symptom | Next move |
-| --- | --- |
-| `generate` reports `output.destination.invalid` | The output directory must not exist yet. Choose a new path, or remove the one left by an earlier run. |
-| `check` reports `breg.module.lock-digest-mismatch` or `breg.module.lock-version-mismatch` | You edited a module after its last lock. Run `bregctl project lock tutorial-work/project`, then check again. |
-| `check` cannot parse `registry.yaml` after your edit | Compare the indentation of the lines you changed with their neighbours; the grant lists sit eight spaces in. |
-| `bregctl` is not found | Put the installers' directory, `~/.local/bin` unless you changed it, back on `PATH` in this terminal. |
-| The running registry does not show `internalNote` | Expected: it serves the package `bregctl dev` built when it first started. Activating a changed package is covered in [Deploy a registry](../../operate/breg/). |
-| `bregctl dev` refuses to start the edited project | Expected while the registry holds records: `dev` keeps the package it started with. Run `bregctl dev stop tutorial-work/project --remove` to discard the records, then `bregctl dev tutorial-work/project` builds the edited project into a fresh registry. To keep the records, copy `tutorial-work/project` without its `.breg/` directory to a new path and start that copy instead. |
+{/* Evidence: crates/registry-breg/src/contract.rs, RegistryModule and EntityExtensionSource;
+    crates/registry-bregctl/src/lib.rs, ProjectLockArgs;
+    products/breg/examples/refactor/minimal/registry.yaml;
+    crates/registry-breg/src/artifacts.rs. */}
 
 ## Next
 
-- [Review changes before updating a registry](../review-registry-changes/) to test a configurable approval workflow on a copied project.
-- [Author a registry project](../../configure/breg/) for the full model: entities, relationships, time, and events.
-- [Build a production candidate](../build-a-breg-production-candidate/) to test, package, and verify a project like this one.
+- [Author a registry project](../../configure/breg/)
+- [Test with journeys](../../configure/breg-journeys/)
+- [Build a production candidate](../build-a-breg-production-candidate/)

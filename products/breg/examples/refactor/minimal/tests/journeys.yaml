@@ -32,3 +32,16 @@ journeys:
           outcome: success
           status: 200
           fields: {name: Example contact, email: contact@example.test, jurisdiction: zone-a}
+      - id: conceal-contact-outside-jurisdiction
+        recordType: contact
+        accessProfile: directory-editor
+        claims:
+          principal: synthetic-foreign-editor
+          scopes: [registry:directory:write]
+          purpose: directory-administration
+          directClaims: {jurisdiction: zone-b}
+        request: {type: get, recordCapture: contact}
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found

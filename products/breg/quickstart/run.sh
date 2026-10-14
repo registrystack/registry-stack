@@ -18,7 +18,8 @@ else
   command -v cargo >/dev/null || { echo 'cargo is required.' >&2; exit 2; }
   export RUSTC_WRAPPER=
   export CARGO_INCREMENTAL=0
-  cargo build --manifest-path "$repository_root/Cargo.toml" --locked -p registry-breg --features registry-breg/runtime -p registry-bregctl --bins >/dev/null
+  source "$repository_root/scripts/cargo-runtime-library-path.sh"
+  registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.toml" --locked -p registry-breg --features registry-breg/runtime -p registry-bregctl --bins >/dev/null
   cargo_target_dir="${CARGO_TARGET_DIR:-$repository_root/target}"
   if [[ "$cargo_target_dir" != /* ]]; then
     cargo_target_dir="$repository_root/$cargo_target_dir"
@@ -55,9 +56,10 @@ if ! "$bregctl" --format json dev start --breg-bin "$breg" --docker-bin "$(comma
   exit 1
 fi
 printf 'http://127.0.0.1:%s\n' "$breg_port" >"$run_dir/breg-origin"
-client=operator
+client=editor
+[[ "$spatial" == true ]] && client=operator
 "$bregctl" --format json dev token "$client" "$run_dir/project" >"$run_dir/token-report.json"
-python3 - "$run_dir/token-report.json" "$run_dir/headers/operator.header" <<'PY'
+python3 - "$run_dir/token-report.json" "$run_dir/headers/$client.header" <<'PY'
 import json,os,shutil,sys
 source=json.load(open(sys.argv[1]))['headerFile']; shutil.copyfile(source,sys.argv[2]); os.chmod(sys.argv[2],0o600)
 PY
@@ -69,11 +71,18 @@ source=json.load(open(sys.argv[1]))['headerFile']; shutil.copyfile(source,sys.ar
 PY
   python3 "$support" spatial-smoke --root "$run_dir" --seed "$repository_root/products/breg/acceptance/spatial-service-sites/fixtures/seed-service-sites.jsonl"
 else
-  id=$(python3 "$support" request --root "$run_dir" --action create --code QS-001 --label 'Quickstart record')
+  "$bregctl" --format json dev token foreign-editor "$run_dir/project" >"$run_dir/foreign-token-report.json"
+  python3 - "$run_dir/foreign-token-report.json" "$run_dir/headers/foreign-editor.header" <<'PY'
+import json,os,shutil,sys
+source=json.load(open(sys.argv[1]))['headerFile']; shutil.copyfile(source,sys.argv[2]); os.chmod(sys.argv[2],0o600)
+PY
+  id=$(python3 "$support" request --root "$run_dir" --action create --name 'Quickstart contact' --email contact@example.test)
   python3 "$support" request --root "$run_dir" --action get --record-id "$id" >/dev/null
+  python3 "$support" request --root "$run_dir" --action refusal --record-id "$id"
+  echo "  Contact ID: $id"
 fi
 echo 'Base Registry Engine quickstart is ready.'
 echo "  Base Registry Engine: http://127.0.0.1:$breg_port"
-echo "  Operator header: $run_dir/headers/operator.header"
+echo "  Client header: $run_dir/headers/$client.header"
 [[ "$smoke" == true ]] && exit 0
 while :; do sleep 1; done

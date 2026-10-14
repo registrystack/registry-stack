@@ -96,7 +96,7 @@ expectation. Preflight checks that the pair names a patterned field on a target
 of the step; execution requires that exact pair in the response. Preflight does
 not evaluate PostgreSQL expressions or infer the failed field from input values.
 Omit both identifiers when expecting a generic conflict, such as a duplicate
-unique value or a concealed change-request application failure. That expectation
+unique value or a concealed Proposal application failure. That expectation
 requires a response without field metadata.
 
 ## Related pattern: fixed identity, correctable description
@@ -179,7 +179,7 @@ and `ADD CONSTRAINT` clauses and a validated CHECK, not `NOT VALID`. The existin
 fingerprint, and recovery requirements still apply. No orphan constraint should
 remain after removal.
 
-Entity patterns also bind immediate-action and change-request fingerprints.
+Entity patterns also bind Action and Proposal fingerprints.
 Unchanged patterns preserve their existing contracts. A relevant changed pattern
 makes a pending frozen proposal incompatible. Use the existing authorized rebase,
 resubmission, and configured review process; activation does not silently rewrite

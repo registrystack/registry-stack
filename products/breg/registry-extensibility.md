@@ -149,7 +149,7 @@ no authority to call BREG. A consumer requesting a subsequent registry change
 needs its own narrowly granted token and operation identity.
 
 Use the existing [events and webhooks contract](EVENTS-AND-WEBHOOKS.md) and
-[durable receiver example](demo/support/WEBHOOK-RECEIVER.md). Delivery is
+[durable receiver example](examples/webhook-receiver/README.md). Delivery is
 asynchronous and can be repeated. Operator replay changes the delivery
 idempotency key while preserving the event identity, so consumer business
 deduplication must account for the stable CloudEvents source and event ID.
@@ -189,5 +189,5 @@ SQL/Rhai reads during mutations, or a process engine. The operator guard is an
 acceptance-time check on a linked input, not a permanent condition on all future
 records. The owner profile uses the direct stored-owner model; live relational
 [membership authorization](membership-access.md) is a separate policy capability
-and requires its own declared model and tests. Existing change-request approval
+and requires its own declared model and tests. Proposal review
 remains the path when accepting a change requires review.

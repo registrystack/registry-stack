@@ -43,32 +43,7 @@ fn compile(source: &[u8]) -> registry_breg::CompiledRegistry {
 }
 
 fn facility_registry() -> registry_breg::CompiledRegistry {
-    let mut project = parse_project_yaml(FACILITY).unwrap();
-    project.access_profiles.push(serde_json::from_value(json!({
-        "id":"fixture-seeder", "principalClaim":"registry_principal",
-        "requiredScopes":["fixture:seed"], "requiredPurposes":["facility-administration"],
-        "permissions":{"records":[
-            {"recordType":"operator", "operations":["create","get","list"],
-             "readableFields":["operator-code","status","jurisdiction"],
-             "writableFields":["operator-code","status","jurisdiction"], "rowBoundaries":"unrestricted"},
-            {"recordType":"facility", "operations":["get","list"],
-             "readableFields":["facility-code","name","address-line","city","postal-code","status","jurisdiction"],
-             "rowBoundaries":"unrestricted"},
-            {"recordType":"facility-assignment", "operations":["get","list"],
-             "readableFields":["facility","operator","jurisdiction"], "rowBoundaries":"unrestricted"}
-        ]}
-    })).unwrap());
-    compile_project_with_assets(
-        &project,
-        &[],
-        &[ModuleAssetSource {
-            module: None,
-            path: "plans/correct-address.rhai".into(),
-            bytes: FUNCTION.to_vec(),
-        }],
-        CompileProfile::Authoring,
-    )
-    .unwrap()
+    compile(FACILITY)
 }
 
 fn registrar_claims() -> VerifiedRequestClaims {
@@ -100,8 +75,8 @@ async fn facility_action_is_atomic_checks_references_and_recovers_exactly_once()
     let fixture = client_http::ClientFixture::start(
         facility_registry(),
         claims(
-            "fixture-seeder",
-            "fixture:seed",
+            "operator-editor",
+            "registry:operator:write",
             "facility-administration",
             "zone-a",
         ),
@@ -110,12 +85,12 @@ async fn facility_action_is_atomic_checks_references_and_recovers_exactly_once()
     let metadata = fixture
         .http
         .client
-        .registry_contract(Some("fixture-seeder"))
+        .registry_contract(Some("operator-editor"))
         .await
         .unwrap();
     let BRegDirectWrite::Create(operator_create) = metadata
         .value
-        .select_direct_write("records.operator.create", "fixture-seeder")
+        .select_direct_write("records.operator.create", "operator-editor")
         .unwrap()
     else {
         panic!("create")
@@ -201,11 +176,18 @@ async fn facility_action_is_atomic_checks_references_and_recovers_exactly_once()
     let assignment_id = first.value.results()["assignment"]
         .record_identifier()
         .to_string();
+    let reader = fixture
+        .client_for(claims(
+            "facility-reader",
+            "registry:facility:read",
+            "facility-administration",
+            "zone-a",
+        ))
+        .await;
     let options = BRegRecordOptions::default()
-        .access_profile("fixture-seeder")
+        .access_profile("facility-reader")
         .unwrap();
-    let assignment = fixture
-        .http
+    let assignment = reader
         .client
         .get_record("facility-assignments", &assignment_id, &options)
         .await
@@ -315,6 +297,7 @@ async fn facility_action_is_atomic_checks_references_and_recovers_exactly_once()
     drop(lost);
     drop(fault);
     drop(registrar);
+    drop(reader);
     fixture.finish().await;
 }
 
@@ -783,6 +766,22 @@ async fn minimal_standalone_crud_concealment_conditions_and_exact_receipts() {
             &outside,
             &key("minimal-outside"),
             BRegRecordFormat::Json
+        )
+        .await
+        .is_err());
+    let move_outside = BRegPatchRequest::builder()
+        .replace("jurisdiction", json!("zone-b"))
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(client
+        .patch_record(
+            &patch_binding,
+            Uuid::parse_str(&id).unwrap(),
+            updated.metadata.etag().unwrap(),
+            &move_outside,
+            &key("minimal-patch-outside"),
+            BRegRecordFormat::Json,
         )
         .await
         .is_err());

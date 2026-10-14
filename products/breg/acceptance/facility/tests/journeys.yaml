@@ -4,7 +4,7 @@ journeys:
   - id: bounded-facility-and-batch-validation
     steps:
       - id: create-north-district-facility
-        entity: facility
+        recordType: facility
         accessProfile: facility-operator
         claims:
           principal: synthetic-facility-operator
@@ -27,7 +27,7 @@ journeys:
             administrative-boundary: north-district
         capture: north-facility
       - id: get-north-district-facility
-        entity: facility
+        recordType: facility
         accessProfile: facility-operator
         claims:
           principal: synthetic-facility-operator
@@ -45,7 +45,7 @@ journeys:
             facility-code: FACILITY-SYNTH-001
             administrative-boundary: north-district
       - id: rename-north-district-facility
-        entity: facility
+        recordType: facility
         accessProfile: facility-operator
         claims:
           principal: synthetic-facility-operator
@@ -69,7 +69,7 @@ journeys:
             administrative-boundary: north-district
         capture: updated-north-facility
       - id: list-north-district-facilities
-        entity: facility
+        recordType: facility
         accessProfile: facility-operator
         claims:
           principal: synthetic-facility-operator
@@ -84,7 +84,7 @@ journeys:
           status: 200
           count: 1
       - id: south-district-claim-cannot-see-north-record
-        entity: facility
+        recordType: facility
         accessProfile: facility-operator
         claims:
           principal: synthetic-facility-operator
@@ -100,7 +100,7 @@ journeys:
           status: 404
           problemCode: resource.not_found
       - id: batch-refuses-out-of-bounds-installation
-        entity: installation
+        recordType: installation
         accessProfile: facility-operator
         claims:
           principal: synthetic-facility-operator

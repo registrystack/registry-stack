@@ -53,18 +53,16 @@ const MODULE_SOURCE: &[u8] = include_bytes!("fixtures/fixture-tooling/module.yam
 const JOURNEY_SOURCE: &[u8] = include_bytes!("fixtures/fixture-tooling/journeys.yaml");
 const TERMINAL_FAILURE_SOURCE: &[u8] =
     include_bytes!("fixtures/fixture-tooling/terminal-failure.yaml");
-const SPATIAL_PROJECT_SOURCE: &[u8] = include_bytes!(
-    "fixtures/native-models/products/breg/acceptance/spatial-service-sites/registry.yaml"
-);
+const SPATIAL_PROJECT_SOURCE: &[u8] =
+    include_bytes!("../../../products/breg/acceptance/spatial-service-sites/registry.yaml");
 const SPATIAL_MODULE_SOURCE: &[u8] = include_bytes!(
-    "fixtures/native-models/products/breg/acceptance/spatial-service-sites/modules/spatial-service-sites-core/module.yaml"
+    "../../../products/breg/acceptance/spatial-service-sites/modules/spatial-service-sites-core/module.yaml"
 );
 const SPATIAL_MAP_LABELS_SQL: &[u8] = include_bytes!(
-    "fixtures/native-models/products/breg/acceptance/spatial-service-sites/modules/spatial-service-sites-core/sql/map-labels.sql"
+    "../../../products/breg/acceptance/spatial-service-sites/modules/spatial-service-sites-core/sql/map-labels.sql"
 );
-const SPATIAL_JOURNEY_SOURCE: &[u8] = include_bytes!(
-    "fixtures/native-models/products/breg/acceptance/spatial-service-sites/tests/journeys.yaml"
-);
+const SPATIAL_JOURNEY_SOURCE: &[u8] =
+    include_bytes!("../../../products/breg/acceptance/spatial-service-sites/tests/journeys.yaml");
 const COMPILER_SOURCE_REVISION: &str = "fixture-project-source";
 const DATABASE_ID: &str = "fixture-database";
 const INSTANCE_ID: &str = "fixture-instance";

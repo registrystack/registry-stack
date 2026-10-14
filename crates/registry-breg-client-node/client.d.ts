@@ -478,7 +478,7 @@ export interface BRegActionDescriptor {
     readonly fieldTypeJson: string
     readonly label: string
     readonly description: string | null
-    readonly schemaJson: string | null
+    readonly schemaJson: string
     readonly required: boolean
     readonly nullable: boolean | null
     readonly classification: string

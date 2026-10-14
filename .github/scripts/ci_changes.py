@@ -272,8 +272,8 @@ EVIDENCE_TUTORIAL_INPUTS = (
 
 # Every input the Base Registry Engine tutorial gate replays or is built from:
 # the page runner, the pages whose frontmatter it replays, and the build inputs
-# of the binaries it runs. The same job runs the request-attachments acceptance
-# check.
+# of the binaries it runs. Native Proposal attachments are exercised by the
+# PostgreSQL lane.
 BREG_TUTORIAL_INPUTS = (
     "Cargo.lock",
     "Cargo.toml",
@@ -285,8 +285,6 @@ BREG_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/extend-a-registry-with-a-module.mdx",
     "docs/site/src/content/docs/tutorials/first-breg.mdx",
     "docs/site/src/content/docs/tutorials/review-registry-changes.mdx",
-    "products/breg/acceptance/request-attachments/**",
-    "products/breg/scripts/test-request-attachments.py",
 )
 
 # Every input the Registry Casework tutorial gate replays or is built from: the

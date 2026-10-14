@@ -16,19 +16,15 @@ use uuid::Uuid;
 
 use crate::contract::FieldTypeSource;
 use crate::history_commit::{
-    allocate_revision_commit, install_history_commit_schema, load_history_head, CommitAllocation,
-    HistoryCommitError, RevisionCommitMember,
+    allocate_revision_commit, load_history_head, CommitAllocation, RevisionCommitMember,
 };
 use crate::history_context::CommitOrigin;
 use crate::history_schema::HistorySchemaDescriptor;
-use crate::history_store::{
-    install_history_schema_store, load_descriptor, retain_verified_descriptor,
-};
+use crate::history_store::load_descriptor;
 use crate::migration_plan::{
     AffectedRowBounds, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationStep,
 };
 use crate::model::{CompiledEntity, CompiledField, CompiledRegistry};
-use crate::package::CompiledRegistryMigrationBaseline;
 use crate::postgres::{ExpectedRegistryIdentity, SqlIdentifier};
 use crate::revision::{
     canonical_snapshot, insert_internal_migration_revision, InternalMigrationRevisionInsert,
@@ -74,8 +70,6 @@ pub(crate) enum HistoryMigrationError {
     UnsupportedSqlShape,
     #[error("history migration table exceeds the declared affected-row budget")]
     TableBudgetExceeded,
-    #[error("history migration baseline exceeds the supported row budget")]
-    BaselineBudgetExceeded,
     #[error("history migration changed record identity or lifecycle metadata")]
     UnexpectedRowShape,
     #[error("history migration could not append internal revisions")]
@@ -134,15 +128,7 @@ struct LatestRevisionBinding {
 struct LatestRevisionSnapshot {
     record_revision: i64,
     record_lifecycle: String,
-    package_revision: String,
     snapshot: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BaselineMember {
-    pub(crate) entity_id: String,
-    pub(crate) record_id: Uuid,
-    pub(crate) record_revision: i64,
 }
 
 #[cfg(feature = "runtime")]
@@ -170,38 +156,18 @@ pub(crate) async fn prepare_bounded_history_update(
 pub(crate) async fn ensure_successor_history_ready(
     transaction: &Transaction<'_>,
     current: &ExpectedRegistryIdentity,
-    predecessor_baseline: Option<&CompiledRegistryMigrationBaseline>,
     predecessor_descriptor: Option<&HistorySchemaDescriptor>,
-    runtime_role: &SqlIdentifier,
 ) -> Result<()> {
-    install_history_schema_store(transaction, runtime_role)
+    load_history_head(transaction)
         .await
         .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-    install_history_commit_schema(transaction, runtime_role)
+    let retained = load_descriptor(transaction, &current.activation_id)
         .await
         .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-
-    match load_history_head(transaction).await {
-        Ok(_head) => {
-            let retained = load_descriptor(transaction, &current.activation_id)
-                .await
-                .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-            if predecessor_descriptor.is_some_and(|expected| expected != &retained) {
-                return Err(HistoryMigrationError::RevisionUnavailable);
-            }
-            Ok(())
-        }
-        Err(HistoryCommitError::NotReady) => {
-            establish_existing_history_baseline(
-                transaction,
-                current,
-                predecessor_baseline.ok_or(HistoryMigrationError::RevisionUnavailable)?,
-                predecessor_descriptor.ok_or(HistoryMigrationError::RevisionUnavailable)?,
-            )
-            .await
-        }
-        Err(_) => Err(HistoryMigrationError::RevisionUnavailable),
+    if predecessor_descriptor.is_some_and(|expected| expected != &retained) {
+        return Err(HistoryMigrationError::RevisionUnavailable);
     }
+    Ok(())
 }
 
 #[cfg(feature = "runtime")]
@@ -377,76 +343,6 @@ async fn journal_captured_changes(
     u64::try_from(changed.len()).map_err(|_| HistoryMigrationError::RevisionUnavailable)
 }
 
-#[cfg(feature = "runtime")]
-async fn establish_existing_history_baseline(
-    transaction: &Transaction<'_>,
-    current: &ExpectedRegistryIdentity,
-    predecessor_baseline: &CompiledRegistryMigrationBaseline,
-    predecessor_descriptor: &HistorySchemaDescriptor,
-) -> Result<()> {
-    if predecessor_baseline.package_digest != current.package_digest
-        || predecessor_descriptor.package_revision != current.activation_id
-    {
-        return Err(HistoryMigrationError::RevisionUnavailable);
-    }
-    retain_verified_descriptor(transaction, predecessor_descriptor)
-        .await
-        .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-    verify_revision_journal_uses_active_descriptor(
-        transaction,
-        predecessor_baseline,
-        &current.activation_id,
-    )
-    .await?;
-    let members = verify_live_rows_match_journal_heads(
-        transaction,
-        &predecessor_baseline.entities,
-        Some(&current.activation_id),
-    )
-    .await?;
-    insert_existing_history_baseline(transaction, &current.activation_id, &members).await
-}
-
-/// Prove the retained journal head of every live row reproduces that row, and
-/// return the members a baseline commit would index.
-///
-/// `required_package_revision` pins every journal head to one package revision,
-/// as an existing-data migration baseline requires. A live registry whose
-/// journal legitimately spans several package revisions passes `None`; each
-/// head keeps its own retained descriptor either way.
-#[cfg(feature = "runtime")]
-pub(crate) async fn verify_live_rows_match_journal_heads(
-    transaction: &Transaction<'_>,
-    entities: &BTreeMap<String, CompiledEntity>,
-    required_package_revision: Option<&str>,
-) -> Result<Vec<BaselineMember>> {
-    let expected_members = count_baseline_members(transaction, entities).await?;
-    let mut members = Vec::with_capacity(
-        usize::try_from(expected_members)
-            .map_err(|_| HistoryMigrationError::BaselineBudgetExceeded)?,
-    );
-    for entity in entities.values() {
-        let live_rows = capture_entity_rows(transaction, entity, true).await?;
-        let latest_revisions =
-            load_latest_revision_snapshots(transaction, &entity.id, None).await?;
-        if live_rows.keys().ne(latest_revisions.keys()) {
-            return Err(HistoryMigrationError::UnexpectedRowShape);
-        }
-        for (record_id, live) in live_rows {
-            let latest = latest_revisions
-                .get(&record_id)
-                .ok_or(HistoryMigrationError::UnexpectedRowShape)?;
-            verify_journal_head_reproduces_live_row(&live, latest, required_package_revision)?;
-            members.push(BaselineMember {
-                entity_id: entity.id.clone(),
-                record_id,
-                record_revision: live.record_revision,
-            });
-        }
-    }
-    Ok(members)
-}
-
 /// The live rows one page of [`verify_every_live_row_matches_its_journal_head`]
 /// reads, and the journal heads it loads beside them.
 #[cfg(feature = "runtime")]
@@ -466,10 +362,7 @@ const LIVE_ROW_VERIFICATION_PAGE_ROWS: i64 = 1_000;
 /// bounded here. A statement's cost is bounded by its page's records and their
 /// retained revisions, not by a fixed size: records with many revisions make a
 /// larger page, and the final count per entity covers every head past its last
-/// live row. Nothing is
-/// collected for a commit: a caller that must index the live rows as members
-/// uses [`verify_live_rows_match_journal_heads`], which the commit-member budget
-/// bounds.
+/// live row. The verifier does not collect commit members.
 #[cfg(feature = "runtime")]
 pub(crate) async fn verify_every_live_row_matches_its_journal_head(
     transaction: &Transaction<'_>,
@@ -518,7 +411,7 @@ pub(crate) async fn verify_every_live_row_matches_its_journal_head(
                 let latest = latest_revisions
                     .get(record_id)
                     .ok_or(HistoryMigrationError::UnexpectedRowShape)?;
-                verify_journal_head_reproduces_live_row(live, latest, None)?;
+                verify_journal_head_reproduces_live_row(live, latest)?;
             }
             let page_rows = u64::try_from(live_rows.len())
                 .map_err(|_| HistoryMigrationError::UnexpectedRowShape)?;
@@ -579,69 +472,16 @@ async fn count_retained_journal_heads_in_range(
 fn verify_journal_head_reproduces_live_row(
     live: &CapturedEntityRow,
     latest: &LatestRevisionSnapshot,
-    required_package_revision: Option<&str>,
 ) -> Result<()> {
     let snapshot =
         canonical_snapshot(&live.data).map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
     if live.record_revision != latest.record_revision
         || live.record_lifecycle != latest.record_lifecycle
-        || required_package_revision.is_some_and(|required| latest.package_revision != required)
         || snapshot != latest.snapshot
     {
         return Err(HistoryMigrationError::UnexpectedRowShape);
     }
     Ok(())
-}
-
-#[cfg(feature = "runtime")]
-async fn verify_revision_journal_uses_active_descriptor(
-    transaction: &Transaction<'_>,
-    predecessor_baseline: &CompiledRegistryMigrationBaseline,
-    active_package_revision: &str,
-) -> Result<()> {
-    let rows = transaction
-        .query(
-            "SELECT DISTINCT entity_id, package_revision
-               FROM registry_internal.registry_revisions
-              ORDER BY entity_id, package_revision",
-            &[],
-        )
-        .await
-        .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-    for row in rows {
-        let entity_id = row
-            .try_get::<_, String>(0)
-            .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-        let package_revision = row
-            .try_get::<_, String>(1)
-            .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-        if entity_id.is_empty()
-            || package_revision.is_empty()
-            || !predecessor_baseline.entities.contains_key(&entity_id)
-            || package_revision != active_package_revision
-        {
-            return Err(HistoryMigrationError::RevisionUnavailable);
-        }
-    }
-    Ok(())
-}
-
-#[cfg(feature = "runtime")]
-async fn count_baseline_members(
-    transaction: &Transaction<'_>,
-    entities: &BTreeMap<String, CompiledEntity>,
-) -> Result<u64> {
-    let mut total = 0_u64;
-    for entity in entities.values() {
-        let count = count_entity_rows(transaction, entity).await?;
-        total = total
-            .checked_add(count)
-            .ok_or(HistoryMigrationError::BaselineBudgetExceeded)?;
-        if total > MAX_HISTORY_MIGRATION_COMMIT_MEMBERS {
-            return Err(HistoryMigrationError::BaselineBudgetExceeded);
-        }
-    }
-    Ok(total)
 }
 
 #[cfg(feature = "runtime")]
@@ -710,7 +550,6 @@ async fn load_latest_revision_snapshots(
                     LatestRevisionSnapshot {
                         record_revision,
                         record_lifecycle,
-                        package_revision,
                         snapshot,
                     },
                 )
@@ -720,64 +559,6 @@ async fn load_latest_revision_snapshots(
         }
     }
     Ok(revisions)
-}
-
-#[cfg(feature = "runtime")]
-async fn insert_existing_history_baseline(
-    transaction: &Transaction<'_>,
-    package_revision: &str,
-    members: &[BaselineMember],
-) -> Result<()> {
-    let history_lineage = Uuid::new_v4();
-    let change_id = Uuid::new_v4();
-    let snapshot_reference = Uuid::new_v4();
-    let system_origin = "breg-existing-history-baseline-v1";
-    transaction
-        .execute(
-            "INSERT INTO registry_internal.registry_commit_head
-                 (singleton, history_lineage, latest_position,
-                  coverage_baseline_position, coverage_ready)
-             VALUES (true, $1, 0, 0, true)",
-            &[&history_lineage],
-        )
-        .await
-        .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-    transaction
-        .execute(
-            "INSERT INTO registry_internal.registry_revision_commits
-                 (commit_position, change_id, snapshot_reference, history_lineage,
-                  originating_package_revision, origin_kind, system_origin,
-                  baseline_reference, establishes_baseline)
-             VALUES (0, $1, $2, $3, $4, 'baseline', $5, $5, true)",
-            &[
-                &change_id,
-                &snapshot_reference,
-                &history_lineage,
-                &package_revision,
-                &system_origin,
-            ],
-        )
-        .await
-        .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-    for (index, member) in members.iter().enumerate() {
-        let member_index =
-            i32::try_from(index).map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-        transaction
-            .execute(
-                "INSERT INTO registry_internal.registry_revision_commit_members
-                     (entity_id, record_id, record_revision, commit_position, member_index)
-                 VALUES ($1, $2, $3, 0, $4)",
-                &[
-                    &member.entity_id,
-                    &member.record_id,
-                    &member.record_revision,
-                    &member_index,
-                ],
-            )
-            .await
-            .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-    }
-    Ok(())
 }
 
 fn classify_reviewed_history_step(

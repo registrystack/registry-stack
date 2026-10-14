@@ -32,11 +32,11 @@ use serde_json::{json, Value};
 
 use crate::safe_path::{SafeDir, SafePathError};
 use crate::{
-    artifact_report, capture_project_source, compile_captured_project, compiler_findings,
-    diagnostic, first_diagnostic, render_project_module_locks, tool_diagnostic,
-    validate_project_directory, write_project_registry, yaml_string, CapturedModuleSource,
-    CapturedProjectSource, DiagnosticArtifact, FailureReport, ProfileArg, SuccessReport,
-    SuggestedAction,
+    artifact_report, canonicalize_project_path, capture_resolved_project_source,
+    compile_captured_project, compiler_findings, diagnostic, first_diagnostic,
+    render_project_module_locks, tool_diagnostic, validate_project_directory,
+    write_project_registry, yaml_string, CapturedModuleSource, CapturedProjectSource,
+    DiagnosticArtifact, FailureReport, ProfileArg, SuccessReport, SuggestedAction,
 };
 
 pub(crate) const COMMAND: &str = "module add consent";
@@ -94,13 +94,16 @@ pub(crate) fn add_consent_module(
     project_path: &Path,
     subject: &str,
 ) -> Result<SuccessReport, FailureReport> {
-    let source = capture_project_source(project_path).map_err(|diagnostic| {
+    let source_failure = |diagnostic| {
         failure(
             diagnostic,
             DiagnosticArtifact::RegistryProject,
             SuggestedAction::CorrectAuthoringSource,
         )
-    })?;
+    };
+    let selected_project = canonicalize_project_path(project_path).map_err(&source_failure)?;
+    let project_path = selected_project.as_path();
+    let source = capture_resolved_project_source(project_path).map_err(source_failure)?;
     let plan = plan(&source, subject)?;
     let rendered = render_registry(&source, &plan)?;
     let project = parse_project_yaml(&rendered).map_err(|failure| {
@@ -556,7 +559,7 @@ fn renders_exactly(
         Value::Array(
             locks
                 .iter()
-                .map(|lock| json!({"id": lock.id, "version": lock.version, "digest": lock.digest}))
+                .map(|lock| serde_json::to_value(lock).expect("module locks serialize"))
                 .collect(),
         ),
     );

@@ -1049,11 +1049,13 @@ mod tests {
                     {
                         "id": "target", "apiName": "targetId", "required": true,
                         "nullable": false, "classification": "internal",
+                        "schema": {"type":"string","format":"uuid"},
                         "fieldType": {"type":"reference","target":"item","onDelete":"restrict"}
                     },
                     {
                         "id": "label", "apiName": "label", "required": false,
                         "nullable": optional_nullable, "classification": "internal",
+                        "schema": if optional_nullable { json!({"anyOf":[{"type":"string","minLength":1,"maxLength":16},{"type":"null"}]}) } else { json!({"type":"string","minLength":1,"maxLength":16}) },
                         "fieldType": {"type":"string","minimumLength":1,"maximumLength":16}
                     }
                 ],

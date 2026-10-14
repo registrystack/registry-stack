@@ -5,8 +5,9 @@ use serde_json::{json, Value};
 
 pub fn source(root: &str) -> Value {
     let mut value: Value = serde_json::from_str(include_str!(
-        "../fixtures/native-models/products/breg/fixtures/organization-membership-access/registry.yaml"
-    )).unwrap();
+        "../../../../products/breg/fixtures/organization-membership-access/registry.yaml"
+    ))
+    .unwrap();
     value["recordTypes"][2]["id"] = json!(root);
     value["recordTypes"][2]["route"] = json!(if root == "facility" {
         "facilities".to_owned()

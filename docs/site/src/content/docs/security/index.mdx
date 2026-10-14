@@ -98,13 +98,10 @@ Neither the model's instructions nor a tool argument can widen that decision.
   carries the delegated token, and BReg admits that token only to an access profile declared for
   agents. That profile, applied to the citizen, decides what the agent sees and which drafts it
   may write.
-- The agent drafts a change request and cannot submit it. A delegated token that carries no task
-  grant is admitted only to a standing agent profile, an agent profile with no task grant. The
-  BReg compiler refuses such a profile when it holds `submit-request`, `revise-request`,
-  `cancel-request`, or `apply-request`, when it holds `create` or `patch` on an entity without a
-  change request, when it holds `import`, `tombstone`, or `batch` on any entity, when it holds
-  any action permission, and when it holds `publish` on a statistical dataset. The gateway's own
-  lint configuration also disallows the client methods that would reach further.
+- The agent Starts and edits an authorized Proposal draft. A standing agent without
+  a task grant cannot submit or apply it, invoke immediate effects, mutate records
+  directly, or publish a statistical release. BReg enforces the grant ceiling;
+  the gateway also restricts its reachable client methods.
 - The agent's drafts point at the citizen's own record. The gateway writes a draft's target from
   the single record BReg lists for the delegated token, the citizen's own linked record in the
   reference project, and its owner from the subject of the chat host's verified token. It refuses
@@ -114,17 +111,16 @@ Neither the model's instructions nor a tool argument can widen that decision.
   the citizen's own sign-in. The page calls BReg only to read the registry contract, the draft,
   and the draft's target, and to submit. BReg keeps the agent from submitting. What the citizen's
   sign-in may do through the page is whatever the review access profile grants, and the operator
-  declares that profile: the reference project's review profile also grants `patch` and
-  `cancel-request` on the draft.
-- A reviewer decides where the registry requires one. When the change request declares
-  `review.type: required`, the review authority it names decides whether BReg applies the request.
-  A change request that declares `review.type: none` has no such step.
+  declares that profile: the reference project's review profile also grants the independently declared draft and cancellation operations.
+- A reviewer decides where the registry requires one. When the Proposal Action declares
+  `review.type: required`, the review authority it names decides whether BReg applies the exact frozen Proposal.
+  A Proposal Action that declares `review.type: none` has no such step.
 - The audit journal shows who acted for whom. BReg records an agent's calls with keyed pseudonyms
   for the agent, the citizen it acts for, and the client.
 
 What the assistant says in conversation is outside these controls; the review page shows the
 canonical draft BReg holds, not the assistant's summary of it.
-BReg does not yet tie a change request's target to the requester's own record. For this pair of
+BReg does not yet tie a Proposal's target to the requester's own record. For this pair of
 services, the gateway derives the target, the review page reads the target under the citizen's own
 token before it offers submission and again before it submits, and a reviewer checks the request
 where review is required. The review page's read covers the gap only when the review access
@@ -135,36 +131,11 @@ must keep exchanged token lifetimes short.
 [What the design guarantees](../configure/breg-mcp/#what-the-design-guarantees) states each
 property with its enforcement point.
 
-{/* Evidence: products/breg/MCP-GATEWAY.md; products/breg/TASK_GRANTS.md;
-    crates/registry-breg-mcp/src/outbound.rs, delegated(), authorization_with_actor(),
-    the_exchanged_token_names_the_citizen_and_the_gateway_as_actor;
-    crates/registry-breg-mcp/src/inbound.rs, require_caller();
-    crates/registry-breg-mcp/src/gateway.rs, dispatch(), session(), resolve_own(), start(),
-    owner_api_name;
-    crates/registry-breg-mcp/src/handler.rs, call_tool();
-    crates/registry-breg-mcp/src/tools.rs, screen_controlled(), parse_no_arguments(),
-    a_smuggled_target_argument_is_refused_before_any_call,
-    a_controlled_field_is_refused_before_the_contract_is_known;
-    crates/registry-breg/src/auth.rs, authenticate(), optional_actor_subject(), trusted_actors;
-    crates/registry-breg/src/api/mod.rs, delegated_actor_requires_agent_profile,
-    task_grant_missing, trusted_actor_missing;
-    crates/registry-breg/src/compiler.rs, is_request_operation(), is_direct_target_mutation();
-    crates/registry-breg/tests/standing_agent_ceiling.rs,
-    standing_agent_cannot_hold_a_request_lifecycle_operation,
-    standing_agent_cannot_hold_a_direct_target_mutation,
-    standing_agent_cannot_hold_an_immediate_action,
-    standing_agent_cannot_publish_a_statistical_release;
-    crates/registry-breg/src/compiler/statistics.rs, compile();
-    crates/registry-breg-mcp/clippy.toml; products/breg/scripts/check-mcp-gateway-boundary.sh;
-    crates/registry-breg-review/src/pages.rs, submit(), execute_lifecycle_action;
-    crates/registry-breg-review/src/registry.rs, load(), get_record;
-    crates/registry-breg-review/src/signin.rs, private_key_jwt;
-    crates/registry-breg-review/src/session.rs;
-    crates/registry-breg/src/contract.rs, ChangeRequestReviewSource;
-    crates/registry-breg/src/request_workflow.rs, review_requirement();
-    crates/registry-breg/src/audit.rs, actorPseudonym, principalPseudonym, clientPseudonym;
-    products/breg/acceptance/citizen-address-correction/registry.yaml;
-    products/breg/acceptance/citizen-address-correction/README.md. */}
+{/* Evidence: products/breg/TASK_GRANTS.md;
+    crates/registry-breg-mcp/src/gateway.rs; crates/registry-breg-mcp/src/contract.rs;
+    crates/registry-breg/src/api/proposals.rs; crates/registry-breg/src/compiler.rs;
+    crates/registry-breg-review/src/registry.rs;
+    crates/registry-breg-mcp/clippy.toml; products/breg/scripts/check-mcp-gateway-boundary.sh. */}
 
 ## Maintained boundaries
 

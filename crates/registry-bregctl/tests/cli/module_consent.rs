@@ -560,15 +560,37 @@ fn module_add_consent_runs_once_per_subject_and_reuses_shared_vocabularies() {
 /// pre-declare it.
 #[test]
 fn module_add_consent_fits_an_explicit_manifest_project() {
+    consent_module_fits_an_explicit_manifest_project(false);
+}
+
+#[test]
+fn module_add_consent_preserves_an_unpinned_flow_module_lock() {
+    consent_module_fits_an_explicit_manifest_project(true);
+}
+
+fn consent_module_fits_an_explicit_manifest_project(flow_module_lock: bool) {
     let scratch = TestProject::from_registry_source(b"placeholder: true\n");
     let destination = scratch.path().join("initialized");
 
     fs::create_dir(&destination).unwrap();
     let module_bytes =
-        include_bytes!("../fixtures/retained-native/generic/modules/record-notes/module.yaml");
-    let module = parse_module_yaml(module_bytes).unwrap();
-    let registry = include_str!("../fixtures/retained-native/generic/registry.yaml")
-        .replace("<module-digest>", &module_digest_with_assets(&module, &[]));
+        include_bytes!("../../../../products/breg/fixtures/generic-operator-workflows/modules/record-notes/module.yaml");
+    let registry =
+        include_str!("../../../../products/breg/fixtures/generic-operator-workflows/registry.yaml")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("digest:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    let registry = if flow_module_lock {
+        let (before, _) = registry.rsplit_once("modules:\n").unwrap();
+        let module = parse_module_yaml(module_bytes).unwrap();
+        format!(
+            "{before}modules: [{}]\n",
+            json!({"id": module.id, "version": module.version})
+        )
+    } else {
+        registry
+    };
     fs::create_dir_all(destination.join("modules/record-notes")).unwrap();
     fs::write(destination.join("registry.yaml"), registry).unwrap();
     fs::write(
@@ -579,11 +601,20 @@ fn module_add_consent_fits_an_explicit_manifest_project() {
     fs::create_dir(destination.join("tests")).unwrap();
     fs::write(
         destination.join("tests/journeys.yaml"),
-        include_bytes!("../fixtures/retained-native/generic/tests/journeys.yaml"),
+        include_bytes!(
+            "../../../../products/breg/fixtures/generic-operator-workflows/tests/journeys.yaml"
+        ),
     )
     .unwrap();
 
-    // The init template declares neither recipients nor a purpose vocabulary;
+    // The existing module deliberately has no lock digest yet. Adding another
+    // module must preserve that valid authoring state without panicking.
+    assert!(parse_project_yaml(registry_source(&destination).as_bytes())
+        .unwrap()
+        .modules
+        .iter()
+        .any(|module| module.id == "record-notes" && module.digest.is_none()));
+    // The fixture declares neither recipients nor a purpose vocabulary;
     // both are prerequisites the docs already ask an adopter to declare before
     // running this command, independent of the dataset this fix adds.
     let initialized = registry_source(&destination);
@@ -600,7 +631,15 @@ fn module_add_consent_fits_an_explicit_manifest_project() {
     );
     fs::write(destination.join("registry.yaml"), with_purposes).expect("prerequisites write");
 
-    let added = module_add(&destination, "record");
+    #[cfg(unix)]
+    let selected_project = {
+        let alias = scratch.path().join("project-alias");
+        std::os::unix::fs::symlink(&destination, &alias).unwrap();
+        alias
+    };
+    #[cfg(not(unix))]
+    let selected_project = destination.clone();
+    let added = module_add(&selected_project, "record");
 
     assert!(added.status.success(), "{added:?}");
     let report = json_stdout(&added);
@@ -608,6 +647,10 @@ fn module_add_consent_fits_an_explicit_manifest_project() {
 
     let source = registry_source(&destination);
     let parsed = parse_project_yaml(source.as_bytes()).expect("the project parses");
+    assert!(parsed
+        .modules
+        .iter()
+        .any(|module| module.id == "record-notes" && module.digest.is_none()));
     let projection = parsed
         .manifest_projection
         .as_ref()

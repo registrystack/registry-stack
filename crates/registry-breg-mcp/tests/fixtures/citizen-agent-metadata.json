@@ -253,7 +253,11 @@
           "required": true,
           "nullable": false,
           "classification": "internal",
-          "label": "Registered address"
+          "label": "Registered address",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
         },
         {
           "id": "new-address-line",
@@ -266,7 +270,12 @@
           "required": true,
           "nullable": false,
           "classification": "internal",
-          "label": "New address line"
+          "label": "New address line",
+          "schema": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 200
+          }
         },
         {
           "id": "new-locality",
@@ -279,7 +288,12 @@
           "required": true,
           "nullable": false,
           "classification": "internal",
-          "label": "New town"
+          "label": "New town",
+          "schema": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 200
+          }
         },
         {
           "id": "new-postal-code",
@@ -292,7 +306,12 @@
           "required": true,
           "nullable": false,
           "classification": "internal",
-          "label": "New postal code"
+          "label": "New postal code",
+          "schema": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 20
+          }
         }
       ],
       "referenceInputs": [
