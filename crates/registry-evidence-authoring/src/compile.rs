@@ -796,8 +796,17 @@ pub fn definition_dependencies(project: &EvidenceProject, id: &str) -> Option<Va
     }
     let mut behavior = serde_json::to_value(definition).ok()?;
     behavior.as_object_mut()?.remove("question");
+    let mut functions = project
+        .functions
+        .iter()
+        .filter(|function| function_ids.contains(&function.id))
+        .collect::<Vec<_>>();
+    // Declaration order does not change a Function dependency. Source imports
+    // may recompose owned declarations around authored Functions, so compare
+    // the consumed declarations in their stable identifier order.
+    functions.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
     Some(behavior_value(
-        json!({"definition":behavior,"sources":source_ids.into_iter().map(|id| (id.as_str(), &project.sources[id])).collect::<BTreeMap<_, _>>(),"selectors":definition.subjects.iter().flat_map(|subject| subject.selectors.iter()).map(|id| (id.as_str(), &project.selector_profiles[id])).collect::<BTreeMap<_, _>>(),"functions":project.functions.iter().filter(|function| function_ids.contains(&function.id)).collect::<Vec<_>>()}),
+        json!({"definition":behavior,"sources":source_ids.into_iter().map(|id| (id.as_str(), &project.sources[id])).collect::<BTreeMap<_, _>>(),"selectors":definition.subjects.iter().flat_map(|subject| subject.selectors.iter()).map(|id| (id.as_str(), &project.selector_profiles[id])).collect::<BTreeMap<_, _>>(),"functions":functions}),
     ))
 }
 

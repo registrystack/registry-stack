@@ -28,6 +28,8 @@
 - Token refusals name the supported RFC 8707 `invalid_target` code without
   exposing authorization-server descriptions. Local issuer startup reports the
   setup process exit status while discarding credential-bearing upstream output.
+- Source import compares consumed Function dependencies independently of
+  declaration order, so provenance-only updates do not spuriously affect definitions.
 - BReg-backed source setup invokes BReg's native `--record-type` option for
   preparation and export. Use matching current BReg and Evidence tooling;
   Evidence's own `source add --entity` selection remains unchanged.

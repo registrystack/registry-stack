@@ -1105,16 +1105,15 @@ fn exact_authored_destination_collision_requires_an_explicit_ownership_choice() 
 #[test]
 fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
     let fixture = Fixture::new();
+    const SOURCE: &str = "extractScript: adapters/lookup.rhai\n";
+    const EXTRACT_ONE: &str = "one\n";
     let first = fixture.export(
         "first",
         "lookup",
         "v1",
         &[
-            (
-                "sources/lookup.yaml",
-                "extractScript: adapters/lookup.rhai\n",
-            ),
-            ("adapters/lookup.rhai", "one\n"),
+            ("sources/lookup.yaml", SOURCE),
+            ("adapters/lookup.rhai", EXTRACT_ONE),
         ],
     );
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
@@ -1123,10 +1122,15 @@ fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
     let project = fs::read_to_string(&project_path).unwrap();
     fs::write(
         &project_path,
-        project.replace(
-            "acquisition: {type: single, source: other}",
-            "acquisition: {type: single, source: lookup}",
-        ),
+        project
+            .replace(
+                "subjects: [{role: subject, selectors: [other-reference]}]",
+                "subjects: [{role: subject, selectors: [imported-reference]}]",
+            )
+            .replace(
+                "acquisition: {type: single, source: other}",
+                "acquisition: {type: single, source: lookup}",
+            ),
     )
     .unwrap();
     let next = fixture.export(
@@ -1134,10 +1138,7 @@ fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
         "lookup",
         "v2",
         &[
-            (
-                "sources/lookup.yaml",
-                "extractScript: adapters/lookup.rhai\n",
-            ),
+            ("sources/lookup.yaml", SOURCE),
             ("adapters/lookup.rhai", "two\n"),
         ],
     );
@@ -1147,6 +1148,59 @@ fn structural_impact_follows_source_dependencies_without_inventing_revisions() {
         .unwrap()
         .get("configurationRevision")
         .is_none());
+
+    let selector_next = fixture.export(
+        "selector-next",
+        "lookup",
+        "v2",
+        &[
+            ("sources/lookup.yaml", SOURCE),
+            ("adapters/lookup.rhai", EXTRACT_ONE),
+        ],
+    );
+    replace_export_artifact(
+        &selector_next,
+        "selectors/imported-reference.yaml",
+        "maximumAggregateBytes: 65\nfields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}\n",
+    );
+    let candidate = prepare(&lock, &[selector_next], &BTreeMap::new()).unwrap();
+    assert_eq!(candidate.report().affected_definitions, ["other"]);
+}
+
+#[test]
+fn provenance_only_unconsumed_update_ignores_consumed_function_declaration_order() {
+    let fixture = Fixture::new();
+    let lookup = fixture.export("lookup", "lookup", "v1", &[]);
+    let unrelated = fixture.export("unrelated", "unrelated", "v1", &[]);
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    accepted(&lock, &[lookup], BTreeMap::new());
+    accepted(&lock, &[unrelated], BTreeMap::new());
+
+    let project_path = fixture.project.join("evidence.yaml");
+    let decoded = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        &fs::read(&project_path).unwrap(),
+    )
+    .unwrap();
+    let mut project = serde_json::to_value(decoded.value).unwrap();
+    project["apiVersion"] = json!(registry_evidence_authoring::project::PROJECT_API_VERSION);
+    project["kind"] = json!(registry_evidence_authoring::project::PROJECT_KIND);
+    project["assertionDefinitions"]["other"]["acquisition"] =
+        json!({"type":"single", "source":"lookup"});
+    project["functions"]
+        .as_array_mut()
+        .unwrap()
+        .sort_by_key(|function| {
+            !function["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("lookup-"))
+        });
+    fs::write(&project_path, serde_json::to_vec_pretty(&project).unwrap()).unwrap();
+
+    let provenance_only = fixture.export("unrelated-next", "unrelated", "v2", &[]);
+    let candidate = prepare(&lock, &[provenance_only], &BTreeMap::new()).unwrap();
+    assert_eq!(candidate.report().provenance_changed, ["unrelated"]);
+    assert!(candidate.report().affected_definitions.is_empty());
 }
 
 #[test]
