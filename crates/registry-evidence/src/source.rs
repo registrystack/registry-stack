@@ -3566,14 +3566,24 @@ mod tests {
         }
         let selected = config.requirements[0].id.clone();
         for authority in config.authority_profiles.values_mut() {
-            authority.grants.retain(|grant| grant.requirement == selected);
-            if !authority.grants.iter().any(|grant| grant.subjects.iter().any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant)) {
+            authority
+                .grants
+                .retain(|grant| grant.requirement == selected);
+            if !authority.grants.iter().any(|grant| {
+                grant
+                    .subjects
+                    .iter()
+                    .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant)
+            }) {
                 authority.requester_clients = registry_platform_yaml::UniqueList::default();
                 authority.grant_source_issuer = None;
             }
         }
         let mut profiles = serde_json::to_value(&config.authority_profiles).unwrap();
-        profiles.as_object_mut().unwrap().retain(|_, profile| !profile["grants"].as_array().unwrap().is_empty());
+        profiles
+            .as_object_mut()
+            .unwrap()
+            .retain(|_, profile| !profile["grants"].as_array().unwrap().is_empty());
         config.authority_profiles = serde_json::from_value(profiles).unwrap();
         let check = |config: &EvidenceConfig| {
             config

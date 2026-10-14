@@ -197,6 +197,9 @@ pub enum Command {
     BundleEvaluate {
         #[arg(long)]
         bundle: PathBuf,
+        /// Validated compiled target grants used only for offline fixtures.
+        #[arg(long)]
+        authority_document: Option<PathBuf>,
         #[arg(long)]
         fixture: PathBuf,
         #[arg(long)]
