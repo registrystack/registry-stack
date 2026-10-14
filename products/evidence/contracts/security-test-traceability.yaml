@@ -1,5 +1,21 @@
 contract: registry.evidence.security-test-traceability/v1
 entries:
+  - id: sec-target-authority-atomic-activation
+    tests:
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_is_atomic_idempotent_and_keeps_durable_history}
+      - {file: crates/registry-evidence/src/authority.rs, name: invalid_or_out_of_ceiling_authority_never_replaces_active_snapshot}
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_serializes_concurrent_writers}
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_snapshot_is_process_pinned_and_package_bound}
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_storage_rejects_symlinks_and_unsafe_permissions}
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_reader_rejects_old_envelopes_and_duplicate_members}
+  - id: sec-target-grant-ceilings
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: target_audience_ceiling_refuses_before_source_effects}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: release_audit_binds_activated_authority_revision_and_effective_grants}
+      - {file: crates/registry-evidence/src/audit.rs, name: audit_authority_binding_is_complete_and_coherent_across_phases}
+      - {file: crates/registry-evidence/src/authority.rs, name: target_grants_cannot_widen_any_definition_ceiling}
+      - {file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}
+      - {file: crates/registry-evidence/tests/selector_conformance.rs, name: task_grant_context_is_bound_before_selector_or_source_access}
   - id: sec-oid4vci-offer-request-contract
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: selector_values_outside_the_published_contract_create_no_exchange}
@@ -52,7 +68,9 @@ entries:
     tests:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: authentic_local_assertions_fail_deployable_assurance_expectations}
   - id: sec-unknown-or-disabled-requirement
-    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}]
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: configuration_revision_pin_precedes_authority_and_uri_only_uses_active_revision}
   - id: sec-caller-query-material-rejected
     tests:
       - {file: crates/registry-evidence/src/model.rs, name: request_rejects_query_material_and_unknown_fields}
@@ -83,7 +101,9 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: invalid_grant_refusal_keeps_only_a_valid_identifier_pseudonym}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_audit_failure_returns_service_unavailable}
   - id: sec-selector-possession-no-authority
-    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}]
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: configuration_revision_pin_precedes_authority_and_uri_only_uses_active_revision}
   - id: sec-caller-grant-reference-rejected
     tests: [{file: crates/registry-evidence/src/model.rs, name: request_rejects_query_material_and_unknown_fields}]
   - id: sec-selector-shape-not-callable
@@ -168,6 +188,7 @@ entries:
     tests: [{file: crates/registry-evidence/src/binding.rs, name: every_subject_binding_scope_component_is_cryptographically_bound}]
   - id: sec-runtime-bundle-mutation-absent
     tests:
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_snapshot_is_process_pinned_and_package_bound}
       - {file: crates/registry-evidence/src/bundle.rs, name: package_digest_binds_paths_and_exact_bytes_deterministically}
       - {file: crates/registry-evidence/src/bundle.rs, name: requirement_projection_prunes_unreached_connections_and_covers_selected_behavior}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: serving_runtime_never_reloads_merges_or_falls_back_after_package_capture}
