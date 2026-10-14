@@ -10563,7 +10563,10 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
         ("readPaths", "related records", "none"),
     ] {
         let value = &profile[field];
-        let rendered = if value.is_null() || value.as_array().is_some_and(Vec::is_empty) {
+        let rendered = if value.is_null()
+            || value.as_array().is_some_and(Vec::is_empty)
+            || (field == "rowBoundaries" && value.as_str() == Some("unrestricted"))
+        {
             if field == "rowBoundaries" && membership_restricted {
                 "governed membership required".to_owned()
             } else {

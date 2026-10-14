@@ -154,7 +154,7 @@ fn registry_source(project: &Path) -> String {
 
 /// Each warning's code and the place it names, read back out of the source
 /// file its pointer addresses: every list item is named by the first of its
-/// `id`, `action`, or `entity` members.
+/// `id`, `action`, or `recordType` members; scalar list leaves retain their index.
 fn finding_codes(report: &Value) -> Vec<(String, String)> {
     report["diagnostics"]
         .as_array()
@@ -186,11 +186,14 @@ fn named_path(document: &Value, pointer: &str) -> String {
         match node {
             Value::Array(items) => {
                 let item = &items[segment.parse::<usize>().expect("an index")];
-                let (key, value) = ["id", "action", "recordType"]
+                if let Some((key, value)) = ["id", "action", "recordType"]
                     .into_iter()
                     .find_map(|key| item[key].as_str().map(|value| (key, value)))
-                    .expect("a list item names itself");
-                named.push_str(&format!("[{key}={value}]"));
+                {
+                    named.push_str(&format!("[{key}={value}]"));
+                } else {
+                    named.push_str(&format!("[{segment}]"));
+                }
                 node = item;
             }
             _ => {
@@ -387,7 +390,7 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     assert!(
         codes
             .iter()
-            .all(|(code, _)| !code.starts_with("access.consent.")),
+            .all(|(code, _)| !code.starts_with("breg.access.consent-")),
         "{codes:?}"
     );
     // A self-issued action is bound to its subject through the principal link,
@@ -550,7 +553,7 @@ fn module_add_consent_runs_once_per_subject_and_reuses_shared_vocabularies() {
     }
     assert!(finding_codes(&report)
         .iter()
-        .all(|(code, _)| !code.starts_with("access.consent.")));
+        .all(|(code, _)| !code.starts_with("breg.access.consent-")));
 }
 
 /// A fresh `bregctl init` project already carries a Registry Manifest

@@ -139,7 +139,8 @@ fn explain_access_states_consent_gates_recipients_and_the_ungated_client() {
     let human = String::from_utf8(output.stdout).unwrap();
     let aligned = human.split_whitespace().collect::<Vec<_>>().join(" ");
     for expected in [
-        "breg.access.consent-ungated-client recordTypes[id=person].accessProfiles[id=steward].requesterClients",
+        "warning[breg.access.consent-ungated-client]",
+        "/accessProfiles/2/permissions/records/0",
         "consent required (all) [{\"on\":\"id\",\"record\":\"consent-decision\"}]",
         "Consent:",
         "permission food-targeting over person",
@@ -2467,12 +2468,15 @@ fn init_from_publicschema_reports_the_derived_project_in_the_report_shape() {
         ),
         "a derived project opens with the report lead sentence: {stdout}"
     );
-    assert!(
-        stdout.contains("  finding  breg.access.profile-unrestricted-collection  6 paths\n"),
-        "a repeated code counts the paths it collapsed: {stdout}"
+    assert_eq!(
+        stdout
+            .matches("warning[breg.access.profile-unrestricted-collection]")
+            .count(),
+        6,
+        "each unrestricted permission keeps its diagnostic location: {stdout}"
     );
     assert!(
-        stdout.contains("\n0 errors, 8 findings.\n"),
+        stdout.contains("\n0 errors, 8 warnings\n"),
         "the report closes with the count to act on: {stdout}"
     );
     assert!(
@@ -3575,9 +3579,31 @@ fn explain_actions_reports_the_normalized_ordered_plan() {
         "household"
     );
     assert!(action["revision"].as_str().unwrap().starts_with("sha256:"));
-    // Served route availability and grants are separately explained by their owning surfaces.
+    // Served route availability stays separate; the Action includes its grants
+    // so an author can inspect who may invoke it and which results each sees.
     assert!(action.get("routes").is_none());
-    assert!(action.get("permissions").is_none());
+    let permissions = action["permissions"].as_array().expect("Action grants");
+    assert_eq!(permissions.len(), 2);
+    for (profile, scope, results) in [
+        (
+            "contact-registrar",
+            "registry:contact:register",
+            json!(["household", "membership", "person"]),
+        ),
+        (
+            "contact-auditor",
+            "registry:contact:audit",
+            json!(["household"]),
+        ),
+    ] {
+        let permission = permissions
+            .iter()
+            .find(|permission| permission["profileId"] == profile)
+            .expect("declared profile grant");
+        assert_eq!(permission["operations"], json!(["invoke"]));
+        assert_eq!(permission["requiredScopes"], json!([scope]));
+        assert_eq!(permission["results"], results);
+    }
 }
 
 #[test]
@@ -4194,6 +4220,8 @@ recordTypes:
         report["explanation"]["deliveries"][0]["owner"],
         json!({"type":"record-type","recordType":"case","trigger":"created"})
     );
+    assert_eq!(report["explanation"]["deliveries"][0]["handlerType"], "url");
+    assert_eq!(report["explanation"]["deliveries"][0]["phase"], "after");
     let delivery_keys = report["explanation"]["deliveries"][0]
         .as_object()
         .expect("delivery is an object")
@@ -4214,6 +4242,7 @@ recordTypes:
             "destinationId",
             "eventId",
             "exponentialBackoffMultiplier",
+            "handlerType",
             "id",
             "initialBackoffMs",
             "maximumAttempts",
@@ -4221,6 +4250,7 @@ recordTypes:
             "maximumPayloadBytes",
             "operatorReplay",
             "owner",
+            "phase",
             "projectionFields",
             "retryDelaysMs",
             "retryProfile",
