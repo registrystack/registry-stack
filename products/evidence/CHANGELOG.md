@@ -18,6 +18,9 @@
 - Local audit inspection recognizes normalized authority metadata, every retained
   Output form and bounded holder-batch release sets while preserving minimized
   presentation and refusal on incoherent records.
+- Token refusals name the supported RFC 8707 `invalid_target` code without
+  exposing authorization-server descriptions. Local issuer startup reports the
+  setup process exit status while discarding credential-bearing upstream output.
 - The maintained authoring reference, generated configuration reference and
   first-hour tutorial chain use the normalized project and complete-grant model.
 
