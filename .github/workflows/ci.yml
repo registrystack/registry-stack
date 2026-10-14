@@ -246,7 +246,7 @@ jobs:
     # which fail rather than skip without their disposable database.
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: dispatch
           POSTGRES_USER: dispatch
@@ -772,7 +772,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: casework
           POSTGRES_USER: casework
@@ -920,7 +920,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: scheduling
           POSTGRES_USER: scheduling
@@ -1054,7 +1054,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: messaging
           POSTGRES_USER: messaging
@@ -1130,7 +1130,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_DB: coordinator
           POSTGRES_USER: coordinator

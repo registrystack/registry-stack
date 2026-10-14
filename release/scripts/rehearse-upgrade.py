@@ -127,7 +127,7 @@ RETIRED_PRODUCTS = {
 # Messaging state to upgrade.
 PRODUCT_PLATFORMS = {"messaging": ("linux-amd64",)}
 POSTGRES_IMAGE = (
-    "public.ecr.aws/docker/library/postgres:17.11@sha256:"
+    "docker.io/library/postgres:17.11@sha256:"
     "67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675"
 )
 # The server key must be owned by postgres with mode 0600, which a bind mount
