@@ -1,0 +1,131 @@
+apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
+kind: EvidenceProject
+id: operator-evidence
+selectorProfiles:
+  operator-by-id:
+    maximumAggregateBytes: 64
+    fields:
+      operator-id:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 64
+functions:
+- id: extract-operator
+  interface: source-extract/v1
+  source: functions/extract-operator.rhai
+- id: derive-operator
+  interface: assertion-derive/v1
+  source: functions/derive-operator.rhai
+sources:
+  operator-register:
+    type: http-json
+    connection: operator-http
+    acquisitionPosture: record-transformed
+    selectors:
+    - role: operator
+      profiles:
+      - operator-by-id
+    request:
+      method: GET
+      path: /operators/{operator-id}
+      pathBindings:
+        operator-id:
+          selector:
+            role: operator
+            profile: operator-by-id
+            field: operator-id
+      fixedHeaders:
+      - name: Accept
+        value: application/json
+    response:
+      projection:
+      - /total
+      - /record
+      shape:
+        type: object
+        required:
+        - total
+        properties:
+          total:
+            type: integer
+            minimum: 0
+            maximum: 2
+          record:
+            type: object
+            required:
+            - operator_id
+            - active
+            - status
+            - address_canary
+            properties:
+              operator_id:
+                type: string
+                minimumBytes: 1
+                maximumBytes: 64
+              active:
+                type: boolean
+              status:
+                type: string
+                values:
+                - active
+                - inactive
+                - suspended
+              address_canary:
+                type: string
+                minimumBytes: 1
+                maximumBytes: 128
+      maximumBytes: 16384
+    extract:
+      function: extract-operator
+    facts:
+      active:
+        type: boolean
+      status:
+        type: controlled-category
+        values:
+        - active
+        - inactive
+        - suspended
+      address-canary:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 128
+    limits:
+      attemptTimeoutMilliseconds: 2000
+      maximumConcurrency: 8
+assertionDefinitions:
+  operator-active:
+    question: Is this operator active for facility administration?
+    semantics:
+      requirement: urn:example:requirement:operator-active:v1
+      kind: criterion
+      evidenceType: urn:example:evidence-type:operator-active:v1
+      referenceFrameworks:
+      - urn:example:framework:facility-administration:v1
+    purpose: facility-administration
+    grantCeiling:
+      authorities:
+      - organizational
+      actorKinds:
+      - service
+      valueOrigins:
+      - request
+      audiences:
+      - urn:example:audience:facility-app
+    subjects:
+    - role: operator
+      selectors:
+      - operator-by-id
+    acquisition:
+      type: single
+      source: operator-register
+    derive:
+      function: derive-operator
+    outputs:
+      operator-active:
+        concept: urn:example:concept:operator-active:v1
+        type: boolean
+    validitySeconds: 300
+    subjectBinding: audience-scoped
+    representations:
+    - signed-jws

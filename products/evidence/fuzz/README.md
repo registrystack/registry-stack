@@ -22,9 +22,10 @@ and authoring crates. These live outside the main workspace (see the root
 - `authoring_openapi`: OpenAPI description parsing, operation resolution,
   and schema flattening into candidate leaves
   (`registry-evidence-authoring`).
-- `authoring_project`: project marker, question, answer, and access-policy
-  documents, their validation findings, and authored derivation source
-  (`registry-evidence-authoring`).
+- `authoring_project`: normalized project and complete target-authority documents,
+  output schemas, and named Function interfaces and compilation
+  (`registry-evidence-authoring`). A valid seed is compiled at startup so a
+  broken fixture fails loudly; a retired project envelope remains a refusal seed.
 
 The verifier targets sign inputs with the test key the verifier crate's own
 tests use, through the crate's `fixtures` feature, so verification reaches
