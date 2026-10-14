@@ -269,14 +269,7 @@ fn render_authorized(
         || question.concepts.iter().any(|concept| {
             !valid_alias(&concept.alias)
                 || !valid_uri(&concept.uri)
-                || !matches!(
-                    concept.form.as_str(),
-                    "boolean"
-                        | "controlled-category"
-                        | "bounded-identifier"
-                        | "bounded-integer"
-                        | "reviewed-structured-value"
-                )
+                || !registry_evidence_authoring::output::TYPES.contains(&concept.form.as_str())
         })
         || !valid_purpose(&question.purpose)
     {
@@ -291,8 +284,10 @@ fn render_authorized(
             || stage.decision != Decision::Authorized
             || stage.requester_pseudonym != access.requester_pseudonym
             || stage.response_protection != access.response_protection
+            || !same_authority_context(stage, access)
             || stage.disclosed_concepts != Presence::Absent
             || stage.evidence_id != Presence::Absent
+            || stage.evidence_ids != Presence::Absent
         {
             return Err(failed());
         }
@@ -324,6 +319,7 @@ fn render_authorized(
         || release.purpose != access.purpose
         || release.requester_pseudonym != access.requester_pseudonym
         || release.response_protection != access.response_protection
+        || !same_authority_context(release, access)
         || parse_time(&release.occurred_at)? < parse_time(&access.occurred_at)?
         || release.disclosed_concepts
             != Presence::Present(
@@ -333,10 +329,7 @@ fn render_authorized(
                     .map(|concept| concept.uri.clone())
                     .collect(),
             )
-        || !matches!(
-            &release.evidence_id,
-            Presence::Present(value) if valid_uri(value)
-        )
+        || !valid_released_identity(release)
     {
         return Err(failed());
     }
@@ -374,8 +367,10 @@ fn render_unreleased(
     };
     if terminal.requester_pseudonym != access.requester_pseudonym
         || terminal.response_protection != access.response_protection
+        || !same_authority_context(terminal, access)
         || terminal.disclosed_concepts != Presence::Absent
         || terminal.evidence_id != Presence::Absent
+        || terminal.evidence_ids != Presence::Absent
         || parse_time(&terminal.occurred_at)? < parse_time(&access.occurred_at)?
     {
         return Err(failed());
@@ -386,6 +381,31 @@ fn render_unreleased(
     ))
 }
 
+fn same_authority_context(
+    earlier: &CoreAuthorizedAuditEvent,
+    later: &CoreAuthorizedAuditEvent,
+) -> bool {
+    earlier.authority_revision == later.authority_revision
+        && earlier.effective_grant_digest == later.effective_grant_digest
+}
+
+fn valid_released_identity(event: &CoreAuthorizedAuditEvent) -> bool {
+    match (&event.evidence_id, &event.evidence_ids) {
+        (Presence::Present(identifier), Presence::Absent) => valid_uri(identifier),
+        (Presence::Absent, Presence::Present(identifiers)) => {
+            event.response_protection == ResponseProtection::SdJwtVc
+                && (2..=16).contains(&identifiers.len())
+                && identifiers.iter().all(|identifier| valid_uri(identifier))
+                && identifiers
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    == identifiers.len()
+        }
+        _ => false,
+    }
+}
+
 fn validate_common(
     event: &CoreAuthorizedAuditEvent,
     question: &dev::ReadyDefinitionState,
@@ -393,8 +413,8 @@ fn validate_common(
     if event.requirement != question.requirement_uri
         || event.purpose != question.purpose
         || !matches!(
-            event.response_protection,
-            ResponseProtection::Signed | ResponseProtection::SdJwtVc
+            (&event.authority_revision, &event.effective_grant_digest),
+            (Presence::Absent, Presence::Absent) | (Presence::Present(_), Presence::Present(_))
         )
         || !valid_pseudonym(&event.requester_pseudonym)
     {
@@ -596,9 +616,15 @@ struct CoreAuthorizedAuditEvent {
     requester_pseudonym: String,
     response_protection: ResponseProtection,
     #[serde(default, deserialize_with = "deserialize_presence")]
+    authority_revision: Presence<registry_platform_yaml::Digest>,
+    #[serde(default, deserialize_with = "deserialize_presence")]
+    effective_grant_digest: Presence<registry_platform_yaml::Digest>,
+    #[serde(default, deserialize_with = "deserialize_presence")]
     disclosed_concepts: Presence<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_presence")]
     evidence_id: Presence<String>,
+    #[serde(default, deserialize_with = "deserialize_presence")]
+    evidence_ids: Presence<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -671,6 +697,7 @@ enum SafeErrorCategory {
 #[serde(rename_all = "kebab-case")]
 enum ResponseProtection {
     Signed,
+    Unsigned,
     SdJwtVc,
 }
 

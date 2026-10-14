@@ -107,6 +107,139 @@ fn successful_view_delegates_to_stopped_core_and_prints_only_aliases() {
 }
 
 #[test]
+fn normalized_authority_view_preserves_minimized_output_and_refuses_incoherent_context() {
+    let fixture = Fixture::new();
+    let mut view = successful_view();
+    let revision = format!("sha256:{}", "a".repeat(64));
+    let grant = format!("sha256:{}", "b".repeat(64));
+    for event in view["events"].as_array_mut().expect("events") {
+        event["authorityRevision"] = json!(revision);
+        event["effectiveGrantDigest"] = json!(grant);
+    }
+    fixture.write_core_json(&view);
+    let output = fixture.show();
+    assert_success(&output);
+    let human = String::from_utf8_lossy(&output.stdout);
+    assert!(!human.contains(&revision));
+    assert!(!human.contains(&grant));
+    assert_success(&fixture.show_json());
+
+    for (pointer, replacement) in [
+        ("/events/0/authorityRevision", Value::Null),
+        ("/events/0/effectiveGrantDigest", json!("source-canary")),
+        (
+            "/events/1/authorityRevision",
+            json!(format!("sha256:{}", "c".repeat(64))),
+        ),
+        (
+            "/events/1/effectiveGrantDigest",
+            json!(format!("sha256:{}", "d".repeat(64))),
+        ),
+    ] {
+        let mut invalid = view.clone();
+        *invalid.pointer_mut(pointer).expect("context field") = replacement;
+        fixture.write_core_json(&invalid);
+        assert_closed_failure(&fixture.show(), "invalid authority context");
+    }
+    let mut partial = view;
+    partial["events"][0]
+        .as_object_mut()
+        .expect("access")
+        .remove("effectiveGrantDigest");
+    fixture.write_core_json(&partial);
+    assert_closed_failure(&fixture.show(), "partial authority context");
+}
+
+#[test]
+fn coherent_unsigned_release_uses_the_same_minimized_audit_view() {
+    let fixture = Fixture::new();
+    let mut view = successful_view();
+    for event in view["events"].as_array_mut().expect("events") {
+        event["responseProtection"] = json!("unsigned");
+    }
+    fixture.write_core_json(&view);
+    let output = fixture.show();
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\nDISCLOSURE RELEASED is_adult\n")
+    );
+    assert_success(&fixture.show_json());
+}
+
+#[test]
+fn holder_bound_batch_view_accepts_only_the_complete_bounded_release_set() {
+    let fixture = Fixture::new();
+    let mut view = successful_view();
+    for event in view["events"].as_array_mut().expect("events") {
+        event["responseProtection"] = json!("sd-jwt-vc");
+    }
+    view["events"][1]
+        .as_object_mut()
+        .expect("release")
+        .remove("evidenceId");
+    view["events"][1]["evidenceIds"] =
+        json!(["urn:example:assertion:one", "urn:example:assertion:two"]);
+    fixture.write_core_json(&view);
+    assert_success(&fixture.show());
+
+    for identifiers in [
+        json!(["urn:example:assertion:one"]),
+        json!(["urn:example:assertion:one", "urn:example:assertion:one"]),
+        json!(["urn:example:assertion:one", "source-canary"]),
+        json!((0..17)
+            .map(|index| format!("urn:example:assertion:{index}"))
+            .collect::<Vec<_>>()),
+    ] {
+        let mut invalid = view.clone();
+        invalid["events"][1]["evidenceIds"] = identifiers;
+        fixture.write_core_json(&invalid);
+        assert_closed_failure(&fixture.show(), "invalid released set");
+    }
+    let mut unprotected = view.clone();
+    for event in unprotected["events"].as_array_mut().expect("events") {
+        event["responseProtection"] = json!("signed");
+    }
+    fixture.write_core_json(&unprotected);
+    assert_closed_failure(&fixture.show(), "batch without SD-JWT protection");
+    view["events"][1]["evidenceId"] = json!("urn:example:assertion:one");
+    fixture.write_core_json(&view);
+    assert_closed_failure(&fixture.show(), "singular and batch release together");
+}
+
+#[test]
+fn audit_aliases_accept_every_retained_output_form() {
+    for form in registry_evidence_authoring::output::TYPES {
+        let fixture = Fixture::new();
+        let state_path = fixture.root.join(".evidence/dev/state.json");
+        let mut state: Value =
+            serde_json::from_slice(&fs::read(&state_path).expect("state")).expect("state JSON");
+        state["definitions"][1]["concepts"][0]["form"] = json!(form);
+        fs::write(
+            &state_path,
+            serde_json::to_vec(&state).expect("state renders"),
+        )
+        .expect("state writes");
+        let bundle_path = fixture.root.join(".evidence/dev/bundle/evidence.yaml");
+        let mut bundle: Value = serde_norway::from_slice(&fs::read(&bundle_path).expect("bundle"))
+            .expect("bundle YAML");
+        bundle["requirements"][1]["concepts"][0]["type"] = json!(form);
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o600))
+            .expect("open fixture bundle");
+        fs::write(
+            &bundle_path,
+            serde_norway::to_string(&bundle).expect("bundle renders"),
+        )
+        .expect("bundle writes");
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
+            .expect("seal fixture bundle");
+        refresh_package_envelope(&fixture.root.join(".evidence/dev/bundle"));
+        fixture.write_core_json(&successful_view());
+        assert_success(&fixture.show());
+    }
+}
+
+#[test]
 fn access_only_view_prints_authorized_without_claiming_release() {
     let fixture = Fixture::new();
     let mut view = successful_view();
