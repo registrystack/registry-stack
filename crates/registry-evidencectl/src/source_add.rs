@@ -1518,7 +1518,7 @@ assertionDefinitions:
         let governance = project.join("local-target.yaml");
         let mut document: Value =
             serde_norway::from_slice(&fs::read(&governance).unwrap()).unwrap();
-        document["connections"]["registry"]["baseUrl"] = json!("http://127.0.0.1:29090");
+        document["connections"]["registry"]["origin"] = json!("http://127.0.0.1:29090");
         fs::write(&governance, serde_norway::to_string(&document).unwrap()).unwrap();
         let before = fs::read(&governance).unwrap();
         provider.calls.clear();

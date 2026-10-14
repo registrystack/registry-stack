@@ -130,6 +130,7 @@ pub(crate) fn compile(root: &Path) -> Result<(EvidenceProject, CompiledProject)>
     Ok((project, compiled))
 }
 pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Result<Checked> {
+    let target = target.map(crate::target::target_path);
     let snapshot = crate::project_snapshot::capture_project(root)?;
     let (project, mut compiled) = compile(snapshot.root())
         .map_err(|error| authored::project_refusal(error, snapshot.root(), root))?;
@@ -144,7 +145,7 @@ pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Resu
         function["digest"] = json!(registry_platform_config::sha256_uri(&script));
     }
     let mut authority = Value::Null;
-    if let Some(path) = target {
+    if let Some(path) = target.as_deref() {
         let bytes = authored::read_authored_file(path, "Evidence target")?;
         let target =
             registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?
@@ -192,7 +193,7 @@ pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Resu
         report: crate::report::success(
             command,
             "complete",
-            json!({"project":root,"target":target,"proof":"authoring","diagnostics":[],"projectPresentation":{"id":project.id,"label":project.label,"description":project.description},"selectorProfiles":project.selector_profiles,"capabilityCeilings":{"acquisitionCapabilities":project.acquisition_capabilities,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size},"assertionDefinitions":definitions,"sources":project.sources.iter().map(|(id,source)| json!({"id":id,"label":source.label,"description":source.description,"type":source.source_type,"connection":source.connection,"facts":source.facts,"response":source.response,"prepare":source.prepare,"resolvedPreparation":{"generated":source.prepare.is_none(),"script":compiled.model["sources"][id.as_str()]["request"]["prepareScript"],"limits":compiled.model["sources"][id.as_str()]["request"]["preparationLimits"]},"extract":source.extract,"limits":source.limits})).collect::<Vec<_>>(),"functions":compiled.functions,"authority":authority,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
+            json!({"project":root,"target":target.as_deref(),"proof":"authoring","diagnostics":[],"projectPresentation":{"id":project.id,"label":project.label,"description":project.description},"selectorProfiles":project.selector_profiles,"capabilityCeilings":{"acquisitionCapabilities":project.acquisition_capabilities,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size},"assertionDefinitions":definitions,"sources":project.sources.iter().map(|(id,source)| json!({"id":id,"label":source.label,"description":source.description,"type":source.source_type,"connection":source.connection,"facts":source.facts,"response":source.response,"prepare":source.prepare,"resolvedPreparation":{"generated":source.prepare.is_none(),"script":compiled.model["sources"][id.as_str()]["request"]["prepareScript"],"limits":compiled.model["sources"][id.as_str()]["request"]["preparationLimits"]},"extract":source.extract,"limits":source.limits})).collect::<Vec<_>>(),"functions":compiled.functions,"authority":authority,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
         ),
         diagnostics: registry_platform_yaml::Report::new(Vec::new()),
     })
@@ -247,11 +248,7 @@ pub(crate) fn generate_types(
 }
 
 pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetDocuments> {
-    let path = if path.is_dir() {
-        path.join("target.yaml")
-    } else {
-        path.to_path_buf()
-    };
+    let path = crate::target::target_path(path);
     let source_root = target_directory(&path).canonicalize()?;
     let bytes = authored::read_authored_file(&path, "Evidence target")?;
     let target =
@@ -262,11 +259,7 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(stage.path(), std::fs::Permissions::from_mode(0o700))?;
     let root = stage.path().canonicalize()?;
-    let key = target
-        .signer
-        .get("publicJwkFile")
-        .and_then(Value::as_str)
-        .context("target signer requires publicJwkFile")?;
+    let key = target.signer.public_jwk_file();
     if target.assurance_profile.as_deref().unwrap_or("local") == "local"
         && !source_root.join(key).exists()
         && key == ".generated/secrets/signing-p256-public.jwk.json"
@@ -297,37 +290,18 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
     governance["apiVersion"] = json!(crate::evidence_binary::EVIDENCE_BUNDLE_API_VERSION);
     governance["kind"] = json!(crate::evidence_binary::EVIDENCE_BUNDLE_KIND);
     governance["assuranceProfile"] = json!(target.assurance_profile.as_deref().unwrap_or("local"));
-    governance["service"] = target.service.clone();
-    let issuer = governance["service"]
-        .as_object_mut()
-        .context("target service must be an object")?
-        .remove("issuer")
-        .context("target service requires issuer")?;
-    governance["issuer"] = json!({"uri":issuer});
-    governance["authentication"] = target.authentication.clone();
-    let oidc = governance["authentication"]["oidc"]
-        .as_object_mut()
-        .context("target authentication requires oidc")?;
-    oidc.entry("allowedClients")
-        .or_insert(json!("unrestricted"));
-    oidc.entry("revokedKeyIds").or_insert(json!([]));
-    governance["subjectBinding"] = target.subject_binding.clone();
-    governance["audit"] = target.audit.clone();
-    governance["audit"]
-        .as_object_mut()
-        .context("target audit must be an object")?
-        .remove("path");
-    governance["rateLimits"] = target.rate_limits.clone();
-    governance["rateLimits"]
-        .as_object_mut()
-        .context("target rateLimits must be an object")?
-        .entry("burstPerPrincipal")
-        .or_insert(json!(16));
+    let (service, issuer) = target.service.governed_values()?;
+    governance["service"] = service;
+    governance["issuer"] = issuer;
+    governance["authentication"] = target.authentication.governed_value()?;
+    governance["subjectBinding"] = serde_json::to_value(&target.subject_binding)?;
+    governance["audit"] = target.audit.governed_value();
+    governance["rateLimits"] = target.rate_limits.governed_value()?;
     if let Some(formats) = &target.response_formats {
-        governance["responseFormats"] = formats.clone();
+        governance["responseFormats"] = serde_json::to_value(formats)?;
     }
     if let Some(publication) = &target.publication {
-        governance["publication"] = publication.clone();
+        governance["publication"] = serde_json::to_value(publication)?;
     } else {
         governance
             .as_object_mut()
@@ -338,39 +312,12 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
         .connections
         .iter()
         .map(|(id, connection)| {
-            let mut connection = connection.clone();
-            let object = connection
-                .as_object_mut()
-                .context("target connection must be an object")?;
-            let origin = object
-                .remove("origin")
-                .context("target connection requires origin")?;
-            object.insert("baseUrl".to_owned(), origin);
-            lower_connection_authentication(object);
-            object.entry("maximumConcurrency").or_insert(json!(256));
-            Ok((id.to_string(), connection))
+            Ok((id.to_string(), connection.governed_value()?))
         })
         .collect::<Result<serde_json::Map<_, _>>>()?;
     governance["sourceConnections"] = json!(connections);
     governance["authorityProfiles"] = json!({});
-    let mut runtime = json!({"apiVersion":crate::evidence_binary::EVIDENCE_RUNTIME_API_VERSION,"kind":crate::evidence_binary::EVIDENCE_RUNTIME_KIND,"package":target.package,"listener":target.listener,"secretProviders":target.secret_providers,"signer":target.signer,"audit":{"path":target.audit["path"]},"authority":{"root":source_root.join(".generated/authority"),"target":target.id}});
-    let signer = runtime["signer"]
-        .as_object_mut()
-        .context("target signer must be an object")?;
-    signer.remove("publicJwkFile");
-    signer.remove("algorithm");
-    let listener = runtime["listener"]
-        .as_object_mut()
-        .context("target listener must be an object")?;
-    for (key, value) in [
-        ("tlsTermination", json!("operator-controlled-upstream")),
-        ("maximumRequestBytes", json!(65536)),
-        ("maximumConcurrentRequests", json!(64)),
-        ("requestTimeoutMilliseconds", json!(10000)),
-        ("shutdownGraceMilliseconds", json!(30000)),
-    ] {
-        listener.entry(key).or_insert(value);
-    }
+    let mut runtime = json!({"apiVersion":crate::evidence_binary::EVIDENCE_RUNTIME_API_VERSION,"kind":crate::evidence_binary::EVIDENCE_RUNTIME_KIND,"package":&target.package,"listener":target.listener.runtime_value()?,"secretProviders":&target.secret_providers,"signer":target.signer.runtime_value()?,"audit":target.audit.runtime_value(),"authority":{"root":source_root.join(".generated/authority"),"target":&target.id}});
     for pointer in ["/package/root", "/secretProviders/file/root", "/audit/path"] {
         if let Some(value) = runtime.pointer_mut(pointer) {
             if let Some(path) = value.as_str() {
@@ -383,11 +330,13 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
     runtime["acquisitionCapabilities"] = json!(target.acquisition_capabilities);
     runtime["outboundTls"] = target
         .outbound_tls
-        .clone()
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()?
         .unwrap_or_else(|| json!({"systemRoots":true,"trustProfiles":{}}));
     crate::build::rebase_outbound_tls(&source_root, &mut runtime["outboundTls"])?;
     if let Some(extracts) = &target.extracts {
-        let mut extracts = extracts.clone();
+        let mut extracts = serde_json::to_value(extracts)?;
         let bindings = extracts
             .as_object_mut()
             .context("target extracts must be named bindings")?;
@@ -433,18 +382,6 @@ pub(crate) fn compiled_authority(
             authored::file_findings_report(&path.to_string_lossy(), "authority", findings).into()
         },
     )
-}
-
-/// Translate the authored bearer binding into the retained runtime connection ABI.
-pub(crate) fn lower_connection_authentication(connection: &mut serde_json::Map<String, Value>) {
-    if let Some(authentication) = connection
-        .get_mut("authentication")
-        .and_then(Value::as_object_mut)
-    {
-        if authentication.get("type").and_then(Value::as_str) == Some("bearer") {
-            authentication.insert("type".to_owned(), json!("static-authorization"));
-        }
-    }
 }
 
 pub(crate) fn target_directory(path: &Path) -> &Path {

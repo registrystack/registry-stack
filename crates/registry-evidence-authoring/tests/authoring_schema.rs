@@ -503,6 +503,110 @@ fn canonical_project_target_and_authority_satisfy_schema_and_reader() {
 }
 
 #[test]
+fn the_target_schema_and_reader_close_nested_deployment_blocks() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["listener"]["legacyPort"] = serde_json::json!(8080);
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+
+    let report = target::read_target(
+        "local-target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("an unknown nested deployment member is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.path == "/listener/legacyPort")
+        .expect("the nested unknown member has an exact path");
+    assert_eq!(diagnostic.code, "config.unknown-key");
+}
+
+#[test]
+fn the_target_model_retains_complete_production_deployment_options() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["assuranceProfile"] = serde_json::json!("production");
+    document["package"]["expectedDigest"] =
+        serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+    document["listener"] = serde_json::json!({
+        "bind":"0.0.0.0:8080", "networkExposure":"container-private",
+        "tlsTermination":"operator-controlled-upstream", "trustProxyIdentityHeaders":false,
+        "maximumRequestBytes":65536, "maximumConcurrentRequests":64,
+        "requestTimeoutMilliseconds":10000, "shutdownGraceMilliseconds":30000
+    });
+    document["authentication"]["oidc"]["allowedClients"] =
+        serde_json::json!(["service-client"]);
+    document["authentication"]["oidc"]["assertionIssuers"] =
+        serde_json::json!({"service-client":["urn:example:issuer:grants"]});
+    document["authentication"]["oidc"]["claims"] = serde_json::json!({
+        "actorKind":"actor", "purpose":"purpose", "grantId":"grant_id",
+        "grantSourceIssuer":"grant_source", "grantClient":"grant_client",
+        "grantResource":"grant_resource", "grantExp":"grant_exp",
+        "grantBounds":"grant_bounds", "approver":"approver"
+    });
+    document["authentication"]["oidc"]["actorClaim"] = serde_json::json!("actor");
+    document["authentication"]["oidc"]["tlsTrustProfile"] =
+        serde_json::json!("private-ca");
+    document["authentication"]["oidc"]["revokedKeyIds"] = serde_json::json!([]);
+    document["connections"] = serde_json::json!({
+        "none":{"origin":"http://127.0.0.1:8081","authentication":{"type":"none"}},
+        "basic":{"origin":"https://basic.invalid","authentication":{"type":"basic","usernameRef":"secret:file/user","passwordRef":"secret:file/password"}},
+        "bearer":{"origin":"https://bearer.invalid","authentication":{"type":"bearer","tokenRef":"secret:file/token","scheme":"Bearer"}},
+        "authorization":{"origin":"https://authorization.invalid","authentication":{"type":"static-authorization","tokenRef":"secret:file/token"}},
+        "api-key":{"origin":"https://api.invalid","authentication":{"type":"static-api-key","headerName":"X-Api-Key","valueRef":"secret:file/api-key"}},
+        "oauth-secret":{"origin":"https://oauth.invalid","authentication":{"type":"oauth2-client-credentials","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:file/client-id","clientSecretRef":"secret:file/client-secret","scope":"evidence.read","audience":"evidence","resource":"urn:example:resource","credentialPlacement":"basic-header","maximumCacheSeconds":300,"assumedLifetimeSeconds":300},"tlsTrustProfile":"private-ca","maximumConcurrency":8,"admissionTimeoutMilliseconds":2000,"tokenTimeoutMilliseconds":2000},
+        "oauth-jwt":{"origin":"https://jwt.invalid","authentication":{"type":"oauth2-private-key-jwt","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:file/client-id","clientAssertionKeyRef":"secret:file/client-key","clientAssertionAudience":"urn:example:issuer","scope":"evidence.read","audience":"evidence","resource":"urn:example:resource","maximumCacheSeconds":300,"assumedLifetimeSeconds":300}}
+    });
+    document["secretProviders"]["environment"] = serde_json::json!({});
+    document["signer"] = serde_json::json!({
+        "type":"transit", "algorithm":"ES256", "publicJwkFile":"public-keys/active.jwk.json",
+        "unixSocketPath":"/run/evidence/transit.sock", "mount":"transit",
+        "keyName":"evidence-signing", "keyVersion":7, "attemptTimeoutMilliseconds":2000
+    });
+    document["audit"] = serde_json::json!({
+        "hashKeyRef":"secret:file/audit-hmac-key", "hashKeyVersion":1,
+        "destination":"file", "path":"/var/lib/evidence/audit.jsonl",
+        "rotateBytes":104857600, "retentionDays":90
+    });
+    document["publication"] = serde_json::json!({
+        "serviceId":"urn:example:service:evidence", "title":"Evidence",
+        "description":"Governed Evidence service", "endpointUrl":"https://evidence.invalid",
+        "jurisdictions":["urn:example:jurisdiction"],
+        "publisherId":"urn:example:publisher", "operatorId":"urn:example:operator"
+    });
+    document["responseFormats"] =
+        serde_json::json!(["signed-jws", "unsigned-json", "sd-jwt-vc", "sd-jwt-vc-batch"]);
+    document["outboundTls"] = serde_json::json!({
+        "systemRoots":true,
+        "trustProfiles":{"private-ca":{"caBundleFile":"/etc/evidence/private-ca.pem"}}
+    });
+    document["extracts"] =
+        serde_json::json!({"registry-snapshot":{"path":"/var/lib/evidence/registry.sqlite"}});
+
+    assert!(schema(TARGET_SCHEMA_FILE).is_valid(&document));
+    target::read_target(
+        "target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect("the complete retained target surface reads");
+}
+
+#[test]
+fn target_admission_gates_are_exact_in_schema_and_reader() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["authentication"]["oidc"]["requiredScopes"] = serde_json::json!("everything");
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+    let report = target::read_target(
+        "target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("an unknown admission keyword is refused");
+    assert_eq!(
+        report.diagnostics()[0].path,
+        "/authentication/oidc/requiredScopes"
+    );
+}
+
+#[test]
 fn every_retired_question_corpus_case_is_refused_as_a_normalized_project() {
     let schema = schema(PROJECT_SCHEMA_FILE);
     for (departure, document) in

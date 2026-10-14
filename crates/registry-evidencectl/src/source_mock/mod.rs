@@ -1246,10 +1246,7 @@ fn project_source_binding(
                 "local-target.yaml needs connection `{connection_id}` for an applicable HTTP Source"
             )
         })?;
-        let origin = connection
-            .get("origin")
-            .and_then(Value::as_str)
-            .context("applicable target connection needs an explicit origin")?;
+        let origin = connection.origin.as_str();
         addresses.insert(loopback_origin_address(origin)?);
         let key = (operation.0.to_owned(), operation.1.to_owned());
         if routes

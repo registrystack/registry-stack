@@ -299,7 +299,7 @@ fn compile_local_project_with_target_inputs_resource_and_authority(
         target_root,
     )?);
     plan.bundle["authentication"]["oidc"]["requiredScopes"] =
-        target.authentication["oidc"]["requiredScopes"].clone();
+        serde_json::to_value(&target.authentication.oidc.required_scopes)?;
     let compilation = write_plan(
         &project_root,
         staging_root,

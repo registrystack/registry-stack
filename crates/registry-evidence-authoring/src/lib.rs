@@ -33,6 +33,7 @@ pub mod project;
 pub mod schema;
 pub mod selector;
 pub mod target;
+mod target_binding;
 pub mod types;
 pub mod validate;
 

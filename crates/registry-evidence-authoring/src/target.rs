@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+pub use crate::target_binding::*;
+
 pub const TARGET_API_VERSION: &str = "id.registrystack.org/formats/evidence/target/v1alpha1";
 pub const TARGET_KIND: &str = "EvidenceTarget";
 pub const AUTHORITY_API_VERSION: &str =
@@ -102,65 +104,34 @@ pub struct GrantedSubject {
 pub struct EvidenceTarget {
     pub id: LocalId,
     pub project: LocalId,
-    pub package: Value,
+    pub package: TargetPackage,
     pub authority: String,
-    pub service: Value,
-    pub listener: Value,
-    pub authentication: Value,
-    #[cfg_attr(feature = "schema", schemars(extend("x-registry-passthrough" = "Named target connection bindings, compiled into the retained Evidence runtime connection contract.")))]
-    pub connections: BTreeMap<LocalId, Value>,
-    pub secret_providers: Value,
-    pub signer: Value,
-    pub subject_binding: Value,
-    pub audit: Value,
-    pub rate_limits: Value,
+    pub service: TargetService,
+    pub listener: TargetListener,
+    pub authentication: TargetAuthentication,
+    pub connections: BTreeMap<LocalId, TargetConnection>,
+    pub secret_providers: TargetSecretProviders,
+    pub signer: TargetSigner,
+    pub subject_binding: TargetSubjectBinding,
+    pub audit: TargetAudit,
+    pub rate_limits: TargetRateLimits,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assurance_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub publication: Option<Value>,
+    pub publication: Option<TargetPublication>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub response_formats: Option<Value>,
+    pub response_formats: Option<UniqueList<TargetResponseFormat>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outbound_tls: Option<Value>,
+    pub outbound_tls: Option<TargetOutboundTls>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extracts: Option<Value>,
+    pub extracts: Option<BTreeMap<LocalId, TargetExtractBinding>>,
     /// Operator opt-ins, intersected with the package's acquisition capabilities.
     #[serde(default, skip_serializing_if = "crate::project::empty_capabilities")]
     pub acquisition_capabilities: UniqueList<crate::project::AcquisitionCapability>,
 }
 
 pub fn read_target(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceTarget>, Report> {
-    let decoded = decode_authored::<EvidenceTarget>(file, bytes, &TARGET)?;
-    let mut findings = Vec::new();
-    if decoded
-        .value
-        .authentication
-        .pointer("/oidc/jwksFile")
-        .is_some()
-    {
-        findings.push(Finding::new(FieldPath::root().key("authentication").key("oidc").key("jwksFile"), "target-jwks-source", "declare jwksSource with type uri and the issuer JWKS URI; jwksFile is not an Evidence authentication binding"));
-    }
-    if decoded
-        .value
-        .authentication
-        .pointer("/oidc/jwksSource/uri")
-        .and_then(Value::as_str)
-        .is_none()
-    {
-        findings.push(Finding::new(
-            FieldPath::root()
-                .key("authentication")
-                .key("oidc")
-                .key("jwksSource"),
-            "target-jwks-source",
-            "declare an explicit URI source for verified issuer keys",
-        ));
-    }
-    let report = findings_report(&decoded.document, "target", findings);
-    if report.has_errors() {
-        return Err(report);
-    }
-    Ok(decoded)
+    decode_authored::<EvidenceTarget>(file, bytes, &TARGET)
 }
 pub fn read_authority(
     file: &str,
