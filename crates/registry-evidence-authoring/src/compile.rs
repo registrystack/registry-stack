@@ -5,6 +5,7 @@ use crate::{
     project::{self, EvidenceProject, FunctionInterface, SourceType},
 };
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug)]
@@ -96,8 +97,9 @@ pub fn compile(
                     .is_some_and(|call| call.function == function.id)
         });
         if function.interface != FunctionInterface::AssertionDerive && ordinary_source_call {
-            artifacts.insert(
-                format!("adapters/{}.rhai", function.id),
+            insert_artifact(
+                &mut artifacts,
+                &format!("adapters/functions/{}.rhai", function.id),
                 format!(
                     "// Evidence Function {} interface {}\n{script}",
                     function.id,
@@ -107,7 +109,8 @@ pub fn compile(
                         .expect("interface string")
                 )
                 .into_bytes(),
-            );
+                at.clone().key("source"),
+            )?;
         }
     }
     if !findings.is_empty() {
@@ -122,24 +125,32 @@ pub fn compile(
     };
     let mut sources = Map::new();
     for (id, source) in &project.sources {
-        let response_path = format!("schemas/{id}-response.schema.json");
-        let facts_path = format!("schemas/{id}-facts.schema.json");
-        let parameters_path = format!("schemas/{id}-parameters.schema.json");
+        let source_at = FieldPath::root().key("sources").map_key(id.to_string());
+        let response_path = format!("schemas/source-response/{id}.schema.json");
+        let facts_path = format!("schemas/source-facts/{id}.schema.json");
+        let parameters_path = format!("schemas/source-parameters/{id}.schema.json");
         let facts = json!({"type":"object", "additionalProperties":false, "required":source.facts.keys().collect::<Vec<_>>(), "properties":source.facts.iter().map(|(name, shape)| (name.to_string(), project::value_schema(shape))).collect::<Map<_, _>>()});
-        artifact(
+        insert_json_artifact(
             &mut artifacts,
             &response_path,
             &project::value_schema(&source.response.shape),
-        );
-        artifact(&mut artifacts, &facts_path, &facts);
-        if source.source_type == SourceType::HttpJson || source.prepare.is_some() {
-            artifact(
+            source_at.clone().key("response").key("shape"),
+        )?;
+        insert_json_artifact(
             &mut artifacts,
-            &parameters_path,
-            &source.adapter_parameters_schema.clone().unwrap_or_else(
-                || json!({"type":"object", "additionalProperties":false, "properties":{}, "required":[]}),
-            ),
-        );
+            &facts_path,
+            &facts,
+            source_at.clone().key("facts"),
+        )?;
+        if source.source_type == SourceType::HttpJson || source.prepare.is_some() {
+            insert_json_artifact(
+                &mut artifacts,
+                &parameters_path,
+                &source.adapter_parameters_schema.clone().unwrap_or_else(|| {
+                    json!({"type":"object", "additionalProperties":false, "properties":{}, "required":[]})
+                }),
+                source_at.clone().key("adapterParametersSchema"),
+            )?;
         }
         let selector_inputs = source.selectors.iter().map(|selector| json!({"role":selector.role,"alternatives":selector.profiles.iter().map(|profile| json!({"profile":profile,"fields":project.selector_profiles[profile].fields.keys().collect::<Vec<_>>()})).collect::<Vec<_>>()})).collect::<Vec<_>>();
         let mut request = source.request.clone();
@@ -182,7 +193,10 @@ pub fn compile(
             if let Some(call) = &source.prepare {
                 request_map.insert(
                     "prepareScript".to_owned(),
-                    json!(format!("adapters/{}.rhai", function(&call.function).id)),
+                    json!(format!(
+                        "adapters/functions/{}.rhai",
+                        function(&call.function).id
+                    )),
                 );
                 request_map.insert(
                     "adapterParameters".to_owned(),
@@ -208,18 +222,25 @@ pub fn compile(
                         "the reviewed SQL statement asset was not supplied",
                     )]);
                 };
-                artifacts.insert(path.to_owned(), sql.as_bytes().to_vec());
+                insert_artifact(
+                    &mut artifacts,
+                    path,
+                    sql.as_bytes().to_vec(),
+                    source_at.clone().key("request").key("statement"),
+                )?;
             }
         }
         if source.source_type == SourceType::HttpJson {
             let prepare_path = match &source.prepare {
-                Some(call) => format!("adapters/{}.rhai", function(&call.function).id),
+                Some(call) => format!("adapters/functions/{}.rhai", function(&call.function).id),
                 None => {
-                    let path = format!("adapters/{id}-prepare.rhai");
-                    artifacts.insert(
-                        path.clone(),
+                    let path = format!("adapters/source-prepare/{id}.rhai");
+                    insert_artifact(
+                        &mut artifacts,
+                        &path,
                         b"fn prepare(selectors, context) { #{query: [], body: ()} }\n".to_vec(),
-                    );
+                        source_at.clone().key("request"),
+                    )?;
                     path
                 }
             };
@@ -265,7 +286,7 @@ pub fn compile(
                 )?;
             }
         }
-        let mut compiled = json!({"type":source.source_type,"posture":source.acquisition_posture,"request":request,"responseSchema":response_path,"extractScript":format!("adapters/{}.rhai", function(&source.extract.function).id),"factSchema":facts_path});
+        let mut compiled = json!({"type":source.source_type,"posture":source.acquisition_posture,"request":request,"responseSchema":response_path,"extractScript":format!("adapters/functions/{}.rhai", function(&source.extract.function).id),"factSchema":facts_path});
         if let Some(connection) = &source.connection {
             compiled["connection"] = json!(connection);
         }
@@ -276,34 +297,47 @@ pub fn compile(
             compiled["maximumExtractAgeSeconds"] = json!(age);
         }
         if let Some(batch) = &source.batch {
-            let response_path = format!("schemas/{id}-batch-response.schema.json");
-            artifact(
+            let response_path = format!("schemas/source-batch-response/{id}.schema.json");
+            insert_json_artifact(
                 &mut artifacts,
                 &response_path,
                 &project::value_schema(&batch.response.shape),
-            );
+                source_at.clone().key("batch").key("response").key("shape"),
+            )?;
             let prepare = function(&batch.prepare.function);
             let extract = function(&batch.extract.function);
-            let prepare_path = format!("adapters/{id}-batch-prepare.rhai");
-            let extract_path = format!("adapters/{id}-batch-extract.rhai");
-            artifacts.insert(
-                prepare_path.clone(),
+            let prepare_path = format!("adapters/source-batch-prepare/{id}.rhai");
+            let extract_path = format!("adapters/source-batch-extract/{id}.rhai");
+            insert_artifact(
+                &mut artifacts,
+                &prepare_path,
                 format!(
                     "// Evidence Function {} interface source-prepare/v1 batch\n{}",
                     prepare.id,
                     rename_entry(&scripts[&prepare.source], "prepare", "prepare_batch")
                 )
                 .into_bytes(),
-            );
-            artifacts.insert(
-                extract_path.clone(),
+                source_at
+                    .clone()
+                    .key("batch")
+                    .key("prepare")
+                    .key("function"),
+            )?;
+            insert_artifact(
+                &mut artifacts,
+                &extract_path,
                 format!(
                     "// Evidence Function {} interface source-extract/v1 batch\n{}",
                     extract.id,
                     rename_entry(&scripts[&extract.source], "extract", "extract_batch")
                 )
                 .into_bytes(),
-            );
+                source_at
+                    .clone()
+                    .key("batch")
+                    .key("extract")
+                    .key("function"),
+            )?;
             compiled["batch"] = json!({"maximumItems":batch.maximum_items,"prepareScript":prepare_path,"extractScript":extract_path,"responseSchema":response_path,"projection":batch.response.projection});
         }
         if let Some(evidence) = &source.evidence {
@@ -351,7 +385,7 @@ pub fn compile(
                         "selector codelist version must match the reviewed asset",
                     )]);
                 }
-                artifacts.insert(path.to_owned(), bytes.as_bytes().to_vec());
+                insert_artifact(&mut artifacts, path, bytes.as_bytes().to_vec(), at)?;
             }
         }
     }
@@ -366,12 +400,18 @@ pub fn compile(
             }
             if output.value_type == "controlled-category" && !output.values.is_empty() {
                 map.remove("values");
-                let path = format!("codelists/{id}-{name}.yaml");
-                artifact(
+                let path = inline_codelist_path(id.as_str(), name.as_str());
+                insert_json_artifact(
                     &mut artifacts,
                     &path,
                     &json!({"apiVersion":"id.registrystack.org/formats/evidence/codelist/v1alpha1","kind":"EvidenceCodelist","uri":format!("{}:values",output.concept),"version":"1","type":"code-list","codes":output.values}),
-                );
+                    FieldPath::root()
+                        .key("assertionDefinitions")
+                        .map_key(id.to_string())
+                        .key("outputs")
+                        .map_key(name.to_string())
+                        .key("values"),
+                )?;
                 map.insert("codelist".to_owned(), json!(path));
                 map.insert(
                     "categoryScheme".to_owned(),
@@ -431,7 +471,17 @@ pub fn compile(
                         "codelist URI and version must match this Output",
                     )]);
                 }
-                artifacts.insert(path.clone(), bytes.as_bytes().to_vec());
+                insert_artifact(
+                    &mut artifacts,
+                    path,
+                    bytes.as_bytes().to_vec(),
+                    FieldPath::root()
+                        .key("assertionDefinitions")
+                        .map_key(id.to_string())
+                        .key("outputs")
+                        .map_key(name.to_string())
+                        .key("codelist"),
+                )?;
                 if matches!(output.value_type.as_str(), "date-bucket" | "time-bucket") {
                     map.remove("codelist");
                 }
@@ -476,7 +526,17 @@ pub fn compile(
                     )]);
                 };
                 map.insert("schema".to_owned(), json!(uri));
-                artifact(&mut artifacts, path, &schema);
+                insert_json_artifact(
+                    &mut artifacts,
+                    path,
+                    &schema,
+                    FieldPath::root()
+                        .key("assertionDefinitions")
+                        .map_key(id.to_string())
+                        .key("outputs")
+                        .map_key(name.to_string())
+                        .key("schema"),
+                )?;
             }
             let mut concept = json!({"handle":name,"uri":output.concept,"type":output.value_type,"required":true,"constraints":constraints});
             if let Some(projection) = &output.sd_jwt_vc {
@@ -525,7 +585,16 @@ pub fn compile(
             "// Evidence Function {} interface assertion-derive/v1\n{compiled_script}",
             derive.id
         );
-        artifacts.insert(derive_path.clone(), compiled_script.into_bytes());
+        insert_artifact(
+            &mut artifacts,
+            &derive_path,
+            compiled_script.into_bytes(),
+            FieldPath::root()
+                .key("assertionDefinitions")
+                .map_key(id.to_string())
+                .key("derive")
+                .key("function"),
+        )?;
         let mut requirement = json!({"handle":id,"uri":definition.semantics.requirement,"question":definition.question,"kind":definition.semantics.kind,"grantCeiling":definition.grant_ceiling,"representations":definition.representations,"acquisition":definition.acquisition,"purposes":[definition.purpose],"subjectRoles":definition.subjects.iter().map(|subject| json!({"role":subject.role,"cardinality":"one","selectorProfiles":subject.selectors})).collect::<Vec<_>>(),"referenceFrameworks":definition.semantics.reference_frameworks,"evidenceType":definition.semantics.evidence_type,"observationTimezone":definition.observation_timezone,"validitySeconds":definition.validity_seconds,"subjectBinding":definition.subject_binding,"derivation":{"script":derive_path,"parameters":definition.derive.parameters},"concepts":concepts,"disclosureGuard":definition.disclosure_guard.clone().unwrap_or_else(|| json!({"families":[definition.semantics.requirement]})),"existenceDisclosure":definition.existence_disclosure});
         if !definition.derive.selector_inputs.is_empty() {
             requirement["derivation"]["selectorInputs"] = json!(definition.derive.selector_inputs);
@@ -570,11 +639,61 @@ pub fn compile(
     }
     Ok(compiled)
 }
-fn artifact(artifacts: &mut BTreeMap<String, Vec<u8>>, path: &str, value: &Value) {
-    artifacts.insert(
-        path.to_owned(),
+fn insert_json_artifact(
+    artifacts: &mut BTreeMap<String, Vec<u8>>,
+    path: &str,
+    value: &Value,
+    at: FieldPath,
+) -> Result<(), Vec<Finding>> {
+    insert_artifact(
+        artifacts,
+        path,
         serde_json::to_vec_pretty(value).expect("JSON value serializes"),
+        at,
+    )
+}
+
+fn insert_artifact(
+    artifacts: &mut BTreeMap<String, Vec<u8>>,
+    path: &str,
+    bytes: Vec<u8>,
+    at: FieldPath,
+) -> Result<(), Vec<Finding>> {
+    if artifacts
+        .get(path)
+        .is_some_and(|existing| existing != &bytes)
+    {
+        return Err(vec![Finding::new(
+            at,
+            "artifact-path-collision",
+            "the compiled artifact path is already used for different content",
+        )]);
+    }
+    artifacts.entry(path.to_owned()).or_insert(bytes);
+    Ok(())
+}
+
+fn inline_codelist_path(definition: &str, output: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(
+        u64::try_from(definition.len())
+            .expect("local identifier length fits u64")
+            .to_be_bytes(),
     );
+    digest.update(definition.as_bytes());
+    digest.update(
+        u64::try_from(output.len())
+            .expect("local identifier length fits u64")
+            .to_be_bytes(),
+    );
+    digest.update(output.as_bytes());
+    let digest = digest.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut hex, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    format!("codelists/inline/{hex}.yaml")
 }
 
 /// The wrapper translates only declared public Output names. Unknown, duplicate,

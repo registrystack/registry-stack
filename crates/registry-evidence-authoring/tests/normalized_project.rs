@@ -386,7 +386,7 @@ fn compiler_metadata_exposes_typed_function_bindings_and_exact_extract_outcomes(
         json!({})
     );
     assert_eq!(
-        compiled.artifacts["schemas/person-parameters.schema.json"],
+        compiled.artifacts["schemas/source-parameters/person.schema.json"],
         serde_json::to_vec_pretty(
             &json!({"type":"object","additionalProperties":false,"properties":{},"required":[]})
         )
@@ -472,16 +472,16 @@ fn source_batches_compile_named_source_interfaces_and_package_gates() {
         json!(["source-batch"])
     );
     assert_eq!(compiled.model["maximumHolderBoundBatchSize"], 4);
-    assert!(
-        String::from_utf8(compiled.artifacts["adapters/person-batch-prepare.rhai"].clone())
-            .unwrap()
-            .contains("fn prepare_batch")
-    );
-    assert!(
-        String::from_utf8(compiled.artifacts["adapters/person-batch-extract.rhai"].clone())
-            .unwrap()
-            .contains("fn extract_batch")
-    );
+    assert!(String::from_utf8(
+        compiled.artifacts["adapters/source-batch-prepare/person.rhai"].clone()
+    )
+    .unwrap()
+    .contains("fn prepare_batch"));
+    assert!(String::from_utf8(
+        compiled.artifacts["adapters/source-batch-extract/person.rhai"].clone()
+    )
+    .unwrap()
+    .contains("fn extract_batch"));
     let ts = project::typescript(&project, &compiled);
     let py = project::python(&project, &compiled);
     for text in [&ts, &py] {
@@ -491,6 +491,153 @@ fn source_batches_compile_named_source_interfaces_and_package_gates() {
     let mut invalid = project;
     invalid.acquisition_capabilities = Default::default();
     assert!(compile::compile(&invalid, &scripts).is_err());
+}
+
+#[test]
+fn colliding_local_ids_retain_distinct_artifacts_and_deterministic_output() {
+    let mut value = serde_json::to_value(project()).unwrap();
+    value["acquisitionCapabilities"] = json!(["source-batch"]);
+    value["functions"][0]["id"] = json!("person-prepare");
+    value["sources"]["person"]["extract"]["function"] = json!("person-prepare");
+    let mut second_source = value["sources"]["person"].clone();
+    second_source["prepare"] = json!({"function":"person-batch-prepare"});
+    second_source["extract"] = json!({"function":"person-batch-extract"});
+    value["sources"]["person-batch"] = second_source;
+    value["functions"].as_array_mut().unwrap().extend([
+        json!({"id":"person-batch-prepare","interface":"source-prepare/v1","source":"functions/ordinary-prepare.rhai"}),
+        json!({"id":"person-batch-extract","interface":"source-extract/v1","source":"functions/ordinary-extract.rhai"}),
+        json!({"id":"batch-prepare","interface":"source-prepare/v1","source":"functions/batch-prepare.rhai"}),
+        json!({"id":"batch-extract","interface":"source-extract/v1","source":"functions/batch-extract.rhai"}),
+        json!({"id":"derive-extra","interface":"assertion-derive/v1","source":"functions/derive-extra.rhai"}),
+    ]);
+    value["sources"]["person"]["batch"] = json!({
+        "maximumItems":4,
+        "prepare":{"function":"batch-prepare"},
+        "extract":{"function":"batch-extract"},
+        "response":{
+            "projection":["/results/*"],
+            "shape":{
+                "type":"object",
+                "required":["results"],
+                "properties":{"results":{"type":"array","maxItems":4,"items":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean"}}}}}
+            }
+        }
+    });
+    value["assertionDefinitions"]["active-status"]["outputs"] = json!({
+        "active-extra":{
+            "concept":"urn:example:concept:first",
+            "type":"controlled-category",
+            "values":["first"]
+        }
+    });
+    let mut second_definition = value["assertionDefinitions"]["active-status"].clone();
+    second_definition["semantics"]["requirement"] = json!("urn:example:requirement:second");
+    second_definition["derive"]["function"] = json!("derive-extra");
+    second_definition["outputs"] = json!({
+        "extra":{
+            "concept":"urn:example:concept:second",
+            "type":"controlled-category",
+            "values":["second"]
+        }
+    });
+    value["assertionDefinitions"]["active-status-active"] = second_definition;
+    let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
+    let mut scripts = scripts();
+    scripts.insert(
+        "functions/derive.rhai".to_owned(),
+        "fn derive(facts, selectors, context) { [#{output: \"active-extra\", value: \"first\"}] }"
+            .to_owned(),
+    );
+    scripts.insert(
+        "functions/ordinary-prepare.rhai".to_owned(),
+        "fn prepare(selectors, context) { #{query:[\"ordinary\"],body:()} }".to_owned(),
+    );
+    scripts.insert(
+        "functions/ordinary-extract.rhai".to_owned(),
+        "fn extract(response, selectors, context) { #{outcome:\"match\",facts:#{active:true,canary:\"ordinary\"}} }"
+            .to_owned(),
+    );
+    scripts.insert(
+        "functions/batch-prepare.rhai".to_owned(),
+        "fn prepare(items, context) { #{query:[\"batch\"],body:#{items:items}} }".to_owned(),
+    );
+    scripts.insert(
+        "functions/batch-extract.rhai".to_owned(),
+        "fn extract(response, context) { [] }".to_owned(),
+    );
+    scripts.insert(
+        "functions/derive-extra.rhai".to_owned(),
+        "fn derive(facts, selectors, context) { [#{output: \"extra\", value: \"second\"}] }"
+            .to_owned(),
+    );
+
+    let compiled = compile::compile(&project, &scripts).unwrap();
+    let repeated = compile::compile(&project, &scripts).unwrap();
+    assert_eq!(compiled.model, repeated.model);
+    assert_eq!(compiled.artifacts, repeated.artifacts);
+
+    let text =
+        |path: &str| String::from_utf8(compiled.artifacts[path].clone()).expect("text artifact");
+    assert!(text("adapters/functions/person-prepare.rhai").contains("response.active"));
+    assert!(text("adapters/source-prepare/person.rhai").contains("query: []"));
+    assert!(text("adapters/functions/person-batch-prepare.rhai").contains("ordinary"));
+    assert!(text("adapters/source-batch-prepare/person.rhai").contains("batch"));
+    assert!(text("adapters/functions/person-batch-extract.rhai").contains("ordinary"));
+    assert!(text("adapters/source-batch-extract/person.rhai").contains("fn extract_batch"));
+    assert!(text("schemas/source-response/person-batch.schema.json").contains("\"canary\""));
+    assert!(text("schemas/source-batch-response/person.schema.json").contains("\"results\""));
+
+    let first_codelist = compiled.model["requirements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|requirement| requirement["handle"] == "active-status")
+        .unwrap()["concepts"][0]["constraints"]["codelist"]
+        .as_str()
+        .unwrap();
+    let second_codelist = compiled.model["requirements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|requirement| requirement["handle"] == "active-status-active")
+        .unwrap()["concepts"][0]["constraints"]["codelist"]
+        .as_str()
+        .unwrap();
+    assert_ne!(first_codelist, second_codelist);
+    assert!(text(first_codelist).contains("\"first\""));
+    assert!(text(second_codelist).contains("\"second\""));
+}
+
+#[test]
+fn an_authored_asset_cannot_replace_a_generated_artifact() {
+    let mut value = serde_json::to_value(project()).unwrap();
+    value["assertionDefinitions"]["active-status"]["outputs"]["details"] = json!({
+        "concept":"urn:example:concept:details",
+        "type":"reviewed-structured-value",
+        "schema":"schemas/source-response/person.schema.json",
+        "maximumSerializedBytes":256
+    });
+    let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
+    let mut scripts = scripts();
+    scripts.insert(
+        "schemas/source-response/person.schema.json".to_owned(),
+        json!({
+            "$id":"urn:example:schema:details",
+            "type":"object",
+            "required":["detail"],
+            "properties":{"detail":{"type":"string","maxLength":64}},
+            "additionalProperties":false
+        })
+        .to_string(),
+    );
+
+    let findings = compile::compile(&project, &scripts).unwrap_err();
+
+    assert!(findings.iter().any(|finding| {
+        finding.code == "artifact-path-collision"
+            && finding.field.to_json_pointer()
+                == "/assertionDefinitions/active-status/outputs/details/schema"
+    }));
 }
 
 #[test]

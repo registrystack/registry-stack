@@ -261,8 +261,8 @@ fn successful_package_excludes_runtime_local_state_and_validation_secrets() {
         snapshot.keys().cloned().collect::<Vec<_>>(),
         vec![
             PathBuf::from("bundle/SHA256SUMS"),
-            PathBuf::from("bundle/adapters/source-extract.rhai"),
-            PathBuf::from("bundle/adapters/source-prepare.rhai"),
+            PathBuf::from("bundle/adapters/functions/source-extract.rhai"),
+            PathBuf::from("bundle/adapters/functions/source-prepare.rhai"),
             PathBuf::from("bundle/catalog.jsonld"),
             PathBuf::from("bundle/derivations/answer.rhai"),
             PathBuf::from("bundle/evidence.yaml"),
@@ -270,9 +270,9 @@ fn successful_package_excludes_runtime_local_state_and_validation_secrets() {
             PathBuf::from(
                 "bundle/public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json"
             ),
-            PathBuf::from("bundle/schemas/registry-facts.schema.json"),
-            PathBuf::from("bundle/schemas/registry-parameters.schema.json"),
-            PathBuf::from("bundle/schemas/registry-response.schema.json"),
+            PathBuf::from("bundle/schemas/source-facts/registry.schema.json"),
+            PathBuf::from("bundle/schemas/source-parameters/registry.schema.json"),
+            PathBuf::from("bundle/schemas/source-response/registry.schema.json"),
             PathBuf::from("compiled-authority.yaml"),
             PathBuf::from("runtime.yaml"),
         ]
@@ -439,11 +439,11 @@ fn sqlite_extract_build_copies_the_statement_without_http_only_artifacts() {
     );
     assert!(fixture
         .output
-        .join("bundle/adapters/source-extract.rhai")
+        .join("bundle/adapters/functions/source-extract.rhai")
         .is_file());
     assert!(!fixture
         .output
-        .join("bundle/adapters/source-prepare.rhai")
+        .join("bundle/adapters/functions/source-prepare.rhai")
         .exists());
     let bundle = registry_platform_yaml::Reader::new("bundle/evidence.yaml")
         .scan(&fs::read(fixture.output.join("bundle/evidence.yaml")).unwrap())

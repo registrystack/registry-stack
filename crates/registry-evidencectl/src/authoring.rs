@@ -1305,17 +1305,90 @@ fn write_bundle(
     evidence_bin: &Path,
     revision: Option<&str>,
 ) -> Result<PathBuf> {
+    let config = yaml_bytes(&plan.bundle)?;
+    let mut artifacts = plan.generated_artifacts.clone();
+    for reserved in [
+        "evidence.yaml",
+        "catalog.jsonld",
+        registry_platform_config::SUM_FILE,
+        registry_platform_config::REVISION_FILE,
+    ] {
+        reserve_bundle_path(&artifacts, reserved)?;
+    }
+    insert_bundle_artifact(
+        &mut artifacts,
+        "evidence.yaml",
+        config,
+        "compiled Evidence configuration",
+    )?;
+    if let Some((path, bytes)) = &plan.local_public_jwk {
+        reserve_bundle_path(&artifacts, path)?;
+        insert_bundle_artifact(
+            &mut artifacts,
+            path,
+            bytes.clone(),
+            "local public signing key",
+        )?;
+    }
+    for definition in &plan.definitions {
+        if let Some(path) = &definition.fixture_artifact {
+            let bytes = read_project_artifact(
+                project_root,
+                path,
+                MAX_SOURCE_ARTIFACT_BYTES,
+                "deployment fixture",
+            )?;
+            insert_bundle_artifact(&mut artifacts, path, bytes, "deployment fixture")?;
+        }
+    }
+    let active_public_jwk_file = plan
+        .bundle
+        .pointer("/signing/activePublicJwkFile")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    for path in auxiliary_artifacts(&plan.bundle)? {
+        if artifacts.contains_key(&path) {
+            continue;
+        }
+        let governed_public_key = path.starts_with("public-keys/");
+        let artifact_root = if governed_public_key {
+            deployment_target_root.unwrap_or(project_root)
+        } else {
+            project_root
+        };
+        let bytes = read_project_artifact(
+            artifact_root,
+            &path,
+            MAX_SOURCE_ARTIFACT_BYTES,
+            if governed_public_key {
+                "governed deployment public key"
+            } else {
+                "referenced bundle artifact"
+            },
+        )
+        .map_err(|error| {
+            governed_public_key_fault(
+                &path,
+                active_public_jwk_file.as_deref(),
+                &plan.bundle["signing"]["publishedPublicJwkFiles"],
+                error,
+            )
+        })?;
+        insert_bundle_artifact(&mut artifacts, &path, bytes, "referenced bundle artifact")?;
+    }
+    ensure_no_bundle_path_aliases(artifacts.keys().map(String::as_str).chain([
+        "catalog.jsonld",
+        registry_platform_config::SUM_FILE,
+        registry_platform_config::REVISION_FILE,
+    ]))?;
+
     let bundle = staging_root.join("bundle");
     create_private_directory(&bundle)?;
-    if plan.local_public_jwk.is_some() {
-        create_private_directory(&bundle.join("public-keys"))?;
-    }
-    for (path, bytes) in &plan.generated_artifacts {
+    for (path, bytes) in &artifacts {
         ensure_generated_parent(&bundle, path)?;
         write_private_file(&bundle.join(path), bytes)?;
     }
     let config_path = bundle.join("evidence.yaml");
-    write_private_file(&config_path, &yaml_bytes(&plan.bundle)?)?;
     let description =
         render_discovery_description(evidence_bin, &config_path, deployment_target_root.is_some())?;
     // Evidence prints a description only for a bundle that declares a
@@ -1332,65 +1405,6 @@ fn write_bundle(
     if !description.is_empty() {
         write_private_file(&bundle.join("catalog.jsonld"), &description)?;
     }
-    let mut written_paths = plan
-        .generated_artifacts
-        .keys()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    written_paths.insert("evidence.yaml".to_owned());
-    if let Some((path, bytes)) = &plan.local_public_jwk {
-        write_private_file(&bundle.join(path), bytes)?;
-        written_paths.insert(path.clone());
-    }
-    for definition in &plan.definitions {
-        if let Some(path) = &definition.fixture_artifact {
-            if written_paths.insert(path.clone()) {
-                let bytes = read_project_artifact(
-                    project_root,
-                    path,
-                    MAX_SOURCE_ARTIFACT_BYTES,
-                    "deployment fixture",
-                )?;
-                ensure_generated_parent(&bundle, path)?;
-                write_private_file(&bundle.join(path), &bytes)?;
-            }
-        }
-    }
-    let active_public_jwk_file = plan
-        .bundle
-        .pointer("/signing/activePublicJwkFile")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    for path in auxiliary_artifacts(&plan.bundle)? {
-        if written_paths.insert(path.clone()) {
-            let governed_public_key = path.starts_with("public-keys/");
-            let artifact_root = if governed_public_key {
-                deployment_target_root.unwrap_or(project_root)
-            } else {
-                project_root
-            };
-            let bytes = read_project_artifact(
-                artifact_root,
-                &path,
-                MAX_SOURCE_ARTIFACT_BYTES,
-                if governed_public_key {
-                    "governed deployment public key"
-                } else {
-                    "referenced bundle artifact"
-                },
-            )
-            .map_err(|error| {
-                governed_public_key_fault(
-                    &path,
-                    active_public_jwk_file.as_deref(),
-                    &plan.bundle["signing"]["publishedPublicJwkFiles"],
-                    error,
-                )
-            })?;
-            ensure_generated_parent(&bundle, &path)?;
-            write_private_file(&bundle.join(path), &bytes)?;
-        }
-    }
     registry_platform_config::write_sum_file(
         &bundle,
         revision,
@@ -1399,6 +1413,59 @@ fn write_bundle(
     )?;
     set_bundle_modes(&bundle, 0o500, 0o400)?;
     Ok(bundle)
+}
+
+fn reserve_bundle_path(artifacts: &BTreeMap<String, Vec<u8>>, reserved: &str) -> Result<()> {
+    if artifacts.contains_key(reserved) {
+        bail!("bundle artifact path {reserved} is reserved for generated deployment output");
+    }
+    Ok(())
+}
+
+fn insert_bundle_artifact(
+    artifacts: &mut BTreeMap<String, Vec<u8>>,
+    path: &str,
+    bytes: Vec<u8>,
+    description: &str,
+) -> Result<()> {
+    if artifacts
+        .get(path)
+        .is_some_and(|existing| existing != &bytes)
+    {
+        bail!("bundle artifact path {path} assigns different content to {description}");
+    }
+    artifacts.entry(path.to_owned()).or_insert(bytes);
+    Ok(())
+}
+
+fn ensure_no_bundle_path_aliases<'a>(paths: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    let paths = paths.into_iter().collect::<BTreeSet<_>>();
+    let mut folded = BTreeMap::new();
+    for path in &paths {
+        let mut prefix = String::new();
+        for component in path.split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(component);
+            let is_file = prefix.len() == path.len();
+            if let Some((previous, previous_is_file)) =
+                folded.insert(prefix.to_ascii_lowercase(), (prefix.clone(), is_file))
+            {
+                if previous != prefix || previous_is_file || is_file {
+                    if previous == prefix {
+                        bail!(
+                            "bundle artifact path {previous} cannot also be a directory for {path}"
+                        );
+                    }
+                    bail!(
+                        "bundle artifact path {prefix} differs from {previous} only in letter case"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn package_limits() -> registry_platform_config::PackageLimits {
@@ -2330,6 +2397,106 @@ mod tests {
                 "unreferenced package directory created"
             );
         }
+        set_bundle_modes(&bundle, 0o700, 0o600).unwrap();
+    }
+
+    #[test]
+    fn package_writer_refuses_reserved_and_directory_aliases_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(&evidence, "#!/bin/sh\nexit 0\n");
+        for (index, reserved) in [
+            "evidence.yaml",
+            "catalog.jsonld",
+            registry_platform_config::SUM_FILE,
+            registry_platform_config::REVISION_FILE,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let stage = root.path().join(format!("reserved-{index}"));
+            create_private_directory(&stage).unwrap();
+            let plan = CompilePlan {
+                definitions: Vec::new(),
+                bundle: json!({}),
+                local_public_jwk: None,
+                generated_artifacts: BTreeMap::from([(
+                    reserved.to_owned(),
+                    b"authored overwrite".to_vec(),
+                )]),
+                authority_document: None,
+            };
+            let error = write_bundle(root.path(), None, &stage, &plan, &evidence, None)
+                .expect_err("reserved output must be refused");
+            assert!(format!("{error:#}").contains("is reserved"));
+            assert!(!stage.join("bundle").exists());
+        }
+        let error = ensure_no_bundle_path_aliases([
+            "schemas/source-response",
+            "schemas/source-response/person.schema.json",
+        ])
+        .expect_err("one artifact cannot also be a directory");
+        assert!(format!("{error:#}").contains("cannot also be a directory"));
+        let error =
+            ensure_no_bundle_path_aliases([registry_platform_config::SUM_FILE, "sha256sums"])
+                .expect_err("case-folded names must be refused before writing");
+        assert!(format!("{error:#}").contains("only in letter case"));
+    }
+
+    #[test]
+    fn package_writer_compares_colliding_fixture_bytes_and_reuses_identical_assets() {
+        let root = tempfile::tempdir().unwrap();
+        let fixture_path = root.path().join("fixtures/shared.yaml");
+        fs::create_dir_all(fixture_path.parent().unwrap()).unwrap();
+        fs::write(&fixture_path, b"fixture: authored\n").unwrap();
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(&evidence, "#!/bin/sh\nexit 0\n");
+
+        let different_stage = root.path().join("different");
+        create_private_directory(&different_stage).unwrap();
+        let mut definition = minimal_definition_plan("record-status", 60);
+        definition.fixture_artifact = Some("fixtures/shared.yaml".to_owned());
+        let different = CompilePlan {
+            definitions: vec![definition],
+            bundle: json!({}),
+            local_public_jwk: None,
+            generated_artifacts: BTreeMap::from([(
+                "fixtures/shared.yaml".to_owned(),
+                b"fixture: generated\n".to_vec(),
+            )]),
+            authority_document: None,
+        };
+        let error = write_bundle(
+            root.path(),
+            None,
+            &different_stage,
+            &different,
+            &evidence,
+            None,
+        )
+        .expect_err("different bytes at one path must be refused");
+        assert!(format!("{error:#}").contains("assigns different content"));
+        assert!(!different_stage.join("bundle").exists());
+
+        let shared_stage = root.path().join("shared");
+        create_private_directory(&shared_stage).unwrap();
+        let mut first = minimal_definition_plan("first", 60);
+        first.fixture_artifact = Some("fixtures/shared.yaml".to_owned());
+        let mut second = minimal_definition_plan("second", 60);
+        second.fixture_artifact = Some("fixtures/shared.yaml".to_owned());
+        let shared = CompilePlan {
+            definitions: vec![first, second],
+            bundle: json!({}),
+            local_public_jwk: None,
+            generated_artifacts: BTreeMap::new(),
+            authority_document: None,
+        };
+        let bundle =
+            write_bundle(root.path(), None, &shared_stage, &shared, &evidence, None).unwrap();
+        assert_eq!(
+            fs::read(bundle.join("fixtures/shared.yaml")).unwrap(),
+            b"fixture: authored\n"
+        );
         set_bundle_modes(&bundle, 0o700, 0o600).unwrap();
     }
 }
