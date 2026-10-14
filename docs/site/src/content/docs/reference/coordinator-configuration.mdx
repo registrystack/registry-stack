@@ -174,10 +174,13 @@ Proposal failed or stop source-owned work.
 ## Standalone Casework review
 
 A `casework-review-producer` connection names its endpoint, `profile`, `producer`, and ordinary
-service `authorization`. It accepts no task authority. Submission carries an expected
-`PolicyBinding`, subject, reviewer context, and requester reference. Acceptance and completion
-must agree with that exact policy, subject, and submission digest. Casework owns review authority
-and outcomes. Standalone review needs no BReg connection and creates no registry effect.
+service `authorization`. It accepts no task authority. Submission carries a `PolicySelection`,
+subject, reviewer context, and requester reference. Select a policy by ID, or require an exact
+version and digest together. Casework freezes the concrete `PolicyBinding` at acceptance;
+completion must agree with that accepted policy, subject, and submission digest.
+The [Casework API contract](../apis/registry-casework/#policy-and-submission-binding) defines selection
+and recovery. Casework owns review authority and outcomes.
+Standalone review needs no BReg connection and creates no registry effect.
 
 The optional `completion` block authenticates minimized Casework wake-ups by `recipientBinding`
 and `bearerTokenRef`. The sender presents the same token and binding to
@@ -189,6 +192,8 @@ the latter carries the decision that won the race. Both review mutations use sam
 recovery without a read-only original-key receipt.
 
 {/* Evidence: crates/registry-coordinator/src/review.rs;
+    crates/registry-review-protocol/src/lib.rs, PolicySelection, ReviewRequestAccepted;
+    crates/registry-review-client/src/client.rs;
     crates/registry-coordinator/src/completion.rs;
     crates/registry-coordinator/src/runtime.rs, CaseworkConnectionConfig;
     products/coordinator/examples/standalone-review/workflow.yaml;

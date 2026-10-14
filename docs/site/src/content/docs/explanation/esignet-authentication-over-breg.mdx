@@ -144,7 +144,8 @@ a code change. The provider needs:
   profile grants, and `account_check_fields` must be a non-empty subset of it that contains the
   selector field. Keep the account check to the identifier and a status field.
 - **A separate administrative client** for anyone who edits records. The eSignet client's key is
-  lookup-only by construction, and it stays that way only if nobody reuses it for change requests.
+  lookup-only while its scopes and profile grants permit only that lookup. Do not give the client
+  additional record-write, Action, or Proposal permissions.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, authorize_profile_claims: the selected profile
 admits a request when every entry in required_scopes is present in the verified token, so an empty

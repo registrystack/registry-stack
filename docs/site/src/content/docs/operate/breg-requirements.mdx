@@ -54,18 +54,19 @@ on your machine.
 
 ## What it does not need
 
-Records, their history, pending change requests, and the outbox of undelivered events live in
+Records, their history, Proposals, and the outbox of undelivered events live in
 PostgreSQL. The default audit destination needs a writable local directory per process;
 alternatively, collect the best-effort `stdout` stream through your platform. Webhook delivery
 runs inside the process from that outbox, so there is no message broker. The registry runtime
-needs no cache or object store. Its own registry request path does not depend on a second Registry
-Stack service; Evidence Gateway and Casework remain separately deployed when a composition uses
-them.
+needs no cache. Attachment content uses PostgreSQL by default; an operator can choose S3 storage.
+A standalone registry needs no other Registry Stack service. A composition adds only the services
+it uses, such as a Review provider for reviewed Proposals.
 
 The modeling loop needs none of this. Authoring commands check, explain, and generate a project
 with no database open, so an author can work on a laptop until the project is ready to test.
 
 {/* Evidence: crates/registry-breg/src/outbox.rs; crates/registry-breg/src/webhook.rs;
+    crates/registry-breg/src/attachment_storage.rs, AttachmentStorage;
     release/docker/Dockerfile.breg; crates/registry-bregctl/src/lib.rs, Command; products/breg/README.md. */}
 
 ## How it ships

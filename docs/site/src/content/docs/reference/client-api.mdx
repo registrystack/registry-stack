@@ -1041,11 +1041,13 @@ performs no I/O.
 
 ### Submit and recover a review
 
-Use `review_policy` (`reviewPolicy` in Node) to discover a compiled closure. Its `identity` is the
-exact `{id, version, digest}` binding admission expects. Use the binding from your reviewed project,
-or explicitly accept the discovered closure before constructing the request. Submitted context
-uses `mode: submitted` and a bounded snapshot; current-source context uses `mode: current-source`
-and a reference binding. The subject supplies all five immutable binding fields.
+Select the policy by ID in `ReviewCreateRequest.policy`; Casework freezes its concrete version and
+digest at acceptance. To require an exact pin, use `review_policy` (`reviewPolicy` in Node) to
+discover a compiled closure and supply its complete `identity`, or use your reviewed project's
+binding. See the [Casework API policy contract](../apis/registry-casework/#policy-and-submission-binding)
+for selector validation. Submitted context uses `mode: submitted` and a bounded snapshot;
+current-source context uses `mode: current-source` and a reference binding.
+The subject supplies all five immutable binding fields.
 
 These host-side functions take your complete `ReviewCreateRequest`, declared trusted-producer ID,
 and retained idempotency key. They use the shared Rust canonicalizer, including its portable JSON
@@ -1074,13 +1076,18 @@ def submit_review(token, producer_id, request, key):
 ```
 
 Rust exposes the same local helper as `submission_digest(producer_id, source_namespace, &request)`.
-Persist the accepted request binding. Recover a lost response with the same policy, subject,
-request body, key, and digest. A changed policy binding requires explicit review before a new
-submission; replacing a digest during recovery can accept different work. Read `review_result`
-with the accepted binding or resume the authenticated `review_results` feed. Producer create and
-cancel calls are never automatically resent.
+Persist the accepted concrete request binding. Recover a lost response with the original selector,
+subject, request body, key, and digest, even after a policy update. Do not rewrite an ID-only
+selector into the accepted exact binding during recovery: that changes the submission identity.
+Read `review_result` with the accepted binding or resume the authenticated `review_results` feed.
+Producer create and cancel calls are never automatically resent.
 
 {/* Evidence: crates/registry-review-protocol/src/lib.rs, submission_digest, ReviewCreateRequest;
+    crates/registry-review-client/src/client.rs;
+    crates/registry-review-client/tests/http_boundary.rs,
+    current_policy_create_accepts_a_concrete_binding_and_refuses_partial_pins_before_io;
+    crates/registry-casework/tests/review_acceptance_postgres.rs,
+    current_policy_selection_recovers_before_updates_and_requires_live_authority;
     crates/registry-casework-client/src/client.rs, create_or_recover_review_request;
     crates/registry-casework-client-node/src/lib.rs, submission_digest;
     crates/registry-casework-client-py/src/lib.rs, submission_digest;

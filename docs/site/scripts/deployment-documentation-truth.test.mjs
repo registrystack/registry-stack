@@ -63,10 +63,11 @@ test('current docs stay under /dev/ while the newest published release is the re
   assert.equal(current.source, 'registry-stack-main');
   const readmeLines = new Set(readme.split(/\r?\n/));
   assert.equal(
-    readmeLines.has(
-      '| Serve governed record APIs from PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |',
-    ),
-    true,
+    readme.split(/\r?\n/).filter((line) =>
+      line.includes('](https://docs.registrystack.org/dev/tutorials/first-breg/)'),
+    ).length,
+    1,
+    'the README has one BReg starting point linked to the development tutorial',
   );
   assert.equal(
     [...readmeLines].some((line) => line.includes('/start/pre-1.0-cutover/')),

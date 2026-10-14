@@ -1,4 +1,4 @@
-# Input is the source-neutral Casework request, including expected PolicyBinding.
+# Input is the source-neutral Casework request, including its PolicySelection.
 apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project:

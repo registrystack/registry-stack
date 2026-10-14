@@ -26,8 +26,9 @@ current context disclosed by a source.
 
 A `ReviewPolicy` declares context requirements, ordered stages, eligible profiles, independent
 reviewer thresholds, outcomes, routing, clocks, and retention.
-A trusted producer creates a `ReviewRequest` with that policy's exact ID, version, and digest,
-an immutable subject binding, and an idempotency key.
+A trusted producer creates a `ReviewRequest` selecting the policy by ID, with an immutable subject
+binding and an idempotency key. The producer can also require an exact version and digest.
+Casework atomically binds acceptance to the selected policy's concrete ID, version, and digest.
 The producer cannot select a reviewer or invent a stage.
 
 Casework creates `ReviewTask`s as the pinned stages become active.
@@ -42,7 +43,7 @@ sequenceDiagram
     participant C as Casework
     participant H as Human reviewer
     participant S as Source system
-    P->>C: Submit exact policy and subject binding
+    P->>C: Submit policy selector and exact subject binding
     C->>C: Pin policy and create review tasks
     H->>C: Claim and decide current task revision
     C-->>P: Return authenticated terminal result
@@ -59,6 +60,7 @@ Neither terminal status means that an external system applied a change.
 {/* Evidence: crates/registry-casework/src/review.rs;
     crates/registry-casework/src/pinned_work.rs;
     crates/registry-casework/tests/review_acceptance_postgres.rs;
+    crates/registry-review-protocol/src/lib.rs, PolicySelection, ReviewRequestAccepted;
     crates/registry-casework/tests/breg_review_journey.rs. */}
 
 ## Two context custody choices
@@ -113,7 +115,10 @@ calculation when holiday data changes.
 
 Sensitive mutations and accountability disclosure use the audit destination as a release gate.
 A lost response is an unknown outcome, so a producer retries the same request and key or reads its
-accepted request. It does not create a new round merely to recover the old answer.
+accepted request. The original selector remains part of the submission identity; retrying an
+ID-only selection after a policy update recovers the original concrete binding.
+The producer still needs current authority. It does not create a new round merely to recover the
+old answer.
 Human mutations also retain keyed receipts; a stale revision requires a fresh read before a new action.
 
 {/* Evidence: crates/registry-casework/src/review/maintenance.rs;

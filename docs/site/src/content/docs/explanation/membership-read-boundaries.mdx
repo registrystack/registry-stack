@@ -31,13 +31,13 @@ mechanism and stays available.
 
 ## What the permission declares
 
-A facility stores `organization`, a reference to an `organization` entity. A separate `membership`
-entity stores an `organization` reference, a string `principal`, and a Boolean `active`. The
+A facility stores `organization`, a reference to an `organization` Record type. A separate `membership`
+Record type stores an `organization` reference, a string `principal`, and a Boolean `active`. The
 boundary joins them inside the facility's read grant:
 
 ```yaml
 permissions:
-  entities:
+  records:
     - recordType: facility
       rowBoundaries: unrestricted
       operations: [get, list, lookup, snapshot, revisions]
@@ -46,13 +46,13 @@ permissions:
       revisionAccess: true
       membershipBoundaries:
         - field: organization
-          membershipEntity: membership
+          membershipRecordType: membership
           membershipKeyField: organization
           principalField: principal
           activeField: active
 ```
 
-The two organization fields must be stored references to the same entity, `principalField` must be a
+The two organization fields must be stored references to the same Record type, `principalField` must be a
 stored string or text field, and `activeField` a stored Boolean. Only an active-lifecycle membership
 row with `active: true` and an exact match to the profile's verified principal grants access: a
 missing membership, a null value, an inactive membership, or another principal does not. The
@@ -66,19 +66,21 @@ issuer, and never accept a caller-submitted principal as authority.
 
 ## What the compiler refuses
 
-The refusals keep a membership boundary from being read as broader authority than it is:
+Membership checks apply to the record read grant that declares them. Separate Action and Proposal
+grants do not inherit those checks. The compiler refuses unsupported uses:
 
 | Combination | Diagnostic |
 | --- | --- |
-| Writes, actions, Proposal lifecycle grants | `breg.access.membership-read-only` |
+| Writes on a record grant with membership boundaries | `breg.access.membership-read-only` |
+| `membershipBoundaries` on an Action or Proposal grant | `config.unknown-key` |
 | A spatial bbox permission, which uses a separate database authority role | `breg.access.membership-spatial-unsupported` |
 | More than eight boundaries on one grant | `breg.access.membership-limit` |
 
 A membership-bounded grant supports get, lookup, list, snapshot, and revisions, plus counts when it
 sets `allowCount`. It can protect the root of a relationship read path, and a target permission that
-would reach the same entity through a separate root is rejected rather than silently bypassing the
-rule. A membership source stays a leaf entity: no boundaries of its own, no incoming relationship read paths, which is what keeps row-security policies from
-recursing. A membership entity with mandatory `rowBoundaries` is rejected at compilation, because
+would reach the same Record type through a separate root is rejected rather than silently bypassing the
+rule. A membership source stays a leaf Record type: no boundaries of its own, no incoming relationship read paths, which is what keeps row-security policies from
+recursing. A membership Record type with mandatory `rowBoundaries` is rejected at compilation, because
 the boundary carries no additional direct row requirement from that source. Use a separate,
 explicitly authorized steward profile for membership administration and record mutation, and
 `bregctl explain access` to inspect an expanded boundary beside its scopes, purposes, and ordinary
@@ -160,18 +162,18 @@ codes, so a recipient is retired by removing its clients, not its entry.
 | A spatial bbox permission, which uses a separate database authority role | `breg.consent.require-spatial-unsupported` |
 | Bulk data export of a gated permission | `breg.consent.require-export-unsupported` |
 | Exporting a gated profile as an Evidence source | `breg.consent.require-evidence-source-unsupported` |
-| A read path that reaches a gated entity through a later step | `breg.consent.require-read-path-target` |
+| A read path that reaches a gated Record type through a later step | `breg.consent.require-read-path-target` |
 | A profile granting `create` or `batch` on a consent record, which only actions declaring `consentIssuer` write | `breg.consent.record-direct-write` |
 | A consent record no permission requires yet | `breg.consent.require-unused` |
 
 Every read operation of a gated permission is checked: get, lookup, list, count, snapshot,
-revisions, continuation cursors, and read paths rooted at the gated entity. A row without consent
+revisions, continuation cursors, and read paths rooted at the gated Record type. A row without consent
 answers `404` exactly like an absent row.
 
 ### What it does not enforce
 
 A profile without `requireConsent` bypasses consent. `bregctl check` reports
-`breg.access.consent-ungated-client` when an ungated profile reads a gated entity while it admits any
+`breg.access.consent-ungated-client` when an ungated profile reads a gated Record type while it admits any
 client, or a client a gated profile admits; give each side its own clients. A recipient reads the
 decisions addressed to it through a feed profile, and that feed shows withdrawals and
 invalidations addressed to it, including one for a subject it never received a give for; refusals

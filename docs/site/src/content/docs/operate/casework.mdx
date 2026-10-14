@@ -268,19 +268,25 @@ If doctor refuses, correct the named input, grants, package, or audit path, then
 
 ## Change the active package
 
-Install the successor beside the active directory. Point the operator file to it, plan, apply, then restart or roll out the matching runtime. A process verifies its package at startup and retains that policy in memory. Coordinate the rollout so callers use the policy binding returned by the deployment they reach.
+Install the successor beside the active directory. Point the operator file to it, plan, apply, then
+restart or roll out the matching runtime. A process verifies its package at startup and retains that
+policy in memory. Coordinate exact producer pins with the deployed policy. ID-only selectors resolve
+at admission; accepted rounds retain their concrete bindings, and recovery uses the original body
+and key through the rollout.
 
 Current-source contract changes need matching producer exports and Casework schemas. Transport credential rotation belongs to the runtime bindings and secret store. Existing review clock calculations retain their pinned definitions; holiday recompute is a separate preview/apply operation.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path();
     crates/registry-casework/src/pinned_work.rs;
-    crates/registry-casework/src/review/staffing.rs. */}
+    crates/registry-casework/src/review/staffing.rs;
+    crates/registry-casework/tests/review_acceptance_postgres.rs,
+    current_policy_selection_recovers_before_updates_and_requires_live_authority(). */}
 
 ## Troubleshooting
 
 | Symptom | Recovery |
 | --- | --- |
-| `review.policy-mismatch` on admission | Discover the exact deployed binding and reconcile the producer configuration before submitting. |
+| `review.policy-mismatch` on admission | Reconcile the producer's exact pin with the deployed policy before a fresh submission. Preserve the original body and key for recovery. |
 | Current-source task is concealed or unavailable | Check the human's source profile, exact context binding, and required provider purpose. Never substitute the status credential for human display. |
 | `source.bad-gateway` on a display read | Correct the provider/schema mismatch. The warning identifies the policy and validation reason without source values. |
 | `review.query-too-broad` | Narrow the queue, exact subject, or visible reference filter; do not treat a partial walk as the full inbox. |

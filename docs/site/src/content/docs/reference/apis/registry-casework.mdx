@@ -42,11 +42,17 @@ A status service credential never substitutes for a human display credential.
 ## Policy and submission binding
 
 `GET /v1/review-policies` and `GET /v1/review-policies/{policy_id}` describe compiled policy closures.
-A producer submits the exact `identity` in `POST /v1/review-requests`, alongside its immutable
+A producer submits a `PolicySelection` in `POST /v1/review-requests`, alongside its immutable
 subject, requester reference, and submitted or current-source context.
+The selector requires `id`. Omit `version` and `digest` to select the active policy at admission,
+or supply both to require the exact discovered `identity`. Partial pins and explicit nulls are
+invalid. An exact pin that differs from the active binding is refused with `review.policy-mismatch`.
+Casework validates context against the selected policy and atomically retains its concrete
+`PolicyBinding`, including ID, version, and digest, in the acceptance.
 The accepted producer identity and namespace govern later request, cancellation, history, and result
-access. The submission digest binds the complete round; it is separate from the subject's content
-digest and the policy's digest.
+access. The submission digest includes the original selector; it is separate from the subject's
+content digest and the accepted policy's digest. Replacing an ID-only selector with the accepted
+binding changes the submitted body and is not recovery.
 
 An authenticated `ReviewResult` repeats those bindings and conveys the review answer.
 The consumer validates correlation and authorizes any business mutation independently.
@@ -55,7 +61,10 @@ payload or external authority.
 
 {/* Evidence: crates/registry-review-protocol/src/lib.rs;
     crates/registry-casework/src/http.rs;
-    crates/registry-casework/tests/breg_review_journey.rs. */}
+    crates/registry-casework/tests/breg_review_journey.rs;
+    crates/registry-casework/tests/review_acceptance_postgres.rs,
+    current_policy_selection_recovers_before_updates_and_requires_live_authority(),
+    concurrent_current_policy_acceptance_freezes_one_binding_and_refuses_incompatible_context(). */}
 
 ## Revisions, retries, and expiry
 
@@ -64,16 +73,20 @@ Keyed mutations send an `Idempotency-Key`, bounded to 128 bytes.
 Reuse the original key and exact body after a lost response; a changed body under the same key is
 refused. A fresh key is a fresh operation, not recovery.
 
-Producer clients validate the expected policy, subject, and submission digest when recovering an
-accepted request or consuming its result. Results return `202` while pending, `200` while retained,
+Recovery retains the original concrete policy binding even after an active-policy update and
+still requires current producer authority. Producer clients validate acceptance against the
+original selector, subject, and submission digest, then validate results against the accepted
+concrete binding. Results return `202` while pending, `200` while retained,
 and `410` after expiry. A terminal task decision does not require a source-action recovery route;
 Casework performs no source action.
 Human decision receipts and protected accountability have separate disclosure checks.
 
 {/* Evidence: crates/registry-review-protocol/src/lib.rs;
-    crates/registry-review-client/src/lib.rs;
+    crates/registry-review-client/src/client.rs;
     crates/registry-casework/src/review.rs;
-    crates/registry-casework/src/http.rs. */}
+    crates/registry-casework/src/http.rs;
+    crates/registry-casework/tests/review_acceptance_postgres.rs,
+    current_policy_selection_recovers_before_updates_and_requires_live_authority(). */}
 
 ## Problems and validation
 

@@ -105,7 +105,9 @@ Casework profile. If start fails, inspect the named private logs and run
 
 ## Discover the exact policy
 
-Fetch the compiled policy as the producer. Its `identity` is the exact binding to submit:
+Fetch the compiled policy as the producer. This tutorial submits its complete `identity` to pin
+the exact version and digest. Your integration can instead select a policy by ID and retain the
+concrete binding Casework returns at acceptance:
 
 ```sh
 curl --fail-with-body --silent --show-error \

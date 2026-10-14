@@ -98,7 +98,7 @@ Product names are always in English, including on future translated pages.
   <dd>A BReg typed operation with one bounded plan and a fixed execution mode. Immediate execution commits its ordered effects atomically; Proposal execution Starts durable work. Invoke and Start require separate explicit grants.</dd>
 
   <dt id="proposal">Proposal</dt>
-  <dd>BReg durable work created by a proposal-mode Action. Submission freezes inputs, effects, target revisions, Action revision, attachments, and review policy binding. BReg applies that exact plan automatically under restricted system authority by default, or manually when explicitly configured. The Proposal has independent lifecycle, disclosure, retention, and promoted transition links.</dd>
+  <dd>BReg durable work created by a proposal-mode Action. Submission freezes inputs, effects, target revisions, Action revision, attachments, and the requested review policy selection. A provider fixes the concrete policy at acceptance; BReg retains that binding separately from the frozen submission. BReg applies that exact plan automatically under restricted system authority by default, or manually when explicitly configured. The Proposal has independent lifecycle, disclosure, retention, and promoted transition links.</dd>
 
   <dt id="function">Function</dt>
   <dd>A project-local typed implementation asset used by an Action plan. Its runtime, source, entrypoint, ABI, capabilities, and limits are governed configuration. It computes effects within the Action's declared write ceiling and cannot grant authority or invent a review decision.</dd>
@@ -128,7 +128,7 @@ Product names are always in English, including on future translated pages.
   <dd>Core Public Service Vocabulary Application Profile. Registry Manifest emits CPSV-AP service catalogue JSON-LD.</dd>
 
   <dt id="dataset">dataset</dt>
-  <dd>In a Base Registry Engine project, the value of an entity's required `primaryDataset`, naming the dataset its records belong to. Registry Manifest catalogs use the same word for their own shape.</dd>
+  <dd>In a Base Registry Engine project, the value of a Record type's required `primaryDataset`, naming the dataset its records belong to. Registry Manifest catalogs use the same word for their own shape.</dd>
 
   <dt id="directory">directory</dt>
   <dd>Registry Casework's runtime record of teams, their members and leads, the <a href="#queue">queues</a> each team serves, and declared absences. An Administrator bootstraps and maintains it through the authenticated directory API under `If-Match` revisions; it is not part of the policy package. Team service is a second authority check on every human call, so a queue nobody serves has no inbox, and `caseworkctl doctor` reports it. See <a href="../../operate/casework/">Deploy Registry Casework</a>.</dd>
@@ -197,7 +197,7 @@ Product names are always in English, including on future translated pages.
   <dd>In Registry Casework, a dated list of public holidays for one named holiday set, published to a running deployment by an Administrator rather than written into the policy, because holidays are announced on their own schedule. A new revision drives a reviewed recompute of the activity <a href="#clock">clocks</a> that count against a <a href="#calendar">calendar</a> naming that set.</dd>
 
   <dt id="review-request">review request</dt>
-  <dd>A Registry Casework review round admitted from a trusted producer under an exact <a href="#review-policy">review policy</a>. It binds an immutable subject, policy identity, submission digest, submitted snapshot or current-source reference, human tasks, terminal result, and retention. Submitted context needs no source service.</dd>
+  <dd>A Registry Casework review round admitted from a trusted producer under an exact <a href="#review-policy">review policy</a>. The producer selects a policy by ID and may also require an exact version and digest; Casework fixes the concrete policy at acceptance. It binds an immutable subject, policy identity, submission digest, submitted snapshot or current-source reference, human tasks, terminal result, and retention. Submitted context needs no source service.</dd>
 
   <dt id="review-kind">review kind</dt>
   <dd>The historical name for a Casework policy declaration. The current product uses <a href="#review-policy">ReviewPolicy</a> and `reviewPolicies`.</dd>
@@ -233,7 +233,7 @@ Product names are always in English, including on future translated pages.
   <dd>Evidence Gateway's design rule: one response carries the smallest sufficient answer to one requirement, never the source record. The assertion payload is closed and rejects additional properties, subject selector profiles and selector values never appear in it, the output gate admits only the exact declared concept identifiers and value forms, and purpose does not narrow disclosure, so a purpose that justifies a coarser answer needs its own requirement. See <a href="../../spec/rs-pr-evidence/">RS-PR-EVIDENCE</a> Section 6.</dd>
 
   <dt id="module">module</dt>
-  <dd>A reusable file under `modules/<id>/module.yaml` that contributes entities, vocabularies, events, and extensions to entities declared elsewhere, so a part of a Base Registry Engine model can be reviewed and versioned separately from the <a href="#registry-project">registry project</a> that adopts it.</dd>
+  <dd>A reusable file under `modules/<id>/module.yaml` that contributes Record types, value types, Functions, Actions, and additive extensions to Record types declared elsewhere, so a part of a Base Registry Engine model can be reviewed and versioned separately from the <a href="#registry-project">registry project</a> that adopts it.</dd>
 
   <dt>ODRL</dt>
   <dd>Open Digital Rights Language. W3C recommendation. Registry Manifest emits ODRL Offer documents for dataset-scoped descriptive policies. Publishing an ODRL document is a description, not enforcement, and no maintained runtime in the current release evaluates ODRL terms.</dd>
@@ -329,10 +329,10 @@ Product names are always in English, including on future translated pages.
   <dd>The neutral strict record representation used by Base Registry Engine clients and APIs.</dd>
 
   <dt id="registry-record-envelope">Registry Record envelope</dt>
-  <dd>The single shape every Base Registry Engine read, create, patch, tombstone, revision, and snapshot response returns. `data.recordIdentifier` is the record's stable UUID, `data.revisionIdentifier` a string revision counter starting at `1`, and `data.domainData` the entity's fields under their `apiName`, narrowed to the grant's readable fields and to `$select`. Mutation responses add `data.snapshot`. Native Proposals and Action receipts have separate response contracts. `meta` carries the registry, dataset, and entity identifiers from the compiled <a href="#package">package</a>, and a collection read returns `items` and a `pageInfo` object instead of a single `data`. A field name that would collide with an envelope member is refused at compile time. See the <a href="../breg-api/#record-envelope">Base Registry Engine API reference</a>.</dd>
+  <dd>The single shape every Base Registry Engine read, create, patch, tombstone, revision, and snapshot response returns. `data.recordIdentifier` is the record's stable UUID, `data.revisionIdentifier` a string revision counter starting at `1`, and `data.domainData` the Record type's fields under their `apiName`, narrowed to the grant's readable fields and to `$select`. Mutation responses add `data.snapshot`. Native Proposals and Action receipts have separate response contracts. `meta` carries the registry, dataset, and entity identifiers from the compiled <a href="#package">package</a>, and a collection read returns `items` and a `pageInfo` object instead of a single `data`. A field name that would collide with an envelope member is refused at compile time. See the <a href="../breg-api/#record-envelope">Base Registry Engine API reference</a>.</dd>
 
   <dt id="registry-project">registry project</dt>
-  <dd>The directory of YAML files an adopter writes for one Base Registry Engine registry, `registry.yaml` plus optional <a href="#module">modules</a> and <a href="#journey">journeys</a>, declaring the entities, fields, relationships, access profiles, change requests, and events that registry exposes. `bregctl init` writes a starter project; `bregctl check`, `explain`, and `generate` compile and inspect it without opening a database; `bregctl test` replays its journeys against a throwaway database; `bregctl package` builds the <a href="#package">package</a> an operator activates. `bregctl --help` also calls it an <a href="#authoring-project">authoring project</a>. See <a href="../../configure/breg/">Author a registry project</a>.</dd>
+  <dd>The directory of YAML files an adopter writes for one Base Registry Engine registry, `registry.yaml` plus optional <a href="#module">modules</a> and <a href="#journey">journeys</a>, declaring Record types, datasets, access profiles, Functions, Actions, Proposal policies, and events. `bregctl` checks and packages the project; its journeys test the declared behavior against a throwaway database. `bregctl --help` also calls it an <a href="#authoring-project">authoring project</a>. See <a href="../../configure/breg/">Author a registry project</a>.</dd>
 
   <dt id="registry-relay">Registry Relay</dt>
   <dd>A retired Registry Stack product. Version 0.38.0 was its last numbered release; 0.39.0 is the first release without it. See the <a href="../../decisions/registry-relay-retirement-2026-10-03/">retirement decision</a>.</dd>
@@ -347,7 +347,7 @@ Product names are always in English, including on future translated pages.
   <dd>An Evidence Gateway envelope that asks `POST /v1/evidence/batch` to evaluate between one and sixteen ordered audience-scoped subject sets for one common requirement and purpose. Each item has its own request nonce and complete subject-role set. The response preserves order and contains either one independently signed flattened JWS or `evidence-not-available` for each item; any other failure aborts the complete request. This envelope is distinct from the holder-bound issuance batch on `POST /v1/evidence`, which performs one subject evaluation and emits one credential per holder key.</dd>
 
   <dt id="resource">resource (retired Relay term)</dt>
-  <dd>A named collection in the retired Registry Relay read-only publication contract. Current Base Registry Engine projects declare entities and operations instead; Evidence Gateway projects declare fixed sources and requirements.</dd>
+  <dd>A named collection in the retired Registry Relay read-only publication contract. Current Base Registry Engine projects declare Record types and Actions; Evidence Gateway projects declare fixed sources and requirements.</dd>
 
   <dt id="rhai">Rhai</dt>
   <dd>The bounded scripting language both Evidence Gateway and Base Registry Engine embed for adopter-authored logic, reviewed with the rest of the configuration. Evidence Gateway uses it for requirement-specific derivations, which read the facts, selectors, and context the host gathered and return the answer. Base Registry Engine uses it for named Action plan Functions, which receive admitted inputs and compute effects within the declared write ceiling.</dd>

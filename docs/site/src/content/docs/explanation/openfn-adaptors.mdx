@@ -1,6 +1,6 @@
 ---
 title: Automate registry workflows with OpenFn
-description: How the Registry Stack adaptors expose Evidence Gateway and Base Registry Engine to Lightning workflows.
+description: The v0.1.0 OpenFn adaptors, their older client contract, and the boundary to current Registry Stack workflows.
 status: draft
 owner: registry-docs
 source_repos: [registry-stack, openfn-language-registry-stack]
@@ -10,8 +10,11 @@ locale: en
 standards_referenced: [govstack-digital-registries]
 ---
 
-The Registry Stack adaptors for OpenFn wrap maintained Evidence Gateway and Base Registry Engine
-clients for use in Lightning workflows.
+This page describes the separately versioned **v0.1.0** Registry Stack adaptors for OpenFn, which
+pin `@registrystack/client` at **0.27.0**. Their Base Registry Engine (BReg) adaptor uses the
+retired change-request contract; it does not implement the current Action and Proposal interfaces. Use the matching
+release documentation when running those adaptors. For current native workflows, start with
+[workflow orchestration](../integration-patterns/#workflow-orchestration).
 
 {/* TODO[evidence]: adaptor behaviour, operation lists, result branches, and pilot topology live in
 the separate registrystack/openfn-language-registry-stack repository and cannot be anchored from
@@ -19,10 +22,10 @@ this one. The statements below were checked against that repository's README, th
 READMEs, deployment/README.md, pilot/agriculture/README.md, the two service READMEs, and
 CHANGELOG.md at that repository's v0.1.0 tag. Re-verify them when that repository changes. */}
 
-## Maintained adaptors, one client underneath
+## Versioned adaptors, one client underneath
 
 OpenFn adaptors are Node packages whose exported operations become the vocabulary of a job
-expression. The maintained Registry Stack packages cover Evidence Gateway and Base Registry
+expression. These Registry Stack packages cover Evidence Gateway and Base Registry
 Engine (BReg).
 
 The Evidence and BReg adaptors pin `@registrystack/client` at version 0.27.0 and delegate every
@@ -89,9 +92,9 @@ failure. The adaptor requests signed JWS only and publishes no native handles in
 
 ### BReg: governed reads and writes
 
-The BReg adaptor covers metadata discovery, exact lookups, single-page lists with explicit
-continuation, record creation, patching, Proposal Start and promoted lifecycle transitions. It follows
-the same rules a careful direct client would:
+The v0.1.0 BReg adaptor covers metadata discovery, exact lookups, single-page lists with explicit
+continuation, record creation, patching, and the former change-request lifecycle. Its operations
+follow the older client contract:
 
 - **Writes select their authority from metadata.** Every write fetches caller-filtered metadata
   inside the operation and binds to the exact operation and access profile. No function accepts a
@@ -102,12 +105,10 @@ the same rules a careful direct client would:
 - **Patches need the record's strong ETag.** Lifecycle actions need the separate action-specific
   `ifMatch` value from the request's advertised actions, never the record ETag. The lifecycle helper
   refetches the contract and the record and refuses to act on a changed proposal.
-- **Drafts do not submit themselves.** Creating a change request produces a draft. Submitting,
-  revising, cancelling, and applying are separate source lifecycle operations. An external review
-  authority owns its reviewer actions and returns a result bound to the frozen proposal. Under
-  `onApproved.mode: manual`, a currently authorized applier follows BReg's advertised apply action;
-  `automatic` uses a separately configured ordinary executor credential against that same action.
-  Follow the actions the registry advertises after each call rather than assuming a fixed sequence.
+- **Drafts do not submit themselves.** The former `createChangeRequest` operation creates a
+  request record. `executeLifecycleAction` then follows the actions advertised by that record.
+  These operations are not aliases for current Proposal Start, submit, review, or apply. Current
+  BReg semantics are described in [change control](../../configure/breg-change-control/).
 
 Patch members are written as field operations such as replace on a named field. The native client
 builds and validates the HTTP patch document, so job authors never touch JSON Pointer paths.
@@ -187,7 +188,7 @@ outbox delivery the pilot's event bridge verifies. The preserved pilot used a fo
 
 ## Using the adaptors in your own OpenFn
 
-To load the adaptors into another compatible OpenFn installation, point the worker at a checkout of
+For the v0.1.0 adaptors and their matching Registry Stack release, point the worker at a checkout of
 the repository through its local-adaptor variables and reference the packages as
 `@openfn/language-registry-evidence@local` and `@openfn/language-registry-breg@local`. The worker
 must run Node on glibc for the native client to load. The individual adaptor READMEs carry the
@@ -197,8 +198,8 @@ credential schemas, operation options, and standalone composition rules.
 
 - [Request evidence from an application](../../tutorials/request-evidence-from-an-application/)
   for the direct client flow the Evidence adaptor wraps.
-- [Query BReg with Python and Node](../../tutorials/query-breg-client/) for the direct client flow
-  the BReg adaptor wraps.
+- [Query BReg with Python and Node](../../tutorials/query-breg-client/) for the current direct client flow,
+  independent of the older BReg adaptor.
 - [Send registry events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) for the
   outbox and signature contract the event bridge verifies.
 - [Integration patterns](../integration-patterns/) for where a workflow engine sits among the other

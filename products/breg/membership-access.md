@@ -6,7 +6,7 @@ records. An authorized steward creates or deactivates them through the normal
 mutation API; the reader keeps the same identity token.
 
 For example, a facility stores `organization`, a reference to an `organization`
-entity. A separate `membership` entity stores an `organization` reference,
+Record type. A separate `membership` Record type stores an `organization` reference,
 a string `principal`, and a Boolean `active`. Its optional descriptive fields
 can remain private. Add the boundary to the facility's read grant:
 
@@ -16,8 +16,8 @@ accessProfiles:
     principalClaim: principal
     requiredScopes: [records:read, membership:use]
     permissions:
-      entities:
-        - entity: facility
+      records:
+        - recordType: facility
           rowBoundaries: unrestricted
           operations: [get, list, lookup, snapshot, revisions]
           readableFields: [label]
@@ -36,8 +36,8 @@ accessProfiles:
               activeField: active
 ```
 
-The `label` lookup selector must already be declared on the facility entity.
-The two organization fields must be stored references to the same entity.
+The `label` lookup selector must already be declared on the facility Record type.
+The two organization fields must be stored references to the same Record type.
 `principalField` must be a stored string or text field and `activeField` a
 stored Boolean. Only active-lifecycle membership rows with `active: true` and
 an exact match to the profile's verified principal grant access. A missing
@@ -52,9 +52,9 @@ membership checks in force. Up to eight membership boundaries are supported.
 The declared fields
 are authorization inputs, not an additional readable-field grant. The root
 profile must satisfy the
-membership entity's mandatory scopes and purposes. The current boundary does
+membership Record type's mandatory scopes and purposes. The current boundary does
 not carry additional direct row requirements from that source, so a membership
-entity with mandatory `rowBoundaries` is rejected at compilation.
+Record type with mandatory `rowBoundaries` is rejected at compilation.
 
 The complete authored model is in
 [`organization-membership-access/registry.yaml`](fixtures/organization-membership-access/registry.yaml).
@@ -95,7 +95,7 @@ or RLS bypass is required. PostgreSQL 17 remains the minimum for this surface;
 other enabled features can require a newer supported version.
 
 Membership profiles support get, list, count, lookup, snapshot, and revisions.
-They can protect the root of a relationship read path; a related entity's
+They can protect the root of a relationship read path; a related Record type's
 membership rules cannot silently be bypassed by targeting it through a separate
 root grant. Such target permissions are rejected. Membership sources must remain
 leaf Record types without their own membership boundaries,
@@ -105,12 +105,12 @@ Spatial bbox permissions use a separate authority role and cannot currently be
 combined with membership boundaries. Ordinary reads of facilities remain
 available under the membership profile.
 
-Writes, actions, reviewed changes, and request lifecycle grants cannot use
-membership-bounded profiles. The compiler rejects these combinations rather
-than silently ignoring the boundary. Use a separate explicitly authorized
-steward profile for membership administration and record mutations. This
-version therefore has no mutation idempotency replay authorized through a
-membership profile; read cursor replay always reevaluates live membership.
+Membership boundaries protect record reads. A record grant with a membership
+boundary cannot also grant writes. Action and Proposal grants do not accept
+`membershipBoundaries` and do not inherit membership checks from read grants.
+Use a separate explicitly authorized steward profile for membership
+administration and record mutations. Read cursor replay reevaluates live
+membership; a read grant never authorizes a mutation or its replay.
 
 Use `bregctl explain access` to inspect the expanded membership boundary alongside
 its scopes, purposes, and ordinary row boundaries. Compiler diagnostics identify

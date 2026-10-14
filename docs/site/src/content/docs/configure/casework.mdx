@@ -166,7 +166,14 @@ A stage names its queue, eligible human profiles, and approval threshold. Option
 
 Display snapshots, private drafts, structured results, and result constraints each have a 16 KiB bound. Schemas are closed JSON Schema 2020-12 objects, with a 64 KiB schema bound and bounded nesting. Declare only the fields the reviewer needs; increasing disclosure is not a recovery for an oversized payload.
 
-The producer must submit the exact compiled `policy` binding, `{id, version, digest}`, with an immutable subject binding and its context. Use `data.policyBindings` from `caseworkctl --format json check`, the generated types, or authenticated policy discovery at the deployment. A policy identifier alone is insufficient; an unexpected binding is refused with `review.policy-mismatch`.
+The producer normally selects a `policy` by ID, with an immutable subject binding and its context.
+Casework atomically selects the active policy's concrete version and digest at acceptance and retains
+that binding for the round. To require a particular version, supply both `version` and `digest` from
+`data.policyBindings` in `caseworkctl --format json check` or authenticated policy discovery.
+A mismatched exact pin is refused with `review.policy-mismatch`.
+Neither selection form grants producer authority or relaxes context validation.
+See the [Casework API policy contract](../../reference/apis/registry-casework/#policy-and-submission-binding)
+for selection and recovery rules.
 
 Approval policies use approval, rejection, or changes-requested decisions. Answer policies use a configured outcome. A required reason or structured result must be supplied at decision time. The producer may narrow declared result properties with `resultConstraints`; it cannot widen the schema or introduce fields. Keep result data within the purpose of the review.
 
@@ -175,9 +182,12 @@ Approval policies use approval, rejection, or changes-requested decisions. Answe
 {/* Evidence: crates/registry-casework-core/src/review.rs, ReviewPolicy, ReviewStagePolicy,
     ReviewRetentionPolicy, and ReviewOutcomePolicy;
     crates/registry-casework-core/src/config.rs, ReviewProducerPolicy;
-    crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest;
+    crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest, PolicySelection;
     crates/registry-casework/src/review.rs, settle_review();
-    crates/registry-casework/tests/review_acceptance_postgres.rs, exact_policy_admission_and_independent_producer_authority(). */}
+    crates/registry-casework/tests/review_acceptance_postgres.rs,
+    exact_policy_admission_and_independent_producer_authority(),
+    current_policy_selection_recovers_before_updates_and_requires_live_authority(),
+    concurrent_current_policy_acceptance_freezes_one_binding_and_refuses_incompatible_context(). */}
 
 ## Choose context custody
 

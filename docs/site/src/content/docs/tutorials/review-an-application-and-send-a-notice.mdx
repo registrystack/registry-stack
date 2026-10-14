@@ -70,8 +70,9 @@ waits until Casework owns the decision. It keeps
 credentials in owner-only files. Its status contains the Workflow revision, endpoint references,
 and file references without secret values.
 
-Standalone Casework review carries an exact expected PolicyBinding. Acceptance and the eventual
-result must match its ID, version, and digest, as well as the subject and submission digest.
+This example deliberately pins an exact review policy version and digest. Acceptance must match
+that pin, and the eventual result must match the accepted policy, subject, and submission digest.
+Other integrations can select a policy by ID and retain the concrete binding returned at acceptance.
 This workflow creates no BReg Proposal and grants no registry mutation authority.
 
 The producer is trusted to prepare the review subject with the supplied helper. Coordinator checks
@@ -97,7 +98,9 @@ Use `staff` for Casework or `coordinator-producer` for Coordinator as `CLIENT`, 
 `ownerProject` path in `tutorial-work/session-status.json` as `PROJECT`. Then repeat the request.
 
 {/* Evidence: products/coordinator/examples/reviewed-notice/session.py, start and serve;
-    products/coordinator/examples/reviewed-notice/starter.rs, projection and ContentDigest. */}
+    products/coordinator/examples/reviewed-notice/starter.rs, projection and ContentDigest;
+    products/coordinator/examples/reviewed-notice/functions.rhai;
+    crates/registry-review-protocol/src/lib.rs, PolicySelection, ReviewRequestAccepted. */}
 
 ## Inspect the parked run
 

@@ -28,7 +28,6 @@ release manifests, and docs.
 | Understand the product | [registrystack.org](https://registrystack.org/) |
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
 | Get a first minimum-disclosure assertion | [Evidence Gateway overview](https://docs.registrystack.org/dev/start/evidence-quickstart/) |
-| Serve governed record APIs from PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |
 | Build a writable registry backed by PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |
 | Publish an index of registry providers | [Publish and consume a Registry Discovery index](https://docs.registrystack.org/dev/tutorials/publish-and-consume-discovery-index/) |
 | Explore separate and combined product projects | [Individual and combined examples](#explore-individual-and-combined-examples) |
@@ -63,7 +62,7 @@ its own deployment contract and adopter tooling, and each one is optional.
 - **Registry Manifest:** portable metadata that describes what a registry
   exposes, rendered without touching the production source.
   Docs: [Registry Manifest reference](https://docs.registrystack.org/dev/products/registry-manifest/reference/).
-- **Registry Casework:** a bounded human-review service with pinned policies,
+- **Registry Casework:** a bounded human-review service with policies fixed at acceptance,
   accountable tasks, and correlated results. It runs with submitted snapshots
   or read-only current-source context; the producer authorizes later changes.
   Docs: [Registry Casework overview](https://docs.registrystack.org/dev/start/casework/).
