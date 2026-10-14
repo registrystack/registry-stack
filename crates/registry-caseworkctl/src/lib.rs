@@ -9,7 +9,7 @@ mod report;
 #[cfg(feature = "schema")]
 pub mod schema;
 use anyhow::Result;
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use std::{
     ffi::OsString,
@@ -64,11 +64,12 @@ enum Command {
     /// Report the one review lifecycle.
     Lifecycle,
     /// Package the policy and its exact local schema and provider dependency closure.
+    #[command(group(ArgGroup::new("package_output").required(true).multiple(false).args(["output", "dry_run"])))]
     Package {
         /// Existing authored Casework project directory.
         project: PathBuf,
         /// New directory for the exact package closure; required unless --dry-run.
-        #[arg(long)]
+        #[arg(long, value_name = "DIRECTORY")]
         output: Option<PathBuf>,
         /// One printable source revision recorded in the package.
         #[arg(long)]
@@ -85,8 +86,8 @@ enum Command {
     Status(OperatorArgs),
     /// Apply the reviewed package and fresh-schema activation with the migration credential.
     Apply {
-        /// Operator runtime configuration file with package and credential references.
-        #[arg(long)]
+        /// Runtime configuration file
+        #[arg(long, value_name = "FILE")]
         runtime_config: PathBuf,
         /// Operator change or approval reference recorded with activation.
         #[arg(long)]
@@ -140,8 +141,8 @@ struct TestArgs {
 }
 #[derive(Debug, Args)]
 struct OperatorArgs {
-    /// Operator runtime configuration file with package and credential references.
-    #[arg(long)]
+    /// Runtime configuration file
+    #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
 }
 #[derive(Debug, Args)]
@@ -163,8 +164,8 @@ struct CheckArgs {
     /// Matching bregctl executable used for native package verification.
     #[arg(long, default_value = "bregctl")]
     bregctl_bin: PathBuf,
-    /// Also validate this operator runtime configuration offline.
-    #[arg(long)]
+    /// Runtime configuration file
+    #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
     /// Resolve configured environment substitutions while checking the runtime file.
     #[arg(long, requires = "runtime_config")]
@@ -524,6 +525,41 @@ mod tests {
     fn removed_commands_are_not_exposed() {
         for name in ["source", "attempt", "retention", "simulate"] {
             assert!(Cli::try_parse_from(["caseworkctl", name]).is_err());
+        }
+    }
+    #[test]
+    fn package_requires_one_output_mode_before_project_io() {
+        use clap::error::ErrorKind;
+        for (arguments, expected) in [
+            (
+                vec!["caseworkctl", "package", "missing-project"],
+                ErrorKind::MissingRequiredArgument,
+            ),
+            (
+                vec![
+                    "caseworkctl",
+                    "package",
+                    "missing-project",
+                    "--output",
+                    "package",
+                    "--dry-run",
+                ],
+                ErrorKind::ArgumentConflict,
+            ),
+        ] {
+            assert_eq!(Cli::try_parse_from(arguments).unwrap_err().kind(), expected);
+        }
+        for arguments in [
+            vec![
+                "caseworkctl",
+                "package",
+                "missing-project",
+                "--output",
+                "package",
+            ],
+            vec!["caseworkctl", "package", "missing-project", "--dry-run"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_ok());
         }
     }
     #[test]

@@ -247,6 +247,7 @@ mod tests {
                     "metadata",
                     "sql",
                     "evidence-source",
+                    "sdk",
                 ]
         }));
         for invocation in [

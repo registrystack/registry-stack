@@ -5220,8 +5220,8 @@
               "environment": null
             },
             {
-              "display": "--runtime-config <RUNTIME_CONFIG>",
-              "description": "Also validate this operator runtime configuration offline",
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5273,7 +5273,7 @@
               "kind": "requires-all",
               "when": "--environment",
               "arguments": [
-                "--runtime-config <RUNTIME_CONFIG>"
+                "--runtime-config <FILE>"
               ]
             }
           ],
@@ -5600,7 +5600,7 @@
           "invocation": "caseworkctl package",
           "about": "Package the policy and its exact local schema and provider dependency closure",
           "long_about": null,
-          "usage": "caseworkctl package [OPTIONS] <PROJECT>",
+          "usage": "caseworkctl package [OPTIONS] <--output <DIRECTORY>|--dry-run> <PROJECT>",
           "arguments": [
             {
               "display": "<PROJECT>",
@@ -5614,7 +5614,7 @@
           ],
           "options": [
             {
-              "display": "--output <OUTPUT>",
+              "display": "--output <DIRECTORY>",
               "description": "New directory for the exact package closure; required unless --dry-run",
               "always_required": false,
               "repeatable": false,
@@ -5664,7 +5664,24 @@
               "environment": null
             }
           ],
-          "constraints": [],
+          "constraints": [
+            {
+              "kind": "required-exactly-one",
+              "when": null,
+              "arguments": [
+                "--output <DIRECTORY>",
+                "--dry-run"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--dry-run",
+                "--output <DIRECTORY>"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {
@@ -5672,12 +5689,12 @@
           "invocation": "caseworkctl doctor",
           "about": "Inspect database, active package and audit readiness without applying changes",
           "long_about": null,
-          "usage": "caseworkctl doctor [OPTIONS] --runtime-config <RUNTIME_CONFIG>",
+          "usage": "caseworkctl doctor [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <RUNTIME_CONFIG>",
-              "description": "Operator runtime configuration file with package and credential references",
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5716,12 +5733,12 @@
           "invocation": "caseworkctl plan",
           "about": "Read and explain the candidate activation plan without changing the database",
           "long_about": null,
-          "usage": "caseworkctl plan [OPTIONS] --runtime-config <RUNTIME_CONFIG>",
+          "usage": "caseworkctl plan [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <RUNTIME_CONFIG>",
-              "description": "Operator runtime configuration file with package and credential references",
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5760,12 +5777,12 @@
           "invocation": "caseworkctl status",
           "about": "Read the active package identity and database activation ledger",
           "long_about": null,
-          "usage": "caseworkctl status [OPTIONS] --runtime-config <RUNTIME_CONFIG>",
+          "usage": "caseworkctl status [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <RUNTIME_CONFIG>",
-              "description": "Operator runtime configuration file with package and credential references",
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5804,12 +5821,12 @@
           "invocation": "caseworkctl apply",
           "about": "Apply the reviewed package and fresh-schema activation with the migration credential",
           "long_about": null,
-          "usage": "caseworkctl apply [OPTIONS] --runtime-config <RUNTIME_CONFIG>",
+          "usage": "caseworkctl apply [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <RUNTIME_CONFIG>",
-              "description": "Operator runtime configuration file with package and credential references",
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],

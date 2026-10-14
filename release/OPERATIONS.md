@@ -756,13 +756,13 @@ that by itself: it starts from the newest published release, which for a patch
 release is the previous release of the same line. To rehearse a patch release
 from the floor, dispatch the workflow with `-f from_tag=<floor tag>`.
 The release PR adds its manifest under `release/manifests/`, which starts
-`release-upgrade-rehearsal.yml` on that PR. The workflow builds BReg, Casework,
-Evidence, and Messaging from the PR and runs `release/scripts/rehearse-upgrade.py`. The
+`release-upgrade-rehearsal.yml` on that PR. The workflow builds BReg, Evidence,
+and Messaging from the PR and runs `release/scripts/rehearse-upgrade.py`. The
 script downloads the previous published release's binaries for those products,
 authenticates `SHA256SUMS` with its protected-main Sigstore identity, and checks
 each asset against it as `release/VERIFY.md` describes. It writes a
-registry package with records and revisions, a Casework queue with answered
-and in-flight work, and an Evidence audit stream with the old binaries, using a
+registry package with records and revisions and an Evidence audit stream with
+the old binaries, using a
 disposable loopback PostgreSQL container. It then points the PR's binaries at
 that state and the same files, runs the upgrade an operator runs, and fails
 when any captured view is served differently or any retained table holds fewer
@@ -793,8 +793,17 @@ so and rehearses every leg with the binaries under test on both sides, so the
 legs stay exercised; `--fetch-only` says so and stops. Once the floor's release
 is published the same run downloads it, with no change to the script or the
 workflow.
-Scheduling state is not rehearsed: `PRODUCTS` in the script names no
-Scheduling leg.
+Casework and Scheduling state are not rehearsed: `PRODUCTS` in the script
+names no leg for either product. Casework's current review-only contract starts
+with a fresh database and intentionally refuses the retired schema before
+mutation, so an in-place preservation rehearsal would contradict the supported
+transition. Drain or reconcile legacy review work under the release that wrote
+it, retain that database, and provision the current contract on a fresh
+database. Use the maintained Casework fresh-install and logical backup/restore
+checks, `products/casework/scripts/check-review-journeys.sh` and
+`products/casework/scripts/test-backup-restore.sh`, for the current schema. A
+named `--product casework` request refuses with this guidance before
+downloading assets or starting PostgreSQL.
 
 v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
 Fresh installations create the current verified-creator and caller-scoped
@@ -828,7 +837,7 @@ naming it with `--product messaging` from such a release is refused. Messaging
 publishes Linux amd64 binaries only, so a macOS rehearsal that downloads the
 previous release omits it the same way.
 
-The upgraded Casework, Evidence, and Messaging runtimes continue the audit files the
+The upgraded Evidence and Messaging runtimes continue the audit files the
 previous release wrote, as the upgrade runbook has an operator do. The
 rehearsal counts the records in each stream before and after the upgrade. It
 fails when the stream was empty before the upgrade, or holds fewer records

@@ -347,8 +347,9 @@ class ProductSelectionTest(unittest.TestCase):
                     products, omitted = MODULE.select_products(
                         None, tag, "linux-amd64", True
                     )
-                    self.assertEqual(products, ["breg", "casework", "evidence"])
-                    self.assertEqual(list(omitted), ["messaging"])
+                    self.assertEqual(products, ["breg", "evidence"])
+                    self.assertEqual(list(omitted), ["casework", "messaging"])
+                    self.assertEqual(omitted["casework"], MODULE.CASEWORK_NO_IN_PLACE_UPGRADE)
                     self.assertIn("messaging has not joined a release yet",
                                   omitted["messaging"])
                     for downloading in (True, False):
@@ -361,8 +362,9 @@ class ProductSelectionTest(unittest.TestCase):
 
     def test_a_default_run_omits_a_product_the_starting_release_did_not_ship(self) -> None:
         products, omitted = MODULE.select_products(None, "v0.35.0", "linux-amd64", True)
-        self.assertEqual(products, ["breg", "casework", "evidence"])
-        self.assertEqual(list(omitted), ["messaging"])
+        self.assertEqual(products, ["breg", "evidence"])
+        self.assertEqual(list(omitted), ["casework", "messaging"])
+        self.assertEqual(omitted["casework"], MODULE.CASEWORK_NO_IN_PLACE_UPGRADE)
         self.assertIn("first shipped in v0.36.0", omitted["messaging"])
 
     def test_messaging_joins_the_default_run_from_its_first_release(self) -> None:
@@ -370,15 +372,31 @@ class ProductSelectionTest(unittest.TestCase):
             with self.subTest(tag=tag):
                 products, omitted = MODULE.select_products(None, tag, "linux-amd64", True)
                 self.assertEqual(products, list(MODULE.PRODUCTS))
-                self.assertEqual(omitted, {})
+                self.assertEqual(omitted, {
+                    "casework": MODULE.CASEWORK_NO_IN_PLACE_UPGRADE,
+                })
 
-    def test_a_named_product_the_starting_release_did_not_ship_is_refused(self) -> None:
+    def test_a_named_unavailable_product_is_refused(self) -> None:
         with self.assertRaisesRegex(Error, "messaging was first shipped in v0.36.0"):
             MODULE.select_products(["messaging"], "v0.35.0", "linux-amd64", True)
-        self.assertEqual(
-            MODULE.select_products(["casework"], "v0.35.0", "linux-amd64", True),
-            (["casework"], {}),
-        )
+        with self.assertRaisesRegex(Error, "fresh database"):
+            MODULE.select_products(["casework"], "v0.35.0", "linux-amd64", True)
+
+    def test_main_refuses_casework_before_any_download_or_container(self) -> None:
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(stderr), \
+                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.41.0"), \
+                unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 40, 0)):
+            work = Path(temporary) / "work"
+            status = MODULE.main([
+                "--from-tag", "v0.40.0", "--platform", "linux-amd64",
+                "--product", "casework",
+                "--to-bin-dir", temporary, "--work-dir", str(work),
+            ])
+            self.assertFalse(work.exists())
+        self.assertEqual(status, 1)
+        self.assertIn("fresh database", stderr.getvalue())
+        self.assertIn("drain or reconcile", stderr.getvalue())
 
     def test_messaging_downloads_only_the_platforms_it_publishes(self) -> None:
         products, omitted = MODULE.select_products(None, "v0.36.0", "macos-arm64", True)
@@ -539,83 +557,6 @@ def load_json(path: Path) -> object:
 
 def dump_json(path: Path, document: object) -> None:
     path.write_text(json.dumps(document), encoding="utf-8")
-
-
-# JSON is YAML, so the runtime document round-trips without PyYAML.
-@unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
-@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
-class CaseworkPackageTest(unittest.TestCase):
-    def casework(self, root: Path) -> object:
-        casework = MODULE.Casework.__new__(MODULE.Casework)
-        casework.work = root
-        casework.project = root / "project"
-        casework.package = root / "package"
-        casework.runtime = root / "runtime.yaml"
-        casework.package.mkdir()
-        dump_json(casework.runtime, {"package": {"root": str(casework.package)}})
-        return casework
-
-    def test_a_side_names_the_database_then_plans_and_applies(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            casework = self.casework(Path(directory))
-            side = unittest.mock.Mock()
-            side.run_json.side_effect = [{"changesPending": True},
-                                         {"activationId": "activation"}]
-            self.assertEqual(casework.activate(side), {"activationId": "activation"})
-            self.assertEqual(load_json(casework.runtime)["identity"],
-                             {"databaseId": MODULE.CASEWORK_DATABASE_ID})
-            runtime = ["--runtime-config", str(casework.runtime)]
-            self.assertEqual(side.run_json.call_args_list, [
-                unittest.mock.call("caseworkctl", "--format", "json", "plan", *runtime),
-                unittest.mock.call("caseworkctl", "--format", "json", "apply", *runtime,
-                                   "--operator-reference", MODULE.CASEWORK_OPERATOR_REFERENCE),
-            ])
-            side.run.assert_not_called()
-
-    def test_a_first_plan_with_nothing_pending_is_refused_before_apply(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            casework = self.casework(Path(directory))
-            side = unittest.mock.Mock()
-            side.run_json.return_value = {"changesPending": False}
-            with self.assertRaisesRegex(MODULE.RehearsalError, "first activation"):
-                casework.activate(side)
-            self.assertEqual(side.run_json.call_count, 1)
-
-    def already_active(self, activation: str) -> dict[str, Any]:
-        return {"changesPending": False, "active": {"activationId": activation},
-                "refusals": [{"code": MODULE.CASEWORK_ALREADY_ACTIVE}]}
-
-    def test_an_activated_database_with_nothing_pending_keeps_its_activation(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            casework = self.casework(Path(directory))
-            side = unittest.mock.Mock()
-            side.run_json.return_value = self.already_active("seeded")
-            self.assertEqual(casework.activate(side, "seeded"), {"activationId": "seeded"})
-            side.run_json.assert_called_once_with(
-                "caseworkctl", "--format", "json", "plan",
-                "--runtime-config", str(casework.runtime))
-
-    def test_an_activated_database_with_changes_pending_is_applied(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            casework = self.casework(Path(directory))
-            side = unittest.mock.Mock()
-            side.run_json.side_effect = [{"changesPending": True},
-                                         {"activationId": "successor"}]
-            self.assertEqual(casework.activate(side, "seeded"), {"activationId": "successor"})
-            self.assertEqual(side.run_json.call_args_list[1].args[3], "apply")
-
-    def test_nothing_pending_must_name_the_seeded_activation_as_already_active(self) -> None:
-        other = self.already_active("another")
-        refused = self.already_active("seeded")
-        refused["refusals"].append({"code": "casework.activation.database-id-mismatch"})
-        for planned in (other, refused, {"changesPending": False}):
-            with self.subTest(planned=planned), tempfile.TemporaryDirectory() as directory:
-                casework = self.casework(Path(directory))
-                side = unittest.mock.Mock()
-                side.run_json.return_value = planned
-                with self.assertRaisesRegex(MODULE.RehearsalError, "already active"):
-                    casework.activate(side, "seeded")
-                self.assertEqual(side.run_json.call_count, 1)
 
 
 class MessagingUpgradeTest(unittest.TestCase):
@@ -1256,12 +1197,6 @@ class AuditUpgradeTest(unittest.TestCase):
             with self.subTest(before=before, after=after):
                 self.assertEqual(len(MODULE.audit_stream_losses("Evidence", before, after, 2)), 1)
 
-    def test_casework_losing_one_record_across_the_upgrade_is_a_loss(self) -> None:
-        written = MODULE.CASEWORK_UPGRADED_AUDIT_RECORDS
-        self.assertEqual(written, 2)
-        self.assertEqual(MODULE.audit_stream_losses("Casework", 8, 8 + written, written), [])
-        self.assertEqual(len(MODULE.audit_stream_losses("Casework", 8, 7 + written, written)), 1)
-
     def test_the_stream_requires_valid_response_envelopes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1424,6 +1359,7 @@ class GateWiringTest(unittest.TestCase):
             self.assertTrue(required in workflow, f"workflow lacks {required!r}")
         for refused in ("--from-bin-dir", "contents: write", "id-token: write"):
             self.assertFalse(refused in workflow, f"workflow carries {refused!r}")
+        self.assertNotIn("-p registry-casework", workflow)
 
     def test_forward_path_floor_is_current_for_the_workspace(self) -> None:
         MODULE.check_floor_is_current(MODULE.released_versions(ROOT),
