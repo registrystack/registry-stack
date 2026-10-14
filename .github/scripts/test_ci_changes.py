@@ -710,7 +710,11 @@ class CiChangesTest(unittest.TestCase):
                 crates.add(node)
 
         collect(registry)
-        self.assertIn("products/breg/acceptance/asset-site-placement/registry.yaml", paths)
+        self.assertIn("products/platform/conformance/projects/breg-project/registry.yaml", paths)
+        self.assertIn(
+            "products/platform/conformance/projects/breg/modules/contact-notes/module.yaml",
+            paths,
+        )
         self.assertIn("registry-bregctl", crates)
         self.assertEqual(config_format_inputs(root), (frozenset(paths), frozenset(crates)))
         self.assertLessEqual(crates, set(self.workspace.package_names))
@@ -840,7 +844,9 @@ class CiChangesTest(unittest.TestCase):
             for entry in harness.values()
             for copy in (entry.get("copies") or {}).values()
         }
-        self.assertIn("crates/registry-evidencectl/templates/sqlite-extract", sources)
+        self.assertIn("products/evidence/examples/standalone", sources)
+        self.assertIn("products/platform/conformance/projects/breg-project", sources)
+        self.assertIn("products/platform/conformance/projects/breg", sources)
         for source in sorted(sources):
             path = source if Path(source).is_file() else f"{source}/conformance-probe.yaml"
             with self.subTest(path=path):
