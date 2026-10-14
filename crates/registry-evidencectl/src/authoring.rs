@@ -47,7 +47,14 @@ const OFFLINE_CHECK_PUBLIC_JWK_FILE: &str =
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompiledConceptForm {
     Boolean,
+    ControlledCode,
     ControlledCategory,
+    BoundedDecimal,
+    DateBucket,
+    TimeBucket,
+    AudienceScopedEntityReference,
+    ControlledCodeList,
+    EntityReferenceList,
     BoundedIdentifier,
     BoundedInteger,
     Structured,
@@ -101,7 +108,7 @@ pub(crate) struct CompiledAccessProfile {
     pub(crate) digest: String,
     pub(crate) requester_tags: Vec<String>,
     pub(crate) definitions: Vec<String>,
-    pub(crate) actor_kind: String,
+    pub(crate) actor_kind: Option<String>,
     pub(crate) task_grant: Option<crate::access::TaskGrantBinding>,
 }
 
@@ -893,6 +900,15 @@ fn compile_plan_with_connections(
                     concept_uri: output.concept.clone(),
                     concept_form: match output.value_type.as_str() {
                         "boolean" => CompiledConceptForm::Boolean,
+                        "controlled-code" => CompiledConceptForm::ControlledCode,
+                        "bounded-decimal" => CompiledConceptForm::BoundedDecimal,
+                        "date-bucket" => CompiledConceptForm::DateBucket,
+                        "time-bucket" => CompiledConceptForm::TimeBucket,
+                        "audience-scoped-entity-reference" => {
+                            CompiledConceptForm::AudienceScopedEntityReference
+                        }
+                        "controlled-code-list" => CompiledConceptForm::ControlledCodeList,
+                        "entity-reference-list" => CompiledConceptForm::EntityReferenceList,
                         "controlled-category" => CompiledConceptForm::ControlledCategory,
                         "bounded-identifier" => CompiledConceptForm::BoundedIdentifier,
                         "bounded-integer" => CompiledConceptForm::BoundedInteger,
@@ -1273,10 +1289,7 @@ fn write_plan(
                         .map(str::to_owned)
                         .collect(),
                     definitions,
-                    actor_kind: profile["actorKind"]
-                        .as_str()
-                        .context("profile actor kind")?
-                        .to_owned(),
+                    actor_kind: profile["actorKind"].as_str().map(str::to_owned),
                     task_grant,
                 })
             })

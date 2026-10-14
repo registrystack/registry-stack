@@ -41,6 +41,14 @@
       ],
       "type": "string"
     },
+    "ActorKind": {
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
     "ClientStatus": {
       "enum": [
         "active",
@@ -65,6 +73,16 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "actorKind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActorKind"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "apiVersion": {
       "const": "id.registrystack.org/formats/evidence/access-client/v1alpha1",

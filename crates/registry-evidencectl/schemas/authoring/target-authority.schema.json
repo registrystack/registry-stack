@@ -4,7 +4,7 @@
       "additionalProperties": false,
       "properties": {
         "audienceFrom": {
-          "type": "string"
+          "$ref": "#/$defs/AudienceFrom"
         },
         "definition": {
           "$ref": "#/$defs/LocalId"
@@ -16,6 +16,7 @@
           "items": {
             "$ref": "#/$defs/Representation"
           },
+          "maxItems": 4,
           "minItems": 1,
           "type": "array",
           "uniqueItems": true
@@ -27,6 +28,7 @@
           "items": {
             "$ref": "#/$defs/GrantedSubject"
           },
+          "maxItems": 8,
           "minItems": 1,
           "type": "array"
         }
@@ -45,10 +47,17 @@
       "additionalProperties": false,
       "properties": {
         "actorKind": {
-          "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "authority": {
-          "type": "string"
+          "$ref": "#/$defs/AuthorityKind"
         },
         "grantSourceIssuer": {
           "anyOf": [
@@ -64,6 +73,7 @@
           "items": {
             "$ref": "#/$defs/AccessGrant"
           },
+          "maxItems": 128,
           "minItems": 1,
           "type": "array"
         },
@@ -71,6 +81,8 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 32,
+          "minItems": 1,
           "type": [
             "array",
             "null"
@@ -81,6 +93,7 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 32,
           "minItems": 1,
           "type": "array",
           "uniqueItems": true
@@ -88,11 +101,34 @@
       },
       "required": [
         "authority",
-        "actorKind",
         "requesterTags",
         "grants"
       ],
       "type": "object"
+    },
+    "ActorKind": {
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "AudienceFrom": {
+      "enum": [
+        "authenticated-requester"
+      ],
+      "type": "string"
+    },
+    "AuthorityKind": {
+      "enum": [
+        "statutory",
+        "organizational",
+        "consent",
+        "delegated",
+        "explicit-request"
+      ],
+      "type": "string"
     },
     "BindingMode": {
       "enum": [
@@ -123,12 +159,7 @@
           ]
         },
         "valueOrigin": {
-          "enum": [
-            "request",
-            "authenticated-context",
-            "authenticated-grant"
-          ],
-          "type": "string"
+          "$ref": "#/$defs/ValueOrigin"
         }
       },
       "required": [
@@ -157,6 +188,14 @@
       "format": "uri",
       "maxLength": 2048,
       "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    },
+    "ValueOrigin": {
+      "enum": [
+        "request",
+        "authenticated-context",
+        "authenticated-grant"
+      ],
       "type": "string"
     }
   },

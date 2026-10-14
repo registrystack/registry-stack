@@ -45,7 +45,6 @@ pub fn compile(
                 }),
         );
         let mut sites = Vec::new();
-        let mut bindings = Vec::new();
         for (id, source) in &project.sources {
             if let Some(batch) = &source.batch {
                 for (field, call, interface) in [
@@ -54,7 +53,6 @@ pub fn compile(
                 ] {
                     if call.function == function.id {
                         sites.push(format!("/sources/{id}/batch/{field}"));
-                        bindings.push(json!({"path":format!("/sources/{id}/batch/{field}"),"inputs":{"response":project::value_schema(&batch.response.shape),"items":{"type":"array","maximumItems":batch.maximum_items,"selectors":selector_types(project,source)},"parameters":source.adapter_parameters_schema},"outputs":{"slottedResults":{"outcome":{"enum":["match","no_match","ambiguous"]},"facts":source.facts}},"limits":{"maximumItems":batch.maximum_items,"source":source.limits}}));
                         findings.extend(
                             crate::derivation::validate_batch_function(script, interface)
                                 .into_iter()
@@ -75,7 +73,6 @@ pub fn compile(
             }
             if source.extract.function == function.id {
                 sites.push(format!("/sources/{id}/extract"));
-                bindings.push(json!({"path":format!("/sources/{id}/extract"),"inputs":{"response":project::value_schema(&source.response.shape),"selectors":selector_types(project, source),"parameters":source.adapter_parameters_schema},"outputs":{"outcome":{"enum":["match","no_match","ambiguous"]},"facts":source.facts.iter().map(|(name,shape)|(name.to_string(),project::value_schema(shape))).collect::<Map<_,_>>()},"limits":source.limits}));
             }
             if source
                 .prepare
@@ -83,16 +80,14 @@ pub fn compile(
                 .is_some_and(|call| call.function == function.id)
             {
                 sites.push(format!("/sources/{id}/prepare"));
-                bindings.push(json!({"path":format!("/sources/{id}/prepare"),"inputs":{"selectors":selector_types(project, source),"parameters":source.adapter_parameters_schema},"outputs":{"query":"bounded-name-value-pairs","body":"bounded-json"},"limits":source.preparation_limits.clone().unwrap_or_else(default_preparation_limits)}));
             }
         }
         for (id, definition) in &project.assertion_definitions {
             if definition.derive.function == function.id {
                 sites.push(format!("/assertionDefinitions/{id}/derive"));
-                bindings.push(json!({"path":format!("/assertionDefinitions/{id}/derive"),"inputs":{"facts":definition.acquisition.source_ids().into_iter().map(|source|(source.to_string(),json!(project.sources[source].facts.iter().map(|(name,shape)|(name.to_string(),project::value_schema(shape))).collect::<Map<_,_>>()))).collect::<Map<_,_>>(),"selectors":definition.derive.selector_inputs,"parameters":definition.derive.parameters},"outputs":definition.outputs}));
             }
         }
-        functions.push(json!({"id": function.id, "interface": function.interface, "arity": crate::derivation::function_arity(script,function.interface), "source": function.source, "label":function.label, "description":function.description, "capabilities": function.interface.capabilities(), "callSites": sites, "bindings":bindings}));
+        functions.push(json!({"id": function.id, "interface": function.interface, "arity": crate::derivation::function_arity(script,function.interface), "source": function.source, "label":function.label, "description":function.description, "capabilities": function.interface.capabilities(), "callSites": sites}));
         let ordinary_source_call = project.sources.values().any(|source| {
             source.extract.function == function.id
                 || source
@@ -325,6 +320,41 @@ pub fn compile(
         }
         sources.insert(id.to_string(), compiled);
     }
+    for (id, profile) in &project.selector_profiles {
+        for (name, field) in &profile.fields {
+            if let Some(path) = field.get("codelist").and_then(Value::as_str) {
+                let at = FieldPath::root()
+                    .key("selectorProfiles")
+                    .map_key(id.to_string())
+                    .key("fields")
+                    .map_key(name.to_string())
+                    .key("codelist");
+                let bytes = scripts.get(path).ok_or_else(|| {
+                    vec![Finding::new(
+                        at.clone(),
+                        "codelist-asset",
+                        "the reviewed selector codelist asset was not supplied",
+                    )]
+                })?;
+                let value =
+                    crate::output::codelist_value(path, bytes.as_bytes()).ok_or_else(|| {
+                        vec![Finding::new(
+                            at.clone(),
+                            "codelist-asset",
+                            "the reviewed selector codelist asset is invalid",
+                        )]
+                    })?;
+                if value["version"] != field["codelistVersion"] {
+                    return Err(vec![Finding::new(
+                        at,
+                        "codelist-identity",
+                        "selector codelist version must match the reviewed asset",
+                    )]);
+                }
+                artifacts.insert(path.to_owned(), bytes.as_bytes().to_vec());
+            }
+        }
+    }
     let mut requirements = Vec::new();
     for (id, definition) in &project.assertion_definitions {
         let mut concepts = Vec::new();
@@ -334,9 +364,7 @@ pub fn compile(
             for field in ["concept", "type", "sdJwtVc", "label", "description"] {
                 map.remove(field);
             }
-            if output.value_type == "controlled-category"
-                || output.value_type == "controlled-category-list"
-            {
+            if output.value_type == "controlled-category" && !output.values.is_empty() {
                 map.remove("values");
                 let path = format!("codelists/{id}-{name}.yaml");
                 artifact(
@@ -354,6 +382,59 @@ pub fn compile(
                     "maximumBytes".to_owned(),
                     json!(output.values.iter().map(String::len).max().unwrap_or(1)),
                 );
+            }
+            if let Some(path) = &output.codelist {
+                let bytes = scripts.get(path).ok_or_else(|| {
+                    vec![Finding::new(
+                        FieldPath::root()
+                            .key("assertionDefinitions")
+                            .map_key(id.to_string())
+                            .key("outputs")
+                            .map_key(name.to_string())
+                            .key("codelist"),
+                        "codelist-asset",
+                        "the reviewed codelist asset was not supplied",
+                    )]
+                })?;
+                let value =
+                    crate::output::codelist_value(path, bytes.as_bytes()).ok_or_else(|| {
+                        vec![Finding::new(
+                            FieldPath::root()
+                                .key("assertionDefinitions")
+                                .map_key(id.to_string())
+                                .key("outputs")
+                                .map_key(name.to_string())
+                                .key("codelist"),
+                            "codelist-asset",
+                            "the reviewed codelist asset must declare a bounded EvidenceCodelist",
+                        )]
+                    })?;
+                let expected_version = output
+                    .codelist_version
+                    .as_ref()
+                    .or(output.scheme_version.as_ref());
+                if expected_version.is_some_and(|version| value["version"] != json!(version))
+                    || output
+                        .category_scheme
+                        .as_ref()
+                        .or(output.bucket_scheme.as_ref())
+                        .is_some_and(|uri| value["uri"] != json!(uri))
+                {
+                    return Err(vec![Finding::new(
+                        FieldPath::root()
+                            .key("assertionDefinitions")
+                            .map_key(id.to_string())
+                            .key("outputs")
+                            .map_key(name.to_string())
+                            .key("codelist"),
+                        "codelist-identity",
+                        "codelist URI and version must match this Output",
+                    )]);
+                }
+                artifacts.insert(path.clone(), bytes.as_bytes().to_vec());
+                if matches!(output.value_type.as_str(), "date-bucket" | "time-bucket") {
+                    map.remove("codelist");
+                }
             }
             if let Some(path) = &output.schema {
                 let Some(text) = scripts.get(path) else {
@@ -399,7 +480,7 @@ pub fn compile(
             }
             let mut concept = json!({"handle":name,"uri":output.concept,"type":output.value_type,"required":true,"constraints":constraints});
             if let Some(projection) = &output.sd_jwt_vc {
-                concept["sdJwtVc"] = projection.clone();
+                concept["sdJwtVc"] = json!(projection);
             }
             concepts.push(concept);
         }
@@ -407,7 +488,7 @@ pub fn compile(
         let script = &scripts[&derive.source];
         let declared = definition
             .acquisition
-            .source_ids()
+            .derivation_source_ids()
             .into_iter()
             .flat_map(|source| {
                 project.sources[source]
@@ -454,7 +535,7 @@ pub fn compile(
         }
         requirements.push(requirement);
     }
-    let mut model = json!({"project":project.id,"acquisitionCapabilities":project.acquisition_capabilities,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size,"selectorProfiles":project.selector_profiles.iter().map(|(id,profile)|(id.to_string(),json!({"fields":profile.fields,"maximumAggregateBytes":profile.maximum_aggregate_bytes}))).collect::<Map<_,_>>(),"sources":sources,"requirements":requirements});
+    let mut model = json!({"project":project.id,"acquisitionCapabilities":project.acquisition_capabilities,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size,"selectorProfiles":project.selector_profiles.iter().map(|(id,profile)|(id.to_string(),json!({"fields":profile.fields.iter().map(|(name,value)|(name.to_string(),crate::selector::compiled(value))).collect::<Map<_,_>>(),"maximumAggregateBytes":profile.maximum_aggregate_bytes}))).collect::<Map<_,_>>(),"sources":sources,"requirements":requirements});
     if project.maximum_holder_bound_batch_size.is_none() {
         model
             .as_object_mut()
@@ -474,6 +555,17 @@ pub fn compile(
         .map(|function| crate::types::function_shape(project, &compiled, function))
         .collect::<Vec<_>>();
     for (function, interface) in compiled.functions.iter_mut().zip(interfaces) {
+        let calls = interface["properties"]["calls"]["anyOf"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        function["bindings"] = json!(calls.iter().map(|call| {
+            let properties=&call["properties"];
+            let definition=&properties["definition"]["enum"][0];
+            let source=&properties["source"]["enum"][0];
+            let mode=&properties["mode"]["enum"][0];
+            json!({"definition":definition,"source":source,"mode":mode,"stage":properties["stage"]["enum"][0],"inputs":properties["inputs"]["properties"],"outputs":properties["outputs"],"limits":source.as_str().and_then(|id|project.sources.iter().find(|(key,_)|key.as_str()==id).map(|(_,source)|json!(source.limits)))})
+        }).collect::<Vec<_>>());
         function["abi"] = interface;
     }
     Ok(compiled)
@@ -593,10 +685,6 @@ pub fn definition_dependencies(project: &EvidenceProject, id: &str) -> Option<Va
 fn default_preparation_limits() -> Value {
     json!({"query":"allowed", "jsonBody":"forbidden", "maximumNormalizedBytes":4096})
 }
-fn selector_types(project: &EvidenceProject, source: &project::Source) -> Value {
-    json!(source.selectors.iter().map(|selector| json!({"role":selector.role,"profiles":selector.profiles.iter().map(|id|(id.to_string(),json!(project.selector_profiles[id].fields.iter().map(|(name,shape)|(name.to_string(),project::value_schema(shape))).collect::<Map<_,_>>()))).collect::<Map<_,_>>()})).collect::<Vec<_>>())
-}
-
 fn behavior_value(mut value: Value) -> Value {
     match &mut value {
         Value::Object(object) => {

@@ -28,34 +28,92 @@ fn literal(value: Value) -> Value {
 fn union(items: Vec<Value>) -> Value {
     json!({"anyOf":items})
 }
+fn parameter_shape(value: &Value) -> Value {
+    match value {
+        Value::Object(map) if map.get("type") == Some(&json!("decimal")) => {
+            json!({"x-evidence-rhai-type":"RhaiDecimal"})
+        }
+        Value::Object(map) => fields(
+            map.iter()
+                .map(|(name, value)| (name.clone(), parameter_shape(value))),
+        ),
+        Value::Array(values) => array(union(values.iter().map(parameter_shape).collect())),
+        scalar => literal(scalar.clone()),
+    }
+}
 fn parameters(value: &std::collections::BTreeMap<String, Value>) -> Value {
     fields(
         value
             .iter()
-            .map(|(name, value)| (name.clone(), literal(value.clone()))),
+            .map(|(name, value)| (name.clone(), parameter_shape(value))),
     )
 }
-fn output_shape(output: &Output, compiled: &CompiledProject) -> Value {
-    if let Some(path) = &output.schema {
-        let shape = serde_json::from_slice(&compiled.artifacts[path])
-            .expect("compiled Output schema is JSON");
-        return if output.value_type.ends_with("-list") {
-            array(shape)
-        } else {
-            shape
-        };
-    }
-    let shape = match output.value_type.trim_end_matches("-list") {
+fn codelist_codes(path: &str, compiled: &CompiledProject) -> Value {
+    let value = crate::output::codelist_value(path, &compiled.artifacts[path])
+        .expect("compiled codelist metadata");
+    json!({"type":"string","enum":value.get("codes").or_else(||value.get("allowedOutputs")).expect("codelist codes")})
+}
+fn output_shape(output: &Output, compiled: &CompiledProject, authored: bool) -> Value {
+    match output.value_type.as_str() {
         "boolean" => json!({"type":"boolean"}),
         "bounded-integer" => json!({"type":"integer"}),
-        "controlled-category" => json!({"type":"string","enum":output.values}),
         "bounded-identifier" => json!({"type":"string"}),
+        "controlled-category" if !output.values.is_empty() => {
+            json!({"type":"string","enum":output.values})
+        }
+        "controlled-category" | "controlled-code" => {
+            codelist_codes(output.codelist.as_deref().expect("codelist"), compiled)
+        }
+        "controlled-code-list" => array(codelist_codes(
+            output.codelist.as_deref().expect("codelist"),
+            compiled,
+        )),
+        "bounded-decimal" if authored => json!({"x-evidence-rhai-type":"RhaiDecimal"}),
+        "bounded-decimal" => json!({"type":"string"}),
+        "audience-scoped-entity-reference" | "entity-reference-list" => {
+            let shape = if authored {
+                json!({"x-evidence-rhai-type":"EntityReferenceSeed"})
+            } else {
+                fields([
+                    (
+                        "form".to_owned(),
+                        literal(json!("audience-scoped-entity-reference")),
+                    ),
+                    ("reference".to_owned(), json!({"type":"string"})),
+                ])
+            };
+            if output.value_type == "entity-reference-list" {
+                array(shape)
+            } else {
+                shape
+            }
+        }
+        "date-bucket" | "time-bucket" => fields([
+            ("form".to_owned(), literal(json!(output.value_type))),
+            ("scheme".to_owned(), literal(json!(output.bucket_scheme))),
+            (
+                "bucket".to_owned(),
+                codelist_codes(
+                    output.codelist.as_deref().expect("bucket codelist"),
+                    compiled,
+                ),
+            ),
+        ]),
+        "reviewed-structured-value" => {
+            let schema: Value = serde_json::from_slice(
+                &compiled.artifacts[output.schema.as_deref().expect("schema")],
+            )
+            .expect("compiled schema JSON");
+            fields([
+                (
+                    "form".to_owned(),
+                    literal(json!("reviewed-structured-value")),
+                ),
+                ("schema".to_owned(), literal(schema["$id"].clone())),
+                ("fields".to_owned(), schema),
+            ])
+        }
         _ => unreachable!("compiled Output type is closed"),
-    };
-    if output.value_type.ends_with("-list") {
-        array(shape)
-    } else {
-        shape
     }
 }
 fn facts(source: &Source) -> Value {
@@ -68,6 +126,7 @@ fn facts(source: &Source) -> Value {
 }
 fn selectors(
     project: &EvidenceProject,
+    compiled: &CompiledProject,
     inputs: impl IntoIterator<Item = (String, Vec<(String, Vec<String>)>)>,
 ) -> Value {
     fields(inputs.into_iter().map(|(role, alternatives)| {
@@ -94,7 +153,19 @@ fn selectors(
                                         .find(|(id, _)| id.as_str() == name)
                                         .expect("validated selector field")
                                         .1;
-                                    (name, project::value_schema(value))
+                                    (
+                                        name,
+                                        if value["type"] == "controlled-code" {
+                                            codelist_codes(
+                                                value["codelist"]
+                                                    .as_str()
+                                                    .expect("selector codelist"),
+                                                compiled,
+                                            )
+                                        } else {
+                                            project::value_schema(value)
+                                        },
+                                    )
                                 })),
                             ),
                         ])
@@ -104,9 +175,14 @@ fn selectors(
         )
     }))
 }
-fn source_selectors(project: &EvidenceProject, source: &Source) -> Value {
+fn source_selectors(
+    project: &EvidenceProject,
+    compiled: &CompiledProject,
+    source: &Source,
+) -> Value {
     selectors(
         project,
+        compiled,
         source.selectors.iter().map(|input| {
             (
                 input.role.to_string(),
@@ -128,25 +204,24 @@ fn source_selectors(project: &EvidenceProject, source: &Source) -> Value {
         }),
     )
 }
-fn derive_selectors(project: &EvidenceProject, inputs: &[Value]) -> Value {
+fn derive_selectors(
+    project: &EvidenceProject,
+    compiled: &CompiledProject,
+    inputs: &[project::DeriveSelectorInput],
+) -> Value {
     selectors(
         project,
+        compiled,
         inputs.iter().map(|input| {
             (
-                input["role"].as_str().expect("validated role").to_owned(),
-                input["alternatives"]
-                    .as_array()
-                    .expect("validated alternatives")
+                input.role.to_string(),
+                input
+                    .alternatives
                     .iter()
                     .map(|alternative| {
                         (
-                            alternative["profile"].as_str().expect("profile").to_owned(),
-                            alternative["fields"]
-                                .as_array()
-                                .expect("fields")
-                                .iter()
-                                .map(|field| field.as_str().expect("field").to_owned())
-                                .collect(),
+                            alternative.profile.to_string(),
+                            alternative.fields.iter().map(ToString::to_string).collect(),
                         )
                     })
                     .collect(),
@@ -185,27 +260,85 @@ fn request_parts(source: &Source) -> Value {
         ])
     }
 }
+struct SourceCall<'a> {
+    definition: &'a registry_platform_yaml::LocalId,
+    source: &'a registry_platform_yaml::LocalId,
+    stage: &'static str,
+    prior_facts: Value,
+}
+fn source_calls(project: &EvidenceProject) -> Vec<SourceCall<'_>> {
+    let mut calls = Vec::new();
+    for (id, definition) in &project.assertion_definitions {
+        match &definition.acquisition {
+            project::Acquisition::Single { source } => calls.push(SourceCall {
+                definition: id,
+                source,
+                stage: "single",
+                prior_facts: object(Map::new()),
+            }),
+            project::Acquisition::SearchThenFetch { search, fetch } => {
+                calls.push(SourceCall {
+                    definition: id,
+                    source: search,
+                    stage: "search",
+                    prior_facts: object(Map::new()),
+                });
+                calls.push(SourceCall {
+                    definition: id,
+                    source: fetch,
+                    stage: "fetch",
+                    prior_facts: facts(&project.sources[search]),
+                });
+            }
+            project::Acquisition::SearchThenFetchSet { search, fetch, .. } => {
+                calls.push(SourceCall {
+                    definition: id,
+                    source: search,
+                    stage: "search",
+                    prior_facts: object(Map::new()),
+                });
+                for member in fetch {
+                    calls.push(SourceCall {
+                        definition: id,
+                        source: &member.source,
+                        stage: "fetch",
+                        prior_facts: fields(
+                            project.sources[search]
+                                .facts
+                                .iter()
+                                .filter(|(name, _)| {
+                                    member
+                                        .fact_inputs
+                                        .iter()
+                                        .any(|input| input == name.as_str())
+                                })
+                                .map(|(name, value)| {
+                                    (name.to_string(), project::value_schema(value))
+                                }),
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    calls
+}
 pub(crate) fn function_shape(
     project: &EvidenceProject,
     compiled: &CompiledProject,
     function: &project::Function,
 ) -> Value {
     let mut calls = Vec::new();
-    let mut prior = fields(
-        project
-            .sources
-            .values()
-            .flat_map(|source| source.facts.iter())
-            .map(|(id, shape)| (id.to_string(), project::value_schema(shape))),
-    );
-    prior["required"] = json!([]);
     let extraction_arity = compiled
         .functions
         .iter()
         .find(|entry| entry["id"] == json!(function.id))
         .and_then(|entry| entry["arity"].as_u64())
         .unwrap_or(3);
-    for (id, source) in &project.sources {
+    for call in source_calls(project) {
+        let id = call.source;
+        let source = &project.sources[id];
+        let prior = call.prior_facts;
         let parameters = source
             .adapter_parameters_schema
             .clone()
@@ -222,7 +355,10 @@ pub(crate) fn function_shape(
                     .as_ref()
                     .is_some_and(|call| call.function == function.id),
                 fields([
-                    ("selectors".to_owned(), source_selectors(project, source)),
+                    (
+                        "selectors".to_owned(),
+                        source_selectors(project, compiled, source),
+                    ),
                     ("context".to_owned(), context.clone()),
                 ]),
                 request_parts(source),
@@ -235,7 +371,10 @@ pub(crate) fn function_shape(
                         "response".to_owned(),
                         project::value_schema(&source.response.shape),
                     ),
-                    ("selectors".to_owned(), source_selectors(project, source)),
+                    (
+                        "selectors".to_owned(),
+                        source_selectors(project, compiled, source),
+                    ),
                     ("context".to_owned(), context),
                 ]),
                 lookup(source),
@@ -254,6 +393,8 @@ pub(crate) fn function_shape(
                         .retain(|name| name != "selectors");
                 }
                 calls.push(fields([
+                    ("definition".to_owned(), literal(json!(call.definition))),
+                    ("stage".to_owned(), literal(json!(call.stage))),
                     ("source".to_owned(), literal(json!(id))),
                     ("mode".to_owned(), literal(json!(mode))),
                     ("inputs".to_owned(), inputs),
@@ -264,7 +405,10 @@ pub(crate) fn function_shape(
         if let Some(batch) = &source.batch {
             let items = array(fields([
                 ("slot".to_owned(), json!({"type":"integer"})),
-                ("selectors".to_owned(), source_selectors(project, source)),
+                (
+                    "selectors".to_owned(),
+                    source_selectors(project, compiled, source),
+                ),
             ]));
             let results = array(union(vec![
                 fields([
@@ -314,6 +458,8 @@ pub(crate) fn function_shape(
             ] {
                 if matches {
                     calls.push(fields([
+                        ("definition".to_owned(), literal(json!(call.definition))),
+                        ("stage".to_owned(), literal(json!(call.stage))),
                         ("source".to_owned(), literal(json!(id))),
                         ("mode".to_owned(), literal(json!(mode))),
                         ("inputs".to_owned(), inputs),
@@ -330,7 +476,7 @@ pub(crate) fn function_shape(
         let facts = fields(
             definition
                 .acquisition
-                .source_ids()
+                .derivation_source_ids()
                 .into_iter()
                 .flat_map(|id| project.sources[id].facts.iter())
                 .map(|(id, shape)| (id.to_string(), project::value_schema(shape))),
@@ -340,13 +486,35 @@ pub(crate) fn function_shape(
                 "parameters".to_owned(),
                 parameters(&definition.derive.parameters),
             ),
-            ("observed_at".to_owned(), json!({"type":"string"})),
+            (
+                "observed_at".to_owned(),
+                json!({"x-evidence-rhai-type":"UtcInstant"}),
+            ),
             (
                 "legal_local_date".to_owned(),
-                json!({"type":"string","format":"date"}),
+                json!({"x-evidence-rhai-type":"CalendarDate"}),
             ),
-            ("legal_local_time".to_owned(), json!({"type":"string"})),
-            ("codelists".to_owned(), object(Map::new())),
+            (
+                "legal_local_time".to_owned(),
+                json!({"x-evidence-rhai-type":"LegalLocalTime"}),
+            ),
+            (
+                "codelists".to_owned(),
+                fields(
+                    compiled
+                        .artifacts
+                        .iter()
+                        .filter(|(path, _)| path.starts_with("codelists/"))
+                        .filter_map(|(path, bytes)| {
+                            crate::output::codelist_value(path, bytes).map(|value| {
+                                (
+                                    value["uri"].as_str().expect("codelist identity").to_owned(),
+                                    json!({"x-evidence-rhai-type":"CodelistHandle"}),
+                                )
+                            })
+                        }),
+                ),
+            ),
         ]);
         let outputs = array(union(
             definition
@@ -355,7 +523,7 @@ pub(crate) fn function_shape(
                 .map(|(name, output)| {
                     fields([
                         ("output".to_owned(), literal(json!(name))),
-                        ("value".to_owned(), output_shape(output, compiled)),
+                        ("value".to_owned(), output_shape(output, compiled, true)),
                     ])
                 })
                 .collect(),
@@ -369,7 +537,7 @@ pub(crate) fn function_shape(
                     ("facts".to_owned(), facts),
                     (
                         "selectors".to_owned(),
-                        derive_selectors(project, &definition.derive.selector_inputs),
+                        derive_selectors(project, compiled, &definition.derive.selector_inputs),
                     ),
                     ("context".to_owned(), context),
                 ]),
@@ -386,6 +554,9 @@ pub(crate) fn function_shape(
 fn ts(schema: &Value, root: &Value, depth: usize) -> String {
     if depth > 32 {
         return "unknown".to_owned();
+    }
+    if let Some(name) = schema["x-evidence-rhai-type"].as_str() {
+        return name.to_owned();
     }
     if schema.get("$ref") == Some(&json!("#/$defs/JSONValue")) {
         return "JSONValue".to_owned();
@@ -478,6 +649,9 @@ impl Python {
         if depth > 32 {
             return "Any".to_owned();
         }
+        if let Some(name) = schema["x-evidence-rhai-type"].as_str() {
+            return name.to_owned();
+        }
         if schema.get("$ref") == Some(&json!("#/$defs/JSONValue")) {
             return "JSONValue".to_owned();
         }
@@ -568,14 +742,25 @@ impl Python {
 
 /// Generate TypeScript from the compiled schema closure, with local ID anchors.
 pub fn typescript(project: &EvidenceProject, compiled: &CompiledProject) -> String {
-    let mut result="// Generated from the normalized EvidenceProject.\nexport type JSONValue = null | boolean | number | string | ReadonlyArray<JSONValue> | {readonly [key: string]: JSONValue};\nexport interface AssertionOutputs {\n".to_owned();
+    let mut result="// Generated from the normalized EvidenceProject.\nexport type JSONValue = null | boolean | number | string | ReadonlyArray<JSONValue> | {readonly [key: string]: JSONValue};\nexport interface RhaiDecimal {readonly __evidenceRhaiType: \"Decimal\"}\nexport interface EntityReferenceSeed {readonly __evidenceRhaiType: \"EntityReferenceSeed\"}\n".to_owned();
+    for name in [
+        "UtcInstant",
+        "CalendarDate",
+        "LegalLocalTime",
+        "CodelistHandle",
+    ] {
+        result.push_str(&format!(
+            "export interface {name} {{readonly __evidenceRhaiType: \"{name}\"}}\n"
+        ));
+    }
+    result.push_str("export interface AssertionOutputs {\n");
     for (id, definition) in &project.assertion_definitions {
         result.push_str(&format!(
             "  // evidence-definition: {id}\n  {}: {{\n",
             json!(id)
         ));
         for (name, output) in &definition.outputs {
-            let shape = output_shape(output, compiled);
+            let shape = output_shape(output, compiled, false);
             result.push_str(&format!(
                 "    {}: {};\n",
                 json!(name),
@@ -625,7 +810,17 @@ pub fn typescript(project: &EvidenceProject, compiled: &CompiledProject) -> Stri
 }
 /// Generate Python TypedDict declarations from the same typed call-site projection.
 pub fn python(project: &EvidenceProject, compiled: &CompiledProject) -> String {
-    let mut result="# Generated from the normalized EvidenceProject.\nfrom typing import Any, Literal, Never, NotRequired, TypedDict, Union\nJSONValue = Union[None, bool, int, float, str, list['JSONValue'], dict[str, 'JSONValue']]\n\n".to_owned();
+    let mut result="# Generated from the normalized EvidenceProject.\nfrom typing import Any, Literal, Never, NotRequired, TypedDict, Union, Protocol\nclass RhaiDecimal(Protocol):\n    __evidence_rhai_type: Literal[\"Decimal\"]\nclass EntityReferenceSeed(Protocol):\n    __evidence_rhai_type: Literal[\"EntityReferenceSeed\"]\nJSONValue = Union[None, bool, int, float, str, list['JSONValue'], dict[str, 'JSONValue']]\n\n".to_owned();
+    for name in [
+        "UtcInstant",
+        "CalendarDate",
+        "LegalLocalTime",
+        "CodelistHandle",
+    ] {
+        result.push_str(&format!(
+            "class {name}(Protocol):\n    __evidence_rhai_type: Literal[\"{name}\"]\n"
+        ));
+    }
     let mut renderer = Python {
         definitions: String::new(),
         next: 0,
@@ -635,7 +830,7 @@ pub fn python(project: &EvidenceProject, compiled: &CompiledProject) -> String {
             definition
                 .outputs
                 .iter()
-                .map(|(name, output)| (name.to_string(), output_shape(output, compiled))),
+                .map(|(name, output)| (name.to_string(), output_shape(output, compiled, false))),
         );
         let name = renderer.shape(&shape, &shape, 0);
         result.push_str(&format!("# evidence-definition: {id}\n"));

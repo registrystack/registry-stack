@@ -273,66 +273,19 @@ pub fn finding_code(area: &str, code: &str) -> String {
 #[must_use]
 pub fn finding_action(code: &str) -> &'static str {
     match code {
-        "question-identifier" => {
-            "Name the question with a lowercase local identifier that matches its file name."
-        }
-        "question-text" => "Write the question as one bounded sentence.",
-        "operation-identifier" => {
-            "Name an operationId the project's OpenAPI description declares."
-        }
-        "subject-count" | "subject-declaration" | "subject-identifier" | "subject-role-unique"
-        | "subject-selector-shape" | "subject-profile-alternatives" | "subject-source-context" => {
-            "Declare each subject once, with a unique role and either a selector or profiles, as the message describes."
-        }
-        "compiled-name-length" | "compiled-name-dot" => {
-            "Shorten or rename the member: the compiled bundle names a selector profile, a selector field, and a source with a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`."
-        }
-        "source-declaration" | "source-reference" => {
-            "Name a source under sources/, or an operation of the project's OpenAPI description."
-        }
-        "fact-count" | "fact-name" | "fact-path" | "fact-combination" => {
-            "Give each fact a unique name, a JSON Pointer path, and `combine: collect` exactly when the path visits a collection."
-        }
-        "collection-bounds" => {
-            "Bound each collection the facts visit, by its JSON Pointer, with at most 16 entries."
-        }
-        "answer-count" | "answer-concept-identifier" | "answer-concept-unique" => {
-            "Give each answer a unique concept named by a lowercase local identifier."
-        }
-        "boolean-answer" | "controlled-category-values" | "controlled-category-bounds"
-        | "bounded-integer-values" | "bounded-integer-bounds" | "bounded-integer-bounds-missing"
-        | "bounded-identifier-bounds" | "bounded-identifier-prefix" | "bounded-identifier-shape"
-        | "identifier-constraints-form" => {
-            "Declare exactly the constraints the answer's type takes, as the message describes."
-        }
-        "structured-answer-schema" | "structured-answer-size" | "structured-answer-constraints"
-        | "answer-schema-path" => {
-            "Name a reviewed schema under schemas/ and bound the structured value's serialized size."
-        }
-        "disclosure-allow" => "Allow only concepts the question's answers declare, each once.",
-        "response-formats" | "sd-jwt-vc-format" | "sd-jwt-vc-claim-name" | "sd-jwt-vc-claim-unique" => {
-            "Offer sd-jwt-vc only with a unique SD-JWT VC claim name for each answer that sets one."
-        }
-        "derivation-compile" | "derivation-answer-count" | "derivation-answer-signature"
-        | "derivation-function-unique" | "derivation-reserved-entry-point" => {
-            "Correct the derivation script so it compiles and defines `answer` once with the documented signature."
-        }
-        "derivation-fact-undeclared" => {
-            "Declare every fact the derivation reads under the question's source facts, or stop reading it."
-        }
-        "access-policy-identifier" => {
-            "Name the policy with a lowercase local identifier that matches its file name."
-        }
-        "access-policy-question-count" | "access-policy-question-order" => {
-            "List each question the policy admits once, in sorted order."
-        }
-        "access-policy-grant-kind" | "access-policy-grant-source" | "access-policy-grant-clients"
-        | "access-policy-grant-bindings" | "access-policy-grant-binding-shape" => {
-            "Declare the task grant's kind, an https source issuer, its requester clients, and one binding per bound question role."
-        }
-        "kebab-case" | "date-time" | "x-evidencectl-mock" | "x-evidencectl-recursive-ref" => {
-            "Correct the OpenAPI description as the message describes."
-        }
+        "definition-question" => "Write the question as one bounded human-readable sentence.",
+        "definition-count" | "requirement-unique" => "Give each assertion definition a stable local ID and distinct Requirement URI.",
+        "subject-count" | "subject-role-unique" | "subject-profile-reference" => "Declare complete subject roles and named selector profile references.",
+        "acquisition-source" | "source-reference" => "Name a Source declared in this EvidenceProject and preserve the acquisition contract.",
+        "output-type" | "output-bounds" | "output-concept" => "Declare one retained Output type with exactly its required constraints and an absolute concept URI.",
+        "output-schema" | "codelist-asset" | "codelist-identity" => "Supply the reviewed project-relative schema or codelist asset and matching identity/version.",
+        "function-compile" | "function-signature" | "function-interface" | "function-source" => "Correct the named Function and its declared interface, then check its call sites.",
+        "derivation-fact-undeclared" => "Read only facts supplied to this definition's derivation by its acquisition plan.",
+        "authority-ceiling" | "authority-definition" => "Declare complete grants using existing definitions and stay within every definition ceiling.",
+        "authority-value-claims" | "authority-claim-path" | "authority-request-claims" => "Match valueClaims exactly to the selected profile for authenticated values, and omit them for request values.",
+        "authority-task-clients" | "authority-task-issuer" | "authority-task-only" => "Declare requester clients and the trusted issuer exactly when a subject uses authenticated-grant values.",
+        "selector-field-required" | "selector-field-type" | "selector-field-bounds" => "Declare the closed selector field type and its required bounds or codelist reference.",
+        "kebab-case" | "date-time" | "x-evidencectl-mock" | "x-evidencectl-recursive-ref" => "Correct the inspected OpenAPI description as the message describes.",
         _ => "Correct the named member as the message describes, then check the project again.",
     }
 }

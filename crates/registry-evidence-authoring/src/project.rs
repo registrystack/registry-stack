@@ -74,7 +74,10 @@ pub struct SelectorProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub maximum_aggregate_bytes: BoundedU64<1, 8192>,
-    #[cfg_attr(feature = "schema", schemars(extend("x-registry-passthrough" = "Reviewed bounded selector field schemas, normalized by the Evidence compiler and checked by the kernel.")))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BTreeMap<LocalId, crate::selector::Field>")
+    )]
     pub fields: BTreeMap<LocalId, Value>,
 }
 
@@ -122,6 +125,23 @@ impl FunctionInterface {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DeriveSelectorInput {
+    pub role: LocalId,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 8)))]
+    pub alternatives: Vec<SelectorAlternative>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SelectorAlternative {
+    pub profile: LocalId,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 16)))]
+    pub fields: UniqueList<LocalId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FunctionCall {
     pub function: LocalId,
@@ -129,7 +149,7 @@ pub struct FunctionCall {
     #[cfg_attr(feature = "schema", schemars(extend("x-registry-passthrough" = "Literal reviewed Function parameter bindings, checked at the named Function call site.")))]
     pub parameters: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub selector_inputs: Vec<Value>,
+    pub selector_inputs: Vec<DeriveSelectorInput>,
 }
 
 /// Source preparation and extraction share the Source's declared adapter
@@ -190,16 +210,74 @@ pub struct Semantics {
     pub reference_frameworks: UniqueList<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthorityKind {
+    Statutory,
+    Organizational,
+    Consent,
+    Delegated,
+    ExplicitRequest,
+}
+impl AuthorityKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Statutory => "statutory",
+            Self::Organizational => "organizational",
+            Self::Consent => "consent",
+            Self::Delegated => "delegated",
+            Self::ExplicitRequest => "explicit-request",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ActorKind {
+    Human,
+    Agent,
+    Service,
+}
+impl ActorKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Agent => "agent",
+            Self::Service => "service",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ValueOrigin {
+    Request,
+    AuthenticatedContext,
+    AuthenticatedGrant,
+}
+impl ValueOrigin {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::AuthenticatedContext => "authenticated-context",
+            Self::AuthenticatedGrant => "authenticated-grant",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GrantCeiling {
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
-    pub authorities: UniqueList<String>,
+    pub authorities: UniqueList<AuthorityKind>,
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
-    pub actor_kinds: UniqueList<String>,
+    pub actor_kinds: UniqueList<ActorKind>,
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
-    pub value_origins: UniqueList<String>,
+    pub value_origins: UniqueList<ValueOrigin>,
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub audiences: UniqueList<String>,
 }
@@ -269,6 +347,15 @@ impl Serialize for Acquisition {
     }
 }
 impl Acquisition {
+    /// Sources whose facts reach assertion derivation in the retained kernel.
+    /// Search-then-fetch retains its search facts only for preparing the fetch.
+    pub fn derivation_source_ids(&self) -> Vec<&LocalId> {
+        match self {
+            Self::SearchThenFetch { fetch, .. } => vec![fetch],
+            _ => self.source_ids(),
+        }
+    }
+
     pub fn source_ids(&self) -> Vec<&LocalId> {
         match self {
             Self::Single { source } => vec![source],
@@ -291,6 +378,27 @@ pub struct FetchMember {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OutputProjection {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            length(min = 1, max = 64),
+            regex(pattern = "^[A-Za-z][A-Za-z0-9_]{0,63}$")
+        )
+    )]
+    pub claim: String,
+    pub disclosure: ProjectionDisclosure,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectionDisclosure {
+    TopLevel,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Output {
     /// Optional presentation label. Stable references use the identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -300,21 +408,20 @@ pub struct Output {
     pub description: Option<String>,
     pub concept: String,
     #[serde(rename = "type")]
+    #[cfg_attr(feature = "schema", schemars(extend("enum" = ["boolean","controlled-code","controlled-category","bounded-identifier","bounded-integer","bounded-decimal","date-bucket","time-bucket","audience-scoped-entity-reference","controlled-code-list","entity-reference-list","reviewed-structured-value"])))]
     pub value_type: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(range(min = -9_007_199_254_740_991_i64, max = 9_007_199_254_740_991_i64)))]
-    pub minimum: Option<i64>,
+    pub minimum: Option<crate::output::Bound>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(range(min = -9_007_199_254_740_991_i64, max = 9_007_199_254_740_991_i64)))]
-    pub maximum: Option<i64>,
+    pub maximum: Option<crate::output::Bound>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_bytes: Option<BoundedU64<1, 1024>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_bytes: Option<BoundedU64<1, 1024>>,
+    pub maximum_bytes: Option<BoundedU64<1, 8192>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_items: Option<BoundedU64<1, 64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -324,7 +431,21 @@ pub struct Output {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum_serialized_bytes: Option<BoundedU64<1, 65536>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sd_jwt_vc: Option<Value>,
+    pub sd_jwt_vc: Option<OutputProjection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codelist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codelist_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_scheme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bucket_scheme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheme_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_scale: Option<BoundedU64<0, 9>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unique: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -444,7 +565,18 @@ pub fn read_project(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceProject>
 }
 
 pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
-    let mut findings = Vec::new();
+    let mut findings = project
+        .selector_profiles
+        .iter()
+        .flat_map(|(id, profile)| {
+            crate::selector::validate(
+                profile,
+                &FieldPath::root()
+                    .key("selectorProfiles")
+                    .map_key(id.to_string()),
+            )
+        })
+        .collect::<Vec<_>>();
     let mut push = |path, code, message| findings.push(Finding::new(path, code, message));
     let functions: BTreeMap<_, _> = project.functions.iter().map(|f| (&f.id, f)).collect();
     if functions.len() != project.functions.len() {
@@ -478,6 +610,20 @@ pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
         let at = FieldPath::root()
             .key("assertionDefinitions")
             .map_key(id.to_string());
+        let purpose = definition.purpose.as_bytes();
+        if purpose.is_empty()
+            || purpose.len() > 128
+            || !purpose[0].is_ascii_lowercase()
+            || !purpose.iter().skip(1).all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._:-".contains(byte)
+            })
+        {
+            push(
+                at.clone().key("purpose"),
+                "definition-purpose",
+                "declare a bounded lowercase purpose code",
+            );
+        }
         if definition.question.trim().is_empty() || definition.question.len() > 1024 {
             push(
                 at.clone().key("question"),
@@ -524,6 +670,28 @@ pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
             || definition.representations.is_empty()
         {
             push(at.clone().key("grantCeiling"), "grant-ceiling-empty", "declare complete, nonempty authority, actor, value-origin, audience and representation ceilings");
+        }
+        if definition.grant_ceiling.authorities.len() > 5
+            || definition.grant_ceiling.actor_kinds.len() > 3
+            || definition.grant_ceiling.value_origins.len() > 3
+            || definition.grant_ceiling.audiences.len() > 32
+        {
+            push(at.clone().key("grantCeiling"),"grant-ceiling-bounds","keep each complete ceiling within the retained authority, actor, value-origin and audience bounds");
+        }
+        for (index, audience) in definition.grant_ceiling.audiences.iter().enumerate() {
+            if audience.is_empty()
+                || audience.len() > 2048
+                || audience
+                    .chars()
+                    .any(|c| c.is_control() || c.is_whitespace())
+                || !absolute_uri(audience)
+            {
+                push(
+                    at.clone().key("grantCeiling").key("audiences").index(index),
+                    "grant-ceiling-audience",
+                    "declare a bounded absolute audience URI without whitespace",
+                );
+            }
         }
         if definition.subjects.is_empty() || definition.subjects.len() > 8 {
             push(
@@ -612,80 +780,86 @@ pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
                 "declare between one and 32 public Outputs",
             );
         }
-        for (name, output) in &definition.outputs {
-            let scalar = output.value_type.trim_end_matches("-list");
-            let no_integer = output.minimum.is_none() && output.maximum.is_none();
-            let no_identifier = output.prefix.is_none()
-                && output.minimum_bytes.is_none()
-                && output.maximum_bytes.is_none();
-            let no_schema = output.schema.is_none() && output.maximum_serialized_bytes.is_none();
-            let relevant = match scalar {
-                "boolean" => output.values.is_empty() && no_integer && no_identifier && no_schema,
-                "controlled-category" => no_integer && no_identifier && no_schema,
-                "bounded-identifier" => output.values.is_empty() && no_integer && no_schema,
-                "bounded-integer" => output.values.is_empty() && no_identifier && no_schema,
-                "reviewed-structured-value" => {
-                    output.values.is_empty() && no_integer && no_identifier
-                }
-                _ => false,
-            };
-            let bounded =
-                match scalar {
-                    "boolean" => {
-                        output.values.is_empty()
-                            && output.minimum.is_none()
-                            && output.maximum.is_none()
-                            && output.prefix.is_none()
-                            && output.minimum_bytes.is_none()
-                            && output.maximum_bytes.is_none()
-                            && output.schema.is_none()
-                    }
-                    "controlled-category" => {
-                        !output.values.is_empty()
-                            && output.values.len() <= 32
-                            && output
-                                .values
+        let mut selector_roles = BTreeSet::new();
+        if definition.derive.selector_inputs.len() > 8 {
+            push(
+                at.clone().key("derive").key("selectorInputs"),
+                "derive-selectors",
+                "declare at most eight typed selector inputs",
+            );
+        }
+        for (index, input) in definition.derive.selector_inputs.iter().enumerate() {
+            let input_at = at.clone().key("derive").key("selectorInputs").index(index);
+            if !selector_roles.insert(&input.role)
+                || !definition
+                    .subjects
+                    .iter()
+                    .any(|subject| subject.role == input.role)
+                || input.alternatives.is_empty()
+                || input.alternatives.len() > 8
+            {
+                push(
+                    input_at.clone(),
+                    "derive-selectors",
+                    "declare distinct subject roles with one to eight allowed profile alternatives",
+                );
+            }
+            let mut alternatives = BTreeSet::new();
+            for (alt_index, alternative) in input.alternatives.iter().enumerate() {
+                if !alternatives.insert(&alternative.profile)
+                    || alternative.fields.is_empty()
+                    || alternative.fields.len() > 16
+                    || !definition.subjects.iter().any(|subject| {
+                        subject.role == input.role
+                            && subject.selectors.contains(&alternative.profile)
+                    })
+                    || project
+                        .selector_profiles
+                        .get(&alternative.profile)
+                        .is_none_or(|profile| {
+                            alternative
+                                .fields
                                 .iter()
-                                .all(|value| !value.is_empty() && value.len() <= 64)
-                            && output.values.iter().collect::<BTreeSet<_>>().len()
-                                == output.values.len()
-                    }
-                    "bounded-identifier" => {
-                        output
-                            .prefix
-                            .as_ref()
-                            .is_some_and(|prefix| !prefix.is_empty())
-                            && output
-                                .minimum_bytes
-                                .zip(output.maximum_bytes)
-                                .is_some_and(|(minimum, maximum)| minimum <= maximum)
-                    }
-                    "bounded-integer" => {
-                        output
-                            .minimum
-                            .zip(output.maximum)
-                            .is_some_and(|(minimum, maximum)| {
-                                minimum <= maximum
-                                    && minimum >= -9_007_199_254_740_991
-                                    && maximum <= 9_007_199_254_740_991
-                            })
-                    }
-                    "reviewed-structured-value" => {
-                        output.schema.as_ref().is_some_and(|path| {
-                            valid_asset(path, "yaml") || valid_asset(path, "json")
-                        }) && output.maximum_serialized_bytes.is_some()
-                    }
-                    _ => false,
-                };
-            let list = if output.value_type.ends_with("-list") {
-                output
-                    .minimum_items
-                    .zip(output.maximum_items)
-                    .is_some_and(|(minimum, maximum)| minimum <= maximum)
-            } else {
-                output.minimum_items.is_none() && output.maximum_items.is_none()
-            };
-            if !bounded || !list || !relevant {
+                                .any(|name| !profile.fields.contains_key(name))
+                        })
+                {
+                    push(
+                        input_at.clone().key("alternatives").index(alt_index),
+                        "derive-selector-profile",
+                        "name an allowed profile and one to 16 distinct declared fields",
+                    );
+                }
+            }
+        }
+        let mut projected_claims = BTreeSet::new();
+        for (name, output) in &definition.outputs {
+            if let Some(projection) = &output.sd_jwt_vc {
+                if output.value_type != "reviewed-structured-value" {
+                    push(
+                        at.clone()
+                            .key("outputs")
+                            .map_key(name.to_string())
+                            .key("sdJwtVc"),
+                        "output-projection-type",
+                        "SD-JWT VC field projection requires a reviewed structured value",
+                    );
+                }
+                if !crate::validate::validate_sd_jwt_claim_name(&projection.claim).is_empty()
+                    || !projected_claims.insert(&projection.claim)
+                {
+                    push(
+                        at.clone()
+                            .key("outputs")
+                            .map_key(name.to_string())
+                            .key("sdJwtVc")
+                            .key("claim"),
+                        "output-projection-claim",
+                        "declare a distinct bounded SD-JWT VC claim name",
+                    );
+                }
+            }
+
+            if !crate::output::valid(output) {
                 push(
                     at.clone().key("outputs").map_key(name.to_string()),
                     "output-bounds",
@@ -702,19 +876,7 @@ pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
                     "an Output concept must be an absolute URI",
                 );
             }
-            if !matches!(
-                output.value_type.as_str(),
-                "boolean"
-                    | "controlled-category"
-                    | "bounded-identifier"
-                    | "bounded-integer"
-                    | "reviewed-structured-value"
-                    | "boolean-list"
-                    | "controlled-category-list"
-                    | "bounded-identifier-list"
-                    | "bounded-integer-list"
-                    | "reviewed-structured-value-list"
-            ) {
+            if !crate::output::TYPES.contains(&output.value_type.as_str()) {
                 push(
                     at.clone()
                         .key("outputs")
@@ -852,6 +1014,7 @@ pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
             );
         }
     }
+    findings.extend(crate::acquisition_validation::validate(project));
     findings
 }
 
@@ -864,7 +1027,11 @@ pub fn valid_asset(path: &str, extension: &str) -> bool {
         && path.ends_with(&format!(".{extension}"))
 }
 fn absolute_uri(uri: &str) -> bool {
-    url::Url::parse(uri).is_ok()
+    uri.len() <= 2048
+        && !uri
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+        && url::Url::parse(uri).is_ok()
 }
 
 /// JSON Schema normalization for the bounded field vocabulary shared by facts

@@ -80,6 +80,14 @@
       ],
       "type": "string"
     },
+    "ActorKind": {
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
     "AssertionDefinition": {
       "additionalProperties": false,
       "properties": {
@@ -180,6 +188,16 @@
       ],
       "type": "object"
     },
+    "AuthorityKind": {
+      "enum": [
+        "statutory",
+        "organizational",
+        "consent",
+        "delegated",
+        "explicit-request"
+      ],
+      "type": "string"
+    },
     "BatchResponse": {
       "additionalProperties": false,
       "description": "The batch response uses the Source's byte and transport ceilings.",
@@ -205,6 +223,27 @@
       ],
       "type": "string"
     },
+    "DeriveSelectorInput": {
+      "additionalProperties": false,
+      "properties": {
+        "alternatives": {
+          "items": {
+            "$ref": "#/$defs/SelectorAlternative"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "role": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "role",
+        "alternatives"
+      ],
+      "type": "object"
+    },
     "FetchMember": {
       "additionalProperties": false,
       "properties": {
@@ -224,6 +263,178 @@
         "factInputs"
       ],
       "type": "object"
+    },
+    "Field": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "maximumBytes": {
+              "format": "uint64",
+              "maximum": 8192,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "minimumBytes": {
+              "format": "uint64",
+              "maximum": 8192,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "string",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "minimumBytes",
+            "maximumBytes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "maximum": {
+              "format": "int64",
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "minimum": {
+              "format": "int64",
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "type": {
+              "const": "integer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "minimum",
+            "maximum"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "boolean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "codelist": {
+              "type": "string"
+            },
+            "codelistVersion": {
+              "type": "string"
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "maximumBytes": {
+              "format": "uint64",
+              "maximum": 8192,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "controlled-code",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "codelist",
+            "codelistVersion",
+            "maximumBytes"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Function": {
       "additionalProperties": false,
@@ -271,7 +482,9 @@
           "x-registry-passthrough": "Literal reviewed Function parameter bindings, checked at the named Function call site."
         },
         "selectorInputs": {
-          "items": true,
+          "items": {
+            "$ref": "#/$defs/DeriveSelectorInput"
+          },
           "type": "array"
         }
       },
@@ -293,7 +506,7 @@
       "properties": {
         "actorKinds": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/ActorKind"
           },
           "minItems": 1,
           "type": "array",
@@ -309,7 +522,7 @@
         },
         "authorities": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/AuthorityKind"
           },
           "minItems": 1,
           "type": "array",
@@ -317,7 +530,7 @@
         },
         "valueOrigins": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/ValueOrigin"
           },
           "minItems": 1,
           "type": "array",
@@ -340,6 +553,30 @@
     "Output": {
       "additionalProperties": false,
       "properties": {
+        "bucketScheme": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "categoryScheme": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "codelist": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "codelistVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "concept": {
           "type": "string"
         },
@@ -358,17 +595,18 @@
           ]
         },
         "maximum": {
-          "format": "int64",
-          "maximum": 9007199254740991,
-          "minimum": -9007199254740991,
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutputNumericBound"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "maximumBytes": {
           "format": "uint64",
-          "maximum": 1024,
+          "maximum": 8192,
           "minimum": 1,
           "type": [
             "integer",
@@ -384,6 +622,15 @@
             "null"
           ]
         },
+        "maximumScale": {
+          "format": "uint64",
+          "maximum": 9,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "maximumSerializedBytes": {
           "format": "uint64",
           "maximum": 65536,
@@ -394,12 +641,13 @@
           ]
         },
         "minimum": {
-          "format": "int64",
-          "maximum": 9007199254740991,
-          "minimum": -9007199254740991,
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutputNumericBound"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "minimumBytes": {
@@ -432,9 +680,44 @@
             "null"
           ]
         },
-        "sdJwtVc": true,
+        "schemeVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sdJwtVc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutputProjection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "type": {
+          "enum": [
+            "boolean",
+            "controlled-code",
+            "controlled-category",
+            "bounded-identifier",
+            "bounded-integer",
+            "bounded-decimal",
+            "date-bucket",
+            "time-bucket",
+            "audience-scoped-entity-reference",
+            "controlled-code-list",
+            "entity-reference-list",
+            "reviewed-structured-value"
+          ],
           "type": "string"
+        },
+        "unique": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "values": {
           "items": {
@@ -449,6 +732,46 @@
       ],
       "type": "object"
     },
+    "OutputNumericBound": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "maxLength": 30,
+          "minLength": 1,
+          "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$",
+          "type": "string"
+        }
+      ]
+    },
+    "OutputProjection": {
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+          "type": "string"
+        },
+        "disclosure": {
+          "$ref": "#/$defs/ProjectionDisclosure"
+        }
+      },
+      "required": [
+        "claim",
+        "disclosure"
+      ],
+      "type": "object"
+    },
+    "ProjectionDisclosure": {
+      "enum": [
+        "top-level"
+      ],
+      "type": "string"
+    },
     "Representation": {
       "enum": [
         "signed-jws",
@@ -457,6 +780,28 @@
         "sd-jwt-vc-batch"
       ],
       "type": "string"
+    },
+    "SelectorAlternative": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "profile": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "profile",
+        "fields"
+      ],
+      "type": "object"
     },
     "SelectorProfile": {
       "additionalProperties": false,
@@ -469,12 +814,13 @@
           ]
         },
         "fields": {
-          "additionalProperties": true,
+          "additionalProperties": {
+            "$ref": "#/$defs/Field"
+          },
           "propertyNames": {
             "$ref": "#/$defs/LocalId"
           },
-          "type": "object",
-          "x-registry-passthrough": "Reviewed bounded selector field schemas, normalized by the Evidence compiler and checked by the kernel."
+          "type": "object"
         },
         "label": {
           "description": "Optional presentation label. Stable references use the identifier.",
@@ -783,6 +1129,14 @@
         "selectors"
       ],
       "type": "object"
+    },
+    "ValueOrigin": {
+      "enum": [
+        "request",
+        "authenticated-context",
+        "authenticated-grant"
+      ],
+      "type": "string"
     }
   },
   "$id": "https://id.registrystack.org/schemas/evidence/project/project.v1alpha1.schema.json",

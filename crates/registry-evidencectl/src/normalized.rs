@@ -71,7 +71,29 @@ pub(crate) fn read(root: &Path) -> Result<(EvidenceProject, BTreeMap<String, Str
                         .filter_map(|output| output.schema.as_deref())
                 }),
         );
-    for asset in assets {
+    let codelists = decoded
+        .value
+        .assertion_definitions
+        .values()
+        .flat_map(|definition| {
+            definition
+                .outputs
+                .values()
+                .filter_map(|output| output.codelist.as_deref())
+        })
+        .chain(
+            decoded
+                .value
+                .selector_profiles
+                .values()
+                .flat_map(|profile| {
+                    profile
+                        .fields
+                        .values()
+                        .filter_map(|field| field.get("codelist").and_then(Value::as_str))
+                }),
+        );
+    for asset in assets.chain(codelists) {
         let bytes =
             authored::read_authored_file(&safe_asset(directory, asset)?, "reviewed project asset")?;
         scripts.insert(

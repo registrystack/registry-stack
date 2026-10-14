@@ -20,15 +20,18 @@
 //! The invariant is enforced by `tests/no_io.rs`, which sweeps this crate's own
 //! sources and its dependency list rather than trusting this paragraph.
 
+pub mod acquisition_validation;
 pub mod compile;
 pub mod derivation;
 pub mod finding;
 pub mod formats;
 pub mod layout;
 pub mod openapi;
+pub mod output;
 pub mod project;
 #[cfg(feature = "schema")]
 pub mod schema;
+pub mod selector;
 pub mod target;
 pub mod types;
 pub mod validate;

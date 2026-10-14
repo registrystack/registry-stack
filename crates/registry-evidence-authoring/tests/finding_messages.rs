@@ -186,6 +186,7 @@ fn normalized_rule_codes_remain_machine_addressable() {
         [
             "definition-count",
             "definition-question",
+            "derive-selector-profile",
             "function-interface",
             "function-source",
             "function-unique",
@@ -680,7 +681,13 @@ fn normalized_output_bounds_cover_each_retained_output_family() {
         "bounded-identifier",
         "bounded-integer",
         "reviewed-structured-value",
-        "boolean-list",
+        "controlled-code",
+        "bounded-decimal",
+        "date-bucket",
+        "time-bucket",
+        "audience-scoped-entity-reference",
+        "controlled-code-list",
+        "entity-reference-list",
     ] {
         let findings = normalized_findings(|project| {
             let output = project
@@ -697,9 +704,17 @@ fn normalized_output_bounds_cover_each_retained_output_family() {
                 "boolean" => output.values.push("unexpected".to_owned()),
                 "controlled-category" => output.values.clear(),
                 "bounded-identifier" => output.prefix = Some("urn:example:".to_owned()),
-                "bounded-integer" => output.minimum = Some(1),
+                "bounded-integer" => {
+                    output.minimum = Some(registry_evidence_authoring::output::Bound::Integer(1))
+                }
                 "reviewed-structured-value" => output.schema = Some("../shape.yaml".to_owned()),
-                "boolean-list" => output.minimum_items = None,
+                "controlled-code"
+                | "bounded-decimal"
+                | "date-bucket"
+                | "time-bucket"
+                | "audience-scoped-entity-reference"
+                | "controlled-code-list"
+                | "entity-reference-list" => {}
                 _ => unreachable!(),
             }
         });
