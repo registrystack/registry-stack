@@ -291,6 +291,7 @@ BREG_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/extend-a-registry-with-a-module.mdx",
     "docs/site/src/content/docs/tutorials/first-breg.mdx",
     "docs/site/src/content/docs/tutorials/review-registry-changes.mdx",
+    "docs/site/src/content/docs/tutorials/send-registry-events-to-a-webhook.mdx",
 )
 
 # Every input the Registry Casework tutorial gate replays or is built from: the
@@ -333,11 +334,11 @@ MESSAGING_TUTORIAL_INPUTS = (
 EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS = (
     (
         "crates/registry-evidence-authoring/src/**",
-        "crates/registry-evidence-authoring/src/model.rs",
+        "crates/registry-evidence-authoring/src/project.rs",
     ),
     (
         "crates/registry-evidencectl/src/**",
-        "crates/registry-evidencectl/src/authoring.rs",
+        "crates/registry-evidencectl/src/normalized.rs",
     ),
     (
         "crates/registry-evidence/src/bundle.rs",
