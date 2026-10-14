@@ -834,13 +834,42 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
         ),
         "definition drift fails before the Evidence response-verification stage"
     );
+    let source_requests_before = deployment
+        ._source
+        .received_requests()
+        .await
+        .expect("the source request journal is available")
+        .iter()
+        .filter(|request| request.url.path() == "/v1/facts")
+        .count();
     let reviewed_result = reviewed_client.request(request()).await;
     let Err(reviewed_error) = reviewed_result else {
         panic!("a reviewed revision cannot silently adopt a live revision");
     };
+    let EvidenceClientError::Denied {
+        status,
+        code,
+        trace_id,
+        retry_after_seconds,
+    } = reviewed_error
+    else {
+        panic!("a stale reviewed revision is denied before a response is produced");
+    };
+    assert_eq!(status, 403);
+    assert_eq!(code, "evidence.denied");
+    assert!(trace_id.is_some_and(|trace_id| !trace_id.is_empty()));
+    assert_eq!(retry_after_seconds, None);
     assert_eq!(
-        reviewed_error,
-        EvidenceClientError::Verification(VerificationError::Policy)
+        deployment
+            ._source
+            .received_requests()
+            .await
+            .expect("the source request journal is available")
+            .iter()
+            .filter(|request| request.url.path() == "/v1/facts")
+            .count(),
+        source_requests_before,
+        "the stale independent revision is refused before source access"
     );
 }
 
