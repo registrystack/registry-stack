@@ -755,9 +755,20 @@ operator workflow gates. The previous-release rehearsal does not select BReg;
 a named `--product breg` request refuses with this guidance before any network
 lookup, asset download, or PostgreSQL start.
 
-For Evidence and Messaging before 1.0, a release reads only the state
-its immediate predecessor wrote and promises a forward state path from that
-predecessor alone. An operator on an older release upgrades one release at a time.
+Evidence's normalized model starts at `v0.42.0`. Earlier releases wrote split
+question/source projects and targets containing `governance.yaml` and
+`runtime.yaml`; current tooling requires `evidence.yaml`, `target.yaml`, and
+separate complete target authority. There is no in-place conversion. Retain the
+previous deployment and audit, author and package the current model, and verify
+a fresh synthetic assertion before cutover. The default rehearsal omits Evidence
+for earlier starting releases with this reason; a focused `--product evidence`
+request refuses. A current-source lifecycle run proves the normalized model,
+not compatibility with an earlier release.
+
+For retained Evidence and Messaging contracts before 1.0, a release reads only
+the state its immediate predecessor wrote and promises a forward state path
+from that predecessor alone. An operator on an older release upgrades one
+release at a time.
 A patch release does not move the floor of its minor line, so its rehearsal
 may still start from the release before that line. The workflow does not do
 that by itself: it starts from the newest published release, which for a patch
@@ -766,11 +777,12 @@ from the floor, dispatch the workflow with `-f from_tag=<floor tag>`.
 The release PR adds its manifest under `release/manifests/`, which starts
 `release-upgrade-rehearsal.yml` on that PR. The workflow builds Evidence and
 Messaging from the PR and runs `release/scripts/rehearse-upgrade.py`. The script
-downloads the previous published release's binaries for those products,
+downloads the previous published release's binaries for eligible products,
 authenticates `SHA256SUMS` with its protected-main Sigstore identity, and checks
-each asset against it as `release/VERIFY.md` describes. It writes an Evidence
-audit stream and a Messaging package ledger with scheduled and cancelled
-messages using the old binaries and a disposable loopback PostgreSQL container. It then points the PR's binaries at
+each asset against it as `release/VERIFY.md` describes. Eligible legs write an
+Evidence audit stream or a Messaging package ledger with scheduled and cancelled
+messages using the old binaries, with a disposable loopback PostgreSQL container
+for Messaging. It then points the PR's binaries at
 that state and the same files, runs the upgrade an operator runs, and fails
 when any captured view is served differently or any retained table holds fewer
 rows. Require that run to succeed before merging the release PR. To rehearse
@@ -784,10 +796,12 @@ gh workflow run release-upgrade-rehearsal.yml \
 
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
 earliest release this source reads state from, `v0.41.0`, and the script
-refuses to start from any earlier release rather than skipping the check. The
-forward state path starts at `v0.40.0`: it does not upgrade `v0.39.0` state in
-place. The script also refuses to run when the floor is older than the newest
-release manifest recorded as `status: released` below the first release of the
+refuses to start from any earlier release rather than skipping the check.
+`EVIDENCE_FORWARD_PATH_FLOOR` separately holds Evidence to its normalized
+`v0.42.0` baseline. The earlier `v0.40.0` fresh-install boundary still excludes
+`v0.39.0` state. The script also refuses to run when the floor is older than
+the newest release manifest recorded as `status: released` below the first
+release of the
 workspace version's minor line, or newer than the workspace version.
 While no release from the floor onward is published there is no predecessor to
 download. A run that names neither `--from-tag` nor `--from-bin-dir` then says
@@ -839,9 +853,10 @@ previous release wrote, as the upgrade runbook has an operator do. The
 rehearsal counts the records in each stream before and after the upgrade. It
 fails when the stream was empty before the upgrade, or holds fewer records
 after it than before plus the number the upgraded binaries must write. That is a
-count, not a comparison of the earlier records. Every record in the Evidence
-stream must also be a valid current envelope. The Evidence target is packaged again with the new `evidencectl` and
-its configuration is carried forward unchanged.
+count, not a comparison of the earlier records. Every record in an eligible Evidence
+stream must also be a valid current envelope. From the normalized baseline,
+the Evidence target is packaged again with the new `evidencectl` and its
+configuration is carried forward unchanged.
 
 Every table remains subject to the row-preservation rule, with no empty-table
 allowance. When the rehearsal reports row loss, fix the migration so that it

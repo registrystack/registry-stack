@@ -9,8 +9,10 @@ Messaging package ledger with scheduled and cancelled messages. It then points
 the binaries built from this source at that exact state and those exact files,
 runs the upgrade an operator runs, and fails unless the state is still served
 unchanged and no table lost a row.
-A product the previous release did not ship has no state to carry forward,
-so its leg is omitted and the report says why.
+A product the previous release did not ship, or whose contract starts at a
+new baseline, has no supported state to carry forward. Its leg is omitted and
+the report says why. Evidence starts at the normalized 0.42.0 baseline; earlier
+split projects and bundled authority have no in-place conversion.
 
 While no release on the forward state path is published, there is no
 predecessor to download: the rehearsal then runs every leg with this source's
@@ -78,6 +80,18 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # the workspace version: the forward state path then starts at that release,
 # and this source reads no state an earlier release wrote.
 FORWARD_PATH_FLOOR = (0, 41, 0)
+# Evidence replaced split question/source projects and bundled authority with
+# the normalized project, target, and separately activated complete authority.
+# The current compiler deliberately refuses that retired authoring grammar.
+EVIDENCE_FORWARD_PATH_FLOOR = (0, 42, 0)
+EVIDENCE_NO_IN_PLACE_UPGRADE = (
+    "Evidence's normalized 0.42.0 baseline requires a newly authored evidence.yaml "
+    "project, target.yaml, and complete target authority; retired split projects "
+    "and bundled authority have no in-place conversion. Retain the previous "
+    "deployment and audit, author and package the current model, then verify a "
+    "fresh synthetic assertion before cutover"
+)
+
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
 
@@ -279,6 +293,8 @@ def select_products(requested: list[str] | None, from_tag: str, platform: str,
         platforms = PRODUCT_PLATFORMS.get(product, PLATFORMS)
         if product in RETIRED_PRODUCTS:
             reason = RETIRED_PRODUCTS[product]
+        elif product == "evidence" and start < EVIDENCE_FORWARD_PATH_FLOOR:
+            reason = EVIDENCE_NO_IN_PLACE_UPGRADE
         elif product == "messaging" and not release_roster.messaging_in_release(start):
             first = release_roster.MESSAGING_FIRST_RELEASE
             if first is None:
@@ -1519,6 +1535,13 @@ def main(argv: list[str]) -> int:
                                   "platform": args.platform, "omitted": omitted}
         for product, reason in omitted.items():
             print(f"omitting {product}: {reason}", flush=True)
+        if not products:
+            report["fromProvenance"] = "no supported product predecessor selected"
+            if args.report:
+                args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+            print("no supported predecessor legs to rehearse", flush=True)
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0
         binaries = product_binaries(products)
         if unpublished:
             from_bin = args.to_bin_dir.resolve()

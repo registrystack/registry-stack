@@ -38,6 +38,11 @@ def write_tar(path: Path, members: dict[str, bytes]) -> None:
 
 
 class ReleaseSelectionTest(unittest.TestCase):
+    def setUp(self) -> None:
+        baseline = unittest.mock.patch.object(MODULE, "EVIDENCE_FORWARD_PATH_FLOOR", (0, 40, 0))
+        baseline.start()
+        self.addCleanup(baseline.stop)
+
     def test_selects_the_release_this_source_succeeds_before_and_after_the_bump(self) -> None:
         published = ["v0.31.0", "v0.32.0", "v0.33.0", "v0.34.0-rc.1", "nightly"]
         self.assertEqual(MODULE.select_from_tag(published, "0.33.0"), "v0.33.0")
@@ -238,6 +243,7 @@ class UnpublishedFloorTest(unittest.TestCase):
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
                 unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 40, 0)), \
+                unittest.mock.patch.object(MODULE, "EVIDENCE_FORWARD_PATH_FLOOR", (0, 40, 0)), \
                 unittest.mock.patch.object(MODULE, "workspace_version", return_value=version), \
                 unittest.mock.patch.object(MODULE, "released_versions",
                                            return_value=["0.38.0", "0.39.0"]), \
@@ -330,6 +336,9 @@ class ProductSelectionTest(unittest.TestCase):
     HYPOTHETICAL_MESSAGING_FIRST_RELEASE = (0, 36, 0)
 
     def setUp(self) -> None:
+        baseline = unittest.mock.patch.object(MODULE, "EVIDENCE_FORWARD_PATH_FLOOR", (0, 1, 0))
+        baseline.start()
+        self.addCleanup(baseline.stop)
         roster_patch = unittest.mock.patch.object(
             MODULE.release_roster,
             "MESSAGING_FIRST_RELEASE",
@@ -429,6 +438,81 @@ class ProductSelectionTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("messaging was first shipped in v0.41.0, so v0.40.0 holds no",
                       stderr.getvalue())
+
+
+class EvidenceBaselineTest(unittest.TestCase):
+    def test_default_predecessor_run_downloads_and_executes_only_messaging(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "report.json"
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    unittest.mock.patch.object(MODULE, "fetch_release") as fetched, \
+                    unittest.mock.patch.object(MODULE, "check_binaries", return_value={}), \
+                    unittest.mock.patch.object(MODULE, "Keys"), \
+                    unittest.mock.patch.object(MODULE, "Postgres"), \
+                    unittest.mock.patch.object(MODULE, "rehearse_evidence", side_effect=AssertionError("retired Evidence leg")), \
+                    unittest.mock.patch.object(MODULE, "rehearse_messaging") as messaging:
+                status = MODULE.main([
+                    "--from-tag", "v0.41.0", "--platform", "linux-amd64",
+                    "--to-bin-dir", temporary, "--work-dir", str(Path(temporary) / "work"),
+                    "--report", str(report),
+                ])
+            document = json.loads(report.read_text())
+        self.assertEqual(status, 0)
+        self.assertEqual(fetched.call_args.args[-1], ("messaging", "messagingctl"))
+        messaging.assert_called_once()
+        self.assertEqual(document["omitted"]["evidence"], MODULE.EVIDENCE_NO_IN_PLACE_UPGRADE)
+        self.assertNotIn("evidence", document)
+
+    def test_previous_split_contract_is_omitted_but_messaging_still_runs(self) -> None:
+        products, omitted = MODULE.select_products(None, "v0.41.0", "linux-amd64", True)
+        self.assertEqual(products, ["messaging"])
+        self.assertEqual(omitted["evidence"], MODULE.EVIDENCE_NO_IN_PLACE_UPGRADE)
+        self.assertEqual(MODULE.product_binaries(products), ("messaging", "messagingctl"))
+
+    def test_normalized_predecessor_joins_the_rehearsal(self) -> None:
+        for tag in ("v0.42.0", "v0.42.1", "v0.43.0"):
+            with self.subTest(tag=tag):
+                products, omitted = MODULE.select_products(None, tag, "linux-amd64", True)
+                self.assertIn("evidence", products)
+                self.assertNotIn("evidence", omitted)
+
+    def test_focused_old_evidence_refuses_before_download_or_state_creation(self) -> None:
+        for override in ([], ["--from-bin-dir", "/previous"]):
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as temporary:
+                work = Path(temporary) / "work"
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), \
+                        unittest.mock.patch.object(MODULE, "published_tags", side_effect=AssertionError("network")), \
+                        unittest.mock.patch.object(MODULE, "fetch_release", side_effect=AssertionError("download")), \
+                        unittest.mock.patch.object(MODULE, "Postgres", side_effect=AssertionError("container")):
+                    status = MODULE.main([
+                        "--from-tag", "v0.41.0", "--platform", "linux-amd64",
+                        "--product", "evidence", "--to-bin-dir", temporary,
+                        "--work-dir", str(work), *override,
+                    ])
+                self.assertEqual(status, 1)
+                self.assertFalse(work.exists())
+                self.assertIn(MODULE.EVIDENCE_NO_IN_PLACE_UPGRADE, stderr.getvalue())
+
+    def test_no_eligible_default_legs_reports_omissions_without_download(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "report.json"
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    unittest.mock.patch.object(MODULE, "fetch_release", side_effect=AssertionError("download")), \
+                    unittest.mock.patch.object(MODULE, "Keys", side_effect=AssertionError("keys")), \
+                    unittest.mock.patch.object(MODULE, "Postgres", side_effect=AssertionError("container")):
+                status = MODULE.main([
+                    "--from-tag", "v0.41.0", "--platform", "macos-arm64",
+                    "--to-bin-dir", temporary, "--work-dir", str(Path(temporary) / "work"),
+                    "--report", str(report),
+                ])
+            document = json.loads(report.read_text())
+        self.assertEqual(status, 0)
+        self.assertEqual(document["fromProvenance"], "no supported product predecessor selected")
+        self.assertIn("evidence", document["omitted"])
+        self.assertIn("messaging", document["omitted"])
+        self.assertNotIn("evidence", document)
+        self.assertNotIn("messaging", document)
 
 
 class AssetAuthenticationTest(unittest.TestCase):
