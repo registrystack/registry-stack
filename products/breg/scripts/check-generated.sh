@@ -45,6 +45,9 @@ mkdir "$runtime_candidate"
     -p registry-breg --example refactor-artifacts -- --output "$temporary_root/refactor"
   cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
     -p registry-breg --example refactor-artifacts -- --output "$temporary_root/refactor-minimal" --project minimal
+  cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
+    -p registry-breg --example proposal-event-schema -- \
+    --output "$temporary_root/proposal-lifecycle.schema.json"
 )
 
 if ! diff -ru "$authoring_baseline" "$authoring_candidate"; then
@@ -58,6 +61,12 @@ if ! diff -ru "$runtime_baseline" "$runtime_candidate"; then
   printf '%s\n' 'Base Registry Engine runtime schema differs from the committed artifact.' >&2
   printf '%s\n' 'Regenerate it, then review the complete diff:' >&2
   printf '%s\n' '  cargo run -p registry-breg --features runtime,schema --example runtime-schema -- --output products/breg/generated/runtime' >&2
+  exit 1
+fi
+
+if ! cmp "$repository_root/products/breg/generated/event-schemas/proposal-lifecycle.schema.json" \
+  "$temporary_root/proposal-lifecycle.schema.json"; then
+  printf '%s\n' 'Base Registry Engine Proposal event schema differs from the canonical packaged bytes.' >&2
   exit 1
 fi
 

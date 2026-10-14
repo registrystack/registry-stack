@@ -42,10 +42,16 @@ fn proposal_observers_compile_native_owners_fixed_schema_and_reviewed_handlers()
         assert!(delivery.projection_fields.is_empty());
         assert!(delivery.principal.is_none());
         assert!(delivery.when.is_none());
-        assert!(registry
+        let package_schema = registry
             .artifacts()
             .get(&delivery.data_schema_artifact_path)
-            .is_some());
+            .expect("the package includes its advertised Proposal event schema");
+        assert_eq!(
+            package_schema.bytes,
+            include_bytes!(
+                "../../../products/breg/generated/event-schemas/proposal-lifecycle.schema.json"
+            )
+        );
     }
     let local = registry
         .event_deliveries()

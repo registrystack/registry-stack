@@ -40,6 +40,7 @@ artifacts:
   - {path: quickstart, kind: generic-first-hour-quickstart, state: authored}
   - {path: generated/authoring/registry-project.schema.json, kind: generated-authoring-schema, state: authored}
   - {path: generated/runtime/runtime.schema.json, kind: generated-runtime-schema, state: authored}
+  - {path: generated/event-schemas/proposal-lifecycle.schema.json, kind: generated-proposal-event-schema, state: authored}
   - {path: generated/refactor, kind: generated-baseline, state: authored}
   - {path: generated/refactor-minimal, kind: generated-baseline, state: authored}
   - {path: scripts/check-generated.sh, kind: generated-artifact-gate, state: authored}
