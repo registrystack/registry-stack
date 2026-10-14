@@ -537,16 +537,10 @@ fn deliver_into_project(
             println!("wrote {}", path.display());
         }
         println!(
-            "source draft: {}",
-            project
-                .join("sources")
-                .join(format!("{}.yaml", artifacts.source_id))
-                .display()
-        );
-
-        println!(
-            "not verified: complete a question and run `evidencectl dev`; the local compiler \
-             delegates validation to Evidence."
+            "not verified: complete or update the AssertionDefinitions that acquire this Source, \
+             then run `evidencectl check {}` and `evidencectl test {}`.",
+            project.display(),
+            project.display()
         );
     }
     Ok(Delivery::Written(written))
@@ -558,7 +552,7 @@ fn print_draft(artifacts: &DraftArtifacts) {
         print_block(&file.bundle_relative_path, &file.contents);
     }
     print_block(
-        "the block to paste under `sources:` in bundle/evidence.yaml",
+        "the block to merge at the document root in evidence.yaml",
         &artifacts.source_block,
     );
 }

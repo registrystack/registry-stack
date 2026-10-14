@@ -12,7 +12,7 @@ use anyhow::{bail, Context as _, Result};
 use clap::{Args, Subcommand};
 use registry_evidence_authoring::{
     project::{self, EvidenceProject},
-    target::{self, EvidenceTarget},
+    target::{self, EvidenceTarget, TargetConnection},
 };
 use serde_json::{json, Value};
 
@@ -84,7 +84,7 @@ fn new(args: NewArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn target_path(path: &Path) -> PathBuf {
+pub(crate) fn target_path(path: &Path) -> PathBuf {
     if path.is_dir() {
         path.join("target.yaml")
     } else {
@@ -111,11 +111,7 @@ fn copy_explicit_target(source: &Path, destination: &Path) -> Result<()> {
     let source_root = plain_parent(&source_path, "target parent")?;
     let target = read_target(&source_path)?;
     let authority = safe_relative(&source_root, &target.authority, "target authority")?;
-    let key = target
-        .signer
-        .get("publicJwkFile")
-        .and_then(Value::as_str)
-        .context("target signer requires publicJwkFile")?;
+    let key = target.signer.public_jwk_file();
     let public_key = safe_relative(&source_root, key, "target public key")?;
 
     let parent = created_plain_parent(destination, "target destination parent")?;
@@ -141,13 +137,15 @@ pub(crate) fn check_local_connection(directory: &Path, name: &str, binding: &Val
     if !crate::authoring::valid_local_identifier(name) || !binding.is_object() {
         bail!("local source connection requires a valid name and a mapping");
     }
+    let binding: TargetConnection = serde_json::from_value(binding.clone())
+        .context("local source connection must have valid authored settings")?;
     if !directory.try_exists()? {
         return reject_existing(directory);
     }
     let name = name.parse()?;
     let target = read_target(directory)?;
     if let Some(existing) = target.connections.get(&name) {
-        if existing != binding {
+        if existing != &binding {
             bail!("local source connection already has different authored settings; review it or choose another connection name");
         }
     }
@@ -178,6 +176,8 @@ pub(crate) fn ensure_local_connection(
     if target.connections.contains_key(&id) {
         return Ok(());
     }
+    let binding = serde_json::from_value(binding)
+        .context("local source connection must have valid authored settings")?;
     target.connections.insert(id, binding);
     let bytes = render_target(&target)?;
     replace_plain_file(&path, bytes.as_bytes())
@@ -564,16 +564,9 @@ mod tests {
 
     #[test]
     fn rendered_targets_use_the_normalized_envelope() {
-        let value = json!({
-            "apiVersion": target::TARGET_API_VERSION, "kind": target::TARGET_KIND,
-            "id":"local", "project":"project", "package":{}, "authority":"authority.yaml",
-            "service":{}, "listener":{},
-            "authentication":{"oidc":{"jwksSource":{"type":"uri","uri":"https://issuer.example.test/jwks"}}},
-            "connections":{}, "secretProviders":{}, "signer":{}, "subjectBinding":{}, "audit":{}, "rateLimits":{}
-        });
         let decoded = target::read_target(
             "target.yaml",
-            authored::to_indented_yaml(&value).unwrap().as_bytes(),
+            include_bytes!("../../../products/evidence/examples/standalone/local-target.yaml"),
         )
         .unwrap();
         let rendered = render_target(&decoded.value).unwrap();

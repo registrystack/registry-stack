@@ -76,6 +76,17 @@ fn an_undeclared_command_is_still_refused() {
 }
 
 #[test]
+fn retired_check_and_bare_dev_options_are_absent_from_help() {
+    let check = evidencectl(&["check", "--help"]);
+    assert!(!check.contains("--deny-warnings"), "{check}");
+
+    let dev = evidencectl(&["dev", "--help"]);
+    assert!(!dev.contains("--detach"), "{dev}");
+    assert!(!dev.contains("--project"), "{dev}");
+    assert!(dev.contains("start"), "{dev}");
+}
+
+#[test]
 fn progressive_request_preparation_accepts_no_caller_supplied_selector() {
     registry_evidencectl::command()
         .try_get_matches_from([

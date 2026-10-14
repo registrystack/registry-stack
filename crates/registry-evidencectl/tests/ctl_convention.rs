@@ -383,7 +383,7 @@ fn the_retired_project_flag_is_refused() {
 }
 
 #[test]
-fn check_file_refuses_deny_warnings_because_a_single_file_has_no_warnings() {
+fn retired_check_deny_warnings_is_an_unknown_argument() {
     let workspace = tempfile::tempdir().expect("workspace");
     let file = workspace.path().join("any.yaml");
     std::fs::write(&file, "kind: none\n").expect("write file");

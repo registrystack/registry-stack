@@ -144,18 +144,9 @@ impl std::fmt::Display for DevRefusal {
 impl std::error::Error for DevRefusal {}
 
 #[derive(Debug, Args)]
-// The bare-form flags --detach and --project stay parseable beside an action
-// subcommand on purpose: `args_conflicts_with_subcommands` would replace this
-// command's specific "these compatibility flags belong to the bare spelling"
-// refusal with the generic top-level usage failure that names neither flag.
-#[command(subcommand_negates_reqs = true)]
 pub struct DevArgs {
     #[command(subcommand)]
-    action: Option<DevAction>,
-
-    /// Return after the local issuer and Evidence Gateway are ready on loopback.
-    #[arg(long)]
-    detach: bool,
+    action: DevAction,
 
     /// Loopback port for the local Evidence Gateway service.
     #[arg(long, global = true)]
@@ -173,10 +164,6 @@ pub struct DevArgs {
     /// Defaults to the local gateway resource on first start.
     #[arg(long, global = true, value_name = "URI")]
     resource: Option<String>,
-
-    /// Project root. Defaults to the current directory.
-    #[arg(long, hide = true)]
-    project: Option<PathBuf>,
 
     /// Select the governed target and its complete authority. Defaults to local-target.yaml.
     #[arg(long, global = true)]
@@ -520,13 +507,8 @@ impl Drop for OwnedChildren {
 }
 
 pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<ExitCode> {
-    if let Some(action) = &args.action {
-        if args.detach || args.project.is_some() {
-            return Err(compat_flag_refusal(action_name(action)));
-        }
-    }
     match args.action {
-        Some(DevAction::Start(start)) => {
+        DevAction::Start(start) => {
             let owner = args
                 .issuer_project
                 .as_deref()
@@ -558,88 +540,15 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 format,
             )
         }
-        Some(DevAction::Stop(stop)) => {
+        DevAction::Stop(stop) => {
             let project = stop.project.as_deref().unwrap_or_else(|| Path::new("."));
             stop_dev(project, format)
         }
-        Some(DevAction::Clean(clean)) => clean_dev(&clean.project, format),
-        Some(DevAction::Token(token)) => fresh_token(&token.project, &token.client, format),
-        Some(DevAction::Grant(args)) => approved_grant(args, format),
-        Some(DevAction::Check(args)) => Ok(check_platform_file(&args, format)),
-        None => {
-            if !args.detach {
-                return Err(DevRefusal {
-                    operational: false,
-                    code: "evidence.dev.detach-required",
-                    path: "$".to_owned(),
-                    message: "The bare `dev` form requires --detach.".to_owned(),
-                    suggested_action:
-                        "Run `evidencectl dev start <project>` for the current lifecycle, or add --detach for the retained bare spelling."
-                            .to_owned(),
-                }
-                .into());
-            }
-            let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
-            let owner = args
-                .issuer_project
-                .as_deref()
-                .map(load_breg_issuer)
-                .transpose()?;
-            if owner
-                .as_ref()
-                .is_some_and(|owner| args.issuer_port.is_some_and(|port| port != owner.port))
-            {
-                bail!("--issuer-port differs from the BREG issuer owner");
-            }
-            let ports = selected_ports(
-                project,
-                args.evidence_port,
-                owner.as_ref().map(|owner| owner.port).or(args.issuer_port),
-            )?;
-            start_detached(
-                project,
-                args.evidence_bin.as_deref(),
-                args.docker_bin.as_deref(),
-                args.ready_timeout_seconds,
-                ports,
-                DevStartSelection {
-                    target: args.target.as_deref(),
-                    issuer_project: args.issuer_project.as_deref(),
-                    requested_resource: args.resource.as_deref(),
-                    name_prefix: None,
-                },
-                format,
-            )
-        }
+        DevAction::Clean(clean) => clean_dev(&clean.project, format),
+        DevAction::Token(token) => fresh_token(&token.project, &token.client, format),
+        DevAction::Grant(args) => approved_grant(args, format),
+        DevAction::Check(args) => Ok(check_platform_file(&args, format)),
     }
-}
-
-fn action_name(action: &DevAction) -> &'static str {
-    match action {
-        DevAction::Start(_) => "start",
-        DevAction::Stop(_) => "stop",
-        DevAction::Clean(_) => "clean",
-        DevAction::Token(_) => "token",
-        DevAction::Grant(_) => "grant",
-        DevAction::Check(_) => "check",
-    }
-}
-
-/// The bare-`dev` compatibility flags are refused beside an action
-/// subcommand, naming both the flags and the spelling that owns them.
-fn compat_flag_refusal(action: &'static str) -> anyhow::Error {
-    DevRefusal {
-        operational: false,
-        code: "evidence.dev.compat-flags-refused",
-        path: "$".to_owned(),
-        message: format!(
-            "`dev {action}` does not accept the compatibility flags --detach or --project."
-        ),
-        suggested_action: format!(
-            "Run `evidencectl dev {action}` with the project as its own argument; --detach and --project belong to the bare `evidencectl dev` spelling."
-        ),
-    }
-    .into()
 }
 
 fn selected_ports(

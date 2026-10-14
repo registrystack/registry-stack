@@ -165,9 +165,6 @@ struct CheckArgs {
     /// Require a production or evidence-grade target and complete deployment closure. Requires --target.
     #[arg(long, requires = "target")]
     production: bool,
-    /// Exit 1 when a warning is reported.
-    #[arg(long, conflicts_with = "file")]
-    deny_warnings: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1195,12 +1192,7 @@ fn project_of(args: &CheckArgs) -> &std::path::Path {
 
 fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
     let project = project_of(&args);
-    let checked = check::check(
-        project,
-        args.target.as_deref(),
-        args.production,
-        args.deny_warnings,
-    );
+    let checked = check::check(project, args.target.as_deref(), args.production);
     write_checked(checked, format, |found| {
         check::refused_check_report(project, args.target.as_deref(), found)
     })
@@ -1428,26 +1420,11 @@ mod tests {
             "project"
         ])
         .is_ok());
-        assert!(Cli::try_parse_from(["evidencectl", "dev", "--detach"]).is_ok());
+        assert!(Cli::try_parse_from(["evidencectl", "dev"]).is_err());
+        assert!(Cli::try_parse_from(["evidencectl", "dev", "--detach"]).is_err());
+        assert!(Cli::try_parse_from(["evidencectl", "dev", "--project", "project"]).is_err());
         assert!(Cli::try_parse_from(["evidencectl", "dev", "stop"]).is_ok());
         assert!(Cli::try_parse_from(["evidencectl", "dev", "stop", "project"]).is_ok());
-
-        // The bare-form compatibility flags stay parseable beside an action
-        // subcommand so `run_with_format` can refuse them while naming both
-        // the flags and the spelling that owns them; a parse-level conflict
-        // would collapse into the generic usage failure that names neither.
-        let mixed_mode = Cli::try_parse_from(["evidencectl", "dev", "--detach", "stop"])
-            .expect("the mixed spelling parses so its refusal can name the flags");
-        let Command::Dev(args) = mixed_mode.command else {
-            panic!("the dev command must parse");
-        };
-        let error = dev::run_with_format(args, OutputFormat::Human)
-            .expect_err("the compatibility flags are refused with their cause");
-        let refusal = error
-            .downcast_ref::<dev::DevRefusal>()
-            .expect("the refusal is typed so both output formats keep its cause");
-        assert_eq!(refusal.code, "evidence.dev.compat-flags-refused");
-        assert!(refusal.message.contains("--detach or --project"));
     }
 
     #[test]

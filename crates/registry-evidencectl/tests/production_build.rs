@@ -509,6 +509,35 @@ fn a_missing_target_public_key_refuses_packaging_before_delegation() {
 }
 
 #[test]
+fn a_missing_target_public_key_refuses_production_check_before_delegation() {
+    let fixture = Fixture::new();
+    fs::remove_file(
+        fixture
+            .target
+            .parent()
+            .unwrap()
+            .join("public-keys/active.jwk.json"),
+    )
+    .expect("remove target key");
+
+    let output = fixture.check_production("json");
+
+    assert_failed(&output, "production check with missing target public key");
+    assert!(fixture.invocations().is_empty());
+    assert_value_free(&output);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON refusal report");
+    assert_eq!(report["status"], "domain-refusal", "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidence.target.signing-key-missing",
+        "{report}"
+    );
+    assert!(report["diagnostics"][0]["path"]
+        .as_str()
+        .is_some_and(|path| path.ends_with("target.yaml:/signer/publicJwkFile")));
+}
+
+#[test]
 fn target_explain_reports_complete_grants_without_runtime_secret_resolution() {
     let fixture = Fixture::new();
     let output = fixture.explain();
@@ -525,6 +554,25 @@ fn target_explain_reports_complete_grants_without_runtime_secret_resolution() {
         "{report}"
     );
     assert!(fixture.invocations().is_empty());
+}
+
+#[test]
+fn check_and_explain_accept_a_directory_containing_target_yaml() {
+    let fixture = Fixture::new();
+    let target_directory = fixture.target.parent().expect("target directory");
+
+    let checked = fixture.check_production_with("json", target_directory);
+    assert_success(&checked, "production check with target directory");
+    assert_value_free(&checked);
+    assert_eq!(fixture.steps(), ["check"]);
+
+    let explained = fixture.explain_project_with_target(target_directory);
+    assert_success(&explained, "project explain with target directory");
+    let report: Value = serde_json::from_slice(&explained.stdout).expect("explain JSON report");
+    assert_eq!(report["command"], "explain", "{report}");
+    assert!(report["target"]
+        .as_str()
+        .is_some_and(|target| target.ends_with("target.yaml")));
 }
 
 #[test]
@@ -1038,13 +1086,16 @@ impl Fixture {
     }
 
     fn check_production(&self, format: &str) -> Output {
+        self.check_production_with(format, &self.target)
+    }
+
+    fn check_production_with(&self, format: &str, target: &Path) -> Output {
         Command::new(env!("CARGO_BIN_EXE_evidencectl"))
             .args(["--format", format, "check"])
             .arg(&self.project)
             .arg("--target")
-            .arg(&self.target)
+            .arg(target)
             .arg("--production")
-            .arg("--deny-warnings")
             .env("EVIDENCE_BIN", &self.evidence)
             .env("FAKE_EVIDENCE_LOG", &self.log)
             .env(
@@ -1062,11 +1113,15 @@ impl Fixture {
     }
 
     fn explain(&self) -> Output {
+        self.explain_target(&self.target)
+    }
+
+    fn explain_target(&self, target: &Path) -> Output {
         Command::new(env!("CARGO_BIN_EXE_evidencectl"))
             .args(["--format", "json"])
             .arg("target")
             .arg("explain")
-            .arg(&self.target)
+            .arg(target)
             .arg(&self.project)
             .env("EVIDENCE_BIN", &self.evidence)
             .env("FAKE_EVIDENCE_LOG", &self.log)
@@ -1076,6 +1131,16 @@ impl Fixture {
             )
             .output()
             .expect("evidencectl target explain starts")
+    }
+
+    fn explain_project_with_target(&self, target: &Path) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(["--format", "json", "explain"])
+            .arg(&self.project)
+            .arg("--target")
+            .arg(target)
+            .output()
+            .expect("evidencectl explain starts")
     }
 
     fn command(&self, project: &Path, target: &Path, output: &Path) -> Command {

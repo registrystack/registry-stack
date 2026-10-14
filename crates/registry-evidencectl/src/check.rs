@@ -8,12 +8,9 @@ pub(crate) struct Checked {
     pub(crate) report: Value,
     pub(crate) diagnostics: Report,
 }
-pub(crate) fn check(
-    project: &Path,
-    target: Option<&Path>,
-    production: bool,
-    _deny_warnings: bool,
-) -> Result<Checked> {
+pub(crate) fn check(project: &Path, target: Option<&Path>, production: bool) -> Result<Checked> {
+    let target_path = target.map(crate::target::target_path);
+    let target = target_path.as_deref();
     if production {
         let target = target
             .ok_or_else(|| anyhow::anyhow!("--production requires an explicit EvidenceTarget"))?;
@@ -35,11 +32,7 @@ pub(crate) fn check(
             registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?
                 .value;
         let root = crate::normalized::target_directory(path);
-        let key = target_model
-            .signer
-            .get("publicJwkFile")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("target signer requires publicJwkFile"))?;
+        let key = target_model.signer.public_jwk_file();
         if std::fs::symlink_metadata(root.join(key)).is_ok() {
             crate::normalized::safe_asset(root, key)?;
             let evidence = crate::evidence_binary::resolve_matching(None)?;
@@ -67,6 +60,15 @@ pub(crate) fn check(
             checked.report["packageDigest"] = json!(result.package_digest);
             checked.report["definitionRevisions"] = json!(result.requirements.iter().map(|definition| json!({"requirement":definition.id,"configurationRevision":definition.configuration_revision})).collect::<Vec<_>>());
         } else {
+            if production {
+                return Err(crate::build::TargetDocumentDiagnostic {
+                    code: "evidence.target.signing-key-missing",
+                    path: format!("{}:/signer/publicJwkFile", path.display()),
+                    message: "the production target's governed public signing key is missing"
+                        .to_owned(),
+                }
+                .into());
+            }
             checked.report["deploymentInputs"] =
                 json!({"complete":false,"missing":["signer.publicJwkFile"]});
         }
@@ -160,7 +162,7 @@ mod tests {
     use super::*;
     #[test]
     fn production_requires_an_explicit_target() {
-        assert!(check(Path::new("unused"), None, true, false).is_err());
+        assert!(check(Path::new("unused"), None, true).is_err());
     }
     #[test]
     fn explain_renders_named_definitions_functions_and_authority() {

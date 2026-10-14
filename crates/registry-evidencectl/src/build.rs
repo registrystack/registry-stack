@@ -15,7 +15,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::{authoring, evidence_binary, source_import::ProjectLock, OutputFormat};
 
@@ -240,21 +240,13 @@ pub(crate) fn local_dev_target_inputs(target: &Path) -> Result<(Value, Value)> {
         .connections
         .iter()
         .map(|(id, value)| {
-            let mut value = value.clone();
-            let map = value
-                .as_object_mut()
-                .context("source connection must be an object")?;
-            let origin = map
-                .remove("origin")
-                .context("source connection requires origin")?;
-            map.insert("baseUrl".to_owned(), origin);
-            crate::normalized::lower_connection_authentication(map);
-            map.entry("maximumConcurrency").or_insert(json!(256));
-            Ok((id.to_string(), value))
+            Ok((id.to_string(), value.governed_value()?))
         })
-        .collect::<Result<Map<_, _>>>()?;
+        .collect::<Result<BTreeMap<_, _>>>()?;
     let mut outbound_tls = target
         .outbound_tls
+        .map(serde_json::to_value)
+        .transpose()?
         .unwrap_or_else(|| json!({"systemRoots":true,"trustProfiles":{}}));
     rebase_outbound_tls(
         crate::normalized::target_directory(&path),

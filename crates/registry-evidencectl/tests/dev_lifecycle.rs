@@ -103,6 +103,19 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
     assert!(!fixture.root.join(".evidence/dev/control.sock").exists());
     assert_success(&fixture.dev_clean(), "dev clean");
     assert!(!fixture.root.join(".evidence/dev").exists());
+
+    let (next_evidence_port, next_issuer_port) = unused_port_pair();
+    let restarted = fixture.dev_start_named(
+        &evidence,
+        &docker,
+        next_evidence_port,
+        next_issuer_port,
+        &name_prefix,
+    );
+    assert_success(&restarted, "immediate fresh dev start after clean");
+    assert_success(&fixture.dev_stop(), "fresh dev stop");
+    assert_success(&fixture.dev_clean(), "fresh dev clean");
+    assert!(!fixture.root.join(".evidence/dev").exists());
 }
 
 #[test]
@@ -115,8 +128,9 @@ fn mint_issuer_flags_are_unknown_arguments_and_create_no_private_state() {
             "/missing/mint"
         };
         let output = evidencectl()
-            .args(["dev", "--detach", flag, value, "--project"])
+            .args(["dev", "start"])
             .arg(&fixture.root)
+            .args([flag, value])
             .output()
             .expect("Mint issuer flag");
         assert_eq!(output.status.code(), Some(2));
@@ -281,14 +295,15 @@ fn equal_local_ports_fail_before_creating_private_state() {
     let output = evidencectl()
         .args([
             "dev",
-            "--detach",
+            "start",
+        ])
+        .arg(&fixture.root)
+        .args([
             "--evidence-port",
             "18080",
             "--issuer-port",
             "18080",
-            "--project",
         ])
-        .arg(&fixture.root)
         .output()
         .expect("equal-port start");
     assert!(!output.status.success());
@@ -362,57 +377,22 @@ fn public_symlink_and_stale_state_are_never_replaced() {
 }
 
 #[test]
-fn compatibility_flags_beside_a_dev_action_are_refused_naming_both_flags() {
-    let fixture = Project::new();
-    // The flags stay parseable next to the action so the refusal can name
-    // them; both output formats must carry that cause.
-    let human = evidencectl()
-        .args(["dev", "--detach", "start"])
-        .arg(&fixture.root)
-        .output()
-        .expect("compat-flag start");
-    assert_eq!(human.status.code(), Some(1));
-    let error = String::from_utf8_lossy(&human.stderr);
-    assert!(
-        error.contains("evidence.dev.compat-flags-refused"),
-        "{error}"
-    );
-    assert!(error.contains("--detach"), "{error}");
-    assert!(error.contains("--project"), "{error}");
-    assert!(!fixture.root.join(".evidence").exists());
-
-    let json = evidencectl()
-        .args(["--format=json", "dev", "--project"])
-        .arg(&fixture.root)
-        .args(["token", "local-tutorial-caller"])
-        .output()
-        .expect("compat-flag token");
-    assert_eq!(json.status.code(), Some(1));
-    let report: Value = serde_json::from_slice(&json.stdout).expect("JSON refusal");
-    assert_eq!(report["status"], "domain-refusal");
-    assert_eq!(
-        report["diagnostics"][0]["code"],
-        "evidence.dev.compat-flags-refused"
-    );
-    assert!(report["diagnostics"][0]["message"]
-        .as_str()
-        .expect("message")
-        .contains("--detach or --project"));
-}
-
-#[test]
-fn bare_dev_without_detach_names_the_required_spelling() {
-    let fixture = Project::new();
-    let output = evidencectl()
-        .args(["dev", "--project"])
-        .arg(&fixture.root)
-        .output()
-        .expect("bare dev");
-    assert_eq!(output.status.code(), Some(1));
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(error.contains("evidence.dev.detach-required"), "{error}");
-    assert!(error.contains("dev start"), "{error}");
-    assert!(!fixture.root.join(".evidence").exists());
+fn retired_bare_dev_spellings_are_unknown_and_create_no_private_state() {
+    for arguments in [
+        vec!["dev", "--detach"],
+        vec!["dev", "--project", "project"],
+    ] {
+        let fixture = Project::new();
+        let output = evidencectl()
+            .args(arguments)
+            .current_dir(&fixture.root)
+            .output()
+            .expect("retired bare dev spelling");
+        assert_eq!(output.status.code(), Some(2));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("error[evidencectl.usage]"), "{error}");
+        assert!(!fixture.root.join(".evidence").exists());
+    }
 }
 
 #[test]
@@ -513,7 +493,7 @@ fn sqlite_extract_dev_start_refuses_local_serving_without_docker_on_the_path() {
 /// Freeing a port cannot make a SQLite extract servable, so the transport is
 /// judged before the ports the session would otherwise have claimed.
 #[test]
-fn sqlite_extract_bare_dev_refuses_local_serving_before_an_occupied_port() {
+fn sqlite_extract_dev_start_refuses_local_serving_before_an_occupied_port() {
     let fixture = Project::new();
     let project = fixture.sqlite_extract_starter();
     let tool = fixture.tool_that_never_serves();
@@ -522,14 +502,14 @@ fn sqlite_extract_bare_dev_refuses_local_serving_before_an_occupied_port() {
     let (_, issuer_port) = unused_port_pair();
 
     let output = evidencectl()
-        .args(["dev", "--detach", "--project"])
+        .args(["dev", "start"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&tool)
         .args(["--evidence-port", &evidence_port.to_string()])
         .args(["--issuer-port", &issuer_port.to_string()])
         .output()
-        .expect("sqlite bare dev start on an occupied port");
+        .expect("sqlite dev start on an occupied port");
 
     assert_eq!(output.status.code(), Some(1));
     let error = String::from_utf8_lossy(&output.stderr);
@@ -730,7 +710,7 @@ impl Project {
         issuer_port: u16,
     ) -> Output {
         evidencectl()
-            .args(["dev", "--detach", "--project"])
+            .args(["dev", "start"])
             .arg(&self.root)
             .arg("--evidence-bin")
             .arg(evidence)
@@ -770,7 +750,7 @@ impl Project {
 
     fn start_without_binaries(&self) -> Output {
         evidencectl()
-            .args(["dev", "--detach", "--project"])
+            .args(["dev", "start"])
             .arg(&self.root)
             .output()
             .expect("dev start")

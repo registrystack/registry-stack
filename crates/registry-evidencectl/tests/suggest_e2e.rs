@@ -111,6 +111,11 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         "source suggest failed: {}",
         stderr_of(&output)
     );
+    let stdout = stdout_of(&output);
+    assert!(stdout.contains(&project.join("evidence.yaml").display().to_string()));
+    assert!(!stdout.contains("sources/source-b.yaml"), "{stdout}");
+    assert!(stdout.contains("evidencectl check"), "{stdout}");
+    assert!(stdout.contains("evidencectl test"), "{stdout}");
 
     let prepare_path = project.join("functions/source-b-prepare.rhai");
     let script_path = project.join("functions/source-b-extract.rhai");
@@ -261,7 +266,7 @@ fn prints_the_draft_without_a_project_and_writes_nothing() {
     for block in [
         "--- functions/source-c-prepare.rhai ---",
         "--- functions/source-c-extract.rhai ---",
-        "--- the block to paste under `sources:` in bundle/evidence.yaml ---",
+        "--- the block to merge at the document root in evidence.yaml ---",
     ] {
         assert!(
             stdout.contains(block),
