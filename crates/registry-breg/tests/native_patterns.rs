@@ -61,7 +61,8 @@ fn native_pattern_is_persisted_bounded_and_not_a_portable_schema_pattern() {
     // Compilation is deliberately structural: only PostgreSQL validates ARE syntax.
     assert!(compile_project(&project(Some("[")), &[], CompileProfile::Authoring).is_ok());
     assert!(compile_project(&project(Some("")), &[], CompileProfile::Authoring).is_ok());
-    for invalid in ["x".repeat(4097)] {
+    {
+        let invalid = "x".repeat(4097);
         let error =
             compile_project(&project(Some(&invalid)), &[], CompileProfile::Authoring).unwrap_err();
         assert!(error

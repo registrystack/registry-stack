@@ -1495,6 +1495,7 @@ mod tests {
         }
         server.abort();
     }
+
     fn application_status_document(state: &str, mode: &str) -> Value {
         let mut value = document();
         value["effectDigest"] = json!(REVISION);
@@ -1555,7 +1556,8 @@ mod tests {
 
     #[test]
     fn application_status_rejects_unbound_inconsistent_and_unbounded_retry_claims() {
-        let cases: &[(&str, fn(&mut Value))] = &[
+        type CorruptDocument = fn(&mut Value);
+        let cases: &[(&str, CorruptDocument)] = &[
             ("missing frozen digest", |v| {
                 v.as_object_mut().unwrap().remove("effectDigest");
             }),
