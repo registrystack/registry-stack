@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Replay a tutorial page the way a reader follows it.
 //
-//   node scripts/run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|none] <page.mdx>...
-//   node scripts/run-tutorial.mjs [--dry-run] --gate breg|casework|evidence
+//   node scripts/run-tutorial.mjs [--dry-run] [--keep-failed] [--toolset breg|casework|evidence|none] <page.mdx>...
+//   node scripts/run-tutorial.mjs [--dry-run] [--keep-failed] --gate breg|casework|evidence
 //
 // The page is the specification (see tutorial-runner/page.mjs): its sh fences
 // run in document order in one bash shell, from an empty reader directory
@@ -57,7 +57,7 @@ import { readJourney } from './tutorial-runner/page.mjs';
 import { TOOLSETS, ToolsetError } from './tutorial-runner/toolsets.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|none] <page.mdx>...\n       run-tutorial.mjs [--dry-run] --gate breg|casework|evidence';
+const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--keep-failed] [--toolset breg|casework|evidence|none] <page.mdx>...\n       run-tutorial.mjs [--dry-run] [--keep-failed] --gate breg|casework|evidence';
 const DOCS_ROOT = process.env.TUTORIAL_DOCS_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../src/content/docs');
 const APPLY_EDIT = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/apply-edit.mjs');
 const BACKGROUND = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/background.mjs');
@@ -68,10 +68,11 @@ function usageError(message) {
 }
 
 function parseArgs(argv) {
-  const options = { dryRun: false, toolset: 'none', pages: [] };
+  const options = { dryRun: false, keepFailed: false, toolset: 'none', pages: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--keep-failed') options.keepFailed = true;
     else if (arg === '--toolset') options.toolset = argv[++i];
     else if (arg === '--gate') options.gate = options.toolset = argv[++i];
     else if (arg.startsWith('-')) usageError(`unknown option: ${arg}`);
@@ -308,7 +309,7 @@ async function modificationTimes(root) {
   return times;
 }
 
-async function replay(pages, toolset, checkout) {
+async function replay(pages, toolset, checkout, keepFailed = false) {
   const steps = pages.flat();
   const workRoot = await realpath(await mkdtemp(join(tmpdir(), 'tutorial-run.')));
   const readerDir = join(workRoot, 'reader');
@@ -370,7 +371,9 @@ async function replay(pages, toolset, checkout) {
       await stopBackgrounds(outDir);
       unlock(workRoot);
       const stoppedAll = prepared ? await toolset.teardown({ readerDir, binDir, inherited }) : true;
-      if (stoppedAll) {
+      if (stoppedAll && keepFailed && status !== 0) {
+        console.error(`keeping ${workRoot}: failed journey artifacts retained; remove after inspection`);
+      } else if (stoppedAll) {
         await rm(workRoot, { recursive: true, force: true });
       } else {
         console.error(`keeping ${workRoot}: stop the sessions it holds, then remove it`);
@@ -412,7 +415,7 @@ async function readPages(paths) {
   return annotationErrors > 0 ? null : { pages, checkout };
 }
 
-async function runGate(toolsetName, dryRun) {
+async function runGate(toolsetName, dryRun, keepFailed) {
   const toolset = TOOLSETS[toolsetName];
   const { journeys, checkout, skipped, errors } = await planGate(DOCS_ROOT, toolsetName, TOOLSETS);
   for (const error of errors) console.error(error);
@@ -431,7 +434,7 @@ async function runGate(toolsetName, dryRun) {
       printPlan(pages.flat(), fromCheckout);
       continue;
     }
-    const status = await replay(pages, toolset, fromCheckout);
+    const status = await replay(pages, toolset, fromCheckout, keepFailed);
     // A toolset that cannot be prepared fails every journey the same way.
     if (status === 130 || status === 2) return status;
     if (status !== 0) failed.push(journey.at(-1));
@@ -448,11 +451,11 @@ async function runGate(toolsetName, dryRun) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-if (options.gate !== undefined) process.exit(await runGate(options.gate, options.dryRun));
+if (options.gate !== undefined) process.exit(await runGate(options.gate, options.dryRun, options.keepFailed));
 const read = await readPages(options.pages);
 if (!read) process.exit(2);
 if (options.dryRun) {
   printPlan(read.pages.flat(), read.checkout);
   process.exit(0);
 }
-process.exit(await replay(read.pages, TOOLSETS[options.toolset], read.checkout));
+process.exit(await replay(read.pages, TOOLSETS[options.toolset], read.checkout, options.keepFailed));
