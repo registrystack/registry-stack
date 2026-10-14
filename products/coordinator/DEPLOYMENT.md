@@ -838,8 +838,9 @@ the retries run out. A run deadline that ends the retries first ends the run
 `expired` with the retry code instead. The ten attempts can span up to about
 nine minutes, and longer when the service sends `Retry-After`.
 
-For these external replies, a `Retry-After` must be a single whole-second value
-from zero through 86,400. A date, duplicate field, malformed value, or longer wait
+Before the final attempt, these external replies must carry at most one
+`Retry-After` field containing a whole-second value from zero through 86,400.
+A date, duplicate field, malformed value, or longer wait
 stops the call with `external-unusable-retry-after`. Zero still follows the normal
 backoff schedule. A `wait-for` completion uses its own persisted observation
 floor and deadline instead of the call retry schedule.
