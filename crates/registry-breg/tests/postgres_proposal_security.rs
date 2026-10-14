@@ -11,20 +11,20 @@ mod postgres_harness;
 use registry_breg::{
     api::{VerifiedClaimValue, VerifiedRequestClaims},
     auth::{AuthorityClaimConfig, RegistryAuthenticator},
-    compiler::{CompileProfile, compile_project},
+    compiler::{compile_project, CompileProfile},
     contract::parse_project_json,
     task_grant::{TaskGrantBinding, TaskGrantError, TaskGrantStatusChecker},
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{MockIdp, oidc_verifier_config};
+use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use reqwest::{Method, StatusCode};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
 };
 
@@ -854,6 +854,24 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     assert_eq!(value["result"]["state"], "pending");
     assert!(value["context"].get("fields").is_none());
     assert!(!value.to_string().contains("current-name-canary"));
+    let metadata = service
+        .client
+        .registry_contract(Some("review-status"))
+        .await
+        .unwrap()
+        .value;
+    let binding = metadata
+        .select_proposal_review_status("review-status", "correct-name")
+        .unwrap();
+    let purpose_read = service
+        .client
+        .read_proposal_review_by_id(&binding, id)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(purpose_read.subject.id, id);
+    assert!(purpose_read.context.fields.is_none());
+    assert_eq!(purpose_read.result.unwrap().state, "pending");
     for suffix in ["", "/review-context"] {
         let (code, value, _) = send(
             &service,

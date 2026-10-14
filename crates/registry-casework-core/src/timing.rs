@@ -3,12 +3,13 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Source-owned summary over the durable request, including correction drafts.
-/// A later proposal must not replace the first submission or final completion.
+/// Casework-owned timing pinned to admission and terminal settlement.
+/// Source observations and assignment changes cannot reset this budget.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewTiming {
-    pub first_submitted_at: DateTime<Utc>,
+    pub request_accepted_at: DateTime<Utc>,
     /// Completed pause intervals. Final completion folds any open pause here.
     pub paused_milliseconds: i64,
     pub pause_started_at: Option<DateTime<Utc>>,
@@ -16,6 +17,7 @@ pub struct ReviewTiming {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum BudgetState {
     Running,
@@ -24,17 +26,18 @@ pub enum BudgetState {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElapsedBudget {
     pub state: BudgetState,
     pub elapsed_milliseconds: i64,
     pub remaining_milliseconds: i64,
-    /// No due instant is predicted while the source says the clock is paused.
+    /// No due instant is predicted while the runtime says the clock is paused.
     pub due_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("the source timing or elapsed budget is invalid")]
+#[error("the review timing or elapsed budget is invalid")]
 pub struct InvalidTiming;
 
 /// Shared elapsed-time calculation for runtime reads, explain and simulation.
@@ -47,14 +50,14 @@ pub fn evaluate_elapsed_budget(
     let end = timing.completed_at.unwrap_or(now);
     if budget_milliseconds <= 0
         || timing.paused_milliseconds < 0
-        || timing.first_submitted_at > end
+        || timing.request_accepted_at > end
         || end > now
         || (timing.completed_at.is_some() && timing.pause_started_at.is_some())
     {
         return Err(InvalidTiming);
     }
     let current_pause = match timing.pause_started_at {
-        Some(start) if start >= timing.first_submitted_at && start <= end => {
+        Some(start) if start >= timing.request_accepted_at && start <= end => {
             (end - start).num_milliseconds()
         }
         Some(_) => return Err(InvalidTiming),
@@ -64,7 +67,7 @@ pub fn evaluate_elapsed_budget(
         .paused_milliseconds
         .checked_add(current_pause)
         .ok_or(InvalidTiming)?;
-    let elapsed = (end - timing.first_submitted_at)
+    let elapsed = (end - timing.request_accepted_at)
         .num_milliseconds()
         .checked_sub(paused)
         .filter(|elapsed| *elapsed >= 0)
@@ -84,7 +87,7 @@ pub fn evaluate_elapsed_budget(
             .ok_or(InvalidTiming)?;
         Some(
             timing
-                .first_submitted_at
+                .request_accepted_at
                 .checked_add_signed(Duration::try_milliseconds(duration).ok_or(InvalidTiming)?)
                 .ok_or(InvalidTiming)?,
         )
@@ -110,9 +113,9 @@ mod tests {
     }
 
     #[test]
-    fn correction_pause_preserves_remaining_budget_and_resubmission_due_time() {
+    fn explicit_pause_preserves_remaining_budget_and_resume_due_time() {
         let mut timing = ReviewTiming {
-            first_submitted_at: instant("2026-09-10T09:00:00+07:00"),
+            request_accepted_at: instant("2026-09-10T09:00:00+07:00"),
             paused_milliseconds: 0,
             pause_started_at: Some(instant("2026-09-10T13:00:00+07:00")),
             completed_at: None,
@@ -136,7 +139,7 @@ mod tests {
     #[test]
     fn final_response_freezes_elapsed_time_including_cancellation_during_pause() {
         let timing = ReviewTiming {
-            first_submitted_at: instant("2026-09-10T09:00:00Z"),
+            request_accepted_at: instant("2026-09-10T09:00:00Z"),
             paused_milliseconds: 24 * HOUR,
             pause_started_at: None,
             completed_at: Some(instant("2026-09-11T13:00:00Z")),
@@ -151,9 +154,9 @@ mod tests {
     }
 
     #[test]
-    fn inconsistent_source_timing_is_a_diagnostic_not_a_reset_budget() {
+    fn inconsistent_review_timing_is_a_diagnostic_not_a_reset_budget() {
         let mut timing = ReviewTiming {
-            first_submitted_at: instant("2026-09-10T09:00:00Z"),
+            request_accepted_at: instant("2026-09-10T09:00:00Z"),
             paused_milliseconds: 5 * HOUR,
             pause_started_at: None,
             completed_at: None,

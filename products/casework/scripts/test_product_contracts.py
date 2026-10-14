@@ -1,62 +1,16 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""Check current examples, generated authorities and executable proof inventory."""
+import hashlib
 import json
 import re
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[3]
-README = ROOT / "products/casework/README.md"
-RUNTIME_CRATE = ROOT / "crates/registry-casework"
-MATRIX = ROOT / "products/casework/contracts/security-invariant-matrix.yaml"
-TRACE = ROOT / "products/casework/contracts/security-test-traceability.yaml"
-STANDALONE_EXAMPLE = (
-    ROOT / "products/casework/examples/standalone-decision/casework.yaml"
-)
-STANDALONE_FIXTURE = (
-    ROOT
-    / "products/casework/examples/standalone-decision/fixtures/standalone-decision.yaml"
-)
-BREG_EXAMPLE = ROOT / "products/casework/examples/professional-review/casework.yaml"
-BREG_RUNTIME = (
-    ROOT / "products/casework/examples/professional-review/runtime.example.yaml"
-)
-PAYMENT_EXAMPLE = ROOT / "products/casework/examples/payment-review/casework.yaml"
-PAYMENT_FIXTURE = (
-    ROOT / "products/casework/examples/payment-review/fixtures/payment-review.yaml"
-)
-PAYMENT_RUNTIME = (
-    ROOT / "products/casework/examples/payment-review/runtime.example.yaml"
-)
-CASEWORK_RUNTIME_SCHEMA = (
-    ROOT / "products/casework/generated/runtime/runtime.schema.json"
-)
-BREG_RUNTIME_SCHEMA = ROOT / "products/breg/generated/runtime/runtime.schema.json"
-REVIEW_EXAMPLE_RUNNER = ROOT / "products/casework/scripts/check-review-examples.sh"
-MULTISTAGE_EXAMPLE = (
-    ROOT / "products/casework/examples/multi-stage-routing-clocks/casework.yaml"
-)
-MULTISTAGE_SOURCE = (
-    ROOT
-    / "products/casework/examples/multi-stage-routing-clocks/sources/regional-register.json"
-)
-MULTISTAGE_RESPONSE_SOURCE = (
-    ROOT
-    / "products/casework/examples/multi-stage-routing-clocks/sources/response-register.json"
-)
-MULTISTAGE_SIMULATION = (
-    ROOT
-    / "products/casework/examples/multi-stage-routing-clocks/simulations/friday-review.yaml"
-)
-MULTISTAGE_RESPONSE_SIMULATION = (
-    ROOT
-    / "products/casework/examples/multi-stage-routing-clocks/simulations/resubmitted-response.yaml"
-)
-MULTISTAGE_HOLIDAYS = (
-    ROOT
-    / "products/casework/examples/multi-stage-routing-clocks/simulations/holiday-sets/office-holidays-7.yaml"
-)
-
+PRODUCT = ROOT / "products/casework"
+MATRIX = PRODUCT / "contracts/security-invariant-matrix.yaml"
+TRACE = PRODUCT / "contracts/security-test-traceability.yaml"
 
 def references(text: str) -> set[tuple[str, str]]:
     return set(re.findall(r"(?:path|file): ([^,}]+), name: ([A-Za-z0-9_]+)", text))
@@ -85,213 +39,128 @@ def rust_test_attributes(source: str, name: str) -> str | None:
 
 
 class ProductContractTests(unittest.TestCase):
-    def test_standalone_example_is_source_free_and_breg_starter_remains(self):
-        standalone = STANDALONE_EXAMPLE.read_text(encoding="utf-8")
-        fixture = STANDALONE_FIXTURE.read_text(encoding="utf-8")
-        breg = BREG_EXAMPLE.read_text(encoding="utf-8")
+    def test_standalone_example_has_one_submitted_review_policy(self):
+        project = (PRODUCT / "examples/standalone-decision/casework.yaml").read_text()
+        fixture = (PRODUCT / "examples/standalone-decision/fixtures/standalone-decision.yaml").read_text()
+        self.assertRegex(project, r"(?m)^reviewPolicies:")
+        self.assertRegex(project, r"(?m)^trustedProducers:")
+        self.assertIn("mode: submitted", project)
+        self.assertNotRegex(project, r"(?m)^(sources|reviewKinds|reviewProducers):")
+        self.assertIn("policy: decision", fixture)
+        self.assertIn("outcomes: [confirmed, rejected]", fixture)
 
-        self.assertNotRegex(standalone, r"(?m)^sources:")
-        self.assertRegex(standalone, r"(?m)^reviewKinds:")
-        self.assertRegex(standalone, r"(?m)^reviewProducers:")
-        self.assertRegex(standalone, r"(?m)^\s+role: requester$")
-        self.assertRegex(standalone, r"(?m)^\s+contextStrategy: submitted$")
-        self.assertRegex(fixture, r"(?m)^review:$")
-        self.assertRegex(fixture, r"(?m)^\s+outcomes: \[confirmed, rejected\]$")
-        self.assertRegex(breg, r"(?m)^sources:")
-        self.assertNotRegex(breg, r"(?m)^hostedKinds:")
+    def test_canonical_native_context_schema_is_exact_and_local(self):
+        directory = PRODUCT / "examples/canonical-review"
+        project = (directory / "casework.yaml").read_text()
+        self.assertIn("mode: current-source", project)
+        self.assertIn("mode: submitted", project)
+        self.assertIn("capabilities: [human-display, service-status]", project)
+        self.assertIn("service-status: casework-review-status", project)
+        self.assertIn("decidingProfiles: [staff]", project)
+        self.assertNotIn("sourceProfile:", project)
+        reference = re.search(r"\$ref: (schemas/[^\s]+)", project).group(1)
+        schema_bytes = (directory / reference).read_bytes()
+        digest = "sha256:" + hashlib.sha256(schema_bytes).hexdigest()
+        self.assertIn("schemaDigest: " + digest, project)
+        schema = json.loads(schema_bytes)
+        self.assertEqual(schema["type"], "object")
+        self.assertFalse(schema["additionalProperties"])
+        runtime = (directory / "runtime.example.yaml").read_text()
+        self.assertRegex(runtime, r"(?m)^contextProviders:")
+        self.assertIn("casework-review-status", runtime)
+        self.assertNotRegex(runtime, r"(?m)^sources:")
 
-    def test_payment_example_owns_completion_and_retention_without_breg(self):
-        policy = PAYMENT_EXAMPLE.read_text(encoding="utf-8")
-        fixture = PAYMENT_FIXTURE.read_text(encoding="utf-8")
-        runtime = PAYMENT_RUNTIME.read_text(encoding="utf-8")
+    def test_project_schema_exposes_one_review_authoring_model(self):
+        schema = json.loads((PRODUCT / "generated/project/project.schema.json").read_text())
+        properties = schema["properties"]
+        for field in ("reviewPolicies", "contextProviders", "trustedProducers", "teams", "queues", "clocks"):
+            self.assertIn(field, properties)
+        for retired in ("reviewKinds", "reviewProducers", "hostedKinds", "sources", "itemKinds"):
+            self.assertNotIn(retired, properties)
+        policy = schema["$defs"]["ReviewPolicy"]
+        for field in ("context", "stages", "outcomes", "clocks", "displaySchema", "resultSchema"):
+            self.assertIn(field, policy["properties"])
+        self.assertNotIn("sourceProfile", schema["$defs"]["ReviewContextProviderPolicy"]["properties"])
 
-        self.assertNotRegex(policy, r"(?m)^sources:")
-        self.assertRegex(policy, r"(?m)^\s+- id: payment-batch$")
-        self.assertRegex(policy, r"(?m)^\s+terminalDays: 30$")
-        self.assertRegex(policy, r"(?m)^\s+recoveryDays: 7$")
-        self.assertRegex(policy, r"(?m)^\s+destinationId: payment-results$")
-        self.assertRegex(policy, r"(?m)^\s+recipientBinding: payment-processor-v1$")
-        self.assertRegex(fixture, r"(?m)^\s+kind: payment-batch$")
-        self.assertRegex(fixture, r"(?m)^\s+outcomes: \[\]$")
-        self.assertRegex(runtime, r"(?m)^reviewCompletionDestinations:$")
-        self.assertRegex(runtime, r"(?m)^\s+payment-results:$")
-        self.assertRegex(runtime, r"(?m)^\s+bearerTokenRef: secret:file/payment-completion-token$")
+    def test_http_contract_has_policy_binding_and_review_staffing(self):
+        document = json.loads((PRODUCT / "generated/registry-casework.openapi.json").read_text())
+        paths = document["paths"]
+        for path in ("/v1/review-policies", "/v1/review-tasks/next", "/v1/review-tasks/holdings", "/v1/directory/caseload/preview", "/v1/directory/clocks/recompute/preview"):
+            self.assertIn(path, paths)
+        self.assertFalse(any("work-items" in path or "events/sources" in path for path in paths))
+        create = document["components"]["schemas"]["ReviewCreateRequest"]
+        self.assertIn("policy", create["required"])
+        self.assertNotIn("kind", create["properties"])
+        self.assertIn("ReviewStaffingQuery", document["components"]["schemas"])
 
-    def test_payment_example_admits_producers_from_the_runtime_oidc_issuer(self):
-        # Every deployed token validates under the runtime file's OIDC issuer,
-        # and producer admission requires that exact issuer, so the example is
-        # only deployable as shipped when the two files name the same one.
-        policy = PAYMENT_EXAMPLE.read_text(encoding="utf-8")
-        runtime = PAYMENT_RUNTIME.read_text(encoding="utf-8")
+    def test_cli_report_contract_is_generated_from_one_typed_union(self):
+        schemas = sorted(path.name for path in (PRODUCT / "contracts/cli").glob("*.schema.json"))
+        self.assertEqual(schemas, ["report.schema.json"])
+        schema = json.loads((PRODUCT / "contracts/cli/report.schema.json").read_text())
+        self.assertEqual(schema["properties"]["kind"]["const"], "CaseworkReport")
+        self.assertTrue(schema["oneOf"])
+        self.assertIn("ExplainPolicy", schema["$defs"])
+        for field in ("purpose", "context", "displaySchema", "resultSchema", "stages", "outcomes", "clocks", "dependencies"):
+            self.assertIn(field, schema["$defs"]["ExplainPolicy"]["properties"])
+        generator = (PRODUCT / "scripts/generate_cli_schemas.py").read_text()
+        self.assertIn('"report-schemas"', generator)
+        self.assertNotIn("ACTIVATION_DEFS", generator)
 
-        policy_issuers = re.findall(r"(?m)^\s+issuer: (\S+)$", policy)
-        runtime_issuers = re.findall(r"(?m)^\s+issuer: (\S+)$", runtime)
-        self.assertEqual(len(policy_issuers), 1)
-        self.assertEqual(len(runtime_issuers), 1)
-        self.assertEqual(policy_issuers[0], runtime_issuers[0])
-
-    def test_professional_review_example_admits_producers_from_the_runtime_oidc_issuer(self):
-        # Every deployed token validates under the runtime file's OIDC issuer,
-        # and producer admission requires that exact issuer, so the example is
-        # only deployable as shipped when the two files name the same one.
-        policy = BREG_EXAMPLE.read_text(encoding="utf-8")
-        runtime = BREG_RUNTIME.read_text(encoding="utf-8")
-
-        policy_issuers = re.findall(r"(?m)^\s+issuer: (\S+)$", policy)
-        runtime_issuers = re.findall(r"(?m)^\s+issuer: (\S+)$", runtime)
-        self.assertEqual(len(policy_issuers), 1)
-        self.assertEqual(len(runtime_issuers), 1)
-        self.assertEqual(policy_issuers[0], runtime_issuers[0])
-
-    def test_review_runtime_schemas_own_both_sides_of_the_connection(self):
-        casework = json.loads(CASEWORK_RUNTIME_SCHEMA.read_text(encoding="utf-8"))
-        breg = json.loads(BREG_RUNTIME_SCHEMA.read_text(encoding="utf-8"))
-
-        self.assertIn("reviewCompletionDestinations", casework["properties"])
-        authority = breg["$defs"]["RawReviewAuthorityConfig"]
-        self.assertEqual(
-            set(authority["required"]),
-            {"endpoint", "profile", "producerId", "recoveryDays"},
-        )
-        for member in [
-            "tokenRef",
-            "privateKeyJwt",
-            "completionTokenRef",
-            "completionRecipient",
-        ]:
-            self.assertIn(member, authority["properties"])
-
-    def test_review_example_runner_aggregates_three_examples_without_app_kit(self):
-        runner = REVIEW_EXAMPLE_RUNNER.read_text(encoding="utf-8")
-        for proof in [
-            "asset-site-placement-change-requests",
-            "payment-review",
-            "standalone-decision",
-            "breg_review_journey",
-            "review_payment_fixture_postgres",
-            "standalone_structured_answers_support_polling_and_completion_modes",
-            "review_connection_retention_diagnostic_names_the_incompatible_pair",
-        ]:
-            self.assertIn(proof, runner)
-        self.assertNotRegex(runner, r"(?i)app[-_ ]?kit")
-
-    def test_multistage_example_pins_routing_and_both_clock_contracts(self):
-        policy = MULTISTAGE_EXAMPLE.read_text(encoding="utf-8")
-        source = MULTISTAGE_SOURCE.read_text(encoding="utf-8")
-        response_source = MULTISTAGE_RESPONSE_SOURCE.read_text(encoding="utf-8")
-        simulation = MULTISTAGE_SIMULATION.read_text(encoding="utf-8")
-        response_simulation = MULTISTAGE_RESPONSE_SIMULATION.read_text(
-            encoding="utf-8"
-        )
-        holidays = MULTISTAGE_HOLIDAYS.read_text(encoding="utf-8")
-
-        self.assertIn("projection: [region]", policy)
-        self.assertIn("id: northern-requests", policy)
-        self.assertIn("type: subject", policy)
-        self.assertIn("type: activity", policy)
-        self.assertIn("after: {workingDays: 5}", policy)
-        self.assertIn('"authority": "casework-main"', source)
-        self.assertIn('"policyId": "regional-review"', source)
-        # The pinned policyId must resolve to a declared reviewKinds entry;
-        # registrystack/registry-stack#1256 was a source description pinning a
-        # policyId that named no declared review kind.
-        self.assertIn("reviewKinds:\n  - id: regional-review", policy)
-        self.assertIn('"onApproved": {"mode": "manual"}', source)
-        self.assertIn('"field": "region"', source)
-        self.assertIn('"requestEntity": "response-correction"', response_source)
-        self.assertIn('dueAt: "2026-09-14T17:00:00+07:00"', simulation)
-        self.assertIn("eligibleReminders: [due-soon]", simulation)
-        self.assertIn("remainingMilliseconds: 158400000", response_simulation)
-        self.assertIn('dueAt: "2026-09-13T09:00:00+07:00"', response_simulation)
-        self.assertIn("revision: 7", holidays)
-        self.assertIn("dates: [2026-09-07]", holidays)
+    def test_review_runner_selects_all_current_transaction_boundaries(self):
+        runner = (PRODUCT / "scripts/check-review-examples.sh").read_text()
+        for target in ("review_acceptance_postgres", "review_migration_postgres", "review_directory_postgres", "review_postgres", "review_http", "task_grants::", "review_context_package"):
+            self.assertIn(target, runner)
+        self.assertIn("CASEWORK_REVIEW_TEST_DATABASE_URL", runner)
+        self.assertIn("check-checkpoint.sh", runner)
+        self.assertIn("check-review-journeys.sh", runner)
+        checkpoint = (PRODUCT / "scripts/check-checkpoint.sh").read_text()
+        self.assertIn("examples/canonical-review", checkpoint)
+        self.assertIn("examples/standalone-decision", checkpoint)
+        self.assertNotIn('" simulate "', checkpoint)
+        self.assertNotIn("source add", checkpoint)
 
     def test_security_contracts_are_scoped_and_do_not_claim_execution(self):
-        matrix = MATRIX.read_text(encoding="utf-8")
-        trace = TRACE.read_text(encoding="utf-8")
-        self.assertIn("scope: first-full-mvp", matrix)
-        self.assertIn("scope: first-full-mvp", trace)
+        matrix, trace = MATRIX.read_text(), TRACE.read_text()
+        scope = re.search(r"(?m)^scope: (.+)$", matrix)
+        self.assertIsNotNone(scope)
+        self.assertIn("scope: " + scope.group(1), trace)
         self.assertIn("evidenceStatus: source-mapped-not-executed", matrix)
         self.assertIn("executionStatus: not-recorded", trace)
         self.assertNotIn("executionStatus: passed", matrix + trace)
-        matrix_ids = set(re.findall(r"id: (CASEWORK-SEC-[0-9]+)", matrix))
-        trace_ids = set(re.findall(r"id: (CASEWORK-SEC-[0-9]+)", trace))
-        self.assertEqual(matrix_ids, trace_ids)
+        matrix_ids = re.findall(r"id: (CASEWORK-SEC-[0-9]+)", matrix)
+        trace_ids = re.findall(r"id: (CASEWORK-SEC-[0-9]+)", trace)
+        self.assertTrue(matrix_ids)
+        self.assertEqual(len(matrix_ids), len(set(matrix_ids)))
+        self.assertEqual(set(matrix_ids), set(trace_ids))
+        self.assertTrue(references(matrix))
 
-    def test_concept_invariant_mapping_is_complete_without_claiming_deferred_work(self):
-        matrix = MATRIX.read_text(encoding="utf-8")
-        mapped = {
-            int(number)
-            for values in re.findall(r"invariants: \[([^]]+)\]", matrix)
-            for number in values.split(", ")
-        }
-        deferred = {
-            int(number)
-            for number in re.findall(
-                r"^  - \{number: ([0-9]+), targetWave: post-mvp,", matrix, re.M
-            )
-        }
-        self.assertEqual(set(range(1, 19)), mapped | deferred)
-        self.assertFalse(mapped & deferred)
-        self.assertEqual({12}, deferred)
-
-    def test_every_mapped_test_exists_by_exact_name(self):
-        mapped = references(MATRIX.read_text(encoding="utf-8")) | references(
-            TRACE.read_text(encoding="utf-8")
-        )
-        self.assertTrue(mapped)
-        for relative, name in sorted(mapped):
-            source_path = ROOT / relative
-            self.assertTrue(source_path.is_file(), relative)
-            source = source_path.read_text(encoding="utf-8")
-            self.assertRegex(source, rf"\b(?:async\s+)?(?:fn|def)\s+{re.escape(name)}\b", f"{relative}:{name}")
-
-    def test_readme_documents_every_operator_supplied_test_database(self):
-        required = {
-            variable
-            for source in RUNTIME_CRATE.rglob("*.rs")
-            for variable in re.findall(
-                r'"(CASEWORK_[A-Z_]*DATABASE_URL)"', source.read_text(encoding="utf-8")
-            )
-        }
-        self.assertTrue(required)
-        readme = README.read_text(encoding="utf-8")
-        for variable in sorted(required):
-            with self.subTest(variable=variable):
-                self.assertIn(variable, readme)
-
-    def test_source_backed_checkpoint_uses_the_deployment_runtime(self):
-        readme = README.read_text(encoding="utf-8")
-
-        self.assertIn(
-            "caseworkctl apply --runtime-config /etc/registry-casework/runtime.yaml", readme
-        )
-        self.assertNotIn("runtime.yaml migrate", readme)
-        self.assertIn(
-            "casework --runtime-config /etc/registry-casework/runtime.yaml serve", readme
-        )
-        self.assertNotIn("caseworkctl dev start ./casework", readme)
-
-    def test_every_mapped_test_is_selected_by_its_own_runner(self):
-        mapped = references(MATRIX.read_text(encoding="utf-8")) | references(
-            TRACE.read_text(encoding="utf-8")
-        )
+    def test_every_mapped_test_exists_and_is_selectable(self):
+        mapped = references(MATRIX.read_text()) | references(TRACE.read_text())
         self.assertTrue(mapped)
         for relative, name in sorted(mapped):
             with self.subTest(test=f"{relative}:{name}"):
-                source = (ROOT / relative).read_text(encoding="utf-8")
+                path = ROOT / relative
+                self.assertTrue(path.is_file(), relative)
+                source = path.read_text()
                 if relative.endswith(".rs"):
-                    self.assertIsNotNone(
-                        rust_test_attributes(source, name),
-                        f"{relative}:{name} needs a #[test], #[tokio::test] or "
-                        "#[rstest] attribute to be selectable",
-                    )
+                    self.assertIsNotNone(rust_test_attributes(source, name), f"{relative}:{name} must be an attributed test, not a helper")
                 else:
-                    self.assertTrue(
-                        name.startswith("test_"),
-                        f"{relative}:{name} is not collected by unittest",
-                    )
-                    self.assertIn(f"def {name}(", source, f"{relative}:{name}")
+                    self.assertTrue(name.startswith("test_"))
+                    self.assertIn(f"def {name}(", source)
+
+    def test_readme_documents_every_operator_supplied_test_database(self):
+        variables = {variable for path in (ROOT / "crates/registry-casework").rglob("*.rs") for variable in re.findall(r'"(CASEWORK_[A-Z_]*DATABASE_URL)"', path.read_text())}
+        self.assertTrue(variables)
+        readme = (PRODUCT / "README.md").read_text()
+        for variable in sorted(variables):
+            with self.subTest(variable=variable):
+                self.assertIn(variable, readme)
+
+    def test_deployment_uses_explicit_package_activation(self):
+        readme = (PRODUCT / "README.md").read_text()
+        self.assertIn("caseworkctl apply --runtime-config /etc/registry-casework/runtime.yaml", readme)
+        self.assertIn("casework --runtime-config /etc/registry-casework/runtime.yaml serve", readme)
+        self.assertNotIn("runtime.yaml migrate", readme)
 
 
 if __name__ == "__main__":

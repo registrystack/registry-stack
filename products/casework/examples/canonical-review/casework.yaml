@@ -1,0 +1,110 @@
+apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
+kind: CaseworkProject
+project:
+  id: canonical-review
+  version: "1"
+accessProfiles:
+  - id: staff
+    principalClaim: sub
+    requiredScopes: [casework:staff]
+    role: staff
+  - id: supervisor
+    principalClaim: sub
+    requiredScopes: [casework:supervisor]
+    role: supervisor
+  - id: administrator
+    principalClaim: sub
+    requiredScopes: [casework:admin]
+    role: administrator
+  - id: requester
+    principalClaim: sub
+    requiredScopes: [casework:request]
+    role: requester
+queues:
+  - id: facility-addresses
+    label: Facility address reviews
+  - id: decisions
+    label: Decisions awaiting review
+contextProviders:
+  - id: facility-proposal-context
+    capabilities: [human-display, service-status]
+    sourceNamespace: facility-registry
+    deploymentRef: facility-registry
+    serviceProfiles:
+      service-status: casework-review-status
+
+reviewPolicies:
+  - id: decision
+    version: "1"
+    purpose: answer
+    context: {mode: submitted}
+    stages:
+      - id: answer
+        queue: decisions
+        decidingProfiles: [staff]
+        requiredApprovals: 1
+    retention:
+      terminalDays: 90
+      accountabilityDays: 365
+    displaySchema:
+      type: object
+      additionalProperties: false
+      required: [summary, reference]
+      properties:
+        summary: {type: string, maxLength: 160}
+        reference: {type: string, maxLength: 120}
+    outcomes:
+      - id: confirmed
+        label: Confirm
+        settlement: answered
+        reasonRequired: false
+      - id: rejected
+        label: Return for correction
+        settlement: answered
+        reasonRequired: true
+  - id: facility-address-review
+    version: "1"
+    purpose: approval
+    context:
+      mode: current-source
+      provider: facility-proposal-context
+      contract:
+        id: urn:registry:breg:review-context:facility-registry:correct-address:facility-address-context
+        revision: sha256:83e82d067a97914d2c0e32ec0869623d7e4fe492f13deec9f491d36401d174a2
+        schemaDigest: sha256:1229965c65630e6810c0b03b5a0dc5806334a241d7e86d8bb6ee27400ce53a87
+    stages:
+      - id: address-review
+        queue: facility-addresses
+        decidingProfiles: [staff]
+        excludeInitiator: true
+        requiredApprovals: 1
+    retention:
+      terminalDays: 30
+      accountabilityDays: 365
+    displaySchema:
+      $ref: schemas/correct-address.schema.json
+    outcomes:
+      - id: approved
+        label: Approve correction
+        settlement: approved
+        reasonRequired: false
+      - id: rejected
+        label: Return for correction
+        settlement: rejected
+        reasonRequired: true
+trustedProducers:
+  - id: requester
+    profile: requester
+    issuer: http://127.0.0.1:8093
+    subject: b75315b2-5854-70f3-8867-511dd771a6da
+    sourceNamespaces: [standalone]
+    reviewPolicies: [decision]
+    recoveryDays: 30
+  - id: facility-registry
+    profile: requester
+    issuer: https://identity.example.test
+    subject: facility-registry-review-producer
+    trustedInitiatorIssuer: https://identity.example.test
+    sourceNamespaces: [facility-registry]
+    reviewPolicies: [facility-address-review]
+    recoveryDays: 30

@@ -9,7 +9,7 @@ use registry_casework::ReviewTaskDecisionRequest;
 use registry_casework_core::{
     OwnReviewDecisionPage, ReviewCancelRequest, ReviewCancelResponse, ReviewClockCorrelation,
     ReviewCreateRequest, ReviewDecisionReceipt, ReviewRequestAccepted, ReviewRequestView,
-    ReviewResult, ReviewResultFeedPage, ReviewerTaskState,
+    ReviewResult, ReviewResultFeedPage, ReviewTaskState,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -125,7 +125,7 @@ fn main() -> ExitCode {
 fn review_wire_examples() -> Result<BTreeMap<&'static str, Vec<Value>>, serde_json::Error> {
     let digest = format!("sha256:{}", "a".repeat(64));
     let subject = json!({
-        "source":"breg-a", "type":"change-request", "id":"request-1",
+        "source":"breg-a", "type":"proposal", "id":"request-1",
         "version":"7", "digest":digest
     });
     let policy = json!({"id":"address-review", "version":"1", "digest":digest});
@@ -145,8 +145,8 @@ fn review_wire_examples() -> Result<BTreeMap<&'static str, Vec<Value>>, serde_js
         (
             "ReviewCreateRequest",
             typed_examples::<ReviewCreateRequest>(vec![
-                json!({"kind":"address-review","subject":subject,"requesterReference":"case-1","context":{"strategy":"submitted","snapshot":{"field":"value"}},"resultConstraints":{"type":"object"}}),
-                json!({"kind":"address-review","subject":subject,"requesterReference":"case-1","initiator":{"issuer":"https://issuer.example","subject":"person-1"},"context":{"strategy":"source","binding":{"reference":"source-ref"}}}),
+                json!({"policy":policy,"subject":subject,"requesterReference":"case-1","context":{"mode":"submitted","snapshot":{"field":"value"}},"resultConstraints":{"type":"object"}}),
+                json!({"policy":policy,"subject":subject,"requesterReference":"case-1","initiator":{"issuer":"https://issuer.example","subject":"person-1"},"context":{"mode":"current-source","binding":{"reference":"source-ref"}}}),
             ])?,
         ),
         (
@@ -190,8 +190,8 @@ fn review_wire_examples() -> Result<BTreeMap<&'static str, Vec<Value>>, serde_js
             ])?,
         ),
         (
-            "ReviewerTaskState",
-            typed_examples::<ReviewerTaskState>(vec![
+            "ReviewTaskState",
+            typed_examples::<ReviewTaskState>(vec![
                 json!("open"),
                 json!({"held":{"holder":{"issuer":"https://issuer.example","subject":"person-1"}}}),
                 json!("decided"),

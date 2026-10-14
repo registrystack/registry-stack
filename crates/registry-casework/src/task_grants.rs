@@ -1,21 +1,11 @@
 //! Persisted task authority with immutable bounds and live eligibility checks.
 use crate::{PostgresStore, StoreError};
 use chrono::{DateTime, Utc};
-use registry_casework_core::{
-    ActorContext, CaseworkRole, ContentDigest, IssuerPrincipal, ReviewTaskGrant, SubjectRef,
-    TaskAssertionResponse, TaskGrant, TaskGrantList, TaskGrantRevocation, TaskGrantStatus,
-    TaskGrantStatusDetails, TaskGrantView, TaskProposalIdentity, TaskTemplate, TaskTemplatePreview,
-    TaskTemplatePreviews, WorkItem,
-};
+use registry_casework_core::*;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
-
-pub(crate) struct StoredTaskGrant {
-    pub grant: TaskGrant,
-    pub invalidated: bool,
-}
 
 pub(crate) struct StoredReviewTaskGrant {
     pub grant: ReviewTaskGrant,
@@ -28,41 +18,6 @@ fn membership_kind(role: CaseworkRole) -> Option<&'static str> {
         CaseworkRole::Supervisor => Some("supervisor"),
         CaseworkRole::Administrator | CaseworkRole::Requester => None,
     }
-}
-
-async fn eligible(
-    transaction: &Transaction<'_>,
-    actor: &ActorContext,
-    item: &WorkItem,
-    template: &TaskTemplate,
-) -> Result<bool, StoreError> {
-    if item.holder.as_ref() != Some(&actor.principal)
-        || !template.item_states.contains(&item.state)
-        || item.subject.source_id != template.source
-        || !template.item_kinds.contains(&item.subject.kind)
-    {
-        return Ok(false);
-    }
-    eligible_officer(transaction, actor, item, template).await
-}
-
-async fn eligible_officer(
-    transaction: &Transaction<'_>,
-    actor: &ActorContext,
-    item: &WorkItem,
-    template: &TaskTemplate,
-) -> Result<bool, StoreError> {
-    let Some(membership_kind) = membership_kind(actor.role) else {
-        return Ok(false);
-    };
-    if !template.eligible_profiles.contains(&actor.profile_id) {
-        return Ok(false);
-    }
-    let row = transaction.query_one(
-        "SELECT EXISTS(SELECT 1 FROM casework_memberships m JOIN casework_queue_service q ON q.team_id=m.team_id WHERE m.issuer=$1 AND m.subject=$2 AND m.membership_kind=$3 AND m.team_id=ANY($4) AND q.queue_id=$5)",
-        &[&actor.principal.issuer, &actor.principal.subject, &membership_kind, &template.eligible_teams, &item.queue_id],
-    ).await?;
-    Ok(row.get(0))
 }
 
 /// Activate the configured immutable template versions inside
@@ -87,7 +42,8 @@ pub(crate) async fn activate_task_templates_in(
             return Err(StoreError::Configuration);
         }
         if let Some(row) = transaction.query_opt("SELECT document FROM casework_task_templates WHERE template_id=$1 AND template_version=$2", &[&template.id,&template.version]).await? {
-            if row.get::<_,Value>(0) != document { return Err(StoreError::Configuration); }
+            if template_behavior(row.get::<_,Value>(0)) != template_behavior(document.clone()) { return Err(StoreError::Configuration); }
+            transaction.execute("UPDATE casework_task_templates SET document=$3 WHERE template_id=$1 AND template_version=$2",&[&template.id,&template.version,&document]).await?;
         } else {
             transaction.execute("INSERT INTO casework_task_templates(template_id,template_version,document) VALUES($1,$2,$3)", &[&template.id,&template.version,&document]).await?;
         }
@@ -101,28 +57,11 @@ pub(crate) async fn activate_task_templates_in(
     for template in templates {
         transaction.execute("UPDATE casework_task_templates SET active=true WHERE template_id=$1 AND template_version=$2", &[&template.id,&template.version]).await?;
     }
-    let rows = transaction.query("SELECT i.*,g.grant_id FROM casework_task_grants g JOIN casework_items i ON i.item_id=g.item_id WHERE g.invalidated_at IS NULL AND g.expires_at>now() AND NOT EXISTS(SELECT 1 FROM casework_task_templates t WHERE t.active AND t.document=g.record->'template') ORDER BY i.item_id,g.grant_id FOR UPDATE OF i", &[]).await?;
-    for row in rows {
-        let item = crate::store::row_to_item(&row)?;
-        invalidate(
-            transaction,
-            audit,
-            &item,
-            row.get("grant_id"),
-            "template",
-            None,
-        )
-        .await?;
-    }
     let review_rows = transaction
         .query(
             "SELECT g.grant_id,g.record
              FROM casework_review_task_grants g
              WHERE g.invalidated_at IS NULL AND g.expires_at>now()
-               AND NOT EXISTS(
-                 SELECT 1 FROM casework_task_templates t
-                 WHERE t.active AND t.document=g.record->'template'
-               )
              ORDER BY g.task_id,g.grant_id
              FOR UPDATE OF g",
             &[],
@@ -131,6 +70,13 @@ pub(crate) async fn activate_task_templates_in(
     for row in review_rows {
         let id = row.get("grant_id");
         let grant: ReviewTaskGrant = serde_json::from_value(row.get("record"))?;
+        if templates.iter().any(|template| {
+            template.id == grant.template.id
+                && template.version == grant.template.version
+                && template_digest(template).ok().as_ref() == Some(&grant.template_digest)
+        }) {
+            continue;
+        }
         let first_invalidation = transaction
             .execute(
                 "UPDATE casework_review_task_grants
@@ -173,258 +119,8 @@ impl PostgresStore {
         Ok(())
     }
 
-    async fn eligible_task_template(
-        &self,
-        actor: &ActorContext,
-        item_id: Uuid,
-        template: &TaskTemplate,
-    ) -> Result<bool, StoreError> {
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        transaction
-            .query_one(
-                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
-                &[],
-            )
-            .await?;
-        let row = transaction
-            .query_opt(
-                "SELECT * FROM casework_items WHERE item_id=$1 AND erased_at IS NULL FOR SHARE",
-                &[&item_id],
-            )
-            .await?
-            .ok_or(StoreError::NotFound)?;
-        let item = crate::store::row_to_item(&row)?;
-        let allowed = template_active(&transaction, template).await?
-            && eligible(&transaction, actor, &item, template).await?;
-        transaction.commit().await?;
-        Ok(allowed)
-    }
-
-    pub(crate) async fn approve_task_grant(
-        &self,
-        actor: &ActorContext,
-        expected_revision: i64,
-        key: &str,
-        grant: TaskGrant,
-    ) -> Result<StoredTaskGrant, StoreError> {
-        let mut audit = self
-            .begin_audit(crate::audit::request_record(
-                "task-approved",
-                Some(actor),
-                &actor.profile_id,
-                json!({"itemId": grant.item_id, "grantId": grant.id}),
-            ))
-            .await?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        transaction
-            .query_one(
-                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
-                &[],
-            )
-            .await?;
-        let row = transaction
-            .query_opt(
-                "SELECT * FROM casework_items WHERE item_id=$1 AND erased_at IS NULL FOR UPDATE",
-                &[&grant.item_id],
-            )
-            .await?
-            .ok_or(StoreError::NotFound)?;
-        let item = crate::store::row_to_item(&row)?;
-        if !template_active(&transaction, &grant.template).await?
-            || !eligible(&transaction, actor, &item, &grant.template).await?
-        {
-            return Err(StoreError::Forbidden);
-        }
-        if TaskProposalIdentity::from(&item.binding) != grant.proposal {
-            return Err(StoreError::Conflict);
-        }
-        let request = json!({"item":grant.item_id,"template":grant.template,"proposal":grant.proposal,"subjects":grant.subjects,"sourceIssuer":grant.source_issuer});
-        let hash = Sha256::digest(serde_json::to_vec(&request)?)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        if let Some(previous) = transaction.query_opt("SELECT request_hash,record,invalidated_at IS NOT NULL FROM casework_task_grants WHERE item_id=$1 AND approver_issuer=$2 AND approver_subject=$3 AND approver_profile=$4 AND idempotency_key=$5", &[&item.item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&key]).await? {
-            if previous.get::<_,String>(0) != hash { return Err(StoreError::IdempotencyConflict); }
-            let stored = StoredTaskGrant { grant: serde_json::from_value(previous.get(1))?, invalidated: previous.get(2) };
-            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
-            audit.commit(transaction).await?;
-            return Ok(stored);
-        }
-        if item.revision != expected_revision {
-            return Err(StoreError::Conflict);
-        }
-        let count: i64 = transaction
-            .query_one(
-                "SELECT count(*) FROM casework_task_grants WHERE item_id=$1",
-                &[&item.item_id],
-            )
-            .await?
-            .get(0);
-        if count >= 128 {
-            return Err(StoreError::Invalid);
-        }
-        let approved = DateTime::from_timestamp(
-            i64::try_from(grant.approved_at).map_err(|_| StoreError::Invalid)?,
-            0,
-        )
-        .ok_or(StoreError::Invalid)?;
-        let expires = DateTime::from_timestamp(
-            i64::try_from(grant.expires_at).map_err(|_| StoreError::Invalid)?,
-            0,
-        )
-        .ok_or(StoreError::Invalid)?;
-        let record = serde_json::to_value(&grant)?;
-        if serde_json::to_vec(&record)?.len() > 65536 {
-            return Err(StoreError::Invalid);
-        }
-        let approver_role = membership_kind(actor.role).ok_or(StoreError::Forbidden)?;
-        transaction.execute("INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,approver_role,idempotency_key,request_hash,record,approved_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", &[&grant.id,&item.item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&approver_role,&key,&hash,&record,&approved,&expires]).await?;
-        task_event(
-            &transaction,
-            &mut audit,
-            &item,
-            "task-approved",
-            Some(actor),
-            grant.id,
-        )
-        .await?;
-        audit.commit(transaction).await?;
-        Ok(StoredTaskGrant {
-            grant,
-            invalidated: false,
-        })
-    }
-
-    pub(crate) async fn task_grant(&self, id: Uuid) -> Result<StoredTaskGrant, StoreError> {
-        let client = self.client().await?;
-        let row = client.query_opt("SELECT g.record,g.invalidated_at IS NOT NULL FROM casework_task_grants g JOIN casework_items i ON i.item_id=g.item_id WHERE g.grant_id=$1 AND i.erased_at IS NULL", &[&id]).await?.ok_or(StoreError::NotFound)?;
-        Ok(StoredTaskGrant {
-            grant: serde_json::from_value(row.get(0))?,
-            invalidated: row.get(1),
-        })
-    }
-
-    pub(crate) async fn task_grants_for_item(
-        &self,
-        item: Uuid,
-    ) -> Result<Vec<StoredTaskGrant>, StoreError> {
-        let client = self.client().await?;
-        client.query("SELECT g.record,g.invalidated_at IS NOT NULL FROM casework_task_grants g JOIN casework_items i ON i.item_id=g.item_id WHERE g.item_id=$1 AND i.erased_at IS NULL ORDER BY g.approved_at,g.grant_id LIMIT 128", &[&item]).await?.into_iter().map(|row| Ok(StoredTaskGrant { grant:serde_json::from_value(row.get(0))?, invalidated:row.get(1) })).collect()
-    }
-
     /// The directory snapshot and grant invalidation are serialized with all
     /// directory mutations. Once invalidated, later re-eligibility cannot revive it.
-    pub(crate) async fn check_task_eligibility(
-        &self,
-        grant: &TaskGrant,
-        template: &TaskTemplate,
-        configured_approver_role: Option<CaseworkRole>,
-    ) -> Result<bool, StoreError> {
-        let mut audit = self.begin_background_audit().await?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        transaction
-            .query_one(
-                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
-                &[],
-            )
-            .await?;
-        let Some(row) = transaction
-            .query_opt(
-                "SELECT i.*,g.approver_role FROM casework_items i JOIN casework_task_grants g ON g.item_id=i.item_id WHERE g.grant_id=$1 AND i.erased_at IS NULL FOR UPDATE OF i",
-                &[&grant.id],
-            )
-            .await?
-        else {
-            return Ok(false);
-        };
-        let item = crate::store::row_to_item(&row)?;
-        let role = match row.get::<_, &str>("approver_role") {
-            "staff" => CaseworkRole::Staff,
-            "supervisor" => CaseworkRole::Supervisor,
-            _ => return Err(StoreError::Invalid),
-        };
-        let actor = ActorContext {
-            principal: grant.approver.clone(),
-            profile_id: grant.approver_profile.clone(),
-            role,
-        };
-        let valid = Some(role) == configured_approver_role
-            && template_active(&transaction, template).await?
-            && eligible(&transaction, &actor, &item, template).await?
-            && TaskProposalIdentity::from(&item.binding) == grant.proposal;
-        if !valid {
-            invalidate(
-                &transaction,
-                &mut audit,
-                &item,
-                grant.id,
-                "eligibility",
-                None,
-            )
-            .await?;
-        }
-        let row = transaction
-            .query_opt(
-                "SELECT invalidated_at IS NULL FROM casework_task_grants WHERE grant_id=$1",
-                &[&grant.id],
-            )
-            .await?;
-        let active = valid && row.is_some_and(|row| row.get::<_, bool>(0));
-        audit.commit(transaction).await?;
-        Ok(active)
-    }
-
-    pub(crate) async fn invalidate_task_grant(
-        &self,
-        id: Uuid,
-        reason: &'static str,
-        actor: Option<&ActorContext>,
-    ) -> Result<(), StoreError> {
-        if !matches!(reason, "revoked" | "eligibility" | "template" | "source") {
-            return Err(StoreError::Invalid);
-        }
-        let mut audit = self
-            .begin_audit_for(
-                actor,
-                if reason == "revoked" {
-                    "task-revoked"
-                } else {
-                    "task-invalidated"
-                },
-                json!({"grantId": id}),
-            )
-            .await?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        transaction
-            .query_one(
-                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
-                &[],
-            )
-            .await?;
-        let row=transaction.query_opt("SELECT i.* FROM casework_items i JOIN casework_task_grants g ON g.item_id=i.item_id WHERE g.grant_id=$1 AND i.erased_at IS NULL FOR UPDATE OF i", &[&id]).await?.ok_or(StoreError::NotFound)?;
-        let item = crate::store::row_to_item(&row)?;
-        if let Some(actor) = actor {
-            let record: Value = transaction
-                .query_one(
-                    "SELECT record FROM casework_task_grants WHERE grant_id=$1",
-                    &[&id],
-                )
-                .await?
-                .get(0);
-            let grant: TaskGrant = serde_json::from_value(record)?;
-            if !eligible_officer(&transaction, actor, &item, &grant.template).await? {
-                return Err(StoreError::Forbidden);
-            }
-        }
-        invalidate(&transaction, &mut audit, &item, id, reason, actor).await?;
-        audit.commit(transaction).await?;
-        Ok(())
-    }
-
     async fn review_task_grant_eligible(
         transaction: &Transaction<'_>,
         actor: &ActorContext,
@@ -438,7 +134,7 @@ impl PostgresStore {
         let row = transaction
             .query_opt(
                 "SELECT t.request_id,t.revision,r.subject_source,r.subject_type,r.subject_id,
-                        r.subject_version,r.subject_digest,t.assignment_generation
+                        r.subject_version,r.subject_digest,t.assignment_generation,r.policy_snapshot
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -461,28 +157,37 @@ impl PostgresStore {
                     &template.eligible_teams,
                     &actor.profile_id,
                     &template.eligible_profiles,
-                    &template.review_kinds,
+                    &template.review_policies,
                     &expected_revision,
                     &template.source,
                 ],
             )
             .await?;
-        row.map(|row| {
-            Ok((
-                row.get(0),
-                row.get(1),
-                registry_casework_core::SubjectBinding {
-                    source: row.get(2),
-                    subject_type: row.get(3),
-                    id: row.get(4),
-                    version: row.get(5),
-                    digest: ContentDigest::parse(&row.get::<_, String>(6))
-                        .map_err(|_| StoreError::Corrupt)?,
-                },
-                row.get(7),
-            ))
-        })
-        .transpose()
+        let Some(row) = row else { return Ok(None) };
+        let pinned: registry_casework_core::ReviewPolicyClosure =
+            serde_json::from_value(row.get(8))?;
+        pinned.verify().map_err(|_| StoreError::Corrupt)?;
+        if !pinned
+            .dependencies
+            .task_templates
+            .iter()
+            .any(|candidate| template_digest(candidate).ok() == template_digest(template).ok())
+        {
+            return Ok(None);
+        }
+        Ok(Some((
+            row.get(0),
+            row.get(1),
+            registry_casework_core::SubjectBinding {
+                source: row.get(2),
+                subject_type: row.get(3),
+                id: row.get(4),
+                version: row.get(5),
+                digest: ContentDigest::parse(&row.get::<_, String>(6))
+                    .map_err(|_| StoreError::Corrupt)?,
+            },
+            row.get(7),
+        )))
     }
 
     pub(crate) async fn eligible_review_task_template(
@@ -558,13 +263,12 @@ impl PostgresStore {
             return Err(StoreError::Forbidden);
         };
         let mut request = json!({
-            "taskId": grant.task_id,
-            "requestId": grant.request_id,
+            "reviewTaskId": grant.task_id,
+            "reviewRequestId": grant.request_id,
             "taskRevision": grant.task_revision,
             "holder": grant.holder,
             "templateDigest": grant.template_digest,
             "subject": grant.subject,
-            "proposal": grant.proposal,
             "subjects": grant.subjects,
             "sourceIssuer": grant.source_issuer,
         });
@@ -886,7 +590,7 @@ impl PostgresStore {
                             &grant.template.eligible_teams,
                             &actor.profile_id,
                             &grant.template.eligible_profiles,
-                            &grant.template.review_kinds,
+                            &grant.template.review_policies,
                             &grant.template.source,
                         ],
                     )
@@ -965,8 +669,8 @@ async fn review_grant_event(
     let mut audit_record = json!({
         "event": format!("casework.{kind}"),
         "eventId": event,
-        "requestId": grant.request_id,
-        "taskId": grant.task_id,
+        "reviewRequestId": grant.request_id,
+        "reviewTaskId": grant.task_id,
         "grantId": id,
         "actor": actor.map(|actor| json!({
             "issuer": actor.principal.issuer,
@@ -980,10 +684,17 @@ async fn review_grant_event(
     audit.record(event, audit_record)
 }
 
+pub(crate) fn template_behavior(mut document: Value) -> Value {
+    if let Some(fields) = document.as_object_mut() {
+        fields.remove("label");
+    }
+    document
+}
 fn template_digest(template: &TaskTemplate) -> Result<ContentDigest, StoreError> {
-    let bytes =
-        registry_platform_canonical_json::canonicalize_json(&serde_json::to_value(template)?)
-            .map_err(|_| StoreError::Invalid)?;
+    let bytes = registry_platform_canonical_json::canonicalize_json(&template_behavior(
+        serde_json::to_value(template)?,
+    ))
+    .map_err(|_| StoreError::Invalid)?;
     Ok(ContentDigest::for_bytes(&bytes))
 }
 
@@ -992,44 +703,7 @@ async fn template_active(
     template: &TaskTemplate,
 ) -> Result<bool, StoreError> {
     let document = serde_json::to_value(template)?;
-    Ok(transaction.query_one("SELECT EXISTS(SELECT 1 FROM casework_task_templates WHERE active AND template_id=$1 AND template_version=$2 AND document=$3)", &[&template.id,&template.version,&document]).await?.get(0))
-}
-
-async fn invalidate(
-    transaction: &Transaction<'_>,
-    audit: &mut crate::audit::AuditOperation,
-    item: &WorkItem,
-    id: Uuid,
-    reason: &str,
-    actor: Option<&ActorContext>,
-) -> Result<(), StoreError> {
-    if transaction.execute("UPDATE casework_task_grants SET invalidated_at=now(),invalidation_reason=$2 WHERE grant_id=$1 AND invalidated_at IS NULL", &[&id,&reason]).await? == 1 {
-        task_event(transaction,audit,item,if reason=="revoked" {"task-revoked"} else {"task-invalidated"},actor,id).await?;
-    } else {
-        // The grant was already invalidated, so no domain event is recorded.
-        audit.record_outcome(crate::audit::AuditOutcome::Unchanged);
-    }
-    Ok(())
-}
-async fn task_event(
-    transaction: &Transaction<'_>,
-    audit: &mut crate::audit::AuditOperation,
-    item: &WorkItem,
-    kind: &str,
-    actor: Option<&ActorContext>,
-    grant: Uuid,
-) -> Result<(), StoreError> {
-    let event = Uuid::new_v4();
-    let now = Utc::now();
-    let issuer = actor.map(|actor| &actor.principal.issuer);
-    let subject = actor.map(|actor| &actor.principal.subject);
-    let profile = actor.map_or("system:task-grants", |actor| actor.profile_id.as_str());
-    let detail = json!({"grantId":grant});
-    transaction.execute("INSERT INTO casework_history(event_id,item_id,item_revision,kind,occurred_at,actor_issuer,actor_subject,profile_id,detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", &[&event,&item.item_id,&item.revision,&kind,&now,&issuer,&subject,&profile,&detail]).await?;
-    audit.record(
-        event,
-        json!({"event":format!("casework.{kind}"),"eventId":event,"itemId":item.item_id,"actor":actor.map(|actor|json!({"issuer":actor.principal.issuer,"subject":actor.principal.subject})),"grantId":grant,"profileId":profile}),
-    )
+    Ok(transaction.query_one("SELECT EXISTS(SELECT 1 FROM casework_task_templates WHERE active AND template_id=$1 AND template_version=$2 AND (document - 'label')=($3::jsonb - 'label'))", &[&template.id,&template.version,&document]).await?.get(0))
 }
 
 pub(crate) struct TaskAuthority {
@@ -1071,16 +745,7 @@ impl TaskAuthority {
             .audit_reference_hash("casework-principal-v1", "", &approver)
             .map_err(|_| StoreError::Invalid)
     }
-    fn assertion(&self, grant: &TaskGrant, now: u64) -> Result<TaskAssertionResponse, StoreError> {
-        self.assertion_for(
-            grant.id,
-            &grant.template,
-            &grant.approver,
-            &grant.subjects,
-            grant.expires_at,
-            now,
-        )
-    }
+
     fn review_assertion(
         &self,
         grant: &ReviewTaskGrant,
@@ -1162,227 +827,19 @@ impl crate::CaseworkService {
             .jwks()
             .map_err(Into::into)
     }
-    pub(crate) async fn preview_tasks(
-        &self,
-        actor: &ActorContext,
-        item_id: Uuid,
-        source_profile: &str,
-        token: &str,
-    ) -> Result<TaskTemplatePreviews, crate::ServiceError> {
-        let (item, _) = self
-            .caller_item(actor, item_id, source_profile, token)
-            .await?;
-        let mut templates = Vec::new();
-        if self.task_authority.is_none() {
-            return Ok(TaskTemplatePreviews {
-                item_revision: item.revision,
-                templates,
-            });
-        }
-        for template in &self.project.task_templates {
-            if !self
-                .store
-                .eligible_task_template(actor, item_id, template)
-                .await?
-            {
-                continue;
-            }
-            let fields = template.subjects.values().cloned().collect::<Vec<_>>();
-            let context = match self
-                .adapter(&item.subject.source_id)?
-                .read_task_context(
-                    &item.subject,
-                    &fields,
-                    Some((
-                        source_profile,
-                        registry_casework_core::EphemeralCredential::new(token),
-                    )),
-                )
-                .await
-            {
-                Ok(context) => context,
-                Err(
-                    registry_casework_core::SourceAdapterError::Denied
-                    | registry_casework_core::SourceAdapterError::Concealed,
-                ) => continue,
-                Err(error) => return Err(error.into()),
-            };
-            if context.binding != item.binding {
-                return Err(StoreError::Conflict.into());
-            }
-            let Ok(subjects) = template.disclosed_subjects(&context.values) else {
-                continue;
-            };
-            if !self
-                .store
-                .eligible_task_template(actor, item_id, template)
-                .await?
-            {
-                continue;
-            }
-            templates.push(TaskTemplatePreview {
-                id: template.id.clone(),
-                version: template.version.clone(),
-                label: template.label.clone(),
-                agent: template.agent.clone(),
-                client: template.client.clone(),
-                resource: template.resource.clone(),
-                scopes: template.scopes.clone(),
-                purpose: template.purpose.clone(),
-                bounds: template.bounds.clone(),
-                evidence_context: template.evidence_context.clone(),
-                subjects,
-                authorization_mode: template.authorization_mode,
-                lifetime_seconds: template.lifetime_seconds,
-            });
-        }
-        Ok(TaskTemplatePreviews {
-            item_revision: item.revision,
-            templates,
-        })
-    }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn approve_task(
-        &self,
-        actor: &ActorContext,
-        item_id: Uuid,
-        revision: i64,
-        source_profile: &str,
-        key: &str,
-        token: &str,
-        request: registry_casework_core::TaskApprovalRequest,
-    ) -> Result<TaskGrantView, crate::ServiceError> {
-        let authority = self
-            .task_authority
-            .as_ref()
-            .ok_or(crate::ServiceError::Forbidden)?;
-        let template = self
-            .project
-            .task_templates
-            .iter()
-            .find(|template| {
-                template.id == request.template_id && template.version == request.template_version
-            })
-            .ok_or(crate::ServiceError::Forbidden)?;
-        let (item, _) = self
-            .caller_item(actor, item_id, source_profile, token)
-            .await?;
-        if item.holder.as_ref() != Some(&actor.principal) {
-            return Err(crate::ServiceError::Forbidden);
-        }
-        if item.revision != revision {
-            return Err(StoreError::Conflict.into());
-        }
-        if !self
-            .store
-            .eligible_task_template(actor, item_id, template)
-            .await?
-        {
-            return Err(crate::ServiceError::Forbidden);
-        }
-        let fields = template.subjects.values().cloned().collect::<Vec<_>>();
-        let context = self
-            .adapter(&item.subject.source_id)?
-            .read_task_context(
-                &item.subject,
-                &fields,
-                Some((
-                    source_profile,
-                    registry_casework_core::EphemeralCredential::new(token),
-                )),
-            )
-            .await?;
-        if context.binding != item.binding {
-            return Err(StoreError::Conflict.into());
-        }
-        let subjects = template
-            .disclosed_subjects(&context.values)
-            .map_err(|_| crate::ServiceError::Forbidden)?;
-        let now = now_seconds()?;
-        let grant = TaskGrant {
-            id: Uuid::new_v4(),
-            item_id,
-            template: template.clone(),
-            source_issuer: authority.config.issuer.clone(),
-            approver: actor.principal.clone(),
-            approver_profile: actor.profile_id.clone(),
-            source_subject: item.subject.clone(),
-            proposal: TaskProposalIdentity::from(&context.binding),
-            subjects,
-            approved_at: now,
-            expires_at: now
-                .checked_add(template.lifetime_seconds)
-                .ok_or(StoreError::Invalid)?,
-        };
-        let stored = self
-            .store
-            .approve_task_grant(actor, revision, key, grant)
-            .await?;
-        Ok(grant_view(&stored))
-    }
-    pub(crate) async fn list_tasks(
-        &self,
-        actor: &ActorContext,
-        item: Uuid,
-        profile: &str,
-        token: &str,
-    ) -> Result<TaskGrantList, crate::ServiceError> {
-        self.caller_item(actor, item, profile, token).await?;
-        let grants = self.store.task_grants_for_item(item).await?;
-        let mut eligible = false;
-        for template in self
-            .project
-            .task_templates
-            .iter()
-            .filter(|template| template.review_kinds.is_empty())
-        {
-            if self
-                .store
-                .eligible_task_template(actor, item, template)
-                .await?
-            {
-                eligible = true;
-                break;
-            }
-        }
-        if !eligible {
-            return Err(crate::ServiceError::Forbidden);
-        }
-        Ok(TaskGrantList {
-            grants: grants.iter().map(grant_view).collect(),
-        })
-    }
-    pub(crate) async fn revoke_task(
-        &self,
-        actor: &ActorContext,
-        item: Uuid,
-        id: Uuid,
-    ) -> Result<TaskGrantRevocation, crate::ServiceError> {
-        let stored = self.store.task_grant(id).await?;
-        if stored.grant.item_id != item {
-            return Err(crate::ServiceError::NotFound);
-        }
-        self.store
-            .invalidate_task_grant(id, "revoked", Some(actor))
-            .await?;
-        Ok(TaskGrantRevocation {
-            id,
-            invalidated: true,
-        })
-    }
     pub(crate) async fn preview_review_task_templates(
         &self,
         actor: &ActorContext,
         task_id: Uuid,
-        source_profile: &str,
+        source_profile: Option<&str>,
         token: &str,
     ) -> Result<TaskTemplatePreviews, crate::ServiceError> {
         let mut templates = Vec::new();
         let mut task_revision = None;
         if self.task_authority.is_none() {
             return Ok(TaskTemplatePreviews {
-                item_revision: 0,
+                task_revision: 0,
                 templates,
             });
         }
@@ -1390,7 +847,7 @@ impl crate::CaseworkService {
             .project
             .task_templates
             .iter()
-            .filter(|template| !template.review_kinds.is_empty())
+            .filter(|template| !template.review_policies.is_empty())
         {
             let Some((request_id, revision, subject, assignment_generation)) = self
                 .store
@@ -1399,35 +856,17 @@ impl crate::CaseworkService {
             else {
                 continue;
             };
-            let source_subject = SubjectRef {
-                source_id: subject.source.clone(),
-                kind: subject.subject_type.clone(),
-                id: subject.id.clone(),
-            };
-            let fields = template.subjects.values().cloned().collect::<Vec<_>>();
-            let context = match self
-                .adapter(&source_subject.source_id)?
-                .read_task_context(
-                    &source_subject,
-                    &fields,
-                    Some((
-                        source_profile,
-                        registry_casework_core::EphemeralCredential::new(token),
-                    )),
-                )
-                .await
-            {
-                Ok(context) if review_source_binding_matches(&context.binding, &subject) => context,
-                Ok(_) | Err(registry_casework_core::SourceAdapterError::BindingMoved) => {
-                    return Err(crate::ServiceError::BindingMoved)
-                }
-                Err(
-                    registry_casework_core::SourceAdapterError::Denied
-                    | registry_casework_core::SourceAdapterError::Concealed,
-                ) => continue,
-                Err(error) => return Err(error.into()),
-            };
-            let Ok(subjects) = template.disclosed_subjects(&context.values) else {
+            let fields = template
+                .subjects
+                .values()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            self.preflight_review_grant_human(actor, task_id, source_profile, token)
+                .await?;
+            let values = self.review_grant_fields(task_id, revision, &fields).await?;
+            let Ok(subjects) = template.disclosed_subjects(&values) else {
                 continue;
             };
             let Some((
@@ -1469,7 +908,7 @@ impl crate::CaseworkService {
             });
         }
         Ok(TaskTemplatePreviews {
-            item_revision: task_revision.unwrap_or(0),
+            task_revision: task_revision.unwrap_or(0),
             templates,
         })
     }
@@ -1480,7 +919,7 @@ impl crate::CaseworkService {
         actor: &ActorContext,
         task_id: Uuid,
         revision: i64,
-        source_profile: &str,
+        source_profile: Option<&str>,
         key: &str,
         token: &str,
         request: registry_casework_core::TaskApprovalRequest,
@@ -1494,7 +933,7 @@ impl crate::CaseworkService {
             .task_templates
             .iter()
             .find(|template| {
-                !template.review_kinds.is_empty()
+                !template.review_policies.is_empty()
                     && template.id == request.template_id
                     && template.version == request.template_version
             })
@@ -1509,28 +948,18 @@ impl crate::CaseworkService {
         if current_revision != revision {
             return Err(StoreError::Conflict.into());
         }
-        let source_subject = SubjectRef {
-            source_id: subject.source.clone(),
-            kind: subject.subject_type.clone(),
-            id: subject.id.clone(),
-        };
-        let fields = template.subjects.values().cloned().collect::<Vec<_>>();
-        let context = self
-            .adapter(&source_subject.source_id)?
-            .read_task_context(
-                &source_subject,
-                &fields,
-                Some((
-                    source_profile,
-                    registry_casework_core::EphemeralCredential::new(token),
-                )),
-            )
+        self.preflight_review_grant_human(actor, task_id, source_profile, token)
             .await?;
-        if !review_source_binding_matches(&context.binding, &subject) {
-            return Err(crate::ServiceError::BindingMoved);
-        }
+        let fields = template
+            .subjects
+            .values()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let values = self.review_grant_fields(task_id, revision, &fields).await?;
         let subjects = template
-            .disclosed_subjects(&context.values)
+            .disclosed_subjects(&values)
             .map_err(|_| crate::ServiceError::Forbidden)?;
         let now = now_seconds()?;
         let grant = ReviewTaskGrant {
@@ -1546,8 +975,6 @@ impl crate::CaseworkService {
             source_issuer: authority.config.issuer.clone(),
             approver_profile: actor.profile_id.clone(),
             subject,
-            source_subject,
-            proposal: TaskProposalIdentity::from(&context.binding),
             subjects,
             approved_at: now,
             expires_at: now
@@ -1565,13 +992,13 @@ impl crate::CaseworkService {
         &self,
         actor: &ActorContext,
         task_id: Uuid,
-        source_profile: &str,
+        source_profile: Option<&str>,
         token: &str,
     ) -> Result<TaskGrantList, crate::ServiceError> {
         let previews = self
             .preview_review_task_templates(actor, task_id, source_profile, token)
             .await?;
-        if previews.item_revision == 0 {
+        if previews.task_revision == 0 {
             return Err(crate::ServiceError::NotFound);
         }
         let grants = self.store.review_task_grants_for_task(task_id).await?;
@@ -1580,13 +1007,13 @@ impl crate::CaseworkService {
             .project
             .task_templates
             .iter()
-            .filter(|template| !template.review_kinds.is_empty())
+            .filter(|template| !template.review_policies.is_empty())
         {
             if self
                 .store
                 .eligible_review_task_template(actor, task_id, template)
                 .await?
-                .is_some_and(|(_, revision, _, _)| revision == previews.item_revision)
+                .is_some_and(|(_, revision, _, _)| revision == previews.task_revision)
             {
                 eligible = true;
                 break;
@@ -1619,70 +1046,6 @@ impl crate::CaseworkService {
         })
     }
 
-    async fn active_task(&self, id: Uuid) -> Result<StoredTaskGrant, crate::ServiceError> {
-        let stored = self.store.task_grant(id).await?;
-        if stored.invalidated || now_seconds()? >= stored.grant.expires_at {
-            return Err(crate::ServiceError::Forbidden);
-        }
-        let grant = &stored.grant;
-        let Some(template) = self
-            .project
-            .task_templates
-            .iter()
-            .find(|template| **template == grant.template)
-        else {
-            self.store
-                .invalidate_task_grant(id, "template", None)
-                .await?;
-            return Err(crate::ServiceError::Forbidden);
-        };
-        let configured_approver_role = self
-            .project
-            .access_profiles
-            .iter()
-            .find(|profile| profile.id == grant.approver_profile)
-            .map(|profile| profile.role);
-        if !self
-            .store
-            .check_task_eligibility(grant, template, configured_approver_role)
-            .await?
-        {
-            return Err(crate::ServiceError::Forbidden);
-        }
-        let fields = template.subjects.values().cloned().collect::<Vec<_>>();
-        let context = self
-            .adapter(&grant.source_subject.source_id)?
-            .read_task_context(&grant.source_subject, &fields, None)
-            .await;
-        let valid = match context {
-            Ok(context) => {
-                TaskProposalIdentity::from(&context.binding) == grant.proposal
-                    && template
-                        .disclosed_subjects(&context.values)
-                        .is_ok_and(|subjects| subjects == grant.subjects)
-            }
-            Err(
-                registry_casework_core::SourceAdapterError::Concealed
-                | registry_casework_core::SourceAdapterError::Denied
-                | registry_casework_core::SourceAdapterError::BindingMoved,
-            ) => false,
-            Err(error) => return Err(error.into()),
-        };
-        if !valid {
-            self.store.invalidate_task_grant(id, "source", None).await?;
-            return Err(crate::ServiceError::Forbidden);
-        }
-        // Recheck after source I/O so revocation during the read cannot release an assertion.
-        if !self
-            .store
-            .check_task_eligibility(grant, template, configured_approver_role)
-            .await?
-            || now_seconds()? >= grant.expires_at
-        {
-            return Err(crate::ServiceError::Forbidden);
-        }
-        Ok(stored)
-    }
     async fn active_review_task(
         &self,
         id: Uuid,
@@ -1692,12 +1055,10 @@ impl crate::CaseworkService {
             return Err(crate::ServiceError::Forbidden);
         }
         let grant = &stored.grant;
-        let Some(template) = self
-            .project
-            .task_templates
-            .iter()
-            .find(|template| **template == grant.template && !template.review_kinds.is_empty())
-        else {
+        let Some(template) = self.project.task_templates.iter().find(|template| {
+            template_digest(template).ok().as_ref() == Some(&grant.template_digest)
+                && !template.review_policies.is_empty()
+        }) else {
             self.store
                 .invalidate_review_task_grant(id, "template", None)
                 .await?;
@@ -1716,25 +1077,33 @@ impl crate::CaseworkService {
         {
             return Err(crate::ServiceError::Forbidden);
         }
-        let fields = template.subjects.values().cloned().collect::<Vec<_>>();
+        let fields = template
+            .subjects
+            .values()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
         let context = self
-            .adapter(&grant.source_subject.source_id)?
-            .read_task_context(&grant.source_subject, &fields, None)
+            .review_grant_fields(grant.task_id, grant.task_revision, &fields)
             .await;
         let valid = match context {
-            Ok(context) => {
-                review_source_binding_matches(&context.binding, &grant.subject)
-                    && TaskProposalIdentity::from(&context.binding) == grant.proposal
-                    && template
-                        .disclosed_subjects(&context.values)
-                        .is_ok_and(|subjects| subjects == grant.subjects)
+            Ok(values) => template
+                .disclosed_subjects(&values)
+                .is_ok_and(|subjects| subjects == grant.subjects),
+            Err(crate::ServiceError::Context(ReviewContextError::Unavailable)) => {
+                return Err(crate::ServiceError::Context(
+                    ReviewContextError::Unavailable,
+                ))
             }
             Err(
-                registry_casework_core::SourceAdapterError::Concealed
-                | registry_casework_core::SourceAdapterError::Denied
-                | registry_casework_core::SourceAdapterError::BindingMoved,
-            ) => false,
-            Err(error) => return Err(error.into()),
+                error @ crate::ServiceError::Store(
+                    StoreError::Unavailable
+                    | StoreError::AuditUnavailable
+                    | StoreError::Postgres(_),
+                ),
+            ) => return Err(error),
+            Err(_) => false,
         };
         if !valid {
             self.store
@@ -1761,25 +1130,14 @@ impl crate::CaseworkService {
             .task_authority
             .as_ref()
             .ok_or(crate::ServiceError::Forbidden)?;
-        match self.store.task_grant(id).await {
-            Ok(stored) => {
-                require_grant_client(client, &stored.grant.template)?;
-                let stored = self.active_task(id).await?;
-                authority
-                    .assertion(&stored.grant, now_seconds()?)
-                    .map_err(Into::into)
-            }
-            Err(StoreError::NotFound) => {
-                let stored = self.store.review_task_grant(id).await?;
-                require_grant_client(client, &stored.grant.template)?;
-                let stored = self.active_review_task(id).await?;
-                authority
-                    .review_assertion(&stored.grant, now_seconds()?)
-                    .map_err(Into::into)
-            }
-            Err(error) => Err(error.into()),
-        }
+        let stored = self.store.review_task_grant(id).await?;
+        require_grant_client(client, &stored.grant.template)?;
+        let stored = self.active_review_task(id).await?;
+        authority
+            .review_assertion(&stored.grant, now_seconds()?)
+            .map_err(Into::into)
     }
+
     pub(crate) async fn task_status(
         &self,
         id: Uuid,
@@ -1799,41 +1157,20 @@ impl crate::CaseworkService {
             .status_clients
             .get(client)
             .ok_or(crate::ServiceError::Forbidden)?;
-        match self.store.task_grant(id).await {
-            Ok(stored) => {
-                if stored.grant.template.resource != *resource {
-                    return Err(crate::ServiceError::NotFound);
-                }
-                match self.active_task(id).await {
-                    Ok(stored) => Ok(active_grant_status(
-                        stored.grant.id,
-                        stored.grant.source_issuer,
-                        stored.grant.template,
-                        stored.grant.subjects,
-                        stored.grant.expires_at,
-                    )),
-                    Err(crate::ServiceError::Forbidden) => Ok(inactive_grant_status()),
-                    Err(error) => Err(error),
-                }
-            }
-            Err(StoreError::NotFound) => {
-                let stored = self.store.review_task_grant(id).await?;
-                if stored.grant.template.resource != *resource {
-                    return Err(crate::ServiceError::NotFound);
-                }
-                match self.active_review_task(id).await {
-                    Ok(stored) => Ok(active_grant_status(
-                        stored.grant.id,
-                        stored.grant.source_issuer,
-                        stored.grant.template,
-                        stored.grant.subjects,
-                        stored.grant.expires_at,
-                    )),
-                    Err(crate::ServiceError::Forbidden) => Ok(inactive_grant_status()),
-                    Err(error) => Err(error),
-                }
-            }
-            Err(error) => Err(error.into()),
+        let stored = self.store.review_task_grant(id).await?;
+        if stored.grant.template.resource != *resource {
+            return Err(crate::ServiceError::NotFound);
+        }
+        match self.active_review_task(id).await {
+            Ok(stored) => Ok(active_grant_status(
+                stored.grant.id,
+                stored.grant.source_issuer,
+                stored.grant.template,
+                stored.grant.subjects,
+                stored.grant.expires_at,
+            )),
+            Err(crate::ServiceError::Forbidden) => Ok(inactive_grant_status()),
+            Err(error) => Err(error),
         }
     }
 }
@@ -1883,23 +1220,6 @@ fn inactive_grant_status() -> TaskGrantStatus {
 fn now_seconds() -> Result<u64, StoreError> {
     u64::try_from(Utc::now().timestamp()).map_err(|_| StoreError::Invalid)
 }
-fn grant_view(stored: &StoredTaskGrant) -> TaskGrantView {
-    TaskGrantView {
-        id: stored.grant.id,
-        template_id: stored.grant.template.id.clone(),
-        template_version: stored.grant.template.version.clone(),
-        agent: stored.grant.template.agent.clone(),
-        client: stored.grant.template.client.clone(),
-        resource: stored.grant.template.resource.clone(),
-        scopes: stored.grant.template.scopes.clone(),
-        purpose: stored.grant.template.purpose.clone(),
-        bounds: stored.grant.template.bounds.clone(),
-        evidence_context: stored.grant.template.evidence_context.clone(),
-        authorization_mode: stored.grant.template.authorization_mode,
-        expires_at: stored.grant.expires_at,
-        invalidated: stored.invalidated,
-    }
-}
 
 fn review_grant_view(stored: &StoredReviewTaskGrant) -> TaskGrantView {
     TaskGrantView {
@@ -1919,133 +1239,9 @@ fn review_grant_view(stored: &StoredReviewTaskGrant) -> TaskGrantView {
     }
 }
 
-fn review_source_binding_matches(
-    binding: &registry_casework_core::SourceBinding,
-    subject: &registry_casework_core::SubjectBinding,
-) -> bool {
-    binding.version == subject.version
-        && binding.integrity.as_deref() == Some(subject.digest.as_str())
-}
-
 #[cfg(test)]
-mod evidence_assertion_tests {
+mod wire_tests {
     use super::*;
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    use registry_casework_core::{IssuerPrincipal, SubjectRef, TaskGrantBounds};
-    use std::collections::BTreeMap;
-
-    fn test_authority() -> TaskAuthority {
-        let mut key = registry_platform_crypto::generate_private_jwk(
-            registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
-        )
-        .unwrap();
-        key.alg = Some("RS256".into());
-        key.kid = Some("task-authority-key".into());
-        TaskAuthority {
-            config: crate::TaskAuthorityConfig {
-                issuer: "https://casework.test".into(),
-                exchange_audience: "https://issuer.test".into(),
-                signing_key_ref: "secret:unused".into(),
-                status_clients: BTreeMap::new(),
-            },
-            key,
-            identifiers: registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
-        }
-    }
-
-    fn evidence_grant(template: serde_json::Value) -> TaskGrant {
-        TaskGrant {
-            id: Uuid::new_v4(),
-            item_id: Uuid::new_v4(),
-            template: serde_json::from_value(template).unwrap(),
-            source_issuer: "https://casework.test".into(),
-            approver: IssuerPrincipal {
-                issuer: "https://approver-issuer.test".into(),
-                subject: "approver-subject-canary".into(),
-            },
-            approver_profile: "staff".into(),
-            source_subject: SubjectRef {
-                source_id: "source".into(),
-                kind: "request".into(),
-                id: "request-1".into(),
-            },
-            proposal: TaskProposalIdentity {
-                version: "1".into(),
-                integrity: None,
-                generation: "1".into(),
-            },
-            subjects: BTreeMap::from([("given_name".into(), json!("Amina"))]),
-            approved_at: 100,
-            expires_at: 1_000,
-        }
-    }
-
-    fn evidence_template() -> serde_json::Value {
-        json!({
-            "id":"evidence-check", "version":"1", "label":"Check evidence",
-            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
-            "itemKinds":["request"], "itemStates":["claimed"],
-            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
-            "client":"evidence-task-agent", "resource":"urn:test:evidence",
-            "scopes":["evidence:invoke"], "purpose":"fixture-eligibility",
-            "bounds":{"type":"evidence", "requirement":"urn:test:requirement:adult"},
-            "evidenceContext":{"requesterTags":["fixture-agency", "benefits"], "audience":"https://relying.test/procedure"},
-            "subjects":{"given_name":"given-name"}, "lifetimeSeconds":900
-        })
-    }
-
-    #[test]
-    fn task_assertion_refuses_a_deferred_evidence_grant() {
-        // Evidence checks only the grant deadline and no grant status, so the
-        // signer refuses a deferred Evidence grant even if one was stored.
-        let authority = test_authority();
-        let mut template = evidence_template();
-        template["authorizationMode"] = json!("deferred");
-        let grant = evidence_grant(template);
-        assert!(matches!(
-            authority.assertion(&grant, 200),
-            Err(StoreError::Forbidden)
-        ));
-        assert!(authority
-            .assertion(&evidence_grant(evidence_template()), 200)
-            .is_ok());
-    }
-
-    #[test]
-    fn task_assertion_pseudonymizes_approver_and_keeps_evidence_context_explicit() {
-        let authority = test_authority();
-        let grant = evidence_grant(evidence_template());
-        let response = authority.assertion(&grant, 200).unwrap();
-        let encoded = response
-            .assertion
-            .split('.')
-            .nth(1)
-            .expect("the assertion has a payload");
-        let payload: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).unwrap())
-            .expect("the assertion payload is JSON");
-        assert_eq!(
-            payload["evidence_tags"],
-            json!(["fixture-agency", "benefits"])
-        );
-        assert_eq!(
-            payload["evidence_audience"],
-            "https://relying.test/procedure"
-        );
-        let approver =
-            serde_json::to_string(&("https://approver-issuer.test", "approver-subject-canary"))
-                .unwrap();
-        let expected_approver = registry_platform_audit::AuditKeyHasher::unkeyed_dev_only()
-            .audit_reference_hash("casework-principal-v1", "", &approver)
-            .unwrap();
-        assert_eq!(payload["registry_approver"], expected_approver);
-        assert!(payload.get("registry_grant_authority").is_none());
-        assert!(payload.get("registry_grant_source_issuer").is_none());
-        let serialized = payload.to_string();
-        assert!(!serialized.contains("https://approver-issuer.test"));
-        assert!(!serialized.contains("approver-subject-canary"));
-        assert!(payload.get("evidence_context").is_none());
-    }
-
     #[test]
     fn governed_scheduling_bounds_are_the_platform_verifiers_wire_contract() {
         let bounds: TaskGrantBounds = serde_json::from_value(json!({
@@ -2087,19 +1283,92 @@ mod evidence_assertion_tests {
 }
 
 #[cfg(all(test, feature = "postgres-test"))]
-mod tests;
-
+mod dev_session_logs;
 #[cfg(all(test, feature = "postgres-test"))]
 mod http_tests;
-
-#[cfg(all(test, feature = "postgres-test"))]
-mod native_exchange_tests;
-
 #[cfg(all(test, feature = "postgres-test"))]
 mod local_session_tests;
-
-#[cfg(test)]
-mod dev_session_logs;
-
+#[cfg(all(test, feature = "postgres-test"))]
+mod native_exchange_tests;
 #[cfg(all(test, feature = "postgres-test"))]
 mod native_resource;
+#[cfg(all(test, feature = "postgres-test"))]
+mod tests;
+
+#[cfg(test)]
+mod evidence_assertion_tests {
+    use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use std::collections::BTreeMap;
+    fn authority() -> TaskAuthority {
+        let mut key = registry_platform_crypto::generate_private_jwk(
+            registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
+        )
+        .unwrap();
+        key.alg = Some("RS256".into());
+        key.kid = Some("task-authority-test".into());
+        TaskAuthority {
+            config: crate::TaskAuthorityConfig {
+                issuer: "https://casework.test".into(),
+                exchange_audience: "https://issuer.test".into(),
+                signing_key_ref: "secret:unused".into(),
+                status_clients: BTreeMap::new(),
+            },
+            key,
+            identifiers: registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
+        }
+    }
+    fn template() -> TaskTemplate {
+        serde_json::from_value(json!({"id":"evidence-check","version":"1","label":"Check evidence","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"notices","reviewPolicies":["notice-review"],"agent":{"issuer":"https://issuer.test","subject":"agent"},"client":"evidence-agent","resource":"urn:test:evidence","scopes":["evidence:invoke"],"purpose":"notice-eligibility","bounds":{"type":"evidence","requirement":"urn:test:requirement:adult"},"evidenceContext":{"requesterTags":["agency"],"audience":"https://relying.test/procedure"},"subjects":{"given_name":"given-name"},"lifetimeSeconds":900})).unwrap()
+    }
+    #[test]
+    fn task_assertion_refuses_a_deferred_evidence_grant() {
+        let authority = authority();
+        let mut template = template();
+        let holder = IssuerPrincipal {
+            issuer: "https://people.test".into(),
+            subject: "holder-canary".into(),
+        };
+        let fields = BTreeMap::from([("given_name".into(), json!("Person"))]);
+        assert!(authority
+            .assertion_for(Uuid::new_v4(), &template, &holder, &fields, 1000, 200)
+            .is_ok());
+        template.authorization_mode = registry_casework_core::TaskAuthorizationMode::Deferred;
+        assert!(matches!(
+            authority.assertion_for(Uuid::new_v4(), &template, &holder, &fields, 1000, 200),
+            Err(StoreError::Forbidden)
+        ));
+    }
+    #[test]
+    fn assertions_keep_credentials_short_and_approver_identity_pseudonymous() {
+        let authority = authority();
+        let holder = IssuerPrincipal {
+            issuer: "https://people.test".into(),
+            subject: "holder-canary".into(),
+        };
+        let fields = BTreeMap::from([("given_name".into(), json!("Person"))]);
+        let response = authority
+            .assertion_for(Uuid::new_v4(), &template(), &holder, &fields, 1000, 200)
+            .unwrap();
+        assert_eq!(response.expires_at, 260);
+        assert_eq!(response.grant_expires_at, 1000);
+        let payload: Value = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(response.assertion.split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["evidence_tags"], json!(["agency"]));
+        assert_eq!(
+            payload["evidence_audience"],
+            "https://relying.test/procedure"
+        );
+        assert!(!payload.to_string().contains("holder-canary"));
+        assert!(!payload.to_string().contains("https://people.test"));
+        assert!(payload.get("registry_grant_authority").is_none());
+        assert!(matches!(
+            authority.assertion_for(Uuid::new_v4(), &template(), &holder, &fields, 200, 200),
+            Err(StoreError::Forbidden)
+        ));
+    }
+}

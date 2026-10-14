@@ -28,7 +28,7 @@ inside a `{"kind": "complete", "value": ..., "trace_id": ...}` envelope.
 Requester review operations omit a source profile. Officer task reads, claims,
 assignment, delegation, drafts, decisions, history, notes, and review clocks
 accept an optional source profile when resolving source context. Accountability
-and kind discovery remain Casework-owned authorization paths.
+and policy discovery remain Casework-owned authorization paths.
 Supervisory discovery returns only bounded task and accountability references,
 with a holder-free string state.
 Its query accepts `{"requestId": canonical_request_uuid, "limit": 25}` to find
@@ -53,11 +53,10 @@ Receipts carry the optional decision-time pinned `outcomeLabel`, which cannot
 follow current policy edits. Approval has no outcome or label. The explicit
 audited Supervisor `review_accountability` read includes that receipt through
 its independent accountability retention, including after result erasure.
-Legacy non-approval selections already erased at upgrade omit the receipt.
 Own discovery and single-task receipts end at result expiry or erasure.
 
 `CaseworkClientError` preserves problem codes, status, trace context, validation
-details, and original attempt identifiers. Callers can therefore handle cursor
+details, and closed validation reasons. Callers can therefore handle cursor
 or idempotency expiry explicitly; the binding never replaces a key.
 
 A keyed mutation whose outcome is unknown (a timeout or broken exchange after
@@ -71,14 +70,14 @@ again under the same key, because a new key could apply it twice.
 never established, and every 4xx refusal. It is false for
 `410 idempotency.expired` too, but there an earlier attempt under the key
 committed and only its stored response was erased by retention: reconcile the
-original operation, by reading the item, review request, or directory, before
+original operation, by reading the task, review request, or directory, before
 choosing a new key.
 
 This crate is private and does not publish a standalone Python distribution.
 
 Task delegation uses the current human profile for template previews, grant
 approval, listing, and revocation. Approval accepts only the template ID and
-version, with the item revision and a caller-owned idempotency key. The preview
+version, with the task revision and a caller-owned idempotency key. The preview
 contains the exact destination, purpose, immutable bounds, derived subjects,
 and lifetime; the grant list omits stored subjects. Agent assertion and grant
 status calls take only a bearer token and grant ID, without human or source
@@ -92,3 +91,11 @@ and business operation's idempotency key across a delay or restart. Acquire a
 fresh assertion when executing; its short credential lifetime does not extend
 the approved deadline. See the [task-grant lifecycle](../../products/casework/TASK_GRANTS.md)
 for expiry, revocation, and changes that require another approval.
+
+Review policies are discovered through `reviewPolicies` (Node) or
+`review_policies` (Python). Admission supplies the exact `policy` binding.
+Review task lists support the five SubjectBinding selectors and `sort`
+(`due`, `subject`, or `reference`). Due-ordered next and holdings use
+`nextReviewTask` / `reviewTaskHoldings` in Node and `next_review_task` /
+`review_task_holdings` in Python. Caseload and clock preview/apply calls
+operate on ReviewTasks and apply only the revision-fenced preview ID.

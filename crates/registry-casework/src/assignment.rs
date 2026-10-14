@@ -1,50 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-
-use std::collections::BTreeSet;
-use std::time::{Duration, Instant};
-
+use crate::{CaseworkService, PostgresStore, ServiceError, StoreError};
 use chrono::{TimeDelta, Utc};
-use registry_casework_core::{
-    resolve_absence_cover, valid_directory_identifier, validate_absence, AbsenceInput, AbsenceList,
-    AbsenceRecord, ActorContext, AssignmentContext, AssignmentRequest, BootstrapDirectoryRequest,
-    CaseloadApplyRequest, CaseloadItemOutcome, CaseloadItemResult, CaseloadMoveRequest,
-    CaseloadPreviewPage, CaseworkRole, DelegateRequest, DirectoryMember, DirectoryTargetPage,
-    DirectoryTargetPurpose, DirectoryTeamUpdateRequest, HistoryKind, IssuerPrincipal, Page,
-    PageStatus, SourceAdapterError, StaffingDiagnostic, WorkItem,
-    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES,
-    MAXIMUM_DIRECTORY_PRINCIPALS, MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES,
-    MAXIMUM_DIRECTORY_SERVED_QUEUES,
-};
+use registry_casework_core::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use tokio_postgres::Transaction;
 use uuid::Uuid;
-
-use crate::{CaseworkService, PostgresStore, ServiceError, StoreError};
-
-const MAXIMUM_REASON_BYTES: usize = 2_000;
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum AssignmentOrigin {
-    Source,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AssignmentMutation {
-    pub origin: AssignmentOrigin,
-    pub item_id: Uuid,
-    pub revision: i64,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct AssignmentCandidate {
-    pub origin: AssignmentOrigin,
-    pub item_id: Uuid,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AbsenceDeleteReplay {
@@ -52,9 +15,7 @@ struct AbsenceDeleteReplay {
     person: IssuerPrincipal,
     cover: IssuerPrincipal,
 }
-
 impl PostgresStore {
-    #[allow(clippy::too_many_arguments)]
     pub async fn directory_targets(
         &self,
         actor: &ActorContext,
@@ -222,7 +183,6 @@ impl PostgresStore {
             status: PageStatus::Complete,
         })
     }
-
     pub async fn erase_expired_directory_target_cursors(&self) -> Result<usize, StoreError> {
         let client = self.client().await?;
         let affected = client
@@ -233,7 +193,6 @@ impl PostgresStore {
             .await?;
         usize::try_from(affected).map_err(|_| StoreError::Corrupt)
     }
-
     pub async fn update_directory_team(
         &self,
         actor: &ActorContext,
@@ -363,7 +322,6 @@ impl PostgresStore {
         audit.commit(transaction).await?;
         Ok(next)
     }
-
     pub(crate) async fn absences_page(
         &self,
         actor: &ActorContext,
@@ -474,7 +432,6 @@ impl PostgresStore {
         transaction.commit().await?;
         Ok(page)
     }
-
     pub async fn erase_expired_absence_cursors(&self) -> Result<usize, StoreError> {
         let client = self.client().await?;
         let affected = client
@@ -485,7 +442,6 @@ impl PostgresStore {
             .await?;
         usize::try_from(affected).map_err(|_| StoreError::Corrupt)
     }
-
     pub async fn create_absence(
         &self,
         actor: &ActorContext,
@@ -502,7 +458,6 @@ impl PostgresStore {
         )
         .await
     }
-
     pub async fn update_absence(
         &self,
         actor: &ActorContext,
@@ -520,7 +475,6 @@ impl PostgresStore {
         )
         .await
     }
-
     async fn write_absence(
         &self,
         actor: &ActorContext,
@@ -661,7 +615,6 @@ impl PostgresStore {
         audit.commit(transaction).await?;
         Ok(record)
     }
-
     pub async fn delete_absence(
         &self,
         actor: &ActorContext,
@@ -757,538 +710,6 @@ impl PostgresStore {
         audit.commit(transaction).await?;
         Ok(next)
     }
-
-    pub(crate) async fn assignment_origin(
-        &self,
-        item_id: Uuid,
-    ) -> Result<AssignmentOrigin, StoreError> {
-        let client = self.client().await?;
-        let exists: bool = client
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_items WHERE item_id=$1 AND erased_at IS NULL)",
-                &[&item_id],
-            )
-            .await?
-            .get(0);
-        exists
-            .then_some(AssignmentOrigin::Source)
-            .ok_or(StoreError::NotFound)
-    }
-
-    pub(crate) async fn caseload_candidates(
-        &self,
-        actor: &ActorContext,
-        source_profile_id: Option<&str>,
-        movement: &CaseloadMoveRequest,
-        limit: usize,
-        cursor: Option<&str>,
-    ) -> Result<Page<AssignmentCandidate>, StoreError> {
-        if actor.role != CaseworkRole::Supervisor {
-            return Err(StoreError::Forbidden);
-        }
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        let context_hash = assignment_hash(&(source_profile_id, movement))?;
-        let after = if let Some(cursor) = cursor {
-            let cursor_id = Uuid::parse_str(cursor).map_err(|_| StoreError::CursorInvalid)?;
-            let row=transaction.query_opt("SELECT issuer,subject,profile_id,context_hash,last_item_id,expires_at FROM casework_assignment_cursors WHERE cursor_id=$1",&[&cursor_id]).await?.ok_or(StoreError::CursorInvalid)?;
-            if row.get::<_, String>(0) != actor.principal.issuer
-                || row.get::<_, String>(1) != actor.principal.subject
-                || row.get::<_, String>(2) != actor.profile_id
-                || row.get::<_, String>(3) != context_hash
-            {
-                return Err(StoreError::CursorInvalid);
-            }
-            if row.get::<_, chrono::DateTime<Utc>>(5) <= Utc::now() {
-                return Err(StoreError::CursorExpired);
-            }
-            row.get(4)
-        } else {
-            Uuid::nil()
-        };
-        let desired = limit.clamp(1, 100);
-        let query_limit = i64::try_from(desired + 1).map_err(|_| StoreError::Invalid)?;
-        let rows=transaction.query(
-            "SELECT 'source'::text origin,i.item_id FROM casework_items i WHERE i.erased_at IS NULL AND i.holder_issuer=$1 AND i.holder_subject=$2 AND i.state NOT IN ('completed','superseded','cancelled') AND ($3::text IS NULL OR i.queue_id=$3) AND i.item_id>$4 AND EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=$5 AND m.subject=$6 AND m.membership_kind='supervisor') ORDER BY i.item_id LIMIT $7",
-            &[&movement.from.issuer,&movement.from.subject,&movement.queue_id,&after,&actor.principal.issuer,&actor.principal.subject,&query_limit],
-        ).await?;
-        let more = rows.len() > desired;
-        let items = rows
-            .into_iter()
-            .take(desired)
-            .map(|row| {
-                Ok(AssignmentCandidate {
-                    origin: match row.get::<_, String>(0).as_str() {
-                        "source" => AssignmentOrigin::Source,
-                        _ => return Err(StoreError::Corrupt),
-                    },
-                    item_id: row.get(1),
-                })
-            })
-            .collect::<Result<Vec<_>, StoreError>>()?;
-        let next_cursor = if more {
-            let last = items.last().ok_or(StoreError::Corrupt)?.item_id;
-            let id = Uuid::new_v4();
-            let expires = Utc::now() + TimeDelta::minutes(15);
-            transaction.execute("INSERT INTO casework_assignment_cursors(cursor_id,issuer,subject,profile_id,context_hash,last_item_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)",&[&id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&context_hash,&last,&expires]).await?;
-            Some(id.to_string())
-        } else {
-            None
-        };
-        transaction.commit().await?;
-        Ok(Page {
-            items,
-            next_cursor,
-            status: PageStatus::Complete,
-        })
-    }
-
-    pub(crate) async fn issue_caseload_cursor(
-        &self,
-        actor: &ActorContext,
-        source_profile_id: Option<&str>,
-        movement: &CaseloadMoveRequest,
-        last_item_id: Uuid,
-    ) -> Result<String, StoreError> {
-        let client = self.client().await?;
-        let cursor_id = Uuid::new_v4();
-        let context_hash = assignment_hash(&(source_profile_id, movement))?;
-        let expires_at = Utc::now() + TimeDelta::minutes(15);
-        client.execute(
-            "INSERT INTO casework_assignment_cursors(cursor_id,issuer,subject,profile_id,context_hash,last_item_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)",
-            &[&cursor_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&context_hash,&last_item_id,&expires_at],
-        ).await?;
-        Ok(cursor_id.to_string())
-    }
-
-    pub async fn erase_expired_assignment_cursors(&self) -> Result<usize, StoreError> {
-        let client = self.client().await?;
-        let affected = client.execute(
-            "WITH due AS (SELECT cursor_id FROM casework_assignment_cursors WHERE expires_at<=now() ORDER BY expires_at,cursor_id LIMIT 100 FOR UPDATE SKIP LOCKED) DELETE FROM casework_assignment_cursors c USING due WHERE c.cursor_id=due.cursor_id",
-            &[],
-        ).await?;
-        usize::try_from(affected).map_err(|_| StoreError::Corrupt)
-    }
-
-    pub async fn reconcile_ineligible_assignments(
-        &self,
-        limit: usize,
-    ) -> Result<usize, StoreError> {
-        let client = self.client().await?;
-        let limit = i64::try_from(limit.clamp(1, 100)).map_err(|_| StoreError::Invalid)?;
-        let rows = client
-            .query(
-                "SELECT 'source'::text AS origin,i.item_id FROM casework_items i WHERE i.erased_at IS NULL AND i.state='claimed' AND i.holder_issuer IS NOT NULL AND NOT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=i.holder_issuer AND m.subject=i.holder_subject AND m.membership_kind='staff') AND NOT EXISTS(SELECT 1 FROM casework_attempts a WHERE a.item_id=i.item_id AND a.state IN ('pending','uncertain')) ORDER BY i.item_id LIMIT $1",
-                &[&limit],
-            )
-            .await?;
-        let mut released = 0usize;
-        for row in rows {
-            let origin = match row.get::<_, String>(0).as_str() {
-                "source" => AssignmentOrigin::Source,
-                _ => return Err(StoreError::Corrupt),
-            };
-            if self
-                .release_ineligible_assignment(origin, row.get(1))
-                .await?
-            {
-                released += 1;
-            }
-        }
-        Ok(released)
-    }
-
-    async fn release_ineligible_assignment(
-        &self,
-        _origin: AssignmentOrigin,
-        item_id: Uuid,
-    ) -> Result<bool, StoreError> {
-        let mut audit = self.begin_background_audit().await?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        let table = "casework_items";
-        let visible = " AND erased_at IS NULL";
-        let row = transaction
-            .query_opt(
-                &format!(
-                    "SELECT queue_id,state,holder_issuer,holder_subject,revision FROM {table} WHERE item_id=$1{visible} FOR UPDATE"
-                ),
-                &[&item_id],
-            )
-            .await?
-            .ok_or(StoreError::NotFound)?;
-        let directory_revision: i64 = transaction
-            .query_one(
-                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
-                &[],
-            )
-            .await?
-            .get(0);
-        let queue: String = row.get(0);
-        let state: String = row.get(1);
-        let Some(holder) = principal_columns(&row, 2, 3)? else {
-            audit.commit(transaction).await?;
-            return Ok(false);
-        };
-        if state != "claimed" || is_staff_for_queue(&transaction, &holder, &queue).await? {
-            audit.commit(transaction).await?;
-            return Ok(false);
-        }
-        match ensure_no_source_attempt(&transaction, item_id).await {
-            Ok(()) => {}
-            Err(StoreError::AttemptPending) => {
-                audit.commit(transaction).await?;
-                return Ok(false);
-            }
-            Err(error) => return Err(error),
-        }
-        let revision = row
-            .get::<_, i64>(4)
-            .checked_add(1)
-            .ok_or(StoreError::Corrupt)?;
-        let now = Utc::now();
-        transaction
-            .execute(
-                &format!(
-                    "UPDATE {table} SET state='open',holder_issuer=NULL,holder_subject=NULL,assignment_owner_issuer=NULL,assignment_owner_subject=NULL,assigned_by_issuer=NULL,assigned_by_subject=NULL,assignment_absence_ids='{{}}',staffing_diagnostic=NULL,revision=$2,updated_at=$3 WHERE item_id=$1"
-                ),
-                &[&item_id, &revision, &now],
-            )
-            .await?;
-        let system_actor = ActorContext {
-            principal: IssuerPrincipal {
-                issuer: "urn:registry-stack:casework".to_owned(),
-                subject: "directory-reconciliation".to_owned(),
-            },
-            profile_id: "system:directory-reconciliation".to_owned(),
-            role: CaseworkRole::Administrator,
-        };
-        let detail = json!({
-            "previousHolder": holder,
-            "reason": "directory-membership-changed",
-            "directoryRevision": directory_revision,
-        });
-        let updated = transaction
-            .query_one("SELECT * FROM casework_items WHERE item_id=$1", &[&item_id])
-            .await?;
-        crate::store::append_item_event(
-            &transaction,
-            &mut audit,
-            &crate::store::row_to_item(&updated)?,
-            HistoryKind::Released,
-            Some(&system_actor),
-            &system_actor.profile_id,
-            detail,
-        )
-        .await?;
-        audit.commit(transaction).await?;
-        Ok(true)
-    }
-
-    pub(crate) async fn assign_person(
-        &self,
-        actor: &ActorContext,
-        item_id: Uuid,
-        expected_revision: i64,
-        request: &AssignmentRequest,
-        idempotency_key: &str,
-    ) -> Result<AssignmentMutation, StoreError> {
-        self.change_assignment(
-            actor,
-            item_id,
-            expected_revision,
-            &request.assignee,
-            None,
-            None,
-            request.reason.as_deref(),
-            "assigned",
-            idempotency_key,
-            false,
-        )
-        .await
-    }
-
-    pub(crate) async fn delegate_person(
-        &self,
-        actor: &ActorContext,
-        item_id: Uuid,
-        expected_revision: i64,
-        request: &DelegateRequest,
-        idempotency_key: &str,
-    ) -> Result<AssignmentMutation, StoreError> {
-        self.change_assignment(
-            actor,
-            item_id,
-            expected_revision,
-            &request.delegate,
-            None,
-            None,
-            request.reason.as_deref(),
-            "delegated",
-            idempotency_key,
-            true,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn move_caseload_item(
-        &self,
-        actor: &ActorContext,
-        item_id: Uuid,
-        expected_revision: i64,
-        from: &IssuerPrincipal,
-        to: &IssuerPrincipal,
-        queue: Option<&str>,
-        reason: &str,
-        idempotency_key: &str,
-    ) -> Result<AssignmentMutation, StoreError> {
-        self.change_assignment(
-            actor,
-            item_id,
-            expected_revision,
-            to,
-            Some(from),
-            queue,
-            Some(reason),
-            "caseload-moved",
-            idempotency_key,
-            false,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn change_assignment(
-        &self,
-        actor: &ActorContext,
-        item_id: Uuid,
-        expected_revision: i64,
-        target: &IssuerPrincipal,
-        required_holder: Option<&IssuerPrincipal>,
-        required_queue: Option<&str>,
-        reason: Option<&str>,
-        kind: &str,
-        idempotency_key: &str,
-        delegate: bool,
-    ) -> Result<AssignmentMutation, StoreError> {
-        if let Some(reason) = reason {
-            validate_reason(reason, MAXIMUM_REASON_BYTES, false)?;
-        }
-        let mut audit = self
-            .begin_audit(crate::audit::request_record(
-                kind,
-                Some(actor),
-                &actor.profile_id,
-                json!({"itemId": item_id}),
-            ))
-            .await?;
-        let origin = self.assignment_origin(item_id).await?;
-        let operation = format!("item.{kind}");
-        let resource = item_id.to_string();
-        let request_hash = assignment_hash(&(
-            expected_revision,
-            target,
-            required_holder,
-            required_queue,
-            reason,
-            delegate,
-        ))?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        lock_assignment_key(&transaction, actor, &operation, &resource, idempotency_key).await?;
-        let replay = assignment_replay(
-            &transaction,
-            actor,
-            &operation,
-            &resource,
-            idempotency_key,
-            &request_hash,
-        )
-        .await?;
-        let table = "casework_items";
-        let visible = " AND erased_at IS NULL";
-        let sql=format!("SELECT queue_id,state,holder_issuer,holder_subject,assignment_owner_issuer,assignment_owner_subject,revision FROM {table} WHERE item_id=$1{visible} FOR UPDATE");
-        let row = transaction
-            .query_opt(&sql, &[&item_id])
-            .await?
-            .ok_or(StoreError::NotFound)?;
-        // Absence mutations hold this row for update. The share lock keeps the
-        // cover chain current until this assignment transaction commits.
-        transaction
-            .query_one(
-                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
-                &[],
-            )
-            .await?;
-        let queue: String = row.get(0);
-        let state: String = row.get(1);
-        let revision: i64 = row.get(6);
-        if required_queue.is_some_and(|expected| expected != queue) {
-            return Err(StoreError::Conflict);
-        }
-        let holder = principal_columns(&row, 2, 3)?;
-        let owner = principal_columns(&row, 4, 5)?;
-        if delegate {
-            let controls_assignment = if replay.is_some() {
-                owner.as_ref() == Some(&actor.principal)
-                    || holder.as_ref() == Some(&actor.principal)
-            } else {
-                holder.as_ref() == Some(&actor.principal)
-            };
-            let current_authority = match actor.role {
-                CaseworkRole::Staff => {
-                    is_staff_for_queue(&transaction, &actor.principal, &queue).await?
-                }
-                CaseworkRole::Supervisor => can_assign_queue(&transaction, actor, &queue).await?,
-                CaseworkRole::Administrator | CaseworkRole::Requester => false,
-            };
-            if !controls_assignment || !current_authority {
-                return Err(StoreError::Forbidden);
-            }
-        } else if !can_assign_queue(&transaction, actor, &queue).await? {
-            return Err(StoreError::Forbidden);
-        }
-        if let Some(response) = replay {
-            let result = serde_json::from_value(response).map_err(StoreError::Json)?;
-            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
-            audit.commit(transaction).await?;
-            return Ok(result);
-        }
-        if required_holder.is_some_and(|expected| holder.as_ref() != Some(expected)) {
-            return Err(StoreError::Conflict);
-        }
-        if revision != expected_revision {
-            return Err(StoreError::Conflict);
-        }
-        if origin == AssignmentOrigin::Source {
-            ensure_no_source_attempt(&transaction, item_id).await?;
-        }
-        if !matches!(state.as_str(), "open" | "claimed") {
-            return Err(StoreError::Conflict);
-        }
-        if !is_staff_for_queue(&transaction, target, &queue).await? {
-            return Err(StoreError::Forbidden);
-        }
-        let now = Utc::now();
-        let absences = active_absences(&transaction, target, now).await?;
-        let cover =
-            resolve_absence_cover(target, now, &absences).map_err(|_| StoreError::Corrupt)?;
-        let eligible = is_staff_for_queue(&transaction, &cover.person, &queue).await?;
-        if !eligible && cover.absence_ids.is_empty() {
-            return Err(StoreError::Forbidden);
-        }
-        let next = revision.checked_add(1).ok_or(StoreError::Corrupt)?;
-        let next_holder = eligible.then_some(&cover.person);
-        let assignment_owner = if delegate {
-            owner.as_ref().or(holder.as_ref()).unwrap_or(target)
-        } else {
-            target
-        };
-        let diagnostic = (!eligible).then_some("no-cover-available");
-        let update=format!("UPDATE {table} SET holder_issuer=$2,holder_subject=$3,assignment_owner_issuer=$4,assignment_owner_subject=$5,assigned_by_issuer=$6,assigned_by_subject=$7,assignment_absence_ids=$8,staffing_diagnostic=$9,state=$10,revision=$11,updated_at=$12 WHERE item_id=$1");
-        transaction
-            .execute(
-                &update,
-                &[
-                    &item_id,
-                    &next_holder.map(|p| &p.issuer),
-                    &next_holder.map(|p| &p.subject),
-                    &assignment_owner.issuer,
-                    &assignment_owner.subject,
-                    &actor.principal.issuer,
-                    &actor.principal.subject,
-                    &cover.absence_ids,
-                    &diagnostic,
-                    &if eligible { "claimed" } else { "open" },
-                    &next,
-                    &now,
-                ],
-            )
-            .await?;
-        let assignment = AssignmentContext {
-            owner: Some(assignment_owner.clone()),
-            assigned_by: Some(actor.principal.clone()),
-            absence_ids: cover.absence_ids.clone(),
-            staffing_diagnostic: (!eligible).then_some(StaffingDiagnostic::NoCoverAvailable),
-        };
-        let detail = json!({"previousHolder":holder,"assignment":assignment,"reason":reason});
-        let updated = transaction
-            .query_one("SELECT * FROM casework_items WHERE item_id=$1", &[&item_id])
-            .await?;
-        let item = crate::store::row_to_item(&updated)?;
-        let history_kind = match kind {
-            "assigned" => HistoryKind::Assigned,
-            "delegated" => HistoryKind::Delegated,
-            "caseload-moved" => HistoryKind::CaseloadMoved,
-            _ => return Err(StoreError::Corrupt),
-        };
-        crate::store::append_item_event(
-            &transaction,
-            &mut audit,
-            &item,
-            history_kind,
-            Some(actor),
-            &actor.profile_id,
-            detail,
-        )
-        .await?;
-        let result = AssignmentMutation {
-            origin,
-            item_id,
-            revision: next,
-        };
-        insert_assignment_replay(
-            &transaction,
-            actor,
-            &operation,
-            &resource,
-            idempotency_key,
-            &request_hash,
-            &serde_json::to_value(&result)?,
-        )
-        .await?;
-        audit.commit(transaction).await?;
-        Ok(result)
-    }
-
-    pub(crate) async fn reserve_caseload_apply(
-        &self,
-        actor: &ActorContext,
-        request: &CaseloadApplyRequest,
-        idempotency_key: &str,
-    ) -> Result<(), StoreError> {
-        let operation = "caseload.apply";
-        let resource = "items";
-        let request_hash = assignment_hash(request)?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        lock_assignment_key(&transaction, actor, operation, resource, idempotency_key).await?;
-        if assignment_replay(
-            &transaction,
-            actor,
-            operation,
-            resource,
-            idempotency_key,
-            &request_hash,
-        )
-        .await?
-        .is_none()
-        {
-            insert_assignment_replay(
-                &transaction,
-                actor,
-                operation,
-                resource,
-                idempotency_key,
-                &request_hash,
-                &json!({"reserved":true}),
-            )
-            .await?;
-        }
-        transaction.commit().await?;
-        Ok(())
-    }
 }
 
 impl CaseworkService {
@@ -1320,7 +741,6 @@ impl CaseworkService {
             .await
             .map_err(ServiceError::from)
     }
-
     pub async fn update_directory_team(
         &self,
         actor: &ActorContext,
@@ -1364,11 +784,9 @@ impl CaseworkService {
             .await
             .map_err(ServiceError::from)
     }
-
     pub async fn absences(&self, actor: &ActorContext) -> Result<AbsenceList, ServiceError> {
         self.absences_page(actor, 1_000, None).await
     }
-
     pub async fn absences_page(
         &self,
         actor: &ActorContext,
@@ -1428,353 +846,6 @@ impl CaseworkService {
             .await
             .map_err(ServiceError::from)
     }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn assign_item(
-        &self,
-        actor: &ActorContext,
-        source_profile_id: Option<&str>,
-        token: &str,
-        item_id: Uuid,
-        expected_revision: i64,
-        request: &AssignmentRequest,
-        idempotency_key: &str,
-    ) -> Result<WorkItem, ServiceError> {
-        let origin = self
-            .assignment_visible_item(actor, source_profile_id, token, item_id)
-            .await?
-            .0;
-        self.store
-            .assign_person(actor, item_id, expected_revision, request, idempotency_key)
-            .await?;
-        self.assignment_visible_item_for_origin(actor, source_profile_id, token, item_id, origin)
-            .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn delegate_item(
-        &self,
-        actor: &ActorContext,
-        source_profile_id: Option<&str>,
-        token: &str,
-        item_id: Uuid,
-        expected_revision: i64,
-        request: &DelegateRequest,
-        idempotency_key: &str,
-    ) -> Result<WorkItem, ServiceError> {
-        let origin = self
-            .assignment_visible_item(actor, source_profile_id, token, item_id)
-            .await?
-            .0;
-        self.store
-            .delegate_person(actor, item_id, expected_revision, request, idempotency_key)
-            .await?;
-        self.assignment_visible_item_for_origin(actor, source_profile_id, token, item_id, origin)
-            .await
-    }
-
-    pub async fn preview_caseload_move(
-        &self,
-        actor: &ActorContext,
-        source_profile_id: Option<&str>,
-        token: &str,
-        movement: &CaseloadMoveRequest,
-        limit: usize,
-        cursor: Option<&str>,
-    ) -> Result<CaseloadPreviewPage, ServiceError> {
-        validate_reason(&movement.reason, MAXIMUM_REASON_BYTES, false)?;
-        if movement.from == movement.to {
-            return Err(StoreError::Invalid.into());
-        }
-        let desired = limit.clamp(1, 100);
-        let policy = &self.project.inbox;
-        let started = Instant::now();
-        let deadline = Duration::from_millis(policy.page_deadline_milliseconds);
-        let mut visible = Vec::new();
-        let mut next = cursor.map(str::to_owned);
-        let mut scanned = 0usize;
-        let mut source_reads = 0usize;
-        let mut last_examined = None;
-        loop {
-            if scanned >= policy.maximum_candidate_scan || started.elapsed() >= deadline {
-                let next_cursor = match last_examined {
-                    Some(item_id) => Some(
-                        self.store
-                            .issue_caseload_cursor(actor, source_profile_id, movement, item_id)
-                            .await?,
-                    ),
-                    None => next,
-                };
-                return Ok(Page {
-                    items: visible,
-                    next_cursor,
-                    status: PageStatus::BudgetExhausted,
-                });
-            }
-            let batch_limit = (policy.maximum_candidate_scan - scanned).min(100);
-            let batch = self
-                .store
-                .caseload_candidates(
-                    actor,
-                    source_profile_id,
-                    movement,
-                    batch_limit,
-                    next.as_deref(),
-                )
-                .await?;
-            let batch_len = batch.items.len();
-            let batch_next = batch.next_cursor;
-            for (index, candidate) in batch.items.into_iter().enumerate() {
-                if started.elapsed() >= deadline
-                    || (candidate.origin == AssignmentOrigin::Source
-                        && source_reads >= policy.maximum_source_reads)
-                {
-                    let next_cursor = match last_examined {
-                        Some(item_id) => Some(
-                            self.store
-                                .issue_caseload_cursor(actor, source_profile_id, movement, item_id)
-                                .await?,
-                        ),
-                        None => next,
-                    };
-                    return Ok(Page {
-                        items: visible,
-                        next_cursor,
-                        status: PageStatus::BudgetExhausted,
-                    });
-                }
-                scanned += 1;
-                let read = self.assignment_visible_item_for_origin(
-                    actor,
-                    source_profile_id,
-                    token,
-                    candidate.item_id,
-                    candidate.origin,
-                );
-                let result = if candidate.origin == AssignmentOrigin::Source {
-                    source_reads += 1;
-                    tokio::time::timeout(deadline.saturating_sub(started.elapsed()), read)
-                        .await
-                        .map_err(|_| ServiceError::Adapter(SourceAdapterError::Unavailable))?
-                } else {
-                    read.await
-                };
-                match result {
-                    Ok(item) => visible.push(item),
-                    Err(
-                        ServiceError::NotFound
-                        | ServiceError::Store(StoreError::NotFound)
-                        | ServiceError::Adapter(
-                            SourceAdapterError::Concealed | SourceAdapterError::Denied,
-                        ),
-                    ) => {}
-                    Err(error) => return Err(error),
-                }
-                last_examined = Some(candidate.item_id);
-                if visible.len() == desired {
-                    let more = index + 1 < batch_len || batch_next.is_some();
-                    let next_cursor = if more {
-                        Some(
-                            self.store
-                                .issue_caseload_cursor(
-                                    actor,
-                                    source_profile_id,
-                                    movement,
-                                    candidate.item_id,
-                                )
-                                .await?,
-                        )
-                    } else {
-                        None
-                    };
-                    return Ok(Page {
-                        items: visible,
-                        next_cursor,
-                        status: PageStatus::Complete,
-                    });
-                }
-                if scanned == policy.maximum_candidate_scan {
-                    let more = index + 1 < batch_len || batch_next.is_some();
-                    let next_cursor = if more {
-                        Some(
-                            self.store
-                                .issue_caseload_cursor(
-                                    actor,
-                                    source_profile_id,
-                                    movement,
-                                    candidate.item_id,
-                                )
-                                .await?,
-                        )
-                    } else {
-                        None
-                    };
-                    return Ok(Page {
-                        items: visible,
-                        next_cursor,
-                        status: if more {
-                            PageStatus::BudgetExhausted
-                        } else {
-                            PageStatus::Complete
-                        },
-                    });
-                }
-            }
-            let Some(cursor) = batch_next else {
-                return Ok(Page {
-                    items: visible,
-                    next_cursor: None,
-                    status: PageStatus::Complete,
-                });
-            };
-            next = Some(cursor);
-        }
-    }
-
-    pub async fn apply_caseload_move(
-        &self,
-        actor: &ActorContext,
-        source_profile_id: Option<&str>,
-        token: &str,
-        request: &CaseloadApplyRequest,
-        idempotency_key: &str,
-    ) -> Result<Vec<CaseloadItemResult>, ServiceError> {
-        validate_reason(
-            idempotency_key,
-            MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
-            false,
-        )?;
-        validate_reason(&request.movement.reason, MAXIMUM_REASON_BYTES, false)?;
-        if request.items.is_empty()
-            || request.items.len() > 100
-            || request.movement.from == request.movement.to
-            || request.items.iter().any(|item| item.expected_revision <= 0)
-            || request
-                .items
-                .iter()
-                .map(|item| item.item_id)
-                .collect::<BTreeSet<_>>()
-                .len()
-                != request.items.len()
-        {
-            return Err(ServiceError::Store(StoreError::Invalid));
-        }
-        if actor.role != CaseworkRole::Supervisor {
-            return Err(ServiceError::Store(StoreError::Forbidden));
-        }
-        self.store
-            .reserve_caseload_apply(actor, request, idempotency_key)
-            .await?;
-        let mut results = Vec::with_capacity(request.items.len());
-        for selection in &request.items {
-            match self
-                .assignment_visible_item(actor, source_profile_id, token, selection.item_id)
-                .await
-            {
-                Ok(_) => {}
-                Err(
-                    ServiceError::NotFound
-                    | ServiceError::Store(StoreError::NotFound)
-                    | ServiceError::Adapter(
-                        registry_casework_core::SourceAdapterError::Concealed
-                        | registry_casework_core::SourceAdapterError::Denied,
-                    ),
-                ) => {
-                    results.push(CaseloadItemResult {
-                        item_id: selection.item_id,
-                        result: CaseloadItemOutcome::NotVisible,
-                        revision: None,
-                    });
-                    continue;
-                }
-                Err(error) => return Err(error),
-            }
-            let key = assignment_hash(&(idempotency_key, selection.item_id))?;
-            let moved = self
-                .store
-                .move_caseload_item(
-                    actor,
-                    selection.item_id,
-                    selection.expected_revision,
-                    &request.movement.from,
-                    &request.movement.to,
-                    request.movement.queue_id.as_deref(),
-                    &request.movement.reason,
-                    &key,
-                )
-                .await;
-            let result = match moved {
-                Ok(value) => CaseloadItemResult {
-                    item_id: selection.item_id,
-                    result: CaseloadItemOutcome::Moved,
-                    revision: Some(value.revision),
-                },
-                Err(StoreError::Conflict) => CaseloadItemResult {
-                    item_id: selection.item_id,
-                    result: CaseloadItemOutcome::Conflict,
-                    revision: None,
-                },
-                Err(StoreError::AttemptPending) => CaseloadItemResult {
-                    item_id: selection.item_id,
-                    result: CaseloadItemOutcome::AttemptInProgress,
-                    revision: None,
-                },
-                Err(StoreError::Forbidden) => CaseloadItemResult {
-                    item_id: selection.item_id,
-                    result: CaseloadItemOutcome::NotEligible,
-                    revision: None,
-                },
-                Err(StoreError::NotFound) => CaseloadItemResult {
-                    item_id: selection.item_id,
-                    result: CaseloadItemOutcome::NotVisible,
-                    revision: None,
-                },
-                Err(error) => return Err(error.into()),
-            };
-            results.push(result);
-        }
-        Ok(results)
-    }
-
-    async fn assignment_visible_item(
-        &self,
-        actor: &ActorContext,
-        source_profile_id: Option<&str>,
-        token: &str,
-        item_id: Uuid,
-    ) -> Result<(AssignmentOrigin, WorkItem), ServiceError> {
-        let origin = self.store.assignment_origin(item_id).await?;
-        let item = self
-            .assignment_visible_item_for_origin(actor, source_profile_id, token, item_id, origin)
-            .await?;
-        Ok((origin, item))
-    }
-    async fn assignment_visible_item_for_origin(
-        &self,
-        actor: &ActorContext,
-        source_profile_id: Option<&str>,
-        token: &str,
-        item_id: Uuid,
-        _origin: AssignmentOrigin,
-    ) -> Result<WorkItem, ServiceError> {
-        self.caller_item(
-            actor,
-            item_id,
-            source_profile_id.ok_or(ServiceError::NotFound)?,
-            token,
-        )
-        .await
-        .map(|value| value.0)
-    }
-
-    pub async fn erase_expired_assignment_cursors(&self) -> Result<usize, ServiceError> {
-        self.store
-            .erase_expired_assignment_cursors()
-            .await
-            .map_err(ServiceError::from)
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub async fn directory_targets(
         &self,
         actor: &ActorContext,
@@ -1789,27 +860,15 @@ impl CaseworkService {
             .await
             .map_err(ServiceError::from)
     }
-
     pub async fn erase_expired_directory_target_cursors(&self) -> Result<usize, ServiceError> {
         self.store
             .erase_expired_directory_target_cursors()
             .await
             .map_err(ServiceError::from)
     }
-
     pub async fn erase_expired_absence_cursors(&self) -> Result<usize, ServiceError> {
         self.store
             .erase_expired_absence_cursors()
-            .await
-            .map_err(ServiceError::from)
-    }
-
-    pub async fn reconcile_ineligible_assignments(
-        &self,
-        limit: usize,
-    ) -> Result<usize, ServiceError> {
-        self.store
-            .reconcile_ineligible_assignments(limit)
             .await
             .map_err(ServiceError::from)
     }
@@ -1831,6 +890,7 @@ fn absence_from_row(row: tokio_postgres::Row) -> Result<AbsenceRecord, StoreErro
         revision: row.get(7),
     })
 }
+
 fn role_name(role: CaseworkRole) -> &'static str {
     match role {
         CaseworkRole::Staff => "staff",
@@ -1839,6 +899,7 @@ fn role_name(role: CaseworkRole) -> &'static str {
         CaseworkRole::Requester => "requester",
     }
 }
+
 fn valid_directory_principals(people: &[IssuerPrincipal]) -> bool {
     people.len() <= MAXIMUM_DIRECTORY_PRINCIPALS
         && people.iter().collect::<BTreeSet<_>>().len() == people.len()
@@ -1874,6 +935,7 @@ fn valid_directory_people(people: &[DirectoryMember]) -> bool {
                 })
         })
 }
+
 fn validate_reason(value: &str, maximum: usize, allow_empty: bool) -> Result<(), StoreError> {
     if (!allow_empty && value.is_empty())
         || value.len() > maximum
@@ -1884,6 +946,7 @@ fn validate_reason(value: &str, maximum: usize, allow_empty: bool) -> Result<(),
         Ok(())
     }
 }
+
 fn assignment_hash<T: Serialize>(value: &T) -> Result<String, StoreError> {
     let bytes = serde_json::to_vec(value)?;
     let digest = Sha256::digest(bytes);
@@ -1894,20 +957,6 @@ fn assignment_hash<T: Serialize>(value: &T) -> Result<String, StoreError> {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     ))
-}
-fn principal_columns(
-    row: &tokio_postgres::Row,
-    issuer: usize,
-    subject: usize,
-) -> Result<Option<IssuerPrincipal>, StoreError> {
-    match (
-        row.get::<_, Option<String>>(issuer),
-        row.get::<_, Option<String>>(subject),
-    ) {
-        (Some(issuer), Some(subject)) => Ok(Some(IssuerPrincipal { issuer, subject })),
-        (None, None) => Ok(None),
-        _ => Err(StoreError::Corrupt),
-    }
 }
 
 async fn can_manage_person(
@@ -1929,6 +978,7 @@ async fn can_manage_person(
     let supervises=actor.role==CaseworkRole::Supervisor&&tx.query_opt("SELECT 1 FROM casework_memberships person JOIN casework_memberships lead ON lead.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND lead.issuer=$3 AND lead.subject=$4 AND lead.membership_kind='supervisor' FOR KEY SHARE OF person,lead",&[&person.issuer,&person.subject,&actor.principal.issuer,&actor.principal.subject]).await?.is_some();
     Ok(owns || supervises)
 }
+
 async fn valid_absence_cover(
     tx: &Transaction<'_>,
     actor: &ActorContext,
@@ -1940,6 +990,7 @@ async fn valid_absence_cover(
     }
     Ok(tx.query_opt("SELECT 1 FROM casework_memberships person JOIN casework_memberships cover ON cover.team_id=person.team_id WHERE person.issuer=$1 AND person.subject=$2 AND person.membership_kind='staff' AND cover.issuer=$3 AND cover.subject=$4 AND cover.membership_kind='staff' FOR KEY SHARE OF person,cover",&[&person.issuer,&person.subject,&cover.issuer,&cover.subject]).await?.is_some())
 }
+
 async fn can_assign_queue(
     tx: &Transaction<'_>,
     actor: &ActorContext,
@@ -1947,34 +998,13 @@ async fn can_assign_queue(
 ) -> Result<bool, StoreError> {
     Ok(actor.role==CaseworkRole::Supervisor&&tx.query_opt("SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=$1 AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind='supervisor' FOR KEY SHARE OF q,m",&[&queue,&actor.principal.issuer,&actor.principal.subject]).await?.is_some())
 }
+
 async fn is_staff_for_queue(
     tx: &Transaction<'_>,
     person: &IssuerPrincipal,
     queue: &str,
 ) -> Result<bool, StoreError> {
     Ok(tx.query_opt("SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=$1 AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind='staff' FOR KEY SHARE OF q,m",&[&queue,&person.issuer,&person.subject]).await?.is_some())
-}
-async fn active_absences(
-    tx: &Transaction<'_>,
-    person: &IssuerPrincipal,
-    now: chrono::DateTime<Utc>,
-) -> Result<Vec<AbsenceRecord>, StoreError> {
-    let rows = tx.query(
-        "WITH RECURSIVE chain(absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision,depth) AS (SELECT absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision,1 FROM casework_absences WHERE person_issuer=$1 AND person_subject=$2 AND starts_at<=$3 AND $3<ends_at UNION ALL SELECT a.absence_id,a.person_issuer,a.person_subject,a.starts_at,a.ends_at,a.cover_issuer,a.cover_subject,a.revision,c.depth+1 FROM casework_absences a JOIN chain c ON a.person_issuer=c.cover_issuer AND a.person_subject=c.cover_subject WHERE a.starts_at<=$3 AND $3<a.ends_at AND c.depth<101) SELECT absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision,depth FROM chain ORDER BY depth,starts_at,absence_id LIMIT 102",
-        &[&person.issuer,&person.subject,&now],
-    ).await?;
-    if rows.len() > 101 || rows.iter().any(|row| row.get::<_, i32>(8) >= 101) {
-        return Err(StoreError::Corrupt);
-    }
-    rows.into_iter().map(absence_from_row).collect()
-}
-async fn ensure_no_source_attempt(tx: &Transaction<'_>, item_id: Uuid) -> Result<(), StoreError> {
-    let exists:bool=tx.query_one("SELECT EXISTS(SELECT 1 FROM casework_attempts WHERE item_id=$1 AND state IN ('pending','uncertain'))",&[&item_id]).await?.get(0);
-    if exists {
-        Err(StoreError::AttemptPending)
-    } else {
-        Ok(())
-    }
 }
 
 async fn lock_assignment_key(
@@ -1996,6 +1026,7 @@ async fn lock_assignment_key(
     .await?;
     Ok(())
 }
+
 async fn assignment_replay(
     tx: &Transaction<'_>,
     actor: &ActorContext,
@@ -2014,6 +1045,7 @@ async fn assignment_replay(
         None => Ok(None),
     }
 }
+
 async fn insert_assignment_replay(
     tx: &Transaction<'_>,
     actor: &ActorContext,
@@ -2026,6 +1058,7 @@ async fn insert_assignment_replay(
     tx.execute("INSERT INTO casework_idempotency(issuer,subject,profile_id,operation,resource,idempotency_key,request_hash,response,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",&[&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&operation,&resource,&key,&hash,&response,&Utc::now()]).await?;
     Ok(())
 }
+
 async fn append_directory_assignment_event(
     tx: &Transaction<'_>,
     audit: &mut crate::audit::AuditOperation,

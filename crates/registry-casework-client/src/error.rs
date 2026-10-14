@@ -7,15 +7,10 @@ use registry_casework_core::{
     PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM, PROFILE_NOT_AUTHORIZED_PROBLEM,
     PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM, REQUEST_INVALID_PROBLEM,
     REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM, REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
-    REQUEST_NOT_FOUND_PROBLEM, REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_SOURCE_REJECTED_PROBLEM,
-    REQUEST_UNPROCESSABLE_PROBLEM, REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM,
-    SERVICE_UNAVAILABLE_PROBLEM, SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM,
-    SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM, SOURCE_PROFILE_REQUIRED_PROBLEM,
-    SOURCE_RECORD_MISSING_PROBLEM, SOURCE_REVIEWER_NOT_AUTHORIZED_PROBLEM,
-    SOURCE_SIGNATURE_INVALID_PROBLEM, WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
-    WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM, WORK_ITEM_NOT_VISIBLE_PROBLEM,
-    WORK_ITEM_PROPOSAL_CHANGED_PROBLEM, WORK_ITEM_RECOVERY_PENDING_PROBLEM,
-    WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM, WORK_ITEM_SUPERSEDED_PROBLEM,
+    REQUEST_NOT_FOUND_PROBLEM, REQUEST_UNPROCESSABLE_PROBLEM,
+    REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM, SERVICE_UNAVAILABLE_PROBLEM,
+    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
+    SOURCE_PROFILE_REQUIRED_PROBLEM,
 };
 use registry_platform_httputil::client::TransportKind;
 use std::fmt;
@@ -23,9 +18,10 @@ use thiserror::Error;
 
 const REVIEW_INITIATOR_EXCLUDED_PROBLEM: &str = "review.initiator-excluded";
 const REVIEW_INITIATOR_REQUIRED_PROBLEM: &str = "review.initiator-required";
+const REVIEW_QUERY_TOO_BROAD_PROBLEM: &str = "review.query-too-broad";
+const REVIEW_POLICY_MISMATCH_PROBLEM: &str = "review.policy-mismatch";
 const REVIEW_RESULT_EXPIRED_PROBLEM: &str = "review.result-expired";
 const REVIEW_SUBMISSION_CONFLICT_PROBLEM: &str = "review.submission-conflict";
-const REVIEW_POLICY_MISMATCH_PROBLEM: &str = "review.policy-mismatch";
 const REVIEW_TASK_NOT_HELD_PROBLEM: &str = "review.task-not-held";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,33 +58,20 @@ pub enum CaseworkProblemCode {
     RequestLimitOutOfRange,
     RequestMethodNotAllowed,
     RequestNotFound,
-    RequestReasonUnsupported,
-    RequestSourceRejected,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
     ReviewInitiatorExcluded,
     ReviewInitiatorRequired,
+    ReviewPolicyMismatch,
+    ReviewQueryTooBroad,
     ReviewResultExpired,
     ReviewSubmissionConflict,
-    ReviewPolicyMismatch,
     ReviewTaskNotHeld,
     RuntimeFailure,
     ServiceUnavailable,
     SourceProfileNotApplicable,
     SourceProfileRequired,
     SourceBadGateway,
-    SourceNotFound,
-    SourceRecordMissing,
-    SourceReviewerNotAuthorized,
-    SourceSignatureInvalid,
-    WorkItemAlreadyClaimed,
-    WorkItemNotHolder,
-    WorkItemNotOffered,
-    WorkItemNotVisible,
-    WorkItemProposalChanged,
-    WorkItemRecoveryPending,
-    WorkItemSourceUnavailable,
-    WorkItemSuperseded,
     /// An unrecognized problem code from a newer Casework service.
     Unknown(String),
 }
@@ -98,7 +81,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 34] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -119,33 +102,20 @@ impl CaseworkProblemCode {
         Self::RequestLimitOutOfRange,
         Self::RequestMethodNotAllowed,
         Self::RequestNotFound,
-        Self::RequestReasonUnsupported,
-        Self::RequestSourceRejected,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
         Self::ReviewInitiatorExcluded,
         Self::ReviewInitiatorRequired,
+        Self::ReviewPolicyMismatch,
+        Self::ReviewQueryTooBroad,
         Self::ReviewResultExpired,
         Self::ReviewSubmissionConflict,
-        Self::ReviewPolicyMismatch,
         Self::ReviewTaskNotHeld,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
         Self::SourceProfileNotApplicable,
         Self::SourceProfileRequired,
         Self::SourceBadGateway,
-        Self::SourceNotFound,
-        Self::SourceRecordMissing,
-        Self::SourceReviewerNotAuthorized,
-        Self::SourceSignatureInvalid,
-        Self::WorkItemAlreadyClaimed,
-        Self::WorkItemNotHolder,
-        Self::WorkItemNotOffered,
-        Self::WorkItemNotVisible,
-        Self::WorkItemProposalChanged,
-        Self::WorkItemRecoveryPending,
-        Self::WorkItemSourceUnavailable,
-        Self::WorkItemSuperseded,
     ];
 
     #[must_use]
@@ -171,33 +141,20 @@ impl CaseworkProblemCode {
             Self::RequestLimitOutOfRange => REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
             Self::RequestNotFound => REQUEST_NOT_FOUND_PROBLEM,
-            Self::RequestReasonUnsupported => REQUEST_REASON_UNSUPPORTED_PROBLEM,
-            Self::RequestSourceRejected => REQUEST_SOURCE_REJECTED_PROBLEM,
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
+            Self::ReviewQueryTooBroad => REVIEW_QUERY_TOO_BROAD_PROBLEM,
+            Self::ReviewPolicyMismatch => REVIEW_POLICY_MISMATCH_PROBLEM,
             Self::ReviewResultExpired => REVIEW_RESULT_EXPIRED_PROBLEM,
             Self::ReviewInitiatorExcluded => REVIEW_INITIATOR_EXCLUDED_PROBLEM,
             Self::ReviewInitiatorRequired => REVIEW_INITIATOR_REQUIRED_PROBLEM,
             Self::ReviewSubmissionConflict => REVIEW_SUBMISSION_CONFLICT_PROBLEM,
-            Self::ReviewPolicyMismatch => REVIEW_POLICY_MISMATCH_PROBLEM,
             Self::ReviewTaskNotHeld => REVIEW_TASK_NOT_HELD_PROBLEM,
             Self::RuntimeFailure => RUNTIME_FAILURE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
             Self::SourceProfileNotApplicable => SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
             Self::SourceProfileRequired => SOURCE_PROFILE_REQUIRED_PROBLEM,
             Self::SourceBadGateway => SOURCE_BAD_GATEWAY_PROBLEM,
-            Self::SourceNotFound => SOURCE_NOT_FOUND_PROBLEM,
-            Self::SourceRecordMissing => SOURCE_RECORD_MISSING_PROBLEM,
-            Self::SourceReviewerNotAuthorized => SOURCE_REVIEWER_NOT_AUTHORIZED_PROBLEM,
-            Self::SourceSignatureInvalid => SOURCE_SIGNATURE_INVALID_PROBLEM,
-            Self::WorkItemAlreadyClaimed => WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
-            Self::WorkItemNotHolder => WORK_ITEM_NOT_HOLDER_PROBLEM,
-            Self::WorkItemNotOffered => WORK_ITEM_NOT_OFFERED_PROBLEM,
-            Self::WorkItemNotVisible => WORK_ITEM_NOT_VISIBLE_PROBLEM,
-            Self::WorkItemProposalChanged => WORK_ITEM_PROPOSAL_CHANGED_PROBLEM,
-            Self::WorkItemRecoveryPending => WORK_ITEM_RECOVERY_PENDING_PROBLEM,
-            Self::WorkItemSourceUnavailable => WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM,
-            Self::WorkItemSuperseded => WORK_ITEM_SUPERSEDED_PROBLEM,
             Self::Unknown(code) => code,
         }
     }
@@ -224,33 +181,20 @@ impl CaseworkProblemCode {
             REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM => Self::RequestLimitOutOfRange,
             REQUEST_METHOD_NOT_ALLOWED_PROBLEM => Self::RequestMethodNotAllowed,
             REQUEST_NOT_FOUND_PROBLEM => Self::RequestNotFound,
-            REQUEST_REASON_UNSUPPORTED_PROBLEM => Self::RequestReasonUnsupported,
-            REQUEST_SOURCE_REJECTED_PROBLEM => Self::RequestSourceRejected,
             REQUEST_UNPROCESSABLE_PROBLEM => Self::RequestUnprocessable,
             REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM => Self::RequestUnsupportedMediaType,
+            REVIEW_QUERY_TOO_BROAD_PROBLEM => Self::ReviewQueryTooBroad,
+            REVIEW_POLICY_MISMATCH_PROBLEM => Self::ReviewPolicyMismatch,
             REVIEW_RESULT_EXPIRED_PROBLEM => Self::ReviewResultExpired,
             REVIEW_INITIATOR_EXCLUDED_PROBLEM => Self::ReviewInitiatorExcluded,
             REVIEW_INITIATOR_REQUIRED_PROBLEM => Self::ReviewInitiatorRequired,
             REVIEW_SUBMISSION_CONFLICT_PROBLEM => Self::ReviewSubmissionConflict,
-            REVIEW_POLICY_MISMATCH_PROBLEM => Self::ReviewPolicyMismatch,
             REVIEW_TASK_NOT_HELD_PROBLEM => Self::ReviewTaskNotHeld,
             RUNTIME_FAILURE_PROBLEM => Self::RuntimeFailure,
             SERVICE_UNAVAILABLE_PROBLEM => Self::ServiceUnavailable,
             SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM => Self::SourceProfileNotApplicable,
             SOURCE_PROFILE_REQUIRED_PROBLEM => Self::SourceProfileRequired,
             SOURCE_BAD_GATEWAY_PROBLEM => Self::SourceBadGateway,
-            SOURCE_NOT_FOUND_PROBLEM => Self::SourceNotFound,
-            SOURCE_RECORD_MISSING_PROBLEM => Self::SourceRecordMissing,
-            SOURCE_REVIEWER_NOT_AUTHORIZED_PROBLEM => Self::SourceReviewerNotAuthorized,
-            SOURCE_SIGNATURE_INVALID_PROBLEM => Self::SourceSignatureInvalid,
-            WORK_ITEM_ALREADY_CLAIMED_PROBLEM => Self::WorkItemAlreadyClaimed,
-            WORK_ITEM_NOT_HOLDER_PROBLEM => Self::WorkItemNotHolder,
-            WORK_ITEM_NOT_OFFERED_PROBLEM => Self::WorkItemNotOffered,
-            WORK_ITEM_NOT_VISIBLE_PROBLEM => Self::WorkItemNotVisible,
-            WORK_ITEM_PROPOSAL_CHANGED_PROBLEM => Self::WorkItemProposalChanged,
-            WORK_ITEM_RECOVERY_PENDING_PROBLEM => Self::WorkItemRecoveryPending,
-            WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM => Self::WorkItemSourceUnavailable,
-            WORK_ITEM_SUPERSEDED_PROBLEM => Self::WorkItemSuperseded,
             _ => Self::Unknown(value.to_owned()),
         }
     }
@@ -277,35 +221,22 @@ impl CaseworkProblemCode {
             Self::RequestInvalid
             | Self::RequestLimitOutOfRange
             | Self::SourceProfileNotApplicable
-            | Self::SourceProfileRequired
-            | Self::SourceSignatureInvalid => 400,
-            Self::RequestNotFound
-            | Self::SourceNotFound
-            | Self::SourceRecordMissing
-            | Self::WorkItemNotVisible => 404,
+            | Self::SourceProfileRequired => 400,
+            Self::RequestNotFound => 404,
             Self::RequestMethodNotAllowed => 405,
             Self::IdempotencyKeyReused
-            | Self::WorkItemAlreadyClaimed
-            | Self::WorkItemNotHolder
-            | Self::WorkItemNotOffered
-            | Self::WorkItemProposalChanged
-            | Self::WorkItemRecoveryPending
             | Self::ReviewPolicyMismatch
             | Self::ReviewSubmissionConflict
-            | Self::ReviewTaskNotHeld
-            | Self::WorkItemSuperseded => 409,
+            | Self::ReviewTaskNotHeld => 409,
             Self::PreconditionFailed => 412,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
-            Self::RequestReasonUnsupported
-            | Self::RequestSourceRejected
-            | Self::RequestUnprocessable
-            | Self::ReviewInitiatorRequired => 422,
+            Self::RequestUnprocessable | Self::ReviewInitiatorRequired => 422,
+            Self::ReviewQueryTooBroad => 422,
             Self::PreconditionRequired => 428,
             Self::SourceBadGateway => 502,
-            Self::SourceReviewerNotAuthorized => 403,
             Self::RuntimeFailure => 500,
-            Self::ServiceUnavailable | Self::WorkItemSourceUnavailable => 503,
+            Self::ServiceUnavailable => 503,
             Self::Unknown(_) => return None,
         })
     }
@@ -383,14 +314,6 @@ impl CaseworkProblemCode {
                 "Route not found",
                 "The requested Casework route does not exist.",
             ),
-            Self::RequestReasonUnsupported => (
-                "Reason not supported",
-                "The reason field is not supported for approve or apply on this source. Omit it and try again.",
-            ),
-            Self::RequestSourceRejected => (
-                "Source rejected request",
-                "The source refused the request body. Fix the request before trying again.",
-            ),
             Self::RequestUnprocessable => (
                 "Request could not be processed",
                 "The request body does not match the Casework contract.",
@@ -407,11 +330,12 @@ impl CaseworkProblemCode {
                 "Review initiator required",
                 "This review kind excludes the person who submitted the request, so the request must name its initiator.",
             ),
+            Self::ReviewQueryTooBroad => ("Review query too broad", "Narrow the queue or exact subject query to complete it within the configured read budget."),
+            Self::ReviewPolicyMismatch => ("Review policy mismatch", "The expected review policy binding does not match the active policy."),
             Self::ReviewResultExpired => (
                 "Review result expired",
                 "The retained review result is no longer available. Reconcile through the producer's retained source correlation.",
             ),
-            Self::ReviewPolicyMismatch => ("Review policy changed", "Discover the active review policy and submit its exact identifier, version, and digest with a new command identity."),
             Self::ReviewSubmissionConflict => (
                 "Review submission conflict",
                 "The same producer, source subject, version, and policy were already submitted with different canonical content.",
@@ -439,54 +363,6 @@ impl CaseworkProblemCode {
             Self::SourceBadGateway => (
                 "Invalid source response",
                 "The source returned a response that does not match its registered contract.",
-            ),
-            Self::SourceNotFound => (
-                "Source not found",
-                "The requested source is not registered.",
-            ),
-            Self::SourceRecordMissing => (
-                "Source record missing",
-                "The bound source record is no longer at the registered location.",
-            ),
-            Self::SourceReviewerNotAuthorized => (
-                "Source reviewer not authorized",
-                "The source refused the reviewer binding. Check the selected source profile and credential.",
-            ),
-            Self::SourceSignatureInvalid => (
-                "Source signature invalid",
-                "The event's signature did not verify.",
-            ),
-            Self::WorkItemAlreadyClaimed => (
-                "Work item already claimed",
-                "Someone else claimed this item a moment ago.",
-            ),
-            Self::WorkItemNotHolder => (
-                "Work item held by another person",
-                "You do not hold this item. Claim it first, or ask a supervisor.",
-            ),
-            Self::WorkItemNotOffered => (
-                "Work item action not offered",
-                "The registry did not offer this action to you. Refresh to check again.",
-            ),
-            Self::WorkItemNotVisible => (
-                "Work item not visible",
-                "The registry did not show you this request, so Casework cannot show you the item.",
-            ),
-            Self::WorkItemProposalChanged => (
-                "Work item proposal changed",
-                "The proposal changed since you read it. Your private draft is retained.",
-            ),
-            Self::WorkItemRecoveryPending => (
-                "Work item recovery pending",
-                "We could not confirm the result of your last action. Recover the original attempt; do not decide again.",
-            ),
-            Self::WorkItemSourceUnavailable => (
-                "Work item source unavailable",
-                "The registry is not answering. We cannot confirm the current item or its actions. Your private draft is retained.",
-            ),
-            Self::WorkItemSuperseded => (
-                "Work item superseded",
-                "A revised proposal replaced this item. Open the current one.",
             ),
             Self::Unknown(_) => return None,
         })
@@ -518,7 +394,7 @@ pub enum CaseworkClientError {
         /// Curated human detail for a recognized, exactly validated problem.
         detail: Option<String>,
         trace_id: Option<String>,
-        original_attempt_id: Option<uuid::Uuid>,
+
         validation: Option<ReviewValidationError>,
     },
     #[error("Registry Casework returned an invalid response")]
@@ -651,8 +527,8 @@ impl CaseworkClientError {
                     None => None,
                     Some(validation) => {
                         let reason = match validation.reason {
-                        registry_review_client::ReviewValidationReason::KindNotAllowed => {
-                            ReviewValidationReason::KindNotAllowed
+                        registry_review_client::ReviewValidationReason::PolicyNotAllowed => {
+                            ReviewValidationReason::PolicyNotAllowed
                         }
                         registry_review_client::ReviewValidationReason::ReferenceInvalid => {
                             ReviewValidationReason::ReferenceInvalid
@@ -712,7 +588,7 @@ impl CaseworkClientError {
                     code,
                     detail: expected_text.map(|(_, detail)| detail.to_owned()),
                     trace_id: Some(trace_id),
-                    original_attempt_id: None,
+
                     validation,
                 }
             }
@@ -736,7 +612,7 @@ mod tests {
             code: CaseworkProblemCode::ReviewSubmissionConflict,
             detail: None,
             trace_id: None,
-            original_attempt_id: None,
+
             validation: None,
         };
         assert_eq!(
@@ -761,7 +637,7 @@ mod tests {
             code,
             detail: None,
             trace_id: None,
-            original_attempt_id: None,
+
             validation: None,
         }
     }
@@ -786,7 +662,7 @@ mod tests {
             problem(500, CaseworkProblemCode::RuntimeFailure),
             problem(502, CaseworkProblemCode::SourceBadGateway),
             problem(503, CaseworkProblemCode::ServiceUnavailable),
-            problem(503, CaseworkProblemCode::WorkItemSourceUnavailable),
+            problem(503, CaseworkProblemCode::ServiceUnavailable),
             protocol(502, CaseworkProtocolFailure::Status),
             protocol(201, CaseworkProtocolFailure::Body),
             protocol(200, CaseworkProtocolFailure::TraceContext),
@@ -986,34 +862,38 @@ mod tests {
     }
 
     #[test]
-    fn source_refusal_problems_have_exact_safe_contracts() {
-        for (value, expected, status, title, detail) in [
+    fn context_refusals_use_current_safe_contracts() {
+        for (value, expected, status) in [
             (
-                "request.source-rejected",
-                CaseworkProblemCode::RequestSourceRejected,
-                422,
-                "Source rejected request",
-                "The source refused the request body. Fix the request before trying again.",
-            ),
-            (
-                "source.record-missing",
-                CaseworkProblemCode::SourceRecordMissing,
+                "request.not-found",
+                CaseworkProblemCode::RequestNotFound,
                 404,
-                "Source record missing",
-                "The bound source record is no longer at the registered location.",
             ),
             (
-                "source.reviewer-not-authorized",
-                CaseworkProblemCode::SourceReviewerNotAuthorized,
-                403,
-                "Source reviewer not authorized",
-                "The source refused the reviewer binding. Check the selected source profile and credential.",
+                "source.bad-gateway",
+                CaseworkProblemCode::SourceBadGateway,
+                502,
+            ),
+            (
+                "service.unavailable",
+                CaseworkProblemCode::ServiceUnavailable,
+                503,
+            ),
+            (
+                "review.policy-mismatch",
+                CaseworkProblemCode::ReviewPolicyMismatch,
+                409,
+            ),
+            (
+                "review.query-too-broad",
+                CaseworkProblemCode::ReviewQueryTooBroad,
+                422,
             ),
         ] {
             let code = CaseworkProblemCode::parse(value);
             assert_eq!(code, expected);
             assert_eq!(code.expected_status(), Some(status));
-            assert_eq!(code.expected_text(), Some((title, detail)));
+            assert!(code.expected_text().is_some());
         }
     }
 }

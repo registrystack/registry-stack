@@ -1,315 +1,57 @@
-import {
-  CaseworkClient,
-  CaseworkClientError,
-  type ClockNextEffect,
-  type ContentDigest,
-  type CaseworkProblemCode,
-  type DecideRequest,
-  type DirectoryMember,
-  type HistoryEntry,
-  type ReviewCreateRequest,
-  type ReviewRequestAccepted,
-  type ReviewerTask,
-  type ReviewResultOutcome,
-  type ReviewTaskContext,
-  type ReviewTaskDecisionRequest,
-  type TaskAuthorizationMode,
-  type ReviewTaskQuery,
-  type SupervisoryReviewTask,
-  type OwnReviewDecision,
-  type WorkItem,
-} from '../client'
-
-const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/' })
-const once = new CaseworkClient({ baseUrl: 'https://casework.example.test/', maxMutationRetries: 0 })
-void once
-const token: string = 'header.payload.signature'
-const profile: string = 'staff'
-const sourceProfile: string = 'reviewer'
-const item: WorkItem = {} as WorkItem
-const decision: DecideRequest = {
-  displayedBinding: item.binding,
-  operation: 'approve',
-}
-const staleDecision: DecideRequest = {
-  displayedBinding: item.binding,
-  // @ts-expect-error the Registry-Source-Profile header alone selects the source profile
-  sourceProfileId: 'reviewer',
-  operation: 'approve',
-}
-void staleDecision
-void client.decideWorkItem(token, profile, sourceProfile, item.actions[0], 'attempt-1', decision)
-void client.claimWorkItem(token, profile, sourceProfile, item.actions[0], 'claim-1')
-void client.recoverDecisionByKey(
-  token,
-  profile,
-  sourceProfile,
-  item.itemId,
-  'attempt-1',
-  {},
-)
-void client.recoverDecisionByKey(
-  token,
-  profile,
-  sourceProfile,
-  item.itemId,
-  'attempt-1',
-  // @ts-expect-error the recovery body is empty
-  { sourceProfileId: sourceProfile },
-)
-void client.workItemHistory(token, profile, sourceProfile, item.itemId, { cursor: 'opaque', limit: 25 })
-void client.holdings(token, profile, sourceProfile, { cursor: 'opaque', limit: 25 })
-void client.nextWorkItem(token, profile, sourceProfile, { queue: 'review', cursor: 'opaque' }).then((page) => {
-  const status: string = page.value.status
-  const item: WorkItem | undefined = page.value.items[0]
-  void status
-  void item
-})
-void client.listWorkItems(token, profile, sourceProfile, {
-  view: 'my-teams', sourceId: 'source-one', subjectKind: 'resident-record', subjectId: 'human-reference-42',
-}).then((page) => {
-  const servedQueue: string | undefined = page.value.servedQueues[0]
-  void servedQueue
-})
-// @ts-expect-error subject selectors must include all three fields
-void client.listWorkItems(token, profile, sourceProfile, { view: 'my-teams', sourceId: 'source-one' })
-void client.directoryTargets(token, profile, { purpose: 'assignment', queue: 'review', limit: 25 })
-void client.directoryTargets(token, profile, { purpose: 'absence-person' }).then((page) => {
-  const displayName: string | null | undefined = page.value.items[0]?.displayName
-  void displayName
-})
-void client.directoryTargets(token, profile, { purpose: 'absence-person' })
-void client.directoryTargets(token, profile, {
-  purpose: 'absence-cover', personIssuer: 'https://idp.example', personSubject: 'officer',
-})
-// @ts-expect-error assignment target discovery requires a queue
-void client.directoryTargets(token, profile, { purpose: 'assignment' })
-// @ts-expect-error absence cover discovery requires the complete person identity
-void client.directoryTargets(token, profile, { purpose: 'absence-cover', personIssuer: 'https://idp.example' })
-client.absences(token, profile, { cursor: 'opaque-absence-cursor', limit: 1000 }).then((result) => {
-  const directoryRevision: number = result.value.directoryRevision
-  const absenceCount: number = result.value.items.length
-  const nextCursor: string | undefined = result.value.nextCursor
-  void directoryRevision
-  void absenceCount
-  void nextCursor
-})
-
-const digest = `sha256:${'a'.repeat(64)}` as ContentDigest
-const reviewCreate: ReviewCreateRequest = {
-  kind: 'batch-validation',
-  subject: { source: 'breg', type: 'batch', id: 'batch-43', version: '1', digest },
-  requesterReference: 'batch-43',
-  context: { strategy: 'submitted', snapshot: { summary: 'Review the prepared batch' } },
-  resultConstraints: { acceptedCount: { minimum: 0, maximum: 412 } },
-}
-const reviewCreateWithNullConstraints: ReviewCreateRequest = {
-  ...reviewCreate,
-  resultConstraints: null,
-}
-const reviewCreateWithoutConstraints: ReviewCreateRequest = {
-  kind: reviewCreate.kind,
-  subject: reviewCreate.subject,
-  requesterReference: reviewCreate.requesterReference,
-  context: reviewCreate.context,
-}
-// @ts-expect-error result constraints are JSON objects, never arrays
-const reviewCreateWithArrayConstraints: ReviewCreateRequest = { ...reviewCreate, resultConstraints: [] }
-void reviewCreateWithNullConstraints
-void reviewCreateWithoutConstraints
-void reviewCreateWithArrayConstraints
-const accepted: ReviewRequestAccepted = {
-  requestId: item.itemId,
-  subject: reviewCreate.subject,
-  policy: { id: 'batch-validation', version: '1', digest },
-  submissionDigest: digest,
-}
-void client.createOrRecoverReviewRequest(token, 'requester', 'create-43', reviewCreate, digest)
-void client.reviewRequest(token, 'requester', item.itemId)
+import { CaseworkClient, CaseworkClientError, type ContentDigest, type SubjectBinding,
+  type PolicyBinding, type ReviewCreateRequest, type ReviewRequestAccepted,
+  type ReviewTask, type ReviewTaskDecisionRequest, type ReviewStaffingQuery,
+  type ReviewCaseloadMoveRequest, type ReviewClockRecomputeRequest } from '../client'
+const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/', maxMutationRetries: 0 })
+const token = 'one-call-secret', profile = 'staff', id = '00000000-0000-4000-8000-000000000001'
+const digest: ContentDigest = `sha256:${'a'.repeat(64)}`
+const subject: SubjectBinding = { source: 'registry', type: 'proposal', id: 'proposal-1', version: '1', digest }
+const policy: PolicyBinding = { id: 'review', version: '1', digest }
+const submitted: ReviewCreateRequest = { policy, subject, requesterReference: 'proposal-1', context: { mode: 'submitted', snapshot: { reference: 'proposal-1' } } }
+const current: ReviewCreateRequest = { ...submitted, context: { mode: 'current-source', binding: { reference: 'proposal-1' } } }
+void client.createOrRecoverReviewRequest(token, 'requester', 'submit-1', current, digest)
+void client.createOrRecoverReviewRequest(token, 'requester', 'submit-2', submitted, digest)
+// @ts-expect-error admission requires the expected immutable policy binding
+const missingPolicy: ReviewCreateRequest = { subject, requesterReference: 'proposal-1', context: { mode: 'submitted', snapshot: {} } }
+void missingPolicy
+const query: ReviewStaffingQuery = { queue: 'review', ownership: 'assigned-to-me', subjectSource: subject.source, subjectType: subject.type, subjectId: subject.id, subjectVersion: subject.version, subjectDigest: subject.digest, sort: 'due', limit: 25 }
+void client.reviewTasks(token, profile, query).then(({ value }) => { const task: ReviewTask | undefined = value.items[0]; void task })
+void client.nextReviewTask(token, profile, query).then(({ value }) => { const task: ReviewTask | null = value; void task })
+void client.reviewTaskHoldings(token, profile, query)
+void client.reviewPolicies(token, profile)
+void client.reviewPolicy(token, profile, 'review')
+const accepted: ReviewRequestAccepted = { requestId: id, subject, policy, submissionDigest: digest }
+void client.reviewRequest(token, 'requester', id)
 void client.reviewResult(token, 'requester', accepted)
 void client.reviewResults(token, 'requester', { limit: 25 })
-void client.cancelReviewRequest(token, 'requester', accepted, 'cancel-43', {
-  subject: accepted.subject,
-  reason: 'No longer needed',
-})
-void client.reviewTasks(token, profile, { queue: 'review', limit: 25 }, sourceProfile)
-void client.ownReviewDecisions(token, profile, { queue: 'review', limit: 25 }, sourceProfile).then((page) => {
-  const row: OwnReviewDecision | undefined = page.value.items[0]
-  const label: string | undefined = row?.decisionReceipt.outcomeLabel
-  const reference: string | undefined = row?.requesterReference
-  void label
-  void reference
-})
-// @ts-expect-error own decisions never select another author
-void client.ownReviewDecisions(token, profile, { author: 'colleague' })
-client.reviewTaskContext(token, profile, item.itemId, sourceProfile).then((response) => {
-  const context: ReviewTaskContext = response.value
-  if (context.context.strategy === 'source' && context.context.bindingStatus === 'current') {
-    const sourceRevision: string | undefined = context.context.projection?.binding.sourceRevision
-    void sourceRevision
-  }
-})
-void client.reviewHistory(token, profile, item.itemId, { limit: 25 })
-void client.reviewHistory(token, profile, item.itemId, { limit: 25 }, sourceProfile)
-void client.addReviewNote(token, profile, item.itemId, 'note-1', { audience: 'reviewers', note: 'Review note' }, sourceProfile)
-void client.reviewClocks(token, profile, item.itemId, sourceProfile)
-void client.reviewAccountability(token, 'supervisor', '00000000-0000-0000-0000-000000000000')
-  .then((record) => {
-    const resultDigest: string | undefined = record.value.resultDigest
-    const outcome: string | undefined = record.value.decisionReceipt?.outcome
-    const label: string | undefined = record.value.decisionReceipt?.outcomeLabel
-    void resultDigest
-    void outcome
-    void label
-  })
-const reviewDecision: ReviewTaskDecisionRequest = { decision: { type: 'approve' } }
-void client.decideReviewTask(token, profile, item.itemId, item.revision, 'decide-43', reviewDecision, sourceProfile)
-const assignedReviewTasks: ReviewTaskQuery = { queue: 'review', ownership: 'assigned-to-me', limit: 25 }
-void client.reviewTasks(token, profile, assignedReviewTasks, sourceProfile)
-void client.supervisoryReviewTasks(token, 'supervisor', { queue: 'review', requestId: item.itemId, limit: 25 }, sourceProfile)
+void client.cancelReviewRequest(token, 'requester', accepted, 'cancel-1', { subject, reason: 'Superseded' })
+void client.claimReviewTask(token, profile, id, 1, 'claim-1')
+void client.releaseReviewTask(token, profile, id, 2, 'release-1')
+void client.assignReviewTask(token, profile, id, 2, 'assign-1', { assignee: { issuer: 'https://issuer.example', subject: 'staff-2' } })
+void client.delegateReviewTask(token, profile, id, 2, 'delegate-1', { delegate: { issuer: 'https://issuer.example', subject: 'staff-2' } })
+void client.reviewTaskDraft(token, profile, id)
+void client.saveReviewTaskDraft(token, profile, id, 2, 'draft-1', { body: { note: 'Private' } })
+void client.deleteReviewTaskDraft(token, profile, id, 2, 'delete-1')
+const decision: ReviewTaskDecisionRequest = { decision: { type: 'approve' } }
+void client.decideReviewTask(token, profile, id, 2, 'decision-1', decision)
+void client.reviewHistory(token, profile, id, { limit: 25 })
+void client.ownReviewDecisions(token, profile, { limit: 25 })
+void client.supervisoryReviewTasks(token, 'supervisor', { requestId: id, limit: 25 })
+void client.reviewAccountability(token, 'supervisor', id)
+const movement: ReviewCaseloadMoveRequest = { from: { issuer: 'https://issuer.example', subject: 'staff-1' }, to: { issuer: 'https://issuer.example', subject: 'staff-2' }, reason: 'Cover' }
+void client.previewCaseloadMove(token, 'administrator', movement)
+void client.applyCaseloadMove(token, 'administrator', 'move-1', { previewId: id })
+const recompute: ReviewClockRecomputeRequest = { taskIds: [id] }
+void client.previewClockRecompute(token, 'administrator', recompute)
+void client.applyClockRecompute(token, 'administrator', 'recompute-1', { previewId: id })
+const error = {} as CaseworkClientError
+const unknown: boolean = error.outcomeUnknown
+void unknown
+// @ts-expect-error WorkItem lifecycle was removed
+void client.listWorkItems(token, profile, {})
+// @ts-expect-error generic source action execution was removed
+void client.decideWorkItem(token, profile, {})
 
-function taskHolder(task: ReviewerTask): string | undefined {
-  if (task.state === 'open' || task.state === 'decided') return undefined
-  return task.state.held.holder.subject
-}
-void taskHolder
-
-function decidedByMe(task: ReviewerTask): boolean {
-  if (task.state !== 'decided' || task.decidedByCaller !== true) return false
-  const decision = task.decisionReceipt?.decision
-  return decision === 'approve' || decision === 'reject' || decision === 'changes-requested' || decision === 'answer'
-}
-void decidedByMe
-
-function accountabilityEvent(task: SupervisoryReviewTask): string | undefined {
-  const state: 'open' | 'held' | 'decided' = task.state
-  void state
-  return task.accountabilityEventId
-}
-void accountabilityEvent
-
-function resultTrace(outcome: ReviewResultOutcome): string {
-  switch (outcome.kind) {
-    case 'available':
-      return `${outcome.value.requestId}:${outcome.traceId}`
-    case 'pending':
-    case 'concealed_or_unknown':
-    case 'expired':
-      return outcome.traceId
-    default: {
-      const unreachable: never = outcome
-      return unreachable
-    }
-  }
-}
-void resultTrace
-
-const officer = { issuer: 'https://idp.example', subject: 'officer' }
-const cover = { issuer: 'https://idp.example', subject: 'cover' }
-const namedOfficer: DirectoryMember = { ...officer, displayName: 'Officer One' }
-void client.createAbsence(token, 'administrator', 1, 'absence-1', {
-  person: officer, cover, from: '2026-09-14T00:00:00Z', until: '2026-09-19T00:00:00Z',
-})
-void client.assignWorkItem(token, 'supervisor', item.itemId, item.revision, 'assign-1', { assignee: officer }, sourceProfile)
-const movement = { from: officer, to: cover, reason: 'Cover the absent officer' }
-void client.previewCaseloadMove(token, 'supervisor', movement, { limit: 25 }, sourceProfile)
-void client.applyCaseloadMove(token, 'supervisor', 'move-1', {
-  movement, items: [{ itemId: item.itemId, expectedRevision: item.revision }],
-}, sourceProfile)
-
-const routedBy: string | undefined = item.routing?.ruleId
-const nextClockEffect = item.clockOccurrences?.[0]?.nextEffect
-const upcomingClockEffect: ClockNextEffect | undefined = item.clockOccurrences?.[0]?.upcomingEffects?.[0]
-if (nextClockEffect?.kind === 'reassign') {
-  const queueId: string = nextClockEffect.queueId
-  void queueId
-}
-void routedBy
-void upcomingClockEffect
-const liveAttemptId: string | undefined = item.liveAttempt?.attemptId
-void liveAttemptId
-const heldSince: string | undefined = item.heldSince
-void heldSince
-
-function completedAccountability(entry: HistoryEntry): string | undefined {
-  if (entry.kind !== 'action-completed') return undefined
-  return `${entry.detail.bindingReference}:${entry.detail.sourceReceipt.sourceRevision}`
-}
-void completedAccountability
-
-function settlementDecision(entry: HistoryEntry): string | undefined {
-  if (entry.kind !== 'attempt-settled') return undefined
-  const outcome: 'applied' | 'not-applied' = entry.detail.outcome
-  return `${entry.detail.attemptId}:${entry.detail.bindingReference}:${outcome}:${entry.detail.reason}:${entry.detail.decidedBy}`
-}
-void settlementDecision
-
-function uncertaintyAccountability(entry: HistoryEntry): string | undefined {
-  if (entry.kind !== 'attempt-uncertain') return undefined
-  const operation: string = entry.detail.operation
-  const reason: string | undefined = entry.detail.reason
-  if (entry.detail.operatorReason !== undefined) {
-    const operatorReason: string = entry.detail.operatorReason
-    const decidedBy: string = entry.detail.decidedBy
-    const originalActor: { issuer: string; subject: string } = entry.detail.originalActor
-    const originalProfileId: string = entry.detail.originalProfileId
-    return `${operation}:${operatorReason}:${decidedBy}:${originalActor.subject}:${originalProfileId}:${reason ?? ''}`
-  }
-  if (entry.detail.definitivelyRefused === true) {
-    return `${operation}:refused:${reason ?? ''}`
-  }
-  const sourceRevision: string | null | undefined = entry.detail.sourceRevision
-  return `${operation}:${sourceRevision ?? ''}`
-}
-void uncertaintyAccountability
-
-void client.reviewTasks(token, profile, { limit: 25 }).then((page) => {
-  const status: 'complete' | 'budget-exhausted' | 'source-unavailable' = page.value.status
-  void status
-})
-function pageLimit(error: CaseworkClientError): boolean {
-  const code: CaseworkProblemCode | undefined = error.code
-  return code === 'request.limit-out-of-range'
-}
-void pageLimit
-
-function recoveryReference(error: CaseworkClientError): string | undefined {
-  const code: CaseworkProblemCode | undefined = error.code
-  return code === 'work-item.recovery-pending' ? error.originalAttemptId : undefined
-}
-void recoveryReference
-
-void client.workItemClocks(token, profile, sourceProfile, item.itemId)
-void client.holidayRevision(token, 'administrator', 'office', 7)
-void client.createHolidayRevision(token, 'administrator', 'holiday-7', { document: { holidaySet: 'office', revision: 7, dates: ['2026-09-07'] } })
-void client.previewClockRecompute(token, 'administrator', { clockId: 'review-deadline', holidaySet: 'office', holidayRevision: 7 })
-void client.applyClockRecompute(token, 'administrator', 'apply-preview', { previewId: item.itemId })
-
-void client.updateDirectoryTeam(token, 'administrator', 'review-team', 4, 'team-update', { staff: [namedOfficer], supervisors: [cover], servedQueues: ['review'] })
-
-void client.previewTaskTemplates(token, profile, sourceProfile, item.itemId).then(result => {
-  const revision: number = result.value.itemRevision
-  const lifetime: number | undefined = result.value.templates[0]?.lifetimeSeconds
-  const mode: TaskAuthorizationMode | undefined = result.value.templates[0]?.authorizationMode
-  void revision; void lifetime; void mode
-})
-void client.listTaskGrants(token, profile, sourceProfile, item.itemId).then(result => {
-  const mode: 'immediate' | 'deferred' | undefined = result.value.grants[0]?.authorizationMode
-  void mode
-})
-void client.approveTaskGrant(token, profile, sourceProfile, item.itemId, 7, 'task-key', { templateId: 'verify-status', templateVersion: '1' })
-void client.revokeTaskGrant(token, profile, sourceProfile, item.itemId, item.itemId)
-void client.taskAssertion(token, item.itemId)
-void client.taskGrantStatus(token, item.itemId)
-// @ts-expect-error Policy bounds must come from the governed template.
-void client.approveTaskGrant(token, profile, sourceProfile, item.itemId, 7, 'task-key', { templateId: 'verify-status', templateVersion: '1', resource: 'urn:forged' })
-// @ts-expect-error The approval cannot change the governed authorization mode.
-void client.approveTaskGrant(token, profile, sourceProfile, item.itemId, 7, 'task-key', { templateId: 'verify-status', templateVersion: '1', authorizationMode: 'deferred' })
-// @ts-expect-error Agent assertion calls do not accept human profiles.
-void client.taskAssertion(token, profile, sourceProfile, item.itemId)
-
-function mayHaveTakenEffect(error: CaseworkClientError): boolean {
-  const unknown: boolean = error.outcomeUnknown
-  return unknown
-}
-void mayHaveTakenEffect
+// @ts-expect-error partial SubjectBinding selectors cannot name exact work
+const partial: ReviewStaffingQuery = { subjectId: "proposal-1" }
+void partial

@@ -1,14 +1,13 @@
 //! Source-neutral contracts for Registry Casework.
 //!
-//! The crate deliberately contains no source protocol types. Source adapters
-//! translate their native reads, promoted actions, receipts, and recovery
-//! records at this boundary.
+//! The crate deliberately contains no source protocol types. Context providers
+//! expose separate, read-only observations for each compiled purpose.
 
 mod adapter;
 mod assignment;
-mod attempt_settlement;
 mod clock_runtime;
 mod config;
+mod context;
 mod finding;
 mod fixture;
 mod http;
@@ -19,17 +18,16 @@ mod review;
 mod routing;
 #[cfg(feature = "schema")]
 pub mod schema;
-mod source_retention;
+mod staffing;
 mod task_grant;
 mod timing;
-mod transition;
 pub mod typed;
 
 pub use adapter::*;
 pub use assignment::*;
-pub use attempt_settlement::*;
 pub use clock_runtime::*;
 pub use config::*;
+pub use context::*;
 pub use finding::{findings_report, ConfigFinding, RelatedFinding};
 pub use fixture::*;
 pub use http::*;
@@ -48,7 +46,6 @@ pub use registry_review_protocol as review_protocol;
 pub use registry_review_protocol::*;
 pub use review::*;
 pub use routing::*;
-pub use source_retention::*;
+pub use staffing::*;
 pub use task_grant::*;
 pub use timing::*;
-pub use transition::*;

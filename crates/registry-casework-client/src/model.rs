@@ -81,30 +81,6 @@ pub struct ReviewPageQuery {
     pub limit: Option<usize>,
 }
 
-/// Pagination for source work-item history, whose cursor is an opaque source
-/// continuation rather than a unified review event identifier.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WorkItemHistoryQuery {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<usize>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReviewTaskQuery {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub queue: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ownership: Option<registry_casework_core::ReviewTaskOwnership>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<Uuid>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<usize>,
-}
-
 /// Bounded discovery of the current principal's retained authored decisions.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -135,7 +111,7 @@ pub struct SupervisoryReviewTaskQuery {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewTaskDecisionRequest {
-    pub decision: registry_casework_core::ReviewerDecisionKind,
+    pub decision: registry_casework_core::DecisionKind,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -148,22 +124,23 @@ pub enum ReviewResultResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{OwnReviewDecisionQuery, ReviewTaskQuery, SupervisoryReviewTaskQuery};
+    use super::{OwnReviewDecisionQuery, SupervisoryReviewTaskQuery};
+    use registry_casework_core::ReviewStaffingQuery;
     use registry_casework_core::ReviewTaskOwnership;
     use serde_json::json;
 
     #[test]
     fn reviewer_ownership_uses_the_closed_wire_names() {
-        let query = ReviewTaskQuery {
+        let query = ReviewStaffingQuery {
             ownership: Some(ReviewTaskOwnership::AssignedToMe),
-            ..ReviewTaskQuery::default()
+            ..ReviewStaffingQuery::default()
         };
         assert_eq!(
-            serde_json::to_value(query).expect("serialize query"),
-            json!({"ownership": "assigned-to-me"})
+            serde_json::to_value(query).expect("serialize query")["ownership"],
+            json!("assigned-to-me")
         );
         for refused in ["someone-elses", "assigned_to_me"] {
-            assert!(serde_json::from_value::<ReviewTaskQuery>(json!({
+            assert!(serde_json::from_value::<ReviewStaffingQuery>(json!({
                 "ownership": refused
             }))
             .is_err());

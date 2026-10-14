@@ -39,7 +39,7 @@ impl CaseworkAuthenticator {
                 .map(|profile| (profile.id.clone(), profile))
                 .collect(),
             initiator_profiles: project
-                .review_producers
+                .trusted_producers
                 .iter()
                 .filter_map(|producer| producer.initiator_profile.clone())
                 .collect(),
@@ -207,9 +207,10 @@ mod tests {
             },
             access_profiles: Vec::new(),
             queues: Vec::new(),
-            sources: Vec::new(),
-            review_kinds: Vec::new(),
-            review_producers: Vec::new(),
+            teams: Vec::new(),
+            context_providers: Vec::new(),
+            review_policies: Vec::new(),
+            trusted_producers: Vec::new(),
             calendars: Vec::new(),
             clocks: Vec::new(),
             inbox: InboxPolicy::default(),

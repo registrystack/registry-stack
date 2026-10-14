@@ -1487,12 +1487,7 @@ pub(crate) async fn enqueue_submission(
         proposal.version().get()
     );
     let create = ReviewCreateRequest {
-        policy: registry_review_client::PolicyBinding {
-            id: policy.id.clone(),
-            version: policy.version.clone(),
-            digest: registry_review_client::ContentDigest::parse(policy.digest.as_str())
-                .map_err(|_| MutationError::Unavailable)?,
-        },
+        policy: policy.clone(),
         subject: SubjectBinding {
             source: source.clone(),
             subject_type: "proposal".to_owned(),
@@ -1503,7 +1498,7 @@ pub(crate) async fn enqueue_submission(
         },
         requester_reference: requester_reference.to_owned(),
         initiator: initiator.cloned(),
-        context: registry_review_client::ReviewContext::Source {
+        context: registry_review_client::ReviewContext::CurrentSource {
             binding: SourceContextBinding {
                 reference: source_reference,
             },

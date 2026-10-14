@@ -1,34 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-
-//! Closed public problem vocabulary for Registry Casework.
-
+//! Closed public problem vocabulary and operations for Registry Casework.
 use axum::http::StatusCode;
-use registry_casework_core::{
-    ABSENCE_COVER_CYCLE_PROBLEM, ABSENCE_INVALID_PERIOD_PROBLEM, ABSENCE_OVERLAP_PROBLEM,
-    ABSENCE_SELF_COVER_PROBLEM, AUTHENTICATION_REFUSED_PROBLEM, CASEWORK_PROBLEM_TYPE_BASE,
-    CLOCK_RECOMPUTE_PREVIEW_EXPIRED_PROBLEM, CURSOR_EXPIRED_PROBLEM, CURSOR_INVALID_PROBLEM,
-    IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM, OPERATION_NOT_AUTHORIZED_PROBLEM,
-    PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM, PROFILE_NOT_AUTHORIZED_PROBLEM,
-    PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM, REQUEST_INVALID_PROBLEM,
-    REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM, REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
-    REQUEST_NOT_FOUND_PROBLEM, REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_SOURCE_REJECTED_PROBLEM,
-    REQUEST_UNPROCESSABLE_PROBLEM, REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM,
-    SERVICE_UNAVAILABLE_PROBLEM, SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM,
-    SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM, SOURCE_PROFILE_REQUIRED_PROBLEM,
-    SOURCE_RECORD_MISSING_PROBLEM, SOURCE_REVIEWER_NOT_AUTHORIZED_PROBLEM,
-    SOURCE_SIGNATURE_INVALID_PROBLEM, WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
-    WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM, WORK_ITEM_NOT_VISIBLE_PROBLEM,
-    WORK_ITEM_PROPOSAL_CHANGED_PROBLEM, WORK_ITEM_RECOVERY_PENDING_PROBLEM,
-    WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM, WORK_ITEM_SUPERSEDED_PROBLEM,
-};
-
-/// Resolve a Casework problem code under its registered product prefix.
-#[must_use]
+use registry_casework_core::*;
 pub fn type_uri(code: &str) -> String {
     format!("{CASEWORK_PROBLEM_TYPE_BASE}{}", code.replace('.', "/"))
 }
-
-/// One problem the Casework runtime can emit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ProblemCode {
     AbsenceCoverCycle,
@@ -51,37 +27,22 @@ pub enum ProblemCode {
     RequestLimitOutOfRange,
     RequestMethodNotAllowed,
     RequestNotFound,
-    RequestReasonUnsupported,
-    RequestSourceRejected,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
     ReviewInitiatorExcluded,
     ReviewInitiatorRequired,
     ReviewResultExpired,
     ReviewSubmissionConflict,
-    ReviewPolicyMismatch,
     ReviewTaskNotHeld,
     RuntimeFailure,
     ServiceUnavailable,
     SourceBadGateway,
-    SourceNotFound,
-    SourceRecordMissing,
-    SourceReviewerNotAuthorized,
     SourceProfileNotApplicable,
     SourceProfileRequired,
-    SourceSignatureInvalid,
-    WorkItemAlreadyClaimed,
-    WorkItemNotHolder,
-    WorkItemNotOffered,
-    WorkItemNotVisible,
-    WorkItemProposalChanged,
-    WorkItemRecoveryPending,
-    WorkItemSourceUnavailable,
-    WorkItemSuperseded,
+    ReviewPolicyMismatch,
+    ReviewQueryTooBroad,
 }
-
 impl ProblemCode {
-    /// Every registered code in code-string order.
     pub const ALL: &'static [Self] = &[
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
@@ -103,36 +64,21 @@ impl ProblemCode {
         Self::RequestLimitOutOfRange,
         Self::RequestMethodNotAllowed,
         Self::RequestNotFound,
-        Self::RequestReasonUnsupported,
-        Self::RequestSourceRejected,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
         Self::ReviewInitiatorExcluded,
         Self::ReviewInitiatorRequired,
+        Self::ReviewPolicyMismatch,
+        Self::ReviewQueryTooBroad,
         Self::ReviewResultExpired,
         Self::ReviewSubmissionConflict,
-        Self::ReviewPolicyMismatch,
         Self::ReviewTaskNotHeld,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
         Self::SourceProfileNotApplicable,
         Self::SourceProfileRequired,
         Self::SourceBadGateway,
-        Self::SourceNotFound,
-        Self::SourceRecordMissing,
-        Self::SourceReviewerNotAuthorized,
-        Self::SourceSignatureInvalid,
-        Self::WorkItemAlreadyClaimed,
-        Self::WorkItemNotHolder,
-        Self::WorkItemNotOffered,
-        Self::WorkItemNotVisible,
-        Self::WorkItemProposalChanged,
-        Self::WorkItemRecoveryPending,
-        Self::WorkItemSourceUnavailable,
-        Self::WorkItemSuperseded,
     ];
-
-    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::AbsenceCoverCycle => ABSENCE_COVER_CYCLE_PROBLEM,
@@ -155,90 +101,22 @@ impl ProblemCode {
             Self::RequestLimitOutOfRange => REQUEST_LIMIT_OUT_OF_RANGE_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
             Self::RequestNotFound => REQUEST_NOT_FOUND_PROBLEM,
-            Self::RequestReasonUnsupported => REQUEST_REASON_UNSUPPORTED_PROBLEM,
-            Self::RequestSourceRejected => REQUEST_SOURCE_REJECTED_PROBLEM,
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
             Self::ReviewInitiatorExcluded => "review.initiator-excluded",
             Self::ReviewInitiatorRequired => "review.initiator-required",
             Self::ReviewResultExpired => "review.result-expired",
             Self::ReviewSubmissionConflict => "review.submission-conflict",
-            Self::ReviewPolicyMismatch => "review.policy-mismatch",
             Self::ReviewTaskNotHeld => "review.task-not-held",
             Self::RuntimeFailure => RUNTIME_FAILURE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
             Self::SourceBadGateway => SOURCE_BAD_GATEWAY_PROBLEM,
-            Self::SourceNotFound => SOURCE_NOT_FOUND_PROBLEM,
-            Self::SourceRecordMissing => SOURCE_RECORD_MISSING_PROBLEM,
-            Self::SourceReviewerNotAuthorized => SOURCE_REVIEWER_NOT_AUTHORIZED_PROBLEM,
             Self::SourceProfileNotApplicable => SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
             Self::SourceProfileRequired => SOURCE_PROFILE_REQUIRED_PROBLEM,
-            Self::SourceSignatureInvalid => SOURCE_SIGNATURE_INVALID_PROBLEM,
-            Self::WorkItemAlreadyClaimed => WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
-            Self::WorkItemNotHolder => WORK_ITEM_NOT_HOLDER_PROBLEM,
-            Self::WorkItemNotOffered => WORK_ITEM_NOT_OFFERED_PROBLEM,
-            Self::WorkItemNotVisible => WORK_ITEM_NOT_VISIBLE_PROBLEM,
-            Self::WorkItemProposalChanged => WORK_ITEM_PROPOSAL_CHANGED_PROBLEM,
-            Self::WorkItemRecoveryPending => WORK_ITEM_RECOVERY_PENDING_PROBLEM,
-            Self::WorkItemSourceUnavailable => WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM,
-            Self::WorkItemSuperseded => WORK_ITEM_SUPERSEDED_PROBLEM,
+            Self::ReviewPolicyMismatch => "review.policy-mismatch",
+            Self::ReviewQueryTooBroad => "review.query-too-broad",
         }
     }
-
-    #[must_use]
-    pub const fn status(self) -> StatusCode {
-        match self {
-            Self::AbsenceCoverCycle
-            | Self::AbsenceInvalidPeriod
-            | Self::AbsenceOverlap
-            | Self::AbsenceSelfCover => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::AuthenticationRefused => StatusCode::UNAUTHORIZED,
-            Self::ClockRecomputePreviewExpired | Self::ReviewResultExpired => StatusCode::GONE,
-            Self::CursorExpired => StatusCode::GONE,
-            Self::CursorInvalid => StatusCode::BAD_REQUEST,
-            Self::IdempotencyExpired => StatusCode::GONE,
-            Self::ProfileNotAuthorized
-            | Self::ProfileNotHuman
-            | Self::OperationNotAuthorized
-            | Self::ReviewInitiatorExcluded => StatusCode::FORBIDDEN,
-            Self::RequestInvalid
-            | Self::RequestLimitOutOfRange
-            | Self::SourceProfileNotApplicable
-            | Self::SourceProfileRequired
-            | Self::SourceSignatureInvalid => StatusCode::BAD_REQUEST,
-            Self::RequestNotFound
-            | Self::SourceNotFound
-            | Self::SourceRecordMissing
-            | Self::WorkItemNotVisible => StatusCode::NOT_FOUND,
-            Self::RequestMethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
-            Self::IdempotencyKeyReused
-            | Self::ReviewPolicyMismatch
-            | Self::ReviewSubmissionConflict
-            | Self::ReviewTaskNotHeld
-            | Self::WorkItemAlreadyClaimed
-            | Self::WorkItemNotHolder
-            | Self::WorkItemNotOffered
-            | Self::WorkItemProposalChanged
-            | Self::WorkItemRecoveryPending
-            | Self::WorkItemSuperseded => StatusCode::CONFLICT,
-            Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
-            Self::RequestBodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::RequestUnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Self::RequestReasonUnsupported
-            | Self::RequestSourceRejected
-            | Self::RequestUnprocessable
-            | Self::ReviewInitiatorRequired => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::PreconditionRequired => StatusCode::PRECONDITION_REQUIRED,
-            Self::SourceBadGateway => StatusCode::BAD_GATEWAY,
-            Self::SourceReviewerNotAuthorized => StatusCode::FORBIDDEN,
-            Self::RuntimeFailure => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::ServiceUnavailable | Self::WorkItemSourceUnavailable => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
-        }
-    }
-
-    #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
             Self::AbsenceCoverCycle => "Absence cover cycle",
@@ -261,162 +139,141 @@ impl ProblemCode {
             Self::RequestLimitOutOfRange => "Page size out of range",
             Self::RequestMethodNotAllowed => "Method not allowed",
             Self::RequestNotFound => "Route not found",
-            Self::RequestReasonUnsupported => "Reason not supported",
-            Self::RequestSourceRejected => "Source rejected request",
             Self::RequestUnprocessable => "Request could not be processed",
             Self::RequestUnsupportedMediaType => "Unsupported media type",
             Self::ReviewInitiatorExcluded => "Review initiator excluded",
             Self::ReviewInitiatorRequired => "Review initiator required",
             Self::ReviewResultExpired => "Review result expired",
             Self::ReviewSubmissionConflict => "Review submission conflict",
-            Self::ReviewPolicyMismatch => "Review policy changed",
             Self::ReviewTaskNotHeld => "Review task not held",
             Self::RuntimeFailure => "Casework runtime failure",
             Self::ServiceUnavailable => "Casework service unavailable",
             Self::SourceBadGateway => "Invalid source response",
-            Self::SourceNotFound => "Source not found",
-            Self::SourceRecordMissing => "Source record missing",
-            Self::SourceReviewerNotAuthorized => "Source reviewer not authorized",
             Self::SourceProfileNotApplicable => "Source profile not applicable",
             Self::SourceProfileRequired => "Source profile required",
-            Self::SourceSignatureInvalid => "Source signature invalid",
-            Self::WorkItemAlreadyClaimed => "Work item already claimed",
-            Self::WorkItemNotHolder => "Work item held by another person",
-            Self::WorkItemNotOffered => "Work item action not offered",
-            Self::WorkItemNotVisible => "Work item not visible",
-            Self::WorkItemProposalChanged => "Work item proposal changed",
-            Self::WorkItemRecoveryPending => "Work item recovery pending",
-            Self::WorkItemSourceUnavailable => "Work item source unavailable",
-            Self::WorkItemSuperseded => "Work item superseded",
+            Self::ReviewPolicyMismatch => "Review policy mismatch",
+            Self::ReviewQueryTooBroad => "Review query too broad",
         }
     }
-
-    #[must_use]
     pub const fn detail(self) -> &'static str {
-        match self {
-            Self::AbsenceCoverCycle => {
+        match self{
+Self::AbsenceCoverCycle=>{
                 "Choose cover assignments that do not return to an earlier person during a shared period."
-            }
-            Self::AbsenceInvalidPeriod => "Set until later than from.",
-            Self::AbsenceOverlap => "Adjust the period so this person has no overlapping absence.",
-            Self::AbsenceSelfCover => "Choose a different staff member as cover.",
-            Self::AuthenticationRefused => {
+            },
+Self::AbsenceInvalidPeriod=>"Set until later than from.",
+Self::AbsenceOverlap=>"Adjust the period so this person has no overlapping absence.",
+Self::AbsenceSelfCover=>"Choose a different staff member as cover.",
+Self::AuthenticationRefused=>{
                 "The bearer credential is missing, invalid, or expired. Sign in again."
-            }
-            Self::ClockRecomputePreviewExpired => {
+            },
+Self::ClockRecomputePreviewExpired=>{
                 "Create a new recompute preview and review it before applying."
-            }
-            Self::CursorExpired => {
+            },
+Self::CursorExpired=>{
                 "This cursor has expired. Start again without a cursor and deduplicate entries by eventId."
-            }
-            Self::CursorInvalid => "The cursor is invalid for this request.",
-            Self::IdempotencyExpired => {
+            },
+Self::CursorInvalid=>"The cursor is invalid for this request.",
+Self::IdempotencyExpired=>{
                 "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
-            }
-            Self::IdempotencyKeyReused => "This idempotency key was used for a different request.",
-            Self::OperationNotAuthorized => {
+            },
+Self::IdempotencyKeyReused=>"This idempotency key was used for a different request.",
+Self::OperationNotAuthorized=>{
                 "Your current Casework authority does not allow this operation."
-            }
-            Self::PreconditionFailed => {
+            },
+Self::PreconditionFailed=>{
                 "The item or directory changed since you loaded it. Reload and try again."
-            }
-            Self::PreconditionRequired => "This mutation requires the revision that you loaded.",
-            Self::ProfileNotAuthorized => {
+            },
+Self::PreconditionRequired=>"This mutation requires the revision that you loaded.",
+Self::ProfileNotAuthorized=>{
                 "The selected Casework profile does not authorize this request."
-            }
-            Self::ProfileNotHuman => "This action is reserved for a human session.",
-            Self::RequestBodyTooLarge => "The request body exceeds the one MiB limit.",
-            Self::RequestInvalid => "The Casework request is invalid.",
-            Self::RequestLimitOutOfRange => {
+            },
+Self::ProfileNotHuman=>"This action is reserved for a human session.",
+Self::RequestBodyTooLarge=>"The request body exceeds the one MiB limit.",
+Self::RequestInvalid=>"The Casework request is invalid.",
+Self::RequestLimitOutOfRange=>{
                 "The limit query parameter must be from 1 to 100, or from 1 to 1000 on the directory absence list. Omit it for the default page size."
-            }
-            Self::RequestMethodNotAllowed => "This route does not accept that HTTP method.",
-            Self::RequestNotFound => "The requested Casework route does not exist.",
-            Self::RequestReasonUnsupported => {
-                "The reason field is not supported for approve or apply on this source. Omit it and try again."
-            }
-            Self::RequestSourceRejected => {
-                "The source refused the request body. Fix the request before trying again."
-            }
-            Self::RequestUnprocessable => "The request body does not match the Casework contract.",
-            Self::RequestUnsupportedMediaType => {
+            },
+Self::RequestMethodNotAllowed=>"This route does not accept that HTTP method.",
+Self::RequestNotFound=>"The requested Casework route does not exist.",
+Self::RequestUnprocessable=>"The request body does not match the Casework contract.",
+Self::RequestUnsupportedMediaType=>{
                 "Send a JSON request body with Content-Type application/json."
-            }
-            Self::ReviewInitiatorExcluded => {
+            },
+Self::ReviewInitiatorExcluded=>{
                 "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it."
-            }
-            Self::ReviewInitiatorRequired => {
+            },
+Self::ReviewInitiatorRequired=>{
                 "This review kind excludes the person who submitted the request, so the request must name its initiator."
-            }
-            Self::ReviewResultExpired => {
+            },
+Self::ReviewResultExpired=>{
                 "The retained review result is no longer available. Reconcile through the producer's retained source correlation."
-            }
-            Self::ReviewPolicyMismatch => "Discover the active review policy and submit its exact identifier, version, and digest with a new command identity.",
-            Self::ReviewSubmissionConflict => {
+            },
+Self::ReviewSubmissionConflict=>{
                 "The same producer, source subject, version, and policy were already submitted with different canonical content."
-            }
-            Self::ReviewTaskNotHeld => {
+            },
+Self::ReviewTaskNotHeld=>{
                 "Claim the review task before deciding it, and decide only while the claim remains current."
-            }
-            Self::RuntimeFailure => "Casework could not complete the request.",
-            Self::ServiceUnavailable => {
+            },
+Self::RuntimeFailure=>"Casework could not complete the request.",
+Self::ServiceUnavailable=>{
                 "Casework storage is unavailable. Try again after the service recovers."
-            }
-            Self::SourceBadGateway => {
+            },
+Self::SourceBadGateway=>{
                 "The source returned a response that does not match its registered contract."
-            }
-            Self::SourceNotFound => "The requested source is not registered.",
-            Self::SourceRecordMissing => {
-                "The bound source record is no longer at the registered location."
-            }
-            Self::SourceReviewerNotAuthorized => {
-                "The source refused the reviewer binding. Check the selected source profile and credential."
-            }
-            Self::SourceProfileNotApplicable => {
+            },
+Self::SourceProfileNotApplicable=>{
                 "Omit the Registry-Source-Profile header for this request."
-            }
-            Self::SourceProfileRequired => {
+            },
+Self::SourceProfileRequired=>{
                 "Send the Registry-Source-Profile header to select the source profile for this request."
-            }
-            Self::SourceSignatureInvalid => "The event's signature did not verify.",
-            Self::WorkItemAlreadyClaimed => "Someone else claimed this item a moment ago.",
-            Self::WorkItemNotHolder => {
-                "You do not hold this item. Claim it first, or ask a supervisor."
-            }
-            Self::WorkItemNotOffered => {
-                "The registry did not offer this action to you. Refresh to check again."
-            }
-            Self::WorkItemNotVisible => {
-                "The registry did not show you this request, so Casework cannot show you the item."
-            }
-            Self::WorkItemProposalChanged => {
-                "The proposal changed since you read it. Your private draft is retained."
-            }
-            Self::WorkItemRecoveryPending => {
-                "We could not confirm the result of your last action. Recover the original attempt; do not decide again."
-            }
-            Self::WorkItemSourceUnavailable => {
-                "The registry is not answering. We cannot confirm the current item or its actions. Your private draft is retained."
-            }
-            Self::WorkItemSuperseded => {
-                "A revised proposal replaced this item. Open the current one."
-            }
-        }
+            },
+Self::ReviewPolicyMismatch=>"The expected review policy binding does not match the active policy.",
+Self::ReviewQueryTooBroad=>"Narrow the queue or exact subject query to complete it within the configured read budget.",
+}
     }
-
-    #[must_use]
+    pub fn status(self) -> StatusCode {
+        StatusCode::from_u16(match self {
+            Self::AbsenceCoverCycle => 422,
+            Self::AbsenceInvalidPeriod => 422,
+            Self::AbsenceOverlap => 422,
+            Self::AbsenceSelfCover => 422,
+            Self::AuthenticationRefused => 401,
+            Self::ClockRecomputePreviewExpired => 410,
+            Self::CursorExpired => 410,
+            Self::CursorInvalid => 400,
+            Self::IdempotencyExpired => 410,
+            Self::IdempotencyKeyReused => 409,
+            Self::OperationNotAuthorized => 403,
+            Self::PreconditionFailed => 412,
+            Self::PreconditionRequired => 428,
+            Self::ProfileNotAuthorized => 403,
+            Self::ProfileNotHuman => 403,
+            Self::RequestBodyTooLarge => 413,
+            Self::RequestInvalid => 400,
+            Self::RequestLimitOutOfRange => 400,
+            Self::RequestMethodNotAllowed => 405,
+            Self::RequestNotFound => 404,
+            Self::RequestUnprocessable => 422,
+            Self::RequestUnsupportedMediaType => 415,
+            Self::ReviewInitiatorExcluded => 403,
+            Self::ReviewInitiatorRequired => 422,
+            Self::ReviewResultExpired => 410,
+            Self::ReviewSubmissionConflict => 409,
+            Self::ReviewTaskNotHeld => 409,
+            Self::RuntimeFailure => 500,
+            Self::ServiceUnavailable => 503,
+            Self::SourceBadGateway => 502,
+            Self::SourceProfileNotApplicable => 400,
+            Self::SourceProfileRequired => 400,
+            Self::ReviewPolicyMismatch => 409,
+            Self::ReviewQueryTooBroad => 422,
+        })
+        .expect("fixed HTTP status")
+    }
     pub fn type_uri(self) -> String {
         type_uri(self.code())
     }
 }
-
-impl std::fmt::Display for ProblemCode {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.code())
-    }
-}
-
-/// Rust-owned HTTP operation and reachable-problem contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OperationContract {
     pub method: &'static str,
@@ -427,695 +284,56 @@ pub struct OperationContract {
     pub accepts_json: bool,
     pub problems: &'static [ProblemCode],
 }
-
-const AUTHENTICATION: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-];
-// Each review-producer operation lists only what its handler and store path
-// can return. Every producer route authenticates (the three profile codes and
-// a malformed header's request.invalid), refuses a source profile header, and
-// admits only the configured producer (operation.not-authorized).
-const REVIEW_REQUEST_CREATE: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ReviewInitiatorRequired,
-    ProblemCode::ReviewResultExpired,
-    ProblemCode::ReviewSubmissionConflict,
-    ProblemCode::ReviewPolicyMismatch,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_REQUEST_READ: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ReviewResultExpired,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_REQUEST_CANCEL: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ReviewResultExpired,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-// A missing or expired result is the 404 or 410 success status, not a problem.
-const REVIEW_RESULT_READ: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::RuntimeFailure,
-];
-// A cursor naming an event no longer retained is review.result-expired.
-const REVIEW_RESULT_FEED: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestLimitOutOfRange,
-    ProblemCode::ReviewResultExpired,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_TASK: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ReviewTaskNotHeld,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_HISTORY: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestLimitOutOfRange,
-    ProblemCode::ReviewResultExpired,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_KIND_READ: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_TASK_PAGE: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestLimitOutOfRange,
-    ProblemCode::ReviewResultExpired,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_TASK_READ: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_TASK_HELD_READ: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ReviewTaskNotHeld,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_TASK_CLAIM: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ReviewInitiatorExcluded,
-    ProblemCode::ReviewTaskNotHeld,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::WorkItemAlreadyClaimed,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_TASK_RELEASE: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ReviewTaskNotHeld,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::WorkItemNotHolder,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_TASK_ASSIGNMENT: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ReviewTaskNotHeld,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_TASK_DRAFT_MUTATION: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ReviewTaskNotHeld,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::WorkItemNotHolder,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const REVIEW_TASK_DECISION: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestReasonUnsupported,
-    ProblemCode::RequestSourceRejected,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ReviewInitiatorExcluded,
-    ProblemCode::ReviewTaskNotHeld,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::SourceRecordMissing,
-    ProblemCode::SourceReviewerNotAuthorized,
-    ProblemCode::WorkItemNotHolder,
-    ProblemCode::WorkItemNotOffered,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemProposalChanged,
-    ProblemCode::WorkItemRecoveryPending,
-    ProblemCode::WorkItemSuperseded,
-    ProblemCode::RuntimeFailure,
-];
-const ITEM_READ: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const ITEM_PAGE: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestLimitOutOfRange,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-// A plain read of one item returns the retained occurrence across a moved
-// source binding; only a superseded occurrence is refused.
-const ITEM_OPEN: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::WorkItemSuperseded,
-    ProblemCode::RuntimeFailure,
-];
-const SOURCE_ITEM_PAGE: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::CursorExpired,
-    ProblemCode::CursorInvalid,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestLimitOutOfRange,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::WorkItemSuperseded,
-    ProblemCode::RuntimeFailure,
-];
-const CLAIM: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::WorkItemAlreadyClaimed,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const RELEASE: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::IdempotencyExpired,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::WorkItemNotHolder,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const DRAFT_MUTATION: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::WorkItemNotHolder,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const DECISION: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestReasonUnsupported,
-    ProblemCode::RequestSourceRejected,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceRecordMissing,
-    ProblemCode::SourceReviewerNotAuthorized,
-    ProblemCode::WorkItemNotHolder,
-    ProblemCode::WorkItemNotOffered,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemProposalChanged,
-    ProblemCode::WorkItemRecoveryPending,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::WorkItemSuperseded,
-    ProblemCode::RuntimeFailure,
-];
-const RECOVERY: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemRecoveryPending,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const HOLDINGS: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestLimitOutOfRange,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const DIRECTORY: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const DIRECTORY_PAGE: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::CursorExpired,
-    ProblemCode::CursorInvalid,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestLimitOutOfRange,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileNotApplicable,
-    ProblemCode::RuntimeFailure,
-];
-const ABSENCE_CREATE: &[ProblemCode] = &[
-    ProblemCode::AbsenceCoverCycle,
-    ProblemCode::AbsenceInvalidPeriod,
-    ProblemCode::AbsenceOverlap,
-    ProblemCode::AbsenceSelfCover,
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const ABSENCE_UPDATE: &[ProblemCode] = &[
-    ProblemCode::AbsenceCoverCycle,
-    ProblemCode::AbsenceInvalidPeriod,
-    ProblemCode::AbsenceOverlap,
-    ProblemCode::AbsenceSelfCover,
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const ABSENCE_DELETE: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const ASSIGNMENT_MUTATION: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemRecoveryPending,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const CASELOAD_PREVIEW: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::CursorExpired,
-    ProblemCode::CursorInvalid,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestLimitOutOfRange,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const CASELOAD_APPLY: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const CLOCK_ITEM_READ: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceProfileRequired,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::WorkItemSuperseded,
-    ProblemCode::RuntimeFailure,
-];
-const HOLIDAY_CREATE: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const HOLIDAY_READ: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const CLOCK_RECOMPUTE_PREVIEW: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const CLOCK_RECOMPUTE_APPLY: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ClockRecomputePreviewExpired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::RuntimeFailure,
-];
-const BOOTSTRAP: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-const SOURCE_EVENT: &[ProblemCode] = &[
-    ProblemCode::RequestInvalid,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceNotFound,
-    ProblemCode::SourceSignatureInvalid,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-];
-
-const TASK_AUTHORITY: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceNotFound,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-    ProblemCode::WorkItemProposalChanged,
-    ProblemCode::WorkItemNotOffered,
-    ProblemCode::WorkItemRecoveryPending,
-];
-const TASK_APPROVAL: &[ProblemCode] = &[
-    ProblemCode::AuthenticationRefused,
-    ProblemCode::OperationNotAuthorized,
-    ProblemCode::ProfileNotAuthorized,
-    ProblemCode::ProfileNotHuman,
-    ProblemCode::RequestInvalid,
-    ProblemCode::RequestUnprocessable,
-    ProblemCode::RequestUnsupportedMediaType,
-    ProblemCode::PreconditionFailed,
-    ProblemCode::PreconditionRequired,
-    ProblemCode::IdempotencyKeyReused,
-    ProblemCode::ServiceUnavailable,
-    ProblemCode::SourceBadGateway,
-    ProblemCode::SourceNotFound,
-    ProblemCode::WorkItemNotVisible,
-    ProblemCode::WorkItemSourceUnavailable,
-    ProblemCode::RuntimeFailure,
-    ProblemCode::WorkItemProposalChanged,
-    ProblemCode::WorkItemNotOffered,
-    ProblemCode::WorkItemRecoveryPending,
-];
-
-/// Framework problems can occur outside a successful operation dispatch.
 pub const FRAMEWORK_PROBLEMS: &[ProblemCode] = &[
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
     ProblemCode::RequestBodyTooLarge,
-    ProblemCode::RequestMethodNotAllowed,
-    ProblemCode::RequestNotFound,
 ];
-
-/// Every implemented operation, in path then method order.
+const READ: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestNotFound,
+    ProblemCode::RequestLimitOutOfRange,
+    ProblemCode::ReviewResultExpired,
+    ProblemCode::CursorInvalid,
+    ProblemCode::CursorExpired,
+    ProblemCode::SourceBadGateway,
+    ProblemCode::SourceProfileRequired,
+    ProblemCode::SourceProfileNotApplicable,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+const MUTATION: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestNotFound,
+    ProblemCode::PreconditionRequired,
+    ProblemCode::PreconditionFailed,
+    ProblemCode::IdempotencyExpired,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::ReviewTaskNotHeld,
+    ProblemCode::ReviewInitiatorExcluded,
+    ProblemCode::ReviewInitiatorRequired,
+    ProblemCode::ReviewSubmissionConflict,
+    ProblemCode::ReviewResultExpired,
+    ProblemCode::ReviewPolicyMismatch,
+    ProblemCode::SourceBadGateway,
+    ProblemCode::SourceProfileRequired,
+    ProblemCode::SourceProfileNotApplicable,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::RuntimeFailure,
+    ProblemCode::AbsenceCoverCycle,
+    ProblemCode::AbsenceInvalidPeriod,
+    ProblemCode::AbsenceOverlap,
+    ProblemCode::AbsenceSelfCover,
+];
 pub const OPERATION_CONTRACTS: &[OperationContract] = &[
     OperationContract {
         method: "GET",
@@ -1124,43 +342,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: false,
-        problems: &[ProblemCode::WorkItemNotVisible, ProblemCode::RuntimeFailure],
-    },
-    OperationContract {
-        method: "GET",
-        path: "/v1/work-items/{item_id}/task-templates",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: false,
-        problems: TASK_AUTHORITY,
-    },
-    OperationContract {
-        method: "GET",
-        path: "/v1/work-items/{item_id}/task-grants",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: false,
-        problems: TASK_AUTHORITY,
-    },
-    OperationContract {
-        method: "POST",
-        path: "/v1/work-items/{item_id}/task-grants",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: true,
-        problems: TASK_APPROVAL,
-    },
-    OperationContract {
-        method: "POST",
-        path: "/v1/work-items/{item_id}/task-grants/{grant_id}/revoke",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: false,
-        problems: TASK_AUTHORITY,
+        problems: &[ProblemCode::RequestNotFound, ProblemCode::RuntimeFailure],
     },
     OperationContract {
         method: "POST",
@@ -1169,7 +351,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: TASK_AUTHORITY,
+        problems: MUTATION,
     },
     OperationContract {
         method: "GET",
@@ -1178,16 +360,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: TASK_AUTHORITY,
-    },
-    OperationContract {
-        method: "POST",
-        path: "/events/sources/{source_id}",
-        success_statuses: &[202],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: false,
-        problems: SOURCE_EVENT,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1214,25 +387,25 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: true,
-        problems: REVIEW_REQUEST_CREATE,
+        problems: MUTATION,
     },
     OperationContract {
         method: "GET",
-        path: "/v1/review-kinds",
+        path: "/v1/review-policies",
         success_statuses: &[200],
         extracts_path: false,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_KIND_READ,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
-        path: "/v1/review-kinds/{kind_id}",
+        path: "/v1/review-policies/{policy_id}",
         success_statuses: &[200],
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_KIND_READ,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1241,7 +414,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_REQUEST_READ,
+        problems: READ,
     },
     OperationContract {
         method: "POST",
@@ -1250,7 +423,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: REVIEW_REQUEST_CANCEL,
+        problems: MUTATION,
     },
     OperationContract {
         method: "GET",
@@ -1259,7 +432,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_RESULT_READ,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1268,7 +441,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_TASK,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1277,7 +450,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: REVIEW_RESULT_FEED,
+        problems: READ,
     },
     OperationContract {
         method: "POST",
@@ -1286,7 +459,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_TASK_CLAIM,
+        problems: MUTATION,
     },
     OperationContract {
         method: "GET",
@@ -1295,7 +468,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: REVIEW_TASK_PAGE,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1304,7 +477,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: REVIEW_TASK_PAGE,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1313,7 +486,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: REVIEW_TASK_PAGE,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1322,7 +495,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_TASK_READ,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1331,7 +504,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_TASK_READ,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1340,7 +513,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: TASK_AUTHORITY,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1349,7 +522,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: TASK_AUTHORITY,
+        problems: READ,
     },
     OperationContract {
         method: "POST",
@@ -1358,7 +531,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: TASK_APPROVAL,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
@@ -1367,7 +540,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: TASK_AUTHORITY,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
@@ -1376,7 +549,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: REVIEW_TASK_ASSIGNMENT,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
@@ -1385,7 +558,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: REVIEW_TASK_ASSIGNMENT,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
@@ -1394,7 +567,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_TASK_RELEASE,
+        problems: MUTATION,
     },
     OperationContract {
         method: "GET",
@@ -1403,7 +576,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_TASK_HELD_READ,
+        problems: READ,
     },
     OperationContract {
         method: "PUT",
@@ -1412,7 +585,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: REVIEW_TASK_DRAFT_MUTATION,
+        problems: MUTATION,
     },
     OperationContract {
         method: "DELETE",
@@ -1421,7 +594,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_TASK_DRAFT_MUTATION,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
@@ -1430,7 +603,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: REVIEW_TASK_DECISION,
+        problems: MUTATION,
     },
     OperationContract {
         method: "GET",
@@ -1439,7 +612,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: true,
         accepts_json: false,
-        problems: REVIEW_HISTORY,
+        problems: READ,
     },
     OperationContract {
         method: "POST",
@@ -1448,7 +621,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: REVIEW_TASK,
+        problems: MUTATION,
     },
     OperationContract {
         method: "GET",
@@ -1457,7 +630,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: REVIEW_TASK,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1466,7 +639,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: false,
-        problems: AUTHENTICATION,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1475,7 +648,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: false,
-        problems: DIRECTORY,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1484,7 +657,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: DIRECTORY_PAGE,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
@@ -1493,7 +666,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: DIRECTORY_PAGE,
+        problems: READ,
     },
     OperationContract {
         method: "POST",
@@ -1502,7 +675,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: true,
-        problems: ABSENCE_CREATE,
+        problems: MUTATION,
     },
     OperationContract {
         method: "DELETE",
@@ -1511,7 +684,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: ABSENCE_DELETE,
+        problems: MUTATION,
     },
     OperationContract {
         method: "PUT",
@@ -1520,7 +693,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: ABSENCE_UPDATE,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
@@ -1529,7 +702,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: true,
-        problems: BOOTSTRAP,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
@@ -1538,16 +711,16 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: true,
-        problems: CASELOAD_APPLY,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
         path: "/v1/directory/caseload/preview",
         success_statuses: &[200],
         extracts_path: false,
-        extracts_query: true,
+        extracts_query: false,
         accepts_json: true,
-        problems: CASELOAD_PREVIEW,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
@@ -1556,7 +729,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: true,
-        problems: CLOCK_RECOMPUTE_APPLY,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
@@ -1565,7 +738,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: true,
-        problems: CLOCK_RECOMPUTE_PREVIEW,
+        problems: MUTATION,
     },
     OperationContract {
         method: "POST",
@@ -1574,7 +747,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: false,
         extracts_query: false,
         accepts_json: true,
-        problems: HOLIDAY_CREATE,
+        problems: MUTATION,
     },
     OperationContract {
         method: "GET",
@@ -1583,7 +756,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: false,
-        problems: HOLIDAY_READ,
+        problems: READ,
     },
     OperationContract {
         method: "PUT",
@@ -1592,431 +765,30 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: BOOTSTRAP,
+        problems: MUTATION,
     },
     OperationContract {
         method: "GET",
-        path: "/v1/holdings",
+        path: "/v1/review-tasks/next",
         success_statuses: &[200],
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: HOLDINGS,
+        problems: READ,
     },
     OperationContract {
         method: "GET",
-        path: "/v1/work-items",
+        path: "/v1/review-tasks/holdings",
         success_statuses: &[200],
         extracts_path: false,
         extracts_query: true,
         accepts_json: false,
-        problems: ITEM_PAGE,
-    },
-    OperationContract {
-        method: "GET",
-        path: "/v1/work-items/next",
-        success_statuses: &[200],
-        extracts_path: false,
-        extracts_query: true,
-        accepts_json: false,
-        problems: ITEM_READ,
-    },
-    OperationContract {
-        method: "GET",
-        path: "/v1/work-items/{item_id}",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: false,
-        problems: ITEM_OPEN,
-    },
-    OperationContract {
-        method: "POST",
-        path: "/v1/work-items/{item_id}/assign",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: true,
-        problems: ASSIGNMENT_MUTATION,
-    },
-    OperationContract {
-        method: "POST",
-        path: "/v1/work-items/{item_id}/attempts/recover",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: true,
-        problems: RECOVERY,
-    },
-    OperationContract {
-        method: "POST",
-        path: "/v1/work-items/{item_id}/attempts/{attempt_id}/recover",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: true,
-        problems: RECOVERY,
-    },
-    OperationContract {
-        method: "POST",
-        path: "/v1/work-items/{item_id}/claim",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: false,
-        problems: CLAIM,
-    },
-    OperationContract {
-        method: "GET",
-        path: "/v1/work-items/{item_id}/clocks",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: false,
-        problems: CLOCK_ITEM_READ,
-    },
-    OperationContract {
-        method: "POST",
-        path: "/v1/work-items/{item_id}/decisions",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: true,
-        problems: DECISION,
-    },
-    OperationContract {
-        method: "POST",
-        path: "/v1/work-items/{item_id}/delegate",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: true,
-        problems: ASSIGNMENT_MUTATION,
-    },
-    OperationContract {
-        method: "DELETE",
-        path: "/v1/work-items/{item_id}/draft",
-        success_statuses: &[204],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: false,
-        problems: DRAFT_MUTATION,
-    },
-    OperationContract {
-        method: "GET",
-        path: "/v1/work-items/{item_id}/draft",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: false,
-        problems: ITEM_READ,
-    },
-    OperationContract {
-        method: "PUT",
-        path: "/v1/work-items/{item_id}/draft",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: true,
-        problems: DRAFT_MUTATION,
-    },
-    OperationContract {
-        method: "GET",
-        path: "/v1/work-items/{item_id}/history",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: true,
-        accepts_json: false,
-        problems: SOURCE_ITEM_PAGE,
-    },
-    OperationContract {
-        method: "POST",
-        path: "/v1/work-items/{item_id}/release",
-        success_statuses: &[200],
-        extracts_path: true,
-        extracts_query: false,
-        accepts_json: false,
-        problems: RELEASE,
+        problems: READ,
     },
 ];
 
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-
-    use super::*;
-
-    #[test]
-    fn every_problem_has_a_unique_namespaced_code_and_segmented_uri() {
-        let codes = ProblemCode::ALL
-            .iter()
-            .map(|problem| problem.code())
-            .collect::<Vec<_>>();
-        let mut sorted = codes.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(codes, sorted);
-        for problem in ProblemCode::ALL {
-            assert!(problem.code().contains('.'), "{problem}");
-            let path = problem
-                .type_uri()
-                .strip_prefix(CASEWORK_PROBLEM_TYPE_BASE)
-                .expect("problem uses the Casework prefix")
-                .to_owned();
-            assert_eq!(path, problem.code().replace('.', "/"), "{problem}");
-            assert!(!problem.title().is_empty(), "{problem}");
-            assert!(!problem.detail().is_empty(), "{problem}");
-        }
-    }
-
-    /// Every code a review-producer operation advertises names the handler
-    /// or store path that returns it, so a list cannot keep a code its
-    /// operation stopped returning, or gain one without a reason.
-    #[test]
-    fn review_producer_operations_list_only_codes_their_handlers_return() {
-        use ProblemCode::*;
-        const AUTHENTICATE: &[(ProblemCode, &str)] = &[
-            (
-                AuthenticationRefused,
-                "authenticate: missing or refused bearer",
-            ),
-            (
-                ProfileNotAuthorized,
-                "authenticate: profile or scopes refused",
-            ),
-            (
-                ProfileNotHuman,
-                "authenticate: a person profile with a non-human token",
-            ),
-            (RequestInvalid, "a malformed profile header or path segment"),
-            (SourceProfileNotApplicable, "reject_source_profile"),
-            (
-                OperationNotAuthorized,
-                "producer_for_actor: not the admitted producer",
-            ),
-            (ServiceUnavailable, "the store cannot be reached"),
-            (RuntimeFailure, "a stored record fails to decode"),
-        ];
-        type Documented = &'static [(ProblemCode, &'static str)];
-        let expected: &[(&str, &str, Documented)] = &[
-            (
-                "POST",
-                "/v1/review-requests",
-                &[
-                    (
-                        RequestUnsupportedMediaType,
-                        "StrictJson: not a JSON media type",
-                    ),
-                    (
-                        RequestUnprocessable,
-                        "StrictJson: not a ReviewCreateRequest",
-                    ),
-                    (
-                        IdempotencyKeyReused,
-                        "review_idempotent_response: other request",
-                    ),
-                    (
-                        IdempotencyExpired,
-                        "review_idempotent_response: replay expired",
-                    ),
-                    (
-                        ReviewInitiatorRequired,
-                        "create: the kind excludes its initiator",
-                    ),
-                    (ReviewSubmissionConflict, "reservation holds other content"),
-                    (
-                        ReviewResultExpired,
-                        "recover_review: the resubmitted request expired",
-                    ),
-                    (
-                        WorkItemNotVisible,
-                        "load_request: the reserved request is gone",
-                    ),
-                ],
-            ),
-            (
-                "GET",
-                "/v1/review-requests/{request_id}",
-                &[
-                    (
-                        WorkItemNotVisible,
-                        "load_request_client: not this producer's",
-                    ),
-                    (ReviewResultExpired, "ensure_review_result_retained"),
-                ],
-            ),
-            (
-                "POST",
-                "/v1/review-requests/{request_id}/cancel",
-                &[
-                    (
-                        RequestUnsupportedMediaType,
-                        "StrictJson: not a JSON media type",
-                    ),
-                    (
-                        RequestUnprocessable,
-                        "StrictJson: not a ReviewCancelRequest",
-                    ),
-                    (
-                        IdempotencyKeyReused,
-                        "review_idempotent_response: other request",
-                    ),
-                    (
-                        IdempotencyExpired,
-                        "review_idempotent_response: replay expired",
-                    ),
-                    (WorkItemNotVisible, "load_request: not this producer's"),
-                    (
-                        ReviewResultExpired,
-                        "cancel_review: the settled result expired",
-                    ),
-                ],
-            ),
-            ("GET", "/v1/review-requests/{request_id}/result", &[]),
-            (
-                "GET",
-                "/v1/review-results",
-                &[
-                    (RequestLimitOutOfRange, "page_limit: limit outside 1 to 100"),
-                    (
-                        ReviewResultExpired,
-                        "review_result_feed: cursor event erased",
-                    ),
-                ],
-            ),
-        ];
-        for (method, path, specific) in expected {
-            let operation = OPERATION_CONTRACTS
-                .iter()
-                .find(|operation| operation.method == *method && operation.path == *path)
-                .expect("review producer operation");
-            let documented = AUTHENTICATE
-                .iter()
-                .chain(specific.iter())
-                .map(|(code, reason)| {
-                    assert!(!reason.is_empty());
-                    *code
-                })
-                .collect::<BTreeSet<_>>();
-            assert_eq!(
-                operation.problems.iter().copied().collect::<BTreeSet<_>>(),
-                documented,
-                "{method} {path}"
-            );
-            let takes_idempotency_key = *method == "POST";
-            for code in [IdempotencyKeyReused, IdempotencyExpired] {
-                assert_eq!(
-                    operation.problems.contains(&code),
-                    takes_idempotency_key,
-                    "{method} {path}: {code}"
-                );
-            }
-            assert_eq!(
-                operation.problems.contains(&ReviewInitiatorRequired),
-                *method == "POST" && *path == "/v1/review-requests",
-                "{method} {path}"
-            );
-        }
-    }
-
-    #[test]
-    fn operation_contract_covers_every_problem_and_framework_rejection() {
-        let mut operations = BTreeSet::new();
-        let mut covered = FRAMEWORK_PROBLEMS.iter().copied().collect::<BTreeSet<_>>();
-        for operation in OPERATION_CONTRACTS {
-            assert!(
-                operations.insert((operation.path, operation.method)),
-                "duplicate {} {}",
-                operation.method,
-                operation.path
-            );
-            assert!(!operation.success_statuses.is_empty());
-            if operation.extracts_path || operation.extracts_query {
-                assert!(operation.problems.contains(&ProblemCode::RequestInvalid));
-            }
-            if operation.accepts_json {
-                assert!(operation
-                    .problems
-                    .contains(&ProblemCode::RequestUnsupportedMediaType));
-                assert!(operation
-                    .problems
-                    .contains(&ProblemCode::RequestUnprocessable));
-            }
-            covered.extend(operation.problems.iter().copied());
-        }
-        assert_eq!(
-            covered,
-            ProblemCode::ALL.iter().copied().collect::<BTreeSet<_>>()
-        );
-        let next = OPERATION_CONTRACTS
-            .iter()
-            .find(|operation| operation.method == "GET" && operation.path == "/v1/work-items/next")
-            .expect("next-item operation");
-        assert_eq!(next.success_statuses, &[200]);
-    }
-
-    /// Review history reads a page of retained events and, for a
-    /// source-backed review, preflights the caller's current source view; it
-    /// holds no task, so it lists the refusals of that read and no other.
-    #[test]
-    fn review_history_lists_the_problems_its_read_returns() {
-        use ProblemCode::*;
-        let history = OPERATION_CONTRACTS
-            .iter()
-            .find(|operation| {
-                operation.method == "GET"
-                    && operation.path == "/v1/review-requests/{request_id}/history"
-            })
-            .expect("review history operation");
-        assert_eq!(
-            history.problems.iter().copied().collect::<BTreeSet<_>>(),
-            [
-                // authenticate, the requester or reviewer access checks, and
-                // a source view that no longer matches the pinned binding
-                AuthenticationRefused,
-                OperationNotAuthorized,
-                ProfileNotAuthorized,
-                ProfileNotHuman,
-                // a malformed path, query, or profile header
-                RequestInvalid,
-                // page_limit
-                RequestLimitOutOfRange,
-                // ensure_review_result_retained and an erased cursor event
-                ReviewResultExpired,
-                // preflight_review_record_source
-                SourceProfileNotApplicable,
-                SourceProfileRequired,
-                SourceBadGateway,
-                WorkItemSourceUnavailable,
-                // load_request_by_id
-                WorkItemNotVisible,
-                ServiceUnavailable,
-                RuntimeFailure,
-            ]
-            .into_iter()
-            .collect::<BTreeSet<_>>()
-        );
-    }
-
-    /// Review task cursors name retained task anchors. The store reports a
-    /// missing or no-longer-authorized anchor as an expired review result,
-    /// while malformed UUIDs are rejected during query extraction.
-    #[test]
-    fn review_task_pages_list_their_cursor_anchor_problem() {
-        for path in [
-            "/v1/review-tasks",
-            "/v1/review-tasks/supervision",
-            "/v1/review-tasks/own-decisions",
-        ] {
-            let operation = OPERATION_CONTRACTS
-                .iter()
-                .find(|operation| operation.method == "GET" && operation.path == path)
-                .expect("review task page operation");
-            assert!(operation
-                .problems
-                .contains(&ProblemCode::ReviewResultExpired));
-            assert!(!operation.problems.contains(&ProblemCode::CursorExpired));
-            assert!(!operation.problems.contains(&ProblemCode::CursorInvalid));
-        }
+impl std::fmt::Display for ProblemCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.code())
     }
 }

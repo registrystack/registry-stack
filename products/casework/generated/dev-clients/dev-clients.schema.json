@@ -1,5 +1,46 @@
 {
   "$defs": {
+    "BregBinding": {
+      "additionalProperties": false,
+      "description": "Environment-specific transport and reader identity. Human display always replaces it.",
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "clientAssertionAudience": {
+          "type": "string"
+        },
+        "clientAssertionKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "clientIdRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "statusProfile": {
+          "type": "string"
+        },
+        "tokenEndpoint": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "statusProfile",
+        "tokenEndpoint",
+        "clientIdRef",
+        "clientAssertionKeyRef"
+      ],
+      "type": "object"
+    },
     "Client": {
       "additionalProperties": false,
       "properties": {
@@ -86,15 +127,25 @@
           },
           "type": "array"
         },
+        "contextProviders": {
+          "additionalProperties": {
+            "$ref": "#/$defs/BregBinding"
+          },
+          "description": "Optional provider connections keyed by their declared deploymentRef.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
         "resource": {
-          "description": "Explicit shared audience accepted independently by Casework and each source.",
+          "description": "Audience accepted by this Casework session.",
           "type": "string"
         },
         "secretFiles": {
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Files copied once to source-prefixed references in the retained private root.",
+          "description": "Owner-only files copied into the retained private secret root.",
           "propertyNames": {
             "$ref": "#/$defs/LocalId"
           },
@@ -105,16 +156,6 @@
             "$ref": "#/$defs/ServiceClient"
           },
           "type": "array"
-        },
-        "sources": {
-          "additionalProperties": {
-            "$ref": "#/$defs/SourceBinding"
-          },
-          "description": "One binding for each source `casework.yaml` declares.",
-          "propertyNames": {
-            "$ref": "#/$defs/LocalId"
-          },
-          "type": "object"
         },
         "taskAuthority": {
           "$ref": "#/$defs/TaskAuthority"
@@ -169,58 +210,6 @@
       "required": [
         "id",
         "scopes"
-      ],
-      "type": "object"
-    },
-    "SourceBinding": {
-      "additionalProperties": false,
-      "description": "One source binding as the clients file writes it. The session copies it\ninto the runtime configuration it writes, where it is that source's\n`sources.<id>` binding with the runtime's default timeouts and\nreconciliation interval.",
-      "properties": {
-        "baseUrl": {
-          "$ref": "#/$defs/Url"
-        },
-        "clientAssertionAudience": {
-          "type": "string"
-        },
-        "clientAssertionKeyRef": {
-          "$ref": "#/$defs/SecretReference"
-        },
-        "clientIdRef": {
-          "$ref": "#/$defs/SecretReference"
-        },
-        "eventSource": {
-          "type": "string"
-        },
-        "readerProfile": {
-          "type": "string"
-        },
-        "resource": {
-          "type": "string"
-        },
-        "scopes": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "tokenEndpoint": {
-          "type": "string"
-        },
-        "trustedRootCertificatesRef": {
-          "$ref": "#/$defs/SecretReference"
-        },
-        "webhookSecretRef": {
-          "$ref": "#/$defs/SecretReference"
-        }
-      },
-      "required": [
-        "baseUrl",
-        "readerProfile",
-        "tokenEndpoint",
-        "clientIdRef",
-        "clientAssertionKeyRef",
-        "webhookSecretRef",
-        "eventSource"
       ],
       "type": "object"
     },

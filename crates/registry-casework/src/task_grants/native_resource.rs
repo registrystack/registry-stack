@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Synthetic governed-request fixture for the complete native task journey.
+//! Native BReg Action fixture for the complete task-grant exchange journey.
 #[path = "../../../registry-breg/tests/support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
@@ -34,7 +34,8 @@ pub(super) const PROJECT: &str = r#"{
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"task-authority-http","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-  "entities":[
+  "datasets":[{"id":"test-dataset"}],
+  "recordTypes":[
     {
       "id":"asset-site",
       "primaryDataset":"test-dataset",
@@ -52,7 +53,6 @@ pub(super) const PROJECT: &str = r#"{
       "route":"placements",
       "mutationMode":"mutable",
       "classification":"internal",
-      "changeControl":{"requiredFor":["patch"]},
       "fields":[
         {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
         {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
@@ -69,13 +69,22 @@ pub(super) const PROJECT: &str = r#"{
         {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
         {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
         {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
-      ],
-      "changeRequest":{
-        "effects":[{"target":{"fromField":"placement"},"operation":"patch","set":{"site":{"fromField":"proposed-site"}}}],
-        "review":{"type":"none"}
-      }
+      ]
     }
   ],
+  "actions":[{
+    "id":"file-correction",
+    "execution":{"mode":"immediate"},
+    "inputs":[
+      {"id":"tenant","type":"string","required":true,"minimumLength":1,"maximumLength":64,"classification":"internal"},
+      {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
+      {"id":"proposed-site","apiName":"proposedSite","type":"reference","target":"asset-site","required":true,"classification":"internal"},
+      {"id":"reason","type":"text","required":true,"maximumLength":1000,"classification":"internal"}
+    ],
+    "plan":{"type":"fixed","effects":[{"id":"correction","target":{"recordType":"correction-request"},"operation":"create","set":{
+      "tenant":{"fromInput":"tenant"},"placement":{"fromInput":"placement"},"proposed-site":{"fromInput":"proposed-site"},"reason":{"fromInput":"reason"}
+    }}]}
+  }],
   "accessProfiles":[
     {
       "id":"steward",
@@ -83,22 +92,20 @@ pub(super) const PROJECT: &str = r#"{
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
       "permissions":{
-        "entities":[
+        "records":[
           {
-            "entity":"asset-site",
+            "recordType":"asset-site",
             "operations":["create","get","list"],
             "readableFields":["tenant","name"],
             "writableFields":["tenant","name"],
             "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
           },
           {
-            "entity":"asset-placement",
-            "operations":["create","get","list","revisions"],
-            "revisionAccess":true,
+            "recordType":"asset-placement",
+            "operations":["create","get","list"],
             "readableFields":["tenant","site"],
             "writableFields":["tenant","site"],
-            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-            "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
           }
         ]
       }
@@ -109,16 +116,23 @@ pub(super) const PROJECT: &str = r#"{
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
       "permissions":{
-        "entities":[
+        "records":[
           {
-            "entity":"correction-request",
-            "operations":["create","get","list","revisions","patch","submit-request","revise-request","cancel-request"],
-            "revisionAccess":true,
+            "recordType":"correction-request",
+            "operations":["get"],
             "readableFields":["tenant","placement","proposed-site","reason"],
-            "writableFields":["tenant","placement","proposed-site","reason"],
             "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
           }
-        ]
+        ],
+        "actions":[{
+          "action":"file-correction","operations":["invoke"],
+          "targets":[
+            {"recordType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]},
+            {"recordType":"asset-placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]},
+            {"recordType":"asset-site","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}
+          ],
+          "results":["correction"]
+        }]
       },
       "actorKind":"agent",
       "requesterClients":["task-agent"],
@@ -131,13 +145,12 @@ pub(super) const PROJECT: &str = r#"{
       "requiredScopes":"unrestricted",
       "requiredPurposes":["apply"],
       "permissions":{
-        "entities":[
+        "records":[
           {
-            "entity":"correction-request",
-            "operations":["get","apply-request"],
+            "recordType":"correction-request",
+            "operations":["get"],
             "readableFields":["tenant","placement","proposed-site","reason"],
-            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-            "applyTargets":[{"entity":"asset-placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
           }
         ]
       }
@@ -272,7 +285,6 @@ pub(super) fn app_with_clients(
 pub(super) struct Response {
     pub(super) status: StatusCode,
     pub(super) body: Value,
-    pub(super) etag: String,
 }
 pub(super) async fn send(
     app: &Router,
@@ -309,15 +321,9 @@ pub(super) async fn send(
         .await
         .unwrap();
     let status = response.status();
-    let etag = response
-        .headers()
-        .get("etag")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_owned();
     let body = serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
         .unwrap();
-    Response { status, etag, body }
+    Response { status, body }
 }
 pub(super) async fn create(
     app: &Router,
@@ -350,40 +356,25 @@ pub(super) fn id(response: &Response) -> String {
         .unwrap()
         .into()
 }
-pub(super) async fn get(app: &Router, id: &str, profile: &str, token: &str) -> Response {
-    let r = send(
-        app,
-        Method::GET,
-        &format!("/v1/records/correction-requests/{id}?accessProfile={profile}"),
-        token,
-        None,
-        None,
-        Value::Null,
-    )
-    .await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
-    r
-}
-pub(super) async fn counts(db: &TestDatabase) -> Vec<i64> {
-    let mut counts = Vec::new();
-    for table in [
-        "registry_revisions",
-        "registry_idempotency",
-        "registry_request_proposals",
-        "registry_request_applications",
-        "registry_request_results",
-        "registry_request_task_authority",
-    ] {
-        counts.push(
-            db.admin
-                .query_one(
-                    &format!("SELECT count(*) FROM registry_internal.{table}"),
-                    &[],
-                )
-                .await
-                .unwrap()
-                .get(0),
-        );
-    }
-    counts
+pub(super) async fn counts(db: &TestDatabase, registry: &CompiledRegistry) -> (i64, i64) {
+    let table = &registry.entities()["correction-request"].physical_table;
+    let records = db
+        .admin
+        .query_one(
+            &format!("SELECT count(*) FROM registry_data.\"{table}\""),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let idempotency = db
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_idempotency",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    (records, idempotency)
 }

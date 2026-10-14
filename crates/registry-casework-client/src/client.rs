@@ -3,24 +3,21 @@ use std::fmt;
 
 use registry_casework_core::{
     AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, AssignmentRequest,
-    BootstrapDirectoryRequest, CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest,
-    CaseloadPreviewPage, CaseloadPreviewQuery, CaseworkAction, ClaimRequest, ClockOccurrenceView,
-    ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
-    DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
-    DirectoryTargetsQuery, DraftResponse, HistoryPage, HoldingsPage, HoldingsQuery,
-    HolidaySetDocument, HolidaySetRevisionInput, ListWorkItemsQuery, MutationResponse,
-    NextWorkItemQuery, OwnReviewDecisionPage, RecoverAttemptRequest, ReleaseRequest,
-    ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse, ReviewClockOccurrence,
-    ReviewContextStrategy, ReviewCreateRequest, ReviewHistoryAudience, ReviewHistoryEntry,
-    ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestAccepted,
-    ReviewRequestView, ReviewResultFeedPage, ReviewSourceBindingStatus, ReviewTaskContext,
-    ReviewTaskContextData, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage,
-    ReviewValidationError, ReviewValidationReason, ReviewerTask, ReviewerTaskState,
-    SaveDraftRequest, SupervisoryReviewTaskPage, WorkItem, WorkItemPage,
-    CASEWORK_PROBLEM_TYPE_BASE, CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, HOLDINGS_PATH,
-    IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES,
-    NEXT_WORK_ITEM_PATH, SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
-    WORK_ITEMS_PATH,
+    BootstrapDirectoryRequest, DelegateRequest, Description, DirectoryResponse,
+    DirectoryTargetPage, DirectoryTargetsQuery, HolidaySetDocument, HolidaySetRevisionInput,
+    OwnReviewDecisionPage, ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse,
+    ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest, ReviewCaseloadPreview,
+    ReviewCaseloadResult, ReviewClockOccurrence, ReviewClockRecomputeApplyRequest,
+    ReviewClockRecomputePreview, ReviewClockRecomputeRequest, ReviewClockRecomputeResult,
+    ReviewContextPolicy, ReviewCreateRequest, ReviewHistoryAudience, ReviewHistoryEntry,
+    ReviewHistoryPage, ReviewNoteRequest, ReviewPolicyClosure, ReviewRequestAccepted,
+    ReviewRequestView, ReviewResultFeedPage, ReviewSourceBindingStatus, ReviewStaffingQuery,
+    ReviewTask, ReviewTaskContext, ReviewTaskContextData, ReviewTaskDraft, ReviewTaskDraftInput,
+    ReviewTaskPage, ReviewTaskState, ReviewValidationError, ReviewValidationReason,
+    SupervisoryReviewTaskPage, CASEWORK_PROBLEM_TYPE_BASE, CASEWORK_PROFILE_HEADER,
+    DIRECTORY_TARGETS_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
+    MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER,
+    VALIDATION_REASON_HEADER,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -46,7 +43,7 @@ use uuid::Uuid;
 use crate::{
     CaseworkAuth, CaseworkClientConfig, CaseworkClientError, CaseworkComplete, CaseworkProblemCode,
     CaseworkProtocolFailure, ReviewPageQuery, ReviewResultResponse, ReviewTaskDecisionRequest,
-    ReviewTaskQuery, SupervisoryReviewTaskQuery, WorkItemHistoryQuery,
+    SupervisoryReviewTaskQuery,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -237,13 +234,14 @@ impl CaseworkClient {
             .map_err(CaseworkClientError::from_review)
     }
 
-    pub async fn review_kinds(
+    pub async fn review_policies(
         &self,
         auth: CaseworkAuth<'_>,
-    ) -> Result<CaseworkComplete<Vec<ReviewKindPolicySnapshot>>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<Vec<ReviewPolicyClosure>>, CaseworkClientError> {
         reject_source_profile(&auth)?;
-        let complete: CaseworkComplete<Vec<ReviewKindPolicySnapshot>> =
-            self.get_json(&auth, &["v1", "review-kinds"], &[]).await?;
+        let complete: CaseworkComplete<Vec<ReviewPolicyClosure>> = self
+            .get_json(&auth, &["v1", "review-policies"], &[])
+            .await?;
         if complete
             .value
             .iter()
@@ -258,17 +256,17 @@ impl CaseworkClient {
         Ok(complete)
     }
 
-    pub async fn review_kind(
+    pub async fn review_policy(
         &self,
         auth: CaseworkAuth<'_>,
-        kind_id: &str,
-    ) -> Result<CaseworkComplete<ReviewKindPolicySnapshot>, CaseworkClientError> {
+        policy_id: &str,
+    ) -> Result<CaseworkComplete<ReviewPolicyClosure>, CaseworkClientError> {
         reject_source_profile(&auth)?;
-        validate_identifier(kind_id, "the review kind identifier is invalid")?;
-        let complete: CaseworkComplete<ReviewKindPolicySnapshot> = self
-            .get_json(&auth, &["v1", "review-kinds", kind_id], &[])
+        validate_identifier(policy_id, "the review policy identifier is invalid")?;
+        let complete: CaseworkComplete<ReviewPolicyClosure> = self
+            .get_json(&auth, &["v1", "review-policies", policy_id], &[])
             .await?;
-        if complete.value.identity.id != kind_id || complete.value.verify().is_err() {
+        if complete.value.identity.id != policy_id || complete.value.verify().is_err() {
             return Err(protocol(
                 StatusCode::OK,
                 CaseworkProtocolFailure::Body,
@@ -281,12 +279,11 @@ impl CaseworkClient {
     pub async fn review_tasks(
         &self,
         auth: CaseworkAuth<'_>,
-        query: &ReviewTaskQuery,
+        query: &ReviewStaffingQuery,
     ) -> Result<CaseworkComplete<ReviewTaskPage>, CaseworkClientError> {
-        if let Some(queue) = &query.queue {
-            validate_identifier(queue, "the review queue identifier is invalid")?;
-        }
-        validate_review_page(query.limit)?;
+        query.check().map_err(|_| {
+            CaseworkClientError::invalid_request("the review task query is invalid")
+        })?;
         let request = self.authorized(
             self.http
                 .get(self.url(&["v1", "review-tasks"])?)
@@ -295,9 +292,10 @@ impl CaseworkClient {
         )?;
         let complete: CaseworkComplete<ReviewTaskPage> =
             self.send_json(request, StatusCode::OK).await?;
-        if page_exceeds_limit(complete.value.items.len(), query.limit)
+        if !valid_staffing_page(&complete.value.items, query)
             || complete.value.items.iter().any(|task| {
-                task.decided_by_caller.is_some()
+                !staffing_task_matches(task, query, auth.profile)
+                    || task.decided_by_caller.is_some()
                     || task.decision_receipt.is_some()
                     || !review_task_matches_ownership(&task.state, query.ownership)
                     || query
@@ -402,7 +400,7 @@ impl CaseworkClient {
         &self,
         auth: CaseworkAuth<'_>,
         task_id: Uuid,
-    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<ReviewTask>, CaseworkClientError> {
         let complete = self
             .get_json(&auth, &["v1", "review-tasks", &task_id.to_string()], &[])
             .await?;
@@ -421,7 +419,7 @@ impl CaseworkClient {
                 &[],
             )
             .await?;
-        let snapshot = &complete.value.policy_snapshot;
+        let snapshot = &complete.value.policy_closure;
         if snapshot.verify().is_err()
             || complete.value.task_id != task_id
             || snapshot.identity.id != complete.value.policy.id
@@ -444,7 +442,6 @@ impl CaseworkClient {
         task_id: Uuid,
     ) -> Result<CaseworkComplete<registry_casework_core::TaskTemplatePreviews>, CaseworkClientError>
     {
-        require_source_profile(&auth)?;
         self.get_json(
             &auth,
             &["v1", "review-tasks", &task_id.to_string(), "task-templates"],
@@ -458,7 +455,6 @@ impl CaseworkClient {
         auth: CaseworkAuth<'_>,
         task_id: Uuid,
     ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantList>, CaseworkClientError> {
-        require_source_profile(&auth)?;
         self.get_json(
             &auth,
             &["v1", "review-tasks", &task_id.to_string(), "task-grants"],
@@ -475,7 +471,6 @@ impl CaseworkClient {
         idempotency_key: &str,
         approval: &registry_casework_core::TaskApprovalRequest,
     ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantView>, CaseworkClientError> {
-        require_source_profile(&auth)?;
         let complete: CaseworkComplete<registry_casework_core::TaskGrantView> = self
             .mutate(
                 &auth,
@@ -533,7 +528,7 @@ impl CaseworkClient {
         task_id: Uuid,
         expected_revision: i64,
         idempotency_key: &str,
-    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<ReviewTask>, CaseworkClientError> {
         self.review_task_empty_mutation(
             auth,
             task_id,
@@ -551,7 +546,7 @@ impl CaseworkClient {
         task_id: Uuid,
         expected_revision: i64,
         idempotency_key: &str,
-    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<ReviewTask>, CaseworkClientError> {
         reject_source_profile(&auth)?;
         self.review_task_empty_mutation(
             auth,
@@ -571,7 +566,7 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: &str,
         assignment: &AssignmentRequest,
-    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<ReviewTask>, CaseworkClientError> {
         let complete = self
             .mutate(
                 &auth,
@@ -597,7 +592,7 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: &str,
         delegation: &DelegateRequest,
-    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<ReviewTask>, CaseworkClientError> {
         let complete = self
             .mutate(
                 &auth,
@@ -643,7 +638,7 @@ impl CaseworkClient {
                     .map_err(|error| CaseworkClientError::Transport {
                         kind: read_failure_kind(&error),
                     })?;
-                let value: ReviewTaskDraft = serde_json::from_slice(&body).map_err(|_| {
+                let value: ReviewTaskDraft = decode_response_json(&body).map_err(|_| {
                     protocol(
                         status,
                         CaseworkProtocolFailure::Body,
@@ -686,6 +681,9 @@ impl CaseworkClient {
         idempotency_key: &str,
         draft: &ReviewTaskDraftInput,
     ) -> Result<CaseworkComplete<ReviewTaskDraft>, CaseworkClientError> {
+        draft.check().map_err(|_| {
+            CaseworkClientError::invalid_request("the private decision draft is invalid")
+        })?;
         let complete: CaseworkComplete<ReviewTaskDraft> = self
             .mutate_with_method(
                 &auth,
@@ -741,6 +739,10 @@ impl CaseworkClient {
         idempotency_key: &str,
         decision: &ReviewTaskDecisionRequest,
     ) -> Result<CaseworkComplete<()>, CaseworkClientError> {
+        decision
+            .decision
+            .check_input()
+            .map_err(|_| CaseworkClientError::invalid_request("the review decision is invalid"))?;
         validate_mutation(expected_revision, idempotency_key)?;
         let request = self.mutation_headers(
             self.authorized(
@@ -892,7 +894,7 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: &str,
         expected_status: StatusCode,
-    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<ReviewTask>, CaseworkClientError> {
         validate_mutation(expected_revision, idempotency_key)?;
         let request = self.authorized(
             self.http.post(self.url(&[
@@ -904,7 +906,7 @@ impl CaseworkClient {
             &auth,
         )?;
         let request = self.mutation_headers(request, expected_revision, idempotency_key)?;
-        let complete: CaseworkComplete<ReviewerTask> =
+        let complete: CaseworkComplete<ReviewTask> =
             self.send_keyed_json(request, expected_status).await?;
         require_review_task_transition(
             complete,
@@ -913,125 +915,6 @@ impl CaseworkClient {
             expected_revision,
             expected_status,
         )
-    }
-
-    pub async fn list_work_items(
-        &self,
-        auth: CaseworkAuth<'_>,
-        query: &ListWorkItemsQuery,
-    ) -> Result<CaseworkComplete<WorkItemPage>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        query
-            .subject()
-            .map_err(|_| CaseworkClientError::invalid_request("the subject selector is invalid"))?;
-        query.reference().map_err(|_| {
-            CaseworkClientError::invalid_request("the display reference is invalid")
-        })?;
-        validate_page(query.cursor.as_deref(), query.limit)?;
-        let url = self.url_from_constant(WORK_ITEMS_PATH)?;
-        let request = self.authorized(self.http.get(url).query(query), &auth)?;
-        self.send_json(request, StatusCode::OK).await
-    }
-
-    pub async fn next_work_item(
-        &self,
-        auth: CaseworkAuth<'_>,
-        query: &NextWorkItemQuery,
-    ) -> Result<CaseworkComplete<WorkItemPage>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        if let Some(queue) = query.queue.as_deref() {
-            validate_identifier(queue, "the queue identifier is invalid")?;
-        }
-        validate_page(query.cursor.as_deref(), None)?;
-        let url = self.url_from_constant(NEXT_WORK_ITEM_PATH)?;
-        let request = self.authorized(self.http.get(url).query(query), &auth)?;
-        let page: CaseworkComplete<WorkItemPage> = self.send_json(request, StatusCode::OK).await?;
-        if page.value.items.len() > 1 {
-            return Err(protocol(
-                StatusCode::OK,
-                CaseworkProtocolFailure::Body,
-                Some(page.trace_id),
-            ));
-        }
-        Ok(page)
-    }
-
-    pub async fn get_work_item(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-    ) -> Result<CaseworkComplete<WorkItem>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        self.get_json(&auth, &["v1", "work-items", &item_id.to_string()], &[])
-            .await
-    }
-
-    pub async fn preview_task_templates(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-    ) -> Result<CaseworkComplete<registry_casework_core::TaskTemplatePreviews>, CaseworkClientError>
-    {
-        require_source_profile(&auth)?;
-        self.get_json(
-            &auth,
-            &["v1", "work-items", &item_id.to_string(), "task-templates"],
-            &[],
-        )
-        .await
-    }
-
-    pub async fn list_task_grants(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-    ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantList>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        self.get_json(
-            &auth,
-            &["v1", "work-items", &item_id.to_string(), "task-grants"],
-            &[],
-        )
-        .await
-    }
-
-    pub async fn approve_task_grant(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        expected_revision: i64,
-        idempotency_key: &str,
-        approval: &registry_casework_core::TaskApprovalRequest,
-    ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantView>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        self.mutate(
-            &auth,
-            &["v1", "work-items", &item_id.to_string(), "task-grants"],
-            expected_revision,
-            idempotency_key,
-            approval,
-        )
-        .await
-    }
-
-    pub async fn revoke_task_grant(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        grant_id: Uuid,
-    ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantRevocation>, CaseworkClientError>
-    {
-        require_source_profile(&auth)?;
-        let url = self.url(&[
-            "v1",
-            "work-items",
-            &item_id.to_string(),
-            "task-grants",
-            &grant_id.to_string(),
-            "revoke",
-        ])?;
-        self.send_json(self.authorized(self.http.post(url), &auth)?, StatusCode::OK)
-            .await
     }
 
     /// Obtain an assertion using this agent's short-lived bootstrap token.
@@ -1074,193 +957,81 @@ impl CaseworkClient {
         self.send_json(request, StatusCode::OK).await
     }
 
-    pub async fn claim_work_item(
+    /// Return the first visible eligible task in the requested ordering.
+    pub async fn next_review_task(
         &self,
         auth: CaseworkAuth<'_>,
-        action: &CaseworkAction,
-        idempotency_key: &str,
-    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        self.mutate_action(
+        query: &ReviewStaffingQuery,
+    ) -> Result<CaseworkComplete<Option<ReviewTask>>, CaseworkClientError> {
+        query.check().map_err(|_| {
+            CaseworkClientError::invalid_request("the review task query is invalid")
+        })?;
+        let request = self.authorized(
+            self.http
+                .get(self.url(&["v1", "review-tasks", "next"])?)
+                .query(query),
             &auth,
-            action,
-            "claim",
-            "claim",
-            idempotency_key,
-            &ClaimRequest {},
-        )
-        .await
-    }
-
-    pub async fn release_work_item(
-        &self,
-        auth: CaseworkAuth<'_>,
-        action: &CaseworkAction,
-        idempotency_key: &str,
-    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        self.mutate_action(
-            &auth,
-            action,
-            "release",
-            "release",
-            idempotency_key,
-            &ReleaseRequest {},
-        )
-        .await
-    }
-
-    pub async fn get_draft(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-    ) -> Result<CaseworkComplete<DraftResponse>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        self.get_json(
-            &auth,
-            &["v1", "work-items", &item_id.to_string(), "draft"],
-            &[],
-        )
-        .await
-    }
-
-    pub async fn save_draft(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        expected_revision: i64,
-        idempotency_key: &str,
-        draft: &SaveDraftRequest,
-    ) -> Result<CaseworkComplete<DraftResponse>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        self.mutate_with_method(
-            &auth,
-            Method::PUT,
-            &["v1", "work-items", &item_id.to_string(), "draft"],
-            expected_revision,
-            idempotency_key,
-            draft,
-        )
-        .await
-    }
-
-    pub async fn delete_draft(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        expected_revision: i64,
-        idempotency_key: &str,
-    ) -> Result<CaseworkComplete<()>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        validate_mutation(expected_revision, idempotency_key)?;
-        let url = self.url(&["v1", "work-items", &item_id.to_string(), "draft"])?;
-        let request = self.mutation_headers(
-            self.authorized(self.http.delete(url), &auth)?,
-            expected_revision,
-            idempotency_key,
         )?;
-        self.send_keyed_empty(request, StatusCode::NO_CONTENT).await
-    }
-
-    pub async fn decide_work_item(
-        &self,
-        auth: CaseworkAuth<'_>,
-        action: &CaseworkAction,
-        idempotency_key: &str,
-        decision: &DecideRequest,
-    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        if action.operation != decision.operation.as_str() {
-            return Err(CaseworkClientError::invalid_request(
-                "the offered action does not match the decision",
+        let complete: CaseworkComplete<Option<ReviewTask>> =
+            self.send_json(request, StatusCode::OK).await?;
+        if complete.value.as_ref().is_some_and(|task| {
+            !staffing_task_matches(task, query, auth.profile)
+                || !review_task_matches_ownership(
+                    &task.state,
+                    Some(
+                        query
+                            .ownership
+                            .unwrap_or(registry_casework_core::ReviewTaskOwnership::Unclaimed),
+                    ),
+                )
+                || task.decided_by_caller.is_some()
+                || task.decision_receipt.is_some()
+                || query
+                    .queue
+                    .as_ref()
+                    .is_some_and(|queue| &task.queue != queue)
+        }) {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
             ));
         }
-        self.mutate_action(
+        Ok(complete)
+    }
+
+    /// Bounded holdings under the caller's current disclosure and staffing authority.
+    pub async fn review_task_holdings(
+        &self,
+        auth: CaseworkAuth<'_>,
+        query: &ReviewStaffingQuery,
+    ) -> Result<CaseworkComplete<ReviewTaskPage>, CaseworkClientError> {
+        query.check().map_err(|_| {
+            CaseworkClientError::invalid_request("the review task query is invalid")
+        })?;
+        let request = self.authorized(
+            self.http
+                .get(self.url(&["v1", "review-tasks", "holdings"])?)
+                .query(query),
             &auth,
-            action,
-            decision.operation.as_str(),
-            "decisions",
-            idempotency_key,
-            decision,
-        )
-        .await
-    }
-
-    pub async fn recover_decision(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        attempt_id: Uuid,
-        recovery: &RecoverAttemptRequest,
-    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        let url = self.url(&[
-            "v1",
-            "work-items",
-            &item_id.to_string(),
-            "attempts",
-            &attempt_id.to_string(),
-            "recover",
-        ])?;
-        let request = self.authorized(self.http.post(url).json(recovery), &auth)?;
-        self.send_json(request, StatusCode::OK).await
-    }
-
-    /// Recover the exact prepared decision identified by the original key.
-    ///
-    /// This form remains usable when the response that contained the generated
-    /// attempt identifier was lost. The service binds the lookup to the
-    /// authenticated actor, selected profiles, work item, and idempotency key.
-    pub async fn recover_decision_by_key(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        idempotency_key: &str,
-        recovery: &RecoverAttemptRequest,
-    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        validate_idempotency_key(idempotency_key)?;
-        let url = self.url(&[
-            "v1",
-            "work-items",
-            &item_id.to_string(),
-            "attempts",
-            "recover",
-        ])?;
-        let request = self
-            .authorized(self.http.post(url).json(recovery), &auth)?
-            .header(
-                HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
-                HeaderValue::from_str(idempotency_key).map_err(|_| {
-                    CaseworkClientError::invalid_request("the idempotency key is invalid")
-                })?,
-            );
-        self.send_json(request, StatusCode::OK).await
-    }
-
-    pub async fn work_item_history(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        query: &WorkItemHistoryQuery,
-    ) -> Result<CaseworkComplete<HistoryPage>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        validate_page(query.cursor.as_deref(), query.limit)?;
-        let url = self.url(&["v1", "work-items", &item_id.to_string(), "history"])?;
-        let request = self.authorized(self.http.get(url).query(query), &auth)?;
-        self.send_json(request, StatusCode::OK).await
-    }
-
-    pub async fn holdings(
-        &self,
-        auth: CaseworkAuth<'_>,
-        query: &HoldingsQuery,
-    ) -> Result<CaseworkComplete<HoldingsPage>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        validate_page(query.cursor.as_deref(), query.limit)?;
-        let url = self.url_from_constant(HOLDINGS_PATH)?;
-        let request = self.authorized(self.http.get(url).query(query), &auth)?;
-        self.send_json(request, StatusCode::OK).await
+        )?;
+        let complete: CaseworkComplete<ReviewTaskPage> =
+            self.send_json(request, StatusCode::OK).await?;
+        if !valid_staffing_page(&complete.value.items, query)
+            || complete.value.items.iter().any(|task| {
+                !staffing_task_matches(task, query, auth.profile)
+                    || !matches!(task.state, ReviewTaskState::Held { .. })
+                    || task.decided_by_caller.is_some()
+                    || task.decision_receipt.is_some()
+            })
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     pub async fn directory(
@@ -1388,93 +1159,78 @@ impl CaseworkClient {
         self.send_keyed_empty(request, StatusCode::NO_CONTENT).await
     }
 
-    pub async fn assign_work_item(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        expected_revision: i64,
-        idempotency_key: &str,
-        request: &AssignmentRequest,
-    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
-        self.mutate(
-            &auth,
-            &["v1", "work-items", &item_id.to_string(), "assign"],
-            expected_revision,
-            idempotency_key,
-            request,
-        )
-        .await
-    }
-
-    pub async fn delegate_work_item(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        expected_revision: i64,
-        idempotency_key: &str,
-        request: &DelegateRequest,
-    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
-        self.mutate(
-            &auth,
-            &["v1", "work-items", &item_id.to_string(), "delegate"],
-            expected_revision,
-            idempotency_key,
-            request,
-        )
-        .await
-    }
-
     pub async fn preview_caseload_move(
         &self,
         auth: CaseworkAuth<'_>,
-        movement: &CaseloadMoveRequest,
-        query: &CaseloadPreviewQuery,
-    ) -> Result<CaseworkComplete<CaseloadPreviewPage>, CaseworkClientError> {
-        validate_page(query.cursor.as_deref(), query.limit)?;
+        movement: &ReviewCaseloadMoveRequest,
+    ) -> Result<CaseworkComplete<ReviewCaseloadPreview>, CaseworkClientError> {
+        movement
+            .check()
+            .map_err(|_| CaseworkClientError::invalid_request("the caseload move is invalid"))?;
         let request = self.authorized(
             self.http
                 .post(self.url(&["v1", "directory", "caseload", "preview"])?)
-                .query(query)
                 .json(movement),
             &auth,
         )?;
-        self.send_json(request, StatusCode::OK).await
+        let complete: CaseworkComplete<ReviewCaseloadPreview> =
+            self.send_json(request, StatusCode::OK).await?;
+        if complete.value.preview_id.is_nil()
+            || complete.value.directory_revision < 0
+            || !valid_staffing_tasks(
+                complete
+                    .value
+                    .tasks
+                    .iter()
+                    .map(|task| (task.task_id, task.revision)),
+            )
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     pub async fn apply_caseload_move(
         &self,
         auth: CaseworkAuth<'_>,
         idempotency_key: &str,
-        request: &CaseloadApplyRequest,
-    ) -> Result<CaseworkComplete<Vec<CaseloadItemResult>>, CaseworkClientError> {
+        input: &ReviewCaseloadApplyRequest,
+    ) -> Result<CaseworkComplete<ReviewCaseloadResult>, CaseworkClientError> {
         validate_idempotency_key(idempotency_key)?;
-        if request.items.is_empty()
-            || request.items.len() > 100
-            || request.items.iter().any(|item| item.expected_revision <= 0)
-            || request
-                .items
-                .iter()
-                .map(|item| item.item_id)
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != request.items.len()
-        {
-            return Err(CaseworkClientError::invalid_request(
-                "select between 1 and 100 distinct caseload items with positive revisions",
-            ));
-        }
+        input
+            .check()
+            .map_err(|_| CaseworkClientError::invalid_request("the caseload preview is invalid"))?;
         let request = self
             .authorized(
                 self.http
                     .post(self.url(&["v1", "directory", "caseload", "apply"])?)
-                    .json(request),
+                    .json(input),
                 &auth,
             )?
             .header(
                 HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
                 idempotency_key,
             );
-        self.send_keyed_json(request, StatusCode::OK).await
+        let complete: CaseworkComplete<ReviewCaseloadResult> =
+            self.send_keyed_json(request, StatusCode::OK).await?;
+        if !valid_staffing_tasks(
+            complete
+                .value
+                .moved
+                .iter()
+                .map(|task| (task.task_id, task.revision)),
+        ) {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     pub async fn update_directory_team(
@@ -1492,20 +1248,6 @@ impl CaseworkClient {
             expected_directory_revision,
             idempotency_key,
             request,
-        )
-        .await
-    }
-
-    pub async fn work_item_clocks(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-    ) -> Result<CaseworkComplete<Vec<ClockOccurrenceView>>, CaseworkClientError> {
-        require_source_profile(&auth)?;
-        self.get_json(
-            &auth,
-            &["v1", "work-items", &item_id.to_string(), "clocks"],
-            &[],
         )
         .await
     }
@@ -1555,24 +1297,56 @@ impl CaseworkClient {
     pub async fn preview_clock_recompute(
         &self,
         auth: CaseworkAuth<'_>,
-        input: &ClockRecomputeRequest,
-    ) -> Result<CaseworkComplete<ClockRecomputePreview>, CaseworkClientError> {
+        input: &ReviewClockRecomputeRequest,
+    ) -> Result<CaseworkComplete<ReviewClockRecomputePreview>, CaseworkClientError> {
+        input.check().map_err(|_| {
+            CaseworkClientError::invalid_request("the clock recompute request is invalid")
+        })?;
         let request = self.authorized(
             self.http
                 .post(self.url(&["v1", "directory", "clocks", "recompute", "preview"])?)
                 .json(input),
             &auth,
         )?;
-        self.send_json(request, StatusCode::OK).await
+        let complete: CaseworkComplete<ReviewClockRecomputePreview> =
+            self.send_json(request, StatusCode::OK).await?;
+        let actual: std::collections::BTreeSet<_> = complete
+            .value
+            .tasks
+            .iter()
+            .map(|task| task.task_id)
+            .collect();
+        let expected: std::collections::BTreeSet<_> = input.task_ids.iter().copied().collect();
+        if complete.value.preview_id.is_nil()
+            || complete.value.directory_revision < 0
+            || actual != expected
+            || !valid_staffing_tasks(
+                complete
+                    .value
+                    .tasks
+                    .iter()
+                    .map(|task| (task.task_id, task.revision)),
+            )
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     pub async fn apply_clock_recompute(
         &self,
         auth: CaseworkAuth<'_>,
         idempotency_key: &str,
-        input: &ClockRecomputeApplyRequest,
-    ) -> Result<CaseworkComplete<ClockRecomputeResult>, CaseworkClientError> {
+        input: &ReviewClockRecomputeApplyRequest,
+    ) -> Result<CaseworkComplete<ReviewClockRecomputeResult>, CaseworkClientError> {
         validate_idempotency_key(idempotency_key)?;
+        input.check().map_err(|_| {
+            CaseworkClientError::invalid_request("the clock recompute preview is invalid")
+        })?;
         let request = self
             .authorized(
                 self.http
@@ -1584,7 +1358,22 @@ impl CaseworkClient {
                 HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
                 idempotency_key,
             );
-        self.send_keyed_json(request, StatusCode::OK).await
+        let complete: CaseworkComplete<ReviewClockRecomputeResult> =
+            self.send_keyed_json(request, StatusCode::OK).await?;
+        if !valid_staffing_tasks(
+            complete
+                .value
+                .tasks
+                .iter()
+                .map(|task| (task.task_id, task.revision)),
+        ) {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     async fn get_json<T: DeserializeOwned>(
@@ -1614,32 +1403,6 @@ impl CaseworkClient {
             body,
         )
         .await
-    }
-
-    async fn mutate_action<T: DeserializeOwned, B: Serialize + ?Sized>(
-        &self,
-        auth: &CaseworkAuth<'_>,
-        action: &CaseworkAction,
-        expected_operation: &str,
-        path_suffix: &str,
-        idempotency_key: &str,
-        body: &B,
-    ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
-        if action.operation != expected_operation {
-            return Err(CaseworkClientError::invalid_request(
-                "the offered Casework action has the wrong operation",
-            ));
-        }
-        validate_idempotency_key(idempotency_key)?;
-        validate_if_match(&action.if_match)?;
-        let segments = action_segments(&action.href, path_suffix)?;
-        let request = self.http.post(self.url(&segments)?).json(body);
-        let request = self.mutation_headers_value(
-            self.authorized(request, auth)?,
-            &action.if_match,
-            idempotency_key,
-        )?;
-        self.send_keyed_json(request, StatusCode::OK).await
     }
 
     async fn mutate_with_method<T: DeserializeOwned, B: Serialize + ?Sized>(
@@ -1814,7 +1577,7 @@ impl CaseworkClient {
             .map_err(|error| CaseworkClientError::Transport {
                 kind: read_failure_kind(&error),
             })?;
-        let value = serde_json::from_slice(&body).map_err(|_| {
+        let value = decode_response_json(&body).map_err(|_| {
             protocol(
                 status,
                 CaseworkProtocolFailure::Body,
@@ -1926,25 +1689,9 @@ impl CaseworkClient {
         {
             return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
         }
-        let original_attempt_id = match (&code, original_attempt_values.as_slice()) {
-            (CaseworkProblemCode::WorkItemRecoveryPending, [value]) => {
-                let Ok(text) = value.to_str() else {
-                    return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
-                };
-                let Ok(attempt_id) = Uuid::parse_str(text) else {
-                    return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
-                };
-                if attempt_id.hyphenated().to_string() != text {
-                    return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
-                }
-                Some(attempt_id)
-            }
-            (CaseworkProblemCode::WorkItemRecoveryPending, []) => None,
-            (_, [_, ..]) => {
-                return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
-            }
-            (_, []) => None,
-        };
+        if !original_attempt_values.is_empty() {
+            return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
+        }
         let validation = match (
             validation_path_values.as_slice(),
             validation_reason_values.as_slice(),
@@ -1972,22 +1719,26 @@ impl CaseworkClient {
             code,
             detail: expected_text.map(|(_, detail)| detail.to_owned()),
             trace_id,
-            original_attempt_id,
             validation,
         }
     }
 }
 
+fn decode_response_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, ()> {
+    let value = registry_platform_canonical_json::parse_json_strict(body).map_err(|_| ())?;
+    serde_json::from_value(value).map_err(|_| ())
+}
+
 fn require_review_task_id(
-    complete: CaseworkComplete<ReviewerTask>,
+    complete: CaseworkComplete<ReviewTask>,
     expected_task_id: Uuid,
     status: StatusCode,
-) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+) -> Result<CaseworkComplete<ReviewTask>, CaseworkClientError> {
     // Caller decision details belong to a single decided-task read, and only
     // the deciding principal receives the bounded receipt.
     if complete.value.task_id != expected_task_id
         || complete.value.decided_by_caller.is_some()
-            != matches!(complete.value.state, ReviewerTaskState::Decided)
+            != matches!(complete.value.state, ReviewTaskState::Decided)
         || complete.value.decision_receipt.is_some()
             != (complete.value.decided_by_caller == Some(true))
         || complete
@@ -2045,21 +1796,101 @@ fn valid_decision_receipt(receipt: &registry_casework_core::ReviewDecisionReceip
 }
 
 fn review_task_matches_ownership(
-    state: &ReviewerTaskState,
+    state: &ReviewTaskState,
     ownership: Option<registry_casework_core::ReviewTaskOwnership>,
 ) -> bool {
     match ownership {
-        None => matches!(
-            state,
-            ReviewerTaskState::Open | ReviewerTaskState::Held { .. }
-        ),
+        None => matches!(state, ReviewTaskState::Open | ReviewTaskState::Held { .. }),
         Some(registry_casework_core::ReviewTaskOwnership::AssignedToMe) => {
-            matches!(state, ReviewerTaskState::Held { .. })
+            matches!(state, ReviewTaskState::Held { .. })
         }
         Some(registry_casework_core::ReviewTaskOwnership::Unclaimed) => {
-            *state == ReviewerTaskState::Open
+            *state == ReviewTaskState::Open
         }
     }
+}
+
+fn valid_staffing_page(tasks: &[ReviewTask], query: &ReviewStaffingQuery) -> bool {
+    if page_exceeds_limit(tasks.len(), query.limit)
+        || tasks
+            .iter()
+            .map(|task| task.task_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != tasks.len()
+    {
+        return false;
+    }
+    tasks.windows(2).all(|pair| {
+        use registry_casework_core::ReviewTaskSort;
+        let (left, right) = (&pair[0], &pair[1]);
+        let primary = match query.sort {
+            ReviewTaskSort::Due => match (left.deadline_at, right.deadline_at) {
+                (Some(left), Some(right)) => left.cmp(&right),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            },
+            ReviewTaskSort::Subject => (
+                &left.subject.source,
+                &left.subject.subject_type,
+                &left.subject.id,
+                &left.subject.version,
+                left.subject.digest.as_str(),
+            )
+                .cmp(&(
+                    &right.subject.source,
+                    &right.subject.subject_type,
+                    &right.subject.id,
+                    &right.subject.version,
+                    right.subject.digest.as_str(),
+                )),
+            ReviewTaskSort::Reference => {
+                match (&left.display_reference, &right.display_reference) {
+                    (Some(left), Some(right)) => left.cmp(right),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
+        };
+        primary
+            .then_with(|| left.created_at.cmp(&right.created_at))
+            .then_with(|| left.task_id.cmp(&right.task_id))
+            .is_le()
+    })
+}
+
+fn staffing_task_matches(task: &ReviewTask, query: &ReviewStaffingQuery, profile: &str) -> bool {
+    task.revision > 0
+        && !task.task_id.is_nil()
+        && query
+            .queue
+            .as_ref()
+            .is_none_or(|queue| queue == &task.queue)
+        && query.subject().is_ok_and(|subject| {
+            subject
+                .as_ref()
+                .is_none_or(|subject| subject == &task.subject)
+        })
+        && query
+            .reference
+            .as_ref()
+            .is_none_or(|reference| task.display_reference.as_ref() == Some(reference))
+        && task
+            .eligible_profiles
+            .iter()
+            .any(|eligible| eligible == profile)
+}
+
+fn valid_staffing_tasks(tasks: impl Iterator<Item = (Uuid, i64)>) -> bool {
+    let mut ids = std::collections::BTreeSet::new();
+    for (id, revision) in tasks {
+        if id.is_nil() || revision <= 0 || !ids.insert(id) || ids.len() > MAXIMUM_PAGE_SIZE {
+            return false;
+        }
+    }
+    true
 }
 
 fn page_exceeds_limit(item_count: usize, requested_limit: Option<usize>) -> bool {
@@ -2070,12 +1901,12 @@ fn page_exceeds_limit(item_count: usize, requested_limit: Option<usize>) -> bool
 /// perform, not only the task it names: the revision advances by exactly one
 /// and the state is a legal successor for that mutation.
 fn require_review_task_transition(
-    complete: CaseworkComplete<ReviewerTask>,
+    complete: CaseworkComplete<ReviewTask>,
     expected_task_id: Uuid,
     transition: ReviewTaskTransition,
     expected_revision: i64,
     status: StatusCode,
-) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+) -> Result<CaseworkComplete<ReviewTask>, CaseworkClientError> {
     if complete.value.task_id != expected_task_id
         || complete.value.decided_by_caller.is_some()
         || complete.value.decision_receipt.is_some()
@@ -2108,20 +1939,20 @@ impl ReviewTaskTransition {
         }
     }
 
-    fn completed(self, task: &ReviewerTask, expected_revision: i64) -> bool {
+    fn completed(self, task: &ReviewTask, expected_revision: i64) -> bool {
         expected_revision.checked_add(1) == Some(task.revision)
             && match self {
                 ReviewTaskTransition::Claim => {
-                    matches!(task.state, ReviewerTaskState::Held { .. })
+                    matches!(task.state, ReviewTaskState::Held { .. })
                 }
-                ReviewTaskTransition::Release => task.state == ReviewerTaskState::Open,
+                ReviewTaskTransition::Release => task.state == ReviewTaskState::Open,
                 // Assignment and delegation settle the task on the requested
                 // cover when one is eligible and leave it open otherwise, so
                 // either successor state proves the mutation; the revision
                 // bump rules out an untouched row.
                 ReviewTaskTransition::Assign | ReviewTaskTransition::Delegate => matches!(
                     task.state,
-                    ReviewerTaskState::Open | ReviewerTaskState::Held { .. }
+                    ReviewTaskState::Open | ReviewTaskState::Held { .. }
                 ),
             }
     }
@@ -2134,17 +1965,17 @@ impl ReviewTaskTransition {
 /// pinned occurrence's projection: version and integrity match the caller's
 /// subject binding, and the display satisfies the kind's display schema.
 fn review_task_context_matches_policy(value: &ReviewTaskContext) -> bool {
-    match (&value.context, value.policy_snapshot.context_strategy) {
-        (ReviewTaskContextData::Submitted { snapshot }, ReviewContextStrategy::Submitted) => {
-            value.policy_snapshot.validate_display(snapshot).is_ok()
+    match (&value.context, &value.policy_closure.context) {
+        (ReviewTaskContextData::Submitted { snapshot }, ReviewContextPolicy::Submitted) => {
+            value.policy_closure.validate_display(snapshot).is_ok()
         }
         (
-            ReviewTaskContextData::Source {
+            ReviewTaskContextData::CurrentSource {
                 binding_status,
                 projection,
                 ..
             },
-            ReviewContextStrategy::Source,
+            ReviewContextPolicy::CurrentSource { .. },
         ) => match (*binding_status, projection) {
             (ReviewSourceBindingStatus::BindingChanged, None) => true,
             (
@@ -2153,10 +1984,9 @@ fn review_task_context_matches_policy(value: &ReviewTaskContext) -> bool {
                     binding, display, ..
                 }),
             ) => {
-                binding.version == value.subject.version
-                    && binding.integrity.as_deref() == Some(value.subject.digest.as_str())
+                binding == &value.subject
                     && serde_json::to_value(display).is_ok_and(|display| {
-                        value.policy_snapshot.validate_display(&display).is_ok()
+                        value.policy_closure.validate_display(&display).is_ok()
                     })
             }
             _ => false,
@@ -2181,7 +2011,7 @@ fn valid_review_history_page(value: &ReviewHistoryPage, expected_request_id: Uui
 
 fn review_validation_reason(value: &str) -> Option<ReviewValidationReason> {
     Some(match value {
-        "kind-not-allowed" => ReviewValidationReason::KindNotAllowed,
+        "policy-not-allowed" => ReviewValidationReason::PolicyNotAllowed,
         "reference-invalid" => ReviewValidationReason::ReferenceInvalid,
         "object-required" => ReviewValidationReason::ObjectRequired,
         "maximum-bytes-exceeded" => ReviewValidationReason::MaximumBytesExceeded,
@@ -2254,15 +2084,6 @@ fn validate_identifier(value: &str, reason: &'static str) -> Result<(), Casework
     Ok(())
 }
 
-fn require_source_profile(auth: &CaseworkAuth<'_>) -> Result<(), CaseworkClientError> {
-    if auth.source_profile.is_none() {
-        return Err(CaseworkClientError::invalid_request(
-            "this operation requires an explicit source profile",
-        ));
-    }
-    Ok(())
-}
-
 fn reject_source_profile(auth: &CaseworkAuth<'_>) -> Result<(), CaseworkClientError> {
     if auth.source_profile.is_some() {
         return Err(CaseworkClientError::invalid_request(
@@ -2294,42 +2115,6 @@ fn validate_idempotency_key(idempotency_key: &str) -> Result<(), CaseworkClientE
         ));
     }
     Ok(())
-}
-
-fn validate_if_match(value: &str) -> Result<(), CaseworkClientError> {
-    let revision = value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .and_then(|value| value.parse::<i64>().ok());
-    if revision.is_none_or(|value| value < 0) {
-        return Err(CaseworkClientError::invalid_request(
-            "the offered action revision is invalid",
-        ));
-    }
-    Ok(())
-}
-
-fn action_segments<'a>(
-    href: &'a str,
-    expected_operation: &str,
-) -> Result<Vec<&'a str>, CaseworkClientError> {
-    if !href.starts_with('/') || href.contains(['?', '#']) {
-        return Err(CaseworkClientError::invalid_request(
-            "the offered Casework action route is invalid",
-        ));
-    }
-    let segments = href.trim_start_matches('/').split('/').collect::<Vec<_>>();
-    let valid = segments.len() == 4
-        && segments[0] == "v1"
-        && segments[1] == "work-items"
-        && Uuid::parse_str(segments[2]).is_ok()
-        && segments[3] == expected_operation;
-    if !valid {
-        return Err(CaseworkClientError::invalid_request(
-            "the offered Casework action route is invalid",
-        ));
-    }
-    Ok(segments)
 }
 
 fn validate_page(cursor: Option<&str>, limit: Option<usize>) -> Result<(), CaseworkClientError> {
@@ -2479,7 +2264,7 @@ mod tests {
     fn discovery_filters_require_matching_state_and_requested_page_bound() {
         use registry_casework_core::{IssuerPrincipal, ReviewTaskOwnership};
 
-        let held = ReviewerTaskState::Held {
+        let held = ReviewTaskState::Held {
             holder: IssuerPrincipal {
                 issuer: "https://issuer.example.test".to_owned(),
                 subject: "reviewer".to_owned(),
@@ -2490,19 +2275,19 @@ mod tests {
             Some(ReviewTaskOwnership::AssignedToMe)
         ));
         assert!(!review_task_matches_ownership(
-            &ReviewerTaskState::Open,
+            &ReviewTaskState::Open,
             Some(ReviewTaskOwnership::AssignedToMe)
         ));
         assert!(review_task_matches_ownership(
-            &ReviewerTaskState::Open,
+            &ReviewTaskState::Open,
             Some(ReviewTaskOwnership::Unclaimed)
         ));
         assert!(!review_task_matches_ownership(
-            &ReviewerTaskState::Decided,
+            &ReviewTaskState::Decided,
             Some(ReviewTaskOwnership::Unclaimed)
         ));
         assert!(!review_task_matches_ownership(
-            &ReviewerTaskState::Decided,
+            &ReviewTaskState::Decided,
             None
         ));
         assert!(page_exceeds_limit(2, Some(1)));
@@ -2561,7 +2346,10 @@ mod tests {
     #[test]
     fn every_validation_reason_is_read_in_kebab_case_only() {
         let reasons = [
-            ("kind-not-allowed", ReviewValidationReason::KindNotAllowed),
+            (
+                "policy-not-allowed",
+                ReviewValidationReason::PolicyNotAllowed,
+            ),
             (
                 "reference-invalid",
                 ReviewValidationReason::ReferenceInvalid,

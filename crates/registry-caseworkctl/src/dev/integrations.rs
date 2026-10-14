@@ -1,11 +1,8 @@
-//! Explicit source-backed development inputs. The ordinary standalone session
-//! remains source-free unless this closed integration block is configured.
+//! Explicit provider connections and optional shared issuer authority for local development.
 use super::{config, private, State};
 use anyhow::{bail, Context, Result};
 use registry_casework_core::{typed, CaseworkProject, ConfigFinding};
-use registry_platform_config::SecretReference;
 use registry_thunderid_tooling::{description::*, local};
-use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -17,9 +14,9 @@ use std::{
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Integrations {
-    /// Explicit shared audience accepted independently by Casework and each source.
+    /// Audience accepted by this Casework session.
     pub resource: String,
-    /// One binding for each source `casework.yaml` declares.
+    /// Optional provider connections keyed by their declared deploymentRef.
     #[serde(
         default,
         deserialize_with = "typed::local_id_keys",
@@ -27,10 +24,10 @@ pub(crate) struct Integrations {
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "BTreeMap<registry_platform_yaml::LocalId, SourceBinding>")
+        schemars(with = "BTreeMap<registry_platform_yaml::LocalId, ContextProviderBinding>")
     )]
-    pub sources: BTreeMap<String, SourceBinding>,
-    /// Files copied once to source-prefixed references in the retained private root.
+    pub context_providers: BTreeMap<String, ContextProviderBinding>,
+    /// Owner-only files copied into the retained private secret root.
     #[serde(
         default,
         deserialize_with = "typed::local_id_keys",
@@ -98,80 +95,7 @@ pub(crate) struct TaskAuthority {
     pub status_clients: BTreeMap<String, String>,
 }
 
-/// One source binding as the clients file writes it. The session copies it
-/// into the runtime configuration it writes, where it is that source's
-/// `sources.<id>` binding with the runtime's default timeouts and
-/// reconciliation interval.
-#[derive(Clone, Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct SourceBinding {
-    #[serde(deserialize_with = "typed::url")]
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
-    pub base_url: String,
-    pub reader_profile: String,
-    pub token_endpoint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_assertion_audience: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scopes: Option<Vec<String>>,
-    #[serde(deserialize_with = "secret_reference")]
-    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
-    pub client_id_ref: String,
-    #[serde(deserialize_with = "secret_reference")]
-    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
-    pub client_assertion_key_ref: String,
-    #[serde(deserialize_with = "secret_reference")]
-    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
-    pub webhook_secret_ref: String,
-    pub event_source: String,
-    #[serde(
-        default,
-        deserialize_with = "optional_secret_reference",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
-    pub trusted_root_certificates_ref: Option<String>,
-}
-
-impl std::fmt::Debug for SourceBinding {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("SourceBinding")
-            .field("base_url", &"[REDACTED]")
-            .field("reader_profile", &self.reader_profile)
-            .field("token_endpoint", &"[REDACTED]")
-            .field("client_assertion_audience", &"[REDACTED]")
-            .field("resource", &"[REDACTED]")
-            .field("scopes", &"[REDACTED]")
-            .field("client_id_ref", &"[REDACTED]")
-            .field("client_assertion_key_ref", &"[REDACTED]")
-            .field("webhook_secret_ref", &"[REDACTED]")
-            .field("event_source", &self.event_source)
-            .finish_non_exhaustive()
-    }
-}
-
-/// A secret reference, `secret:env/NAME` or `secret:file/name`, kept as
-/// written. The reader refuses any other spelling at its position without
-/// repeating it.
-fn secret_reference<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    SecretReference::deserialize(deserializer).map(|reference| reference.as_str().to_owned())
-}
-
-/// An optional member holding a secret reference; absent reads as `None`
-/// through `serde(default)`.
-fn optional_secret_reference<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    secret_reference(deserializer).map(Some)
-}
+use registry_casework_breg::BregBinding as ContextProviderBinding;
 
 const SERVICE_SCOPE_MESSAGE: &str =
     "expected an RFC 6749 scope-token of 1 to 128 bytes without '*': printable ASCII without space, '\"', or '\\'";
@@ -189,21 +113,25 @@ impl Integrations {
             found.push(ConfigFinding::new(
                 "casework.dev-clients.invalid-resource",
                 "/integrations/resource",
-                "expected an absolute URI naming the audience Casework and each source accept",
-                "Write the shared audience as a URI, such as urn:casework:source-group.",
+                "expected an absolute URI naming the audience this Casework session accepts",
+                "Write the Casework audience as a URI, such as urn:casework:dev.",
             ));
         }
         let declared = policy
-            .sources
+            .context_providers
             .iter()
-            .map(|source| &source.id)
+            .map(|provider| &provider.deployment_ref)
             .collect::<BTreeSet<_>>();
-        if self.sources.keys().collect::<BTreeSet<_>>() != declared {
+        if self
+            .context_providers
+            .keys()
+            .any(|key| !declared.contains(key))
+        {
             found.push(ConfigFinding::new(
-                "casework.dev-clients.source-bindings-mismatch",
-                "/integrations/sources",
-                "expected exactly one binding for each source casework.yaml declares, and no other",
-                "Bind each source casework.yaml declares under sources, by its ID.",
+                "casework.dev-clients.provider-bindings-mismatch",
+                "/integrations/contextProviders",
+                "expected each connection key to name a declared provider deploymentRef",
+                "Use the context provider deploymentRef as its connection key.",
             ));
         }
         for (key, length, maximum, what) in [
@@ -231,12 +159,12 @@ impl Integrations {
             }
         }
         for (name, path) in &self.secret_files {
-            if !name.starts_with("source-") || !config::identifier(name) || !path.is_absolute() {
+            if !config::identifier(name) || !path.is_absolute() {
                 found.push(ConfigFinding::new(
                     "casework.dev-clients.invalid-secret-file",
                     config::member("/integrations/secretFiles", name),
-                    "expected a lowercase name starting with source- and the absolute path of an owner-only file",
-                    "Name the file source-<name> and write its absolute path.",
+                    "expected a lowercase identifier and the absolute path of an owner-only file",
+                    "Name the secret and write its absolute owner-only file path.",
                 ));
             }
         }
@@ -449,31 +377,36 @@ impl Integrations {
                 .into());
             }
         }
-        for binding in self.sources.values() {
-            let reader = self.service_clients.iter().find(|client| {
+        for binding in self.context_providers.values() {
+            let generated = self.service_clients.iter().find(|client| {
                 binding.client_id_ref == format!("secret:file/service-{}-id", client.id)
-                    && binding.client_assertion_key_ref
+                    || binding.client_assertion_key_ref
                         == format!("secret:file/service-{}-key", client.id)
-                    && !client.task_exchange
-                    && client.resource.as_deref().unwrap_or(&self.resource) == self.resource
-                    && binding.scopes.as_ref().is_some_and(|scopes| {
-                        scopes.iter().collect::<BTreeSet<_>>()
-                            == client.scopes.iter().collect::<BTreeSet<_>>()
-                    })
             });
-            if reader.is_none() {
-                return Err(super::DevFailure::integration("source reader references must select the same generated service client with exactly the binding resource and scopes").into());
-            }
-            if binding.token_endpoint != format!("{}/oauth2/token", state.issuer_origin())
-                || binding.client_assertion_audience.as_deref()
-                    != Some(state.issuer_origin().as_str())
-                || binding.resource.as_deref() != Some(self.resource.as_str())
-                || binding
-                    .scopes
-                    .as_ref()
-                    .is_none_or(|scopes| scopes.is_empty())
-            {
-                return Err(super::DevFailure::integration("source bindings must explicitly use the session issuer token endpoint/audience, integrations.resource and reader scopes; configure BREG to admit that resource with independent human profiles/scopes/clients").into());
+            if let Some(client) = generated {
+                if binding.client_id_ref != format!("secret:file/service-{}-id", client.id)
+                    || binding.client_assertion_key_ref
+                        != format!("secret:file/service-{}-key", client.id)
+                    || client.task_exchange
+                    || binding.resource.as_deref()
+                        != Some(client.resource.as_deref().unwrap_or(&self.resource))
+                    || binding.scopes.as_ref().is_none_or(|scopes| {
+                        scopes.iter().collect::<BTreeSet<_>>()
+                            != client.scopes.iter().collect::<BTreeSet<_>>()
+                    })
+                    || binding.token_endpoint != state.token_endpoint()
+                    || binding.client_assertion_audience.as_deref()
+                        != Some(state.issuer_origin().as_str())
+                {
+                    return Err(super::DevFailure::integration("provider credentials must select one generated service client with its exact resource, scopes and issuer").into());
+                }
+            } else {
+                for reference in [&binding.client_id_ref, &binding.client_assertion_key_ref] {
+                    let name = reference.strip_prefix("secret:file/");
+                    if name.is_none_or(|name| !self.secret_files.contains_key(name)) {
+                        return Err(super::DevFailure::integration("provider credentials must name generated service credentials or explicit owner-only secretFiles").into());
+                    }
+                }
             }
         }
         if let Some(authority) = &self.task_authority {
@@ -702,7 +635,7 @@ impl Integrations {
         clients: &config::Clients,
         value: &mut Value,
     ) -> Result<()> {
-        value["sources"] = serde_json::to_value(&self.sources)?;
+        value["contextProviders"] = serde_json::to_value(&self.context_providers)?;
         // A borrowed session's issuer is the shared owner's, which holds every
         // other local project's clients as well. This list is what keeps them
         // out of this runtime, so it names the session's clients even when
@@ -764,28 +697,35 @@ pub(super) fn validate_bindings(root: &Path, project: &Path) -> Result<()> {
         .secret_providers
         .file
         .as_mut()
-        .ok_or_else(|| anyhow::anyhow!("local source bindings require generated file secrets"))?
+        .ok_or_else(|| anyhow::anyhow!("local provider bindings require generated file secrets"))?
         .root = root.join("secrets");
     let secrets = registry_casework::secret_resolver(&config)?;
     let policy = crate::project::load_and_check_policy(project)?;
-    for source in &policy.sources {
-        config
-            .sources
-            .get(&source.id)
-            .ok_or_else(|| anyhow::anyhow!("a declared source binding is missing"))?
-            .build_adapter(source, project, &secrets)
-            .map_err(source_binding_failure)?;
+    for provider in &policy.context_providers {
+        let Some(binding) = config.context_providers.get(&provider.deployment_ref) else {
+            continue;
+        };
+        let description = provider
+            .description
+            .as_deref()
+            .context("context provider export is missing")?;
+        let bytes = crate::project::read_package_input(&crate::project::project_input_path(
+            project,
+            description,
+        )?)?;
+        registry_casework_breg::build_provider(binding, provider, &bytes, &secrets)
+            .map_err(provider_binding_failure)?;
     }
     Ok(())
 }
 
 /// Only a typed invalid adapter contract is an authoring refusal. Operational
 /// adapter failures keep their type for the owning CLI classifier.
-pub(super) fn source_binding_failure(
-    error: registry_casework_core::SourceAdapterError,
+pub(super) fn provider_binding_failure(
+    error: registry_casework_core::ReviewContextError,
 ) -> anyhow::Error {
-    if error == registry_casework_core::SourceAdapterError::Invalid {
-        super::DevFailure::SourceBindingConfiguration {
+    if error == registry_casework_core::ReviewContextError::Invalid {
+        super::DevFailure::ContextProviderBindingConfiguration {
             source: Box::new(error),
         }
         .into()
