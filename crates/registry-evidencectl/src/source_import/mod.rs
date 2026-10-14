@@ -752,18 +752,24 @@ fn replace_project_sections<const N: usize>(
     let mut edits = replacements
         .into_iter()
         .map(|(pointer, value)| {
-            let span = document
+            let key_span = document
+                .key_span_of(pointer)
+                .with_context(|| format!("EvidenceProject is missing the key for {pointer}"))?;
+            let value_span = document
                 .span_of(pointer)
                 .with_context(|| format!("EvidenceProject is missing {pointer}"))?;
-            let start = byte_offset(original, span.start)?;
-            let mut end = byte_offset(original, span.end)?;
+            let start = byte_offset(original, key_span.start)?;
+            let key_end = byte_offset(original, key_span.end)?;
+            let mut end = byte_offset(original, value_span.end)?;
             while original.as_bytes().get(end) == Some(&b'\n') {
                 end += 1;
             }
-            let continuation_indent = " ".repeat(span.start.column.saturating_sub(1));
-            let mut replacement = serde_json::to_string_pretty(value)?
+            let key_indent = key_span.start.column.saturating_sub(1);
+            end = trailing_boundary_start(original, start, end, key_indent);
+            let continuation_indent = " ".repeat(key_indent.saturating_add(2));
+            let serialized = serde_json::to_string_pretty(value)?
                 .replace('\n', &format!("\n{continuation_indent}"));
-            replacement.push('\n');
+            let replacement = format!("{}: {serialized}\n", &original[start..key_end]);
             Ok((start, end, replacement))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -773,6 +779,34 @@ fn replace_project_sections<const N: usize>(
         text.replace_range(start..end, &replacement);
     }
     Ok(text)
+}
+
+/// A collection span may include blank lines or comments before the next
+/// mapping member. Keep those authored boundaries when replacing the owned
+/// collection. Comments indented inside the collection remain owned by it.
+fn trailing_boundary_start(text: &str, start: usize, end: usize, key_indent: usize) -> usize {
+    let mut boundary = end;
+    let mut offset = start;
+    let mut lines = Vec::new();
+    for line in text[start..end].split_inclusive('\n') {
+        lines.push((offset, line));
+        offset += line.len();
+    }
+    for (line_start, line) in lines.into_iter().rev() {
+        let body = line.trim_end_matches(['\r', '\n']);
+        if body.trim().is_empty() {
+            boundary = line_start;
+            continue;
+        }
+        let content = body.trim_start_matches(' ');
+        let indent = body.len() - content.len();
+        if indent <= key_indent && content.starts_with('#') {
+            boundary = line_start;
+            continue;
+        }
+        break;
+    }
+    boundary
 }
 
 fn byte_offset(text: &str, position: registry_platform_yaml::Position) -> Result<usize> {
