@@ -7,6 +7,7 @@ Coordinator database URL must identify an owned loopback PostgreSQL database.
 """
 import argparse
 import copy
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -21,6 +22,9 @@ import uuid
 
 REPO = Path(__file__).resolve().parents[3]
 EXAMPLE = REPO / "products/coordinator/examples/review-provider"
+# Give source observation a short fixed window; the expiry proof waits against
+# the original availableUntil without changing any result timestamp.
+EXPIRING_RETENTION_SECONDS = 45
 VARIANTS = {
     "correct-amount": ("review-provider", "applications", "external-review"),
     "correct-amount-manual": ("review-provider-manual", "applications-manual", "external-manual-review"),
@@ -144,7 +148,7 @@ def bound_project(native, root, action, context, human_policy):
     flow, _, _ = VARIANTS[action]
     workflow = (root / "workflow.yaml").read_text().replace("id: review-provider,", "id: " + flow + ",")
     if action.endswith("-expiring"):
-        workflow = workflow.replace("resultRetentionSeconds: 86400", "resultRetentionSeconds: 5")
+        workflow = workflow.replace("resultRetentionSeconds: 86400", f"resultRetentionSeconds: {EXPIRING_RETENTION_SECONDS}")
     native.private(root / "workflow.yaml", workflow)
     source = (root / "functions.rhai").read_text().replace('"correct-amount"', json.dumps(action))
     old_context = "urn:registry:breg:review-context:coordinator-source:correct-amount:application-amount-context"
@@ -280,6 +284,15 @@ def run(args):
             return record, journey.proposal_transition(owner, draft, "submit")
         def apply_body(proposal):
             return {key: proposal[key] for key in ("submissionVersion", "effectDigest")}
+        def ready_to_apply(proposal, label):
+            binding = {key: proposal[key] for key in ("id", "actionId", "actionRevision", "submissionVersion", "effectDigest")}
+            def current():
+                value = journey.read_proposal(owner, proposal)
+                assert {key: value[key] for key in binding} == binding, "source readiness must name the exact frozen Proposal"
+                return value
+            return wait_until(current, lambda value: value["links"]["apply"]["availability"]["available"], label)
+        def readiness(proposal):
+            return {"binding": {key: proposal[key] for key in ("id", "actionId", "actionRevision", "submissionVersion", "effectDigest")}, "proposalRevision": proposal["revision"], "availability": proposal["links"]["apply"]["availability"]}
         def applied(proposal):
             current = wait_until(lambda: journey.read_proposal(owner, proposal), lambda value: value["state"] == "applied", "source did not independently apply the exact approved Proposal")
             assert {key: current[key] for key in ("id", "actionId", "actionRevision", "submissionVersion", "effectDigest")} == {key: proposal[key] for key in ("id", "actionId", "actionRevision", "submissionVersion", "effectDigest")}
@@ -358,6 +371,7 @@ def run(args):
         assert "application" not in refused_source
         stale_record, stale = create("stale", action="correct-amount-manual")
         stale_view, stale_result = terminal(stale, "approved")
+        stale_ready = ready_to_apply(stale, "source did not accept the exact approval before changing its assessed condition")
         change_active(stale_record, False)
         current = journey.read_proposal(owner, stale)
         link = current["links"]["apply"]
@@ -376,20 +390,24 @@ def run(args):
         resubmitted = journey.proposal_transition(owner, rebased, "submit")
         fresh_view, fresh_result = terminal(resubmitted, "approved")
         assert fresh_view["requestId"] != stale_view["requestId"] and fresh_result["subject"]["version"] != stale_result["subject"]["version"]
-        current = wait_until(lambda: journey.read_proposal(owner, resubmitted), lambda value: value["links"]["apply"]["availability"]["available"], "fresh exact review did not authorize independently permitted apply")
+        current = ready_to_apply(resubmitted, "fresh exact review did not authorize independently permitted apply")
         recovered = journey.proposal_transition(owner, current, "apply", apply_body(resubmitted))
         assert recovered["state"] == "applied" and recovered["application"]["effectDigest"] == resubmitted["effectDigest"]
-        proof["staleConditionRecovery"] = {"assessedCondition": "recordActive", "oldSubject": stale_result["subject"], "inactiveSubject": inactive_result["subject"], "inactiveReassessment": inactive_result["status"], "freshSubject": fresh_result["subject"], "oldApprovalDidNotOverrideGuard": True, "oldApplyProblem": stale_refusal["code"], "freshApplication": recovered["application"]}
+        proof["staleConditionRecovery"] = {"assessedCondition": "recordActive", "oldSubject": stale_result["subject"], "sourceReadyBeforeConditionChange": readiness(stale_ready), "inactiveSubject": inactive_result["subject"], "inactiveReassessment": inactive_result["status"], "freshSubject": fresh_result["subject"], "oldApprovalDidNotOverrideGuard": True, "oldApplyProblem": stale_refusal["code"], "freshApplication": recovered["application"]}
         _, expiring = create("expiring", action="correct-amount-expiring")
-        expiring_view, _ = terminal(expiring, "approved")
-        time.sleep(5.2)
+        expiring_view, expiring_result = terminal(expiring, "approved")
+        expiring_ready = ready_to_apply(expiring, "source did not accept the exact short-lived approval before expiry")
+        available_until = dt.datetime.fromisoformat(expiring_result["availableUntil"].replace("Z", "+00:00"))
+        remaining = (available_until - dt.datetime.now(dt.timezone.utc)).total_seconds()
+        assert remaining > 0, "source readiness must precede the original result expiry"
+        time.sleep(remaining + 0.2)
         native.http("GET", coordinator_url + f"/v1/review-requests/{expiring_view['requestId']}/result", review_token(), headers=review_headers, expected=(410,))
         native.http("POST", coordinator_url + f"/v1/review-requests/{expiring_view['requestId']}/cancel", review_token(), {"subject": expiring_view["subject"], "reason": "Expired custody cannot be renewed"}, {**review_headers, "Idempotency-Key": str(uuid.uuid4())}, (410,))
         current = journey.read_proposal(owner, expiring)
         expiry_refusal = native.http("POST", journey.urls["breg"] + f"/v1/proposals/{expiring['id']}/apply?accessProfile=seeder", journey.token("bregctl", owner, "seed-client"), apply_body(expiring), {"Idempotency-Key": str(uuid.uuid4()), "If-Match": current["links"]["apply"]["ifMatch"]}, (412,))
         assert expiry_refusal["code"] == "precondition.failed"
         assert "application" not in journey.read_proposal(owner, expiring)
-        proof["refusalAndExpiry"] = {"inactiveResult": refused_result["status"], "expiredResultAndCancel": 410, "expiredApplyProblem": expiry_refusal["code"], "noSourceApplication": True}
+        proof["refusalAndExpiry"] = {"inactiveResult": refused_result["status"], "sourceReadyBeforeExpiry": readiness(expiring_ready), "resultRetentionSeconds": EXPIRING_RETENTION_SECONDS, "availableUntil": expiring_result["availableUntil"], "expiredResultAndCancel": 410, "expiredApplyProblem": expiry_refusal["code"], "noSourceApplication": True}
         native.private(root / "native-review-provider-proof.json", proof)
         success = True
     finally:
