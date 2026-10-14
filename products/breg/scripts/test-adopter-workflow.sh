@@ -826,7 +826,7 @@ if run_json "$temporary_root/apply-v2-locked.json" apply --runtime-config "$temp
   printf '%s\n' 'successor apply unexpectedly succeeded while the managed table was locked.' >&2
   exit 1
 fi
-assert_json_failure "$temporary_root/apply-v2-locked.json" apply.migration.failed
+assert_json_failure "$temporary_root/apply-v2-locked.json" apply.migration.statement-failed
 wait_ready_status "${server_url}ready" 503
 # The failed activation stays durable: status names its exact target and the
 # ledger keeps the failed entry, so the operator's retry resumes it.

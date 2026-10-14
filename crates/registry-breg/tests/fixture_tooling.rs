@@ -1022,10 +1022,16 @@ fn fixture_journey_reader_reports_every_unknown_removed_and_anchored_key_with_it
             ),
         ]
     );
-    assert!(
-        error.to_string().contains("`type: submit-request`"),
-        "the removed key names its replacement: {error}"
-    );
+    for replacement in [
+        "`type: proposal`",
+        "`transition: submit`",
+        "`proposalCapture`",
+    ] {
+        assert!(
+            error.to_string().contains(replacement),
+            "the removed key names its native Proposal replacement {replacement}: {error}"
+        );
+    }
 
     let anchored = source.replacen("        claims:\n", "        claims: &operator\n", 1);
     let error = validate_fixture_journeys(anchored.as_bytes(), &registry).unwrap_err();

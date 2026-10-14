@@ -51,7 +51,7 @@ async fn a_second_migration_changes_no_schema_object_or_protected_row() {
     assert_eq!(catalog(&h).await, before, "the second migration ran DDL");
     assert_eq!(restored_current_job(&h, run).await, job);
     assert_eq!(restored_lease_identity(&h, run).await, identity);
-    assert_eq!(h.store.doctor().await.unwrap().schema_version, 3);
+    assert_eq!(h.store.doctor().await.unwrap().schema_version, 4);
 }
 
 #[tokio::test]

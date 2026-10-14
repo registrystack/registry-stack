@@ -323,7 +323,7 @@ class GeneratedGateTests(unittest.TestCase):
             "compatible-additive",
             "LOCK TABLE",
             "pg_terminate_backend",
-            "apply.migration.failed",
+            "apply.migration.statement-failed",
             "plan --runtime-config",
             "status --runtime-config",
             "assert_plan",
