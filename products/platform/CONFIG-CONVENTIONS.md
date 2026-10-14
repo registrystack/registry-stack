@@ -517,6 +517,13 @@ value outside them with `config.out-of-range`, naming the bounds. An implicit
 `minimum: 0` for an unsigned type does not state a bound: a `minimum: 0` beside
 a maximum below the unsigned format's own ceiling, as the bounded types emit
 it, does.
+
+An output format registered with `reader: none` may state its writer's native
+integer range. The schema must declare both bounds explicitly from the actual
+serialized type, rather than rely on `format` alone. An observed count or
+sequence does not configure resource use, so it needs no invented operational
+cap. This distinction changes no input limit, output closedness, or other
+schema requirement.
 *Enforced by:* the convention lint (every `integer` property declares
 `minimum` and `maximum`); the conformance corpus boundary sweep (each integer
 in each format's example whose registered schema states both bounds, set one

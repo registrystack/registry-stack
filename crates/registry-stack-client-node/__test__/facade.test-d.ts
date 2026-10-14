@@ -30,6 +30,9 @@ breg.verifyWebhookDelivery({
 }).deliveryTime.toUpperCase()
 void discoveryClient
 void caseworkClient.description('header.payload.signature', 'staff')
+declare const producerReview: casework.ReviewCreateRequest
+const canonicalDigest: casework.ContentDigest = casework.submissionDigest('requester', producerReview.subject.source, producerReview)
+void canonicalDigest
 const supervisoryLookup: casework.SupervisoryReviewTaskQuery = {
   requestId: '00000000-0000-0000-0000-000000000009', queue: 'review', limit: 25,
 }

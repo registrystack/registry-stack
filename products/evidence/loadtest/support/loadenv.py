@@ -29,11 +29,10 @@ from urllib.parse import urlparse
 
 MARKER = "registry-stack-evidence-loadtest-v1"
 BUILD_PROFILES = ("debug", "release")
-QUESTION_ID = "adult-status"
-REQUIREMENT = f"urn:registrystack:evidence:local:requirement:{QUESTION_ID}"
-SELECTOR_PROFILE = f"local-subject-{QUESTION_ID}-v1"
+REQUIREMENT = "urn:example:requirement:adult-status:v1"
+SELECTOR_PROFILE = "record-by-id"
 PURPOSE = "age-check"
-ACCESS_POLICY = "loadtest"
+PRIVATE_SOURCE_CANARY = "LOADTEST-PRIVATE-CANARY"
 CLIENT_PREFIX = "loadtest-"
 DEFAULT_CLIENTS = 128
 # Every fetched token must outlive the fetch plus the 4-minute run window that
@@ -150,7 +149,7 @@ def _mock_plan(count: int) -> str:
         "openapi: ../source.openapi.yaml",
         "operations:",
         "  - method: GET",
-        "    path: /people/{person_id}",
+        "    path: /people/{record-id}",
         "    operationId: getPerson",
         "    response:",
         "      status: 200",
@@ -163,32 +162,63 @@ def _mock_plan(count: int) -> str:
             [
                 f"      - name: {identifier}",
                 "        request:",
-                f"          pathParameters: {{person_id: {identifier}}}",
+                f"          pathParameters: {{record-id: {identifier}}}",
                 f"        body: cases/{identifier}.json",
             ]
         )
     return "\n".join(lines) + "\n"
 
 
-def local_project(tracked: Path, project: Path, pool: Path) -> None:
-    """Add the tracked question and a synthetic source mock to an initialised project."""
+def local_project(
+    tracked: Path,
+    project: Path,
+    pool: Path,
+    source_openapi: Path,
+    mock_port: int,
+) -> None:
+    """Copy the canonical project and add the load-test source mock and subject pool."""
     if tracked.is_symlink() or not tracked.is_dir():
-        raise LoadtestError("tracked load-test project must be an ordinary directory")
+        raise LoadtestError("canonical Evidence project must be an ordinary directory")
     if any(path.is_symlink() for path in tracked.rglob("*")):
-        raise LoadtestError("tracked load-test project must not contain symbolic links")
-    if project.is_symlink() or not (project / "evidence-project.yaml").is_file():
-        raise LoadtestError("load-test project must be initialised by evidencectl init first")
+        raise LoadtestError("canonical Evidence project must not contain symbolic links")
+    if project.exists() or project.is_symlink():
+        raise LoadtestError("load-test project must not already exist")
     if pool.exists() or pool.is_symlink():
         raise LoadtestError("load-test subject pool must not already exist")
-    for relative in (f"questions/{QUESTION_ID}.yaml", f"derivations/{QUESTION_ID}.rhai"):
-        destination = project / relative
-        if destination.exists():
-            raise LoadtestError(f"initialised project already has {relative}")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(tracked / relative, destination)
+    if source_openapi.is_symlink() or not source_openapi.is_file():
+        raise LoadtestError("rendered source OpenAPI must be an ordinary file")
+    if not 1 <= mock_port <= 65535:
+        raise LoadtestError("source mock port must be a TCP port")
+
+    files = (".gitignore", "evidence.yaml", "local-target.yaml", "dev-authority.yaml")
+    directories = ("fixtures", "functions")
+    for relative in files:
+        if not (tracked / relative).is_file():
+            raise LoadtestError(f"canonical Evidence project is missing {relative}")
+    for directory in directories:
+        if not (tracked / directory).is_dir():
+            raise LoadtestError(f"canonical Evidence project is missing {directory}")
+
+    project.mkdir(mode=0o700)
+    for relative in files:
+        source = tracked / relative
+        shutil.copyfile(source, project / relative)
+    for directory in directories:
+        source = tracked / directory
+        shutil.copytree(source, project / directory)
+
+    target_path = project / "local-target.yaml"
+    target = target_path.read_text(encoding="utf-8")
+    canonical_origin = "    origin: http://127.0.0.1:8081\n"
+    if target.count(canonical_origin) != 1:
+        raise LoadtestError("canonical local target must name its source origin exactly once")
+    target_path.write_text(
+        target.replace(canonical_origin, f"    origin: http://127.0.0.1:{mock_port}\n", 1),
+        encoding="utf-8",
+    )
+    shutil.copyfile(source_openapi, project / "source.openapi.yaml")
+
     mocks = project / "mocks"
-    if (mocks / "source.yaml").exists():
-        raise LoadtestError("initialised project already has a source mock plan")
     (mocks / "cases").mkdir(parents=True, exist_ok=True)
     (mocks / "source.yaml").write_text(_mock_plan(SUBJECTS), encoding="utf-8")
     minors = 0
@@ -196,11 +226,20 @@ def local_project(tracked: Path, project: Path, pool: Path) -> None:
         identifier = subject_id(index)
         born = date_of_birth(index)
         minors += int(index % MINOR_EVERY == 0)
-        body = {"person_id": identifier, "name": f"Load Subject {index:04d}", "date_of_birth": born}
+        body = {
+            "total": 1,
+            "record": {
+                "record_id": identifier,
+                "birth_date": born,
+                "residence_region": "north",
+                "address_canary": PRIVATE_SOURCE_CANARY,
+            },
+        }
         _write_new(mocks / "cases" / f"{identifier}.json", json.dumps(body, sort_keys=True) + "\n")
     pool.mkdir(mode=0o700)
     _write_new(pool / "subjects.txt", "".join(f"{subject_id(i)}\n" for i in range(1, SUBJECTS + 1)))
     _write_new(pool / "absent.txt", "".join(f"{absent_id(i)}\n" for i in range(1, ABSENT_SUBJECTS + 1)))
+    _write_new(pool / "private-canaries.txt", f"{PRIVATE_SOURCE_CANARY}\n")
     facts = {
         "subjects": SUBJECTS,
         "adultSubjects": SUBJECTS - minors,
@@ -430,6 +469,8 @@ def parser() -> argparse.ArgumentParser:
     local.add_argument("--tracked", type=Path, required=True)
     local.add_argument("--project", type=Path, required=True)
     local.add_argument("--pool", type=Path, required=True)
+    local.add_argument("--source-openapi", type=Path, required=True)
+    local.add_argument("--mock-port", type=int, required=True)
     environment = commands.add_parser("environment")
     environment.add_argument("--root", type=Path, required=True)
     environment.add_argument("--dev-report", type=Path, required=True)
@@ -457,7 +498,13 @@ def main() -> int:
         elif arguments.command == "openapi":
             render_openapi(arguments.template, arguments.port, arguments.out)
         elif arguments.command == "local-project":
-            local_project(arguments.tracked, arguments.project, arguments.pool)
+            local_project(
+                arguments.tracked,
+                arguments.project,
+                arguments.pool,
+                arguments.source_openapi,
+                arguments.mock_port,
+            )
         elif arguments.command == "environment":
             write_environment(
                 arguments.root,

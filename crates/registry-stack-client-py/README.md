@@ -45,10 +45,26 @@ Wheels cover macOS arm64, Linux arm64 with glibc, and Linux x64 with glibc,
 and require glibc 2.17 or newer on Linux. Install the exact client version that
 matches the deployment.
 
-The Casework client supports reviewer inbox ownership filters and the separate
-`supervisory_review_tasks` discovery method. Supervisory rows carry bounded task
-and accountability references with a holder-free string state; a single decided-task read exposes a
-`decisionReceipt` only to the caller who recorded that decision.
+The Casework client uses compiled review policies, producer requests/results,
+and human review tasks. Pass a bearer token and a Casework profile on producer,
+reviewer, and Directory calls. Current-source context operations also take a source
+profile; submitted-context reviews need no provider.
+`casework.submission_digest(producer_id, source_namespace, request)` computes
+the expected canonical submission digest locally. Admission through
+`create_or_recover_review_request` takes the exact policy binding, caller-chosen
+key, complete request, and digest. Retain them unchanged for response-loss
+recovery; producer create/cancel calls are never automatically resent.
+A `ReviewResult` records a review outcome and grants no external apply or write
+authority.
+
+Reviewer staffing uses `review_tasks`, `next_review_task`, and
+`review_task_holdings`. Mutations take the task UUID, displayed revision, and
+caller-chosen key. A decided-task read exposes `decisionReceipt` only to its
+deciding caller; `own_review_decisions` discovers those retained receipts after
+a fresh sign-in. `supervisory_review_tasks` exposes bounded task and
+accountability references with a holder-free state. Keep staffing filters and
+profiles unchanged across snapshot cursors; restart without the cursor after
+`410 review.result-expired`.
 
 The `registry_client.breg` namespace includes the typed retained-history page,
 proposal, and inert result-reference classes exposed by the maintained BReg

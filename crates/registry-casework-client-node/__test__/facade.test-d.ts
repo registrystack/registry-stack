@@ -1,4 +1,4 @@
-import { CaseworkClient, CaseworkClientError, type ContentDigest, type SubjectBinding,
+import { CaseworkClient, CaseworkClientError, submissionDigest, type ContentDigest, type SubjectBinding,
   type PolicyBinding, type ReviewCreateRequest, type ReviewRequestAccepted,
   type ReviewTask, type ReviewTaskDecisionRequest, type ReviewStaffingQuery,
   type ReviewCaseloadMoveRequest, type ReviewClockRecomputeRequest } from '../client'
@@ -10,7 +10,8 @@ const policy: PolicyBinding = { id: 'review', version: '1', digest }
 const submitted: ReviewCreateRequest = { policy, subject, requesterReference: 'proposal-1', context: { mode: 'submitted', snapshot: { reference: 'proposal-1' } } }
 const current: ReviewCreateRequest = { ...submitted, context: { mode: 'current-source', binding: { reference: 'proposal-1' } } }
 void client.createOrRecoverReviewRequest(token, 'requester', 'submit-1', current, digest)
-void client.createOrRecoverReviewRequest(token, 'requester', 'submit-2', submitted, digest)
+const computed: ContentDigest = submissionDigest('producer', subject.source, submitted)
+void client.createOrRecoverReviewRequest(token, 'requester', 'submit-2', submitted, computed)
 // @ts-expect-error admission requires the expected immutable policy binding
 const missingPolicy: ReviewCreateRequest = { subject, requesterReference: 'proposal-1', context: { mode: 'submitted', snapshot: {} } }
 void missingPolicy

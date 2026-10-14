@@ -119,6 +119,25 @@ impl PostgresStore {
         Ok(())
     }
 
+    /// Lock the request fence before any task lock so review settlement and
+    /// grant eligibility share one request-before-task order.
+    async fn lock_review_request_for_task(
+        transaction: &Transaction<'_>,
+        task_id: Uuid,
+    ) -> Result<Option<Uuid>, StoreError> {
+        Ok(transaction
+            .query_opt(
+                "SELECT request_id FROM casework_review_requests
+                 WHERE request_id=(
+                     SELECT request_id FROM casework_review_tasks WHERE task_id=$1
+                 )
+                 FOR KEY SHARE",
+                &[&task_id],
+            )
+            .await?
+            .map(|row| row.get(0)))
+    }
+
     /// The directory snapshot and grant invalidation are serialized with all
     /// directory mutations. Once invalidated, later re-eligibility cannot revive it.
     async fn review_task_grant_eligible(
@@ -131,6 +150,10 @@ impl PostgresStore {
         let Some(kind) = membership_kind(actor.role) else {
             return Ok(None);
         };
+        let Some(request_id) = Self::lock_review_request_for_task(transaction, task_id).await?
+        else {
+            return Ok(None);
+        };
         let row = transaction
             .query_opt(
                 "SELECT t.request_id,t.revision,r.subject_source,r.subject_type,r.subject_id,
@@ -139,7 +162,7 @@ impl PostgresStore {
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
                  JOIN casework_memberships m ON m.team_id=q.team_id
-                 WHERE t.task_id=$1 AND t.state='claimed'
+                 WHERE t.task_id=$1 AND t.request_id=$11 AND t.state='claimed'
                    AND r.lifecycle='reviewing' AND t.stage_index=r.active_stage_index
                    AND t.holder_issuer=$2 AND t.holder_subject=$3
                    AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind=$4
@@ -148,7 +171,7 @@ impl PostgresStore {
                    AND r.policy_id=ANY($8)
                    AND ($9::bigint IS NULL OR t.revision=$9)
                    AND r.subject_source=$10
-                 FOR KEY SHARE OF t,r,q,m",
+                 FOR KEY SHARE OF t,q,m",
                 &[
                     &task_id,
                     &actor.principal.issuer,
@@ -160,6 +183,7 @@ impl PostgresStore {
                     &template.review_policies,
                     &expected_revision,
                     &template.source,
+                    &request_id,
                 ],
             )
             .await?;
@@ -238,10 +262,14 @@ impl PostgresStore {
                 &[],
             )
             .await?;
+        let request_id = Self::lock_review_request_for_task(&transaction, grant.task_id)
+            .await?
+            .ok_or(StoreError::NotFound)?;
         transaction
             .query_opt(
-                "SELECT 1 FROM casework_review_tasks WHERE task_id=$1 FOR UPDATE",
-                &[&grant.task_id],
+                "SELECT 1 FROM casework_review_tasks
+                 WHERE task_id=$1 AND request_id=$2 FOR UPDATE",
+                &[&grant.task_id, &request_id],
             )
             .await?
             .ok_or(StoreError::NotFound)?;
@@ -250,7 +278,7 @@ impl PostgresStore {
         }
         // The revision-agnostic eligibility call confirms the caller's current
         // authority without binding it to the retry's original revision.
-        let Some((request_id, revision, subject, assignment_generation)) =
+        let Some((eligible_request_id, revision, subject, assignment_generation)) =
             Self::review_task_grant_eligible(
                 &transaction,
                 actor,
@@ -310,7 +338,8 @@ impl PostgresStore {
             audit.commit(transaction).await?;
             return Ok(stored);
         }
-        if request_id != grant.request_id
+        if request_id != eligible_request_id
+            || eligible_request_id != grant.request_id
             || revision != grant.task_revision
             || (!grant.template.authorization_mode.is_immediate()
                 && grant.assignment_generation != Some(assignment_generation))
@@ -1288,6 +1317,8 @@ mod dev_session_logs;
 mod http_tests;
 #[cfg(all(test, feature = "postgres-test"))]
 mod local_session_tests;
+#[cfg(all(test, feature = "postgres-test"))]
+mod lock_order_tests;
 #[cfg(all(test, feature = "postgres-test"))]
 mod native_exchange_tests;
 #[cfg(all(test, feature = "postgres-test"))]

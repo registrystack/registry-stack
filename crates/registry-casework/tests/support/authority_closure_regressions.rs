@@ -219,3 +219,53 @@ async fn assignment_roles_stay_pinned_and_activation_refuses_changed_deciding_au
         .any(|r| r.code == "casework.activation.stranded-work"));
     assign(&service, task, "a", "pinned-role").await.unwrap();
 }
+
+#[tokio::test]
+async fn absence_response_failure_withholds_success_and_retry_preserves_exactly_once_change() {
+    let f = Fixture::new(project_value(false, false)).await;
+    let accepted = f.create("absence-response").await;
+    let task = f.task(accepted.request_id).await;
+    assign(&f.service, task, "a", "assign").await.unwrap();
+    f.db.execute("INSERT INTO casework_absences(absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision) VALUES($1,'https://issuer.test','a',now()-interval '1 hour',now()+interval '1 hour','https://issuer.test','b',1)", &[&Uuid::new_v4()]).await.unwrap();
+    // Ready at admission, the destination fails when this background change
+    // publishes its response. The committed change must not become success.
+    let prior_entries = f.audit.entries();
+    f.audit.refuse_after(prior_entries.len());
+    assert!(matches!(
+        f.service.reconcile_review_absences(10).await,
+        Err(ReviewRuntimeError::Store(StoreError::AuditUnavailable))
+    ));
+    let after = f.holders().await;
+    assert_eq!(after, vec![(task, Some("b".to_owned()), 3)]);
+    assert_eq!(f.audit.entries(), prior_entries);
+    assert_eq!(
+        f.db.query_one(
+            "SELECT count(*) FROM casework_review_history WHERE kind='task-absence-reconciled'",
+            &[]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        1
+    );
+    let (audit, capture) = CaseworkAudit::capture();
+    let recovered = CaseworkService::new(
+        f.store.clone().with_audit(audit),
+        f.project.clone(),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
+    )
+    .unwrap();
+    assert_eq!(recovered.reconcile_review_absences(10).await.unwrap(), 0);
+    assert_eq!(f.holders().await, after);
+    assert!(capture.entries().is_empty());
+    assert_eq!(
+        f.db.query_one(
+            "SELECT count(*) FROM casework_review_history WHERE kind='task-absence-reconciled'",
+            &[]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        1
+    );
+}

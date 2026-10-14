@@ -99,7 +99,8 @@ for the full rules.
 A keyed BReg, Casework, Messaging, or Scheduling mutation whose outcome is
 unknown is resent identically under the same idempotency key up to
 `maxMutationRetries` times, a client option: 0 to 2, default 2, and 0 sends it
-once. Reads, unkeyed calls, and every 4xx refusal are never resent. When the returned error
+once. Casework review-request create and cancel are excluded from this retry.
+Reads, unkeyed calls, and every 4xx refusal are never resent. When the returned error
 still reports `outcomeUnknown`, the mutation may have taken effect: recover by
 sending it again under the same key, because a new key could apply it twice.
 `outcomeUnknown` is false for `410 idempotency.expired`, but there an earlier
@@ -137,21 +138,32 @@ Registry Stack v0.42.0.
 
 ## Casework notes
 
-The Casework module is for a trusted server host. Each call takes that request's
-bearer token and selected Casework profile; source-reading calls also take the
-selected source profile. The client does not retain them. Browsers should send
-only the host's session cookie. Claim, release, and decide consume the
-caller-filtered action returned on the item, including its exact route and
-`ifMatch` revision. Mutations require a caller-controlled idempotency key and
-are resent only under the bounded same-key retry above; review request create
-and cancel are never resent. After a lost response, use
-`recoverDecisionByKey` with the original key so recovery does not depend on the
-attempt identifier being received.
-Reviewer inboxes accept an `ownership` filter before pagination.
-`supervisoryReviewTasks` returns only task and accountability references for
-queues the selected supervisor currently serves; its state is a holder-free
-string. A single decided-task read
-includes `decisionReceipt` only for the caller who recorded that decision.
+The Casework module is for a trusted server host. Producer, reviewer, and
+Directory calls take that request's bearer token and selected Casework profile. Current-source context
+operations also take the selected source profile; submitted-context reviews
+need no provider. Credentials remain the host's responsibility.
+
+`reviewPolicy` discovers a compiled closure; admission requires its exact
+`identity` binding, or the binding generated from the reviewed project.
+`casework.submissionDigest(producerId, sourceNamespace, request)` computes the
+canonical expected submission digest locally. Submit with
+`createOrRecoverReviewRequest`, retaining the request and caller-chosen key.
+After a lost response, repeat that same operation with the same binding, body,
+key, and digest. Producer create/cancel calls are never automatically resent.
+Read the accepted request's result with `reviewResult` or resume `reviewResults`.
+A result records a review outcome and grants no external apply or write authority.
+
+Reviewers use `reviewTasks`, `nextReviewTask`, and `reviewTaskHoldings`. Claim,
+release, and decision calls take the task UUID, displayed numeric revision,
+and caller-chosen idempotency key. Recover a lost decision response with
+`reviewTask`; `decisionReceipt` is disclosed only to its deciding caller.
+`ownReviewDecisions` discovers that caller's retained receipts after a fresh
+sign-in. `supervisoryReviewTasks` returns bounded task and accountability
+references for currently served queues, with a holder-free state.
+
+A changed policy binding requires explicit review before a new submission.
+Keep staffing filters and profiles unchanged across snapshot cursors; restart
+without the cursor after `410 review.result-expired`.
 
 ## Documentation
 

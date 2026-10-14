@@ -1958,12 +1958,12 @@ impl ReviewTaskTransition {
     }
 }
 
-/// The returned context must be the one the frozen policy snapshot describes:
-/// the context strategy matches, a submitted snapshot satisfies the kind's
+/// The returned context must be the one the pinned policy closure describes:
+/// the context mode matches, a submitted snapshot satisfies the policy's
 /// display schema, and a source binding change never still carries the
 /// superseded projection. A binding reported current must carry that same
 /// pinned occurrence's projection: version and integrity match the caller's
-/// subject binding, and the display satisfies the kind's display schema.
+/// subject binding, and the display satisfies the policy's display schema.
 fn review_task_context_matches_policy(value: &ReviewTaskContext) -> bool {
     match (&value.context, &value.policy_closure.context) {
         (ReviewTaskContextData::Submitted { snapshot }, ReviewContextPolicy::Submitted) => {

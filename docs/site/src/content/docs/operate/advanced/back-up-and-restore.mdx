@@ -13,12 +13,12 @@ standards_referenced: []
 
 Use this runbook when you operate Base Registry Engine (BReg), Registry Casework, Evidence, or
 Registry Messaging and need a recovery plan. Each product restores differently: BReg restores a
-database and then proves it is the one instance serving the registry, Casework restores a database
-and then catches up from the BReg sources it reads, and Evidence holds no database at all. Messaging
+database and then proves it is the one instance serving the registry, Casework returns to its database backup point
+and stays isolated while you reconcile later producer and source effects, and Evidence holds no database at all. Messaging
 restores a database whose dispatch state must be reconciled with sends and receipts the provider
 already holds. The procedures below link each product's own guide for the details and state what a
-restore does not bring back. Continuous integration restores both BReg and Casework from a logical
-backup and checks their procedures end to end.
+restore does not bring back. Source reads cannot reconstruct lost Casework reviews or decisions.
+The maintained logical-restore checks exercise backup-point state and independent audit continuity.
 
 ## Know what a database backup leaves out
 
@@ -43,11 +43,13 @@ up these alongside every database backup, on the same schedule:
 
 ### Registry Casework state
 
-- The PostgreSQL database, with `pg_dump` before every `caseworkctl apply`; name the dump with
-  `--backup` so the activation ledger records it.
-- The installed package directory, the runtime file, and its secret files: the audit key
-  (`audit.hashKeyRef`), the task-authority signing key (`taskAuthority.signingKeyRef`), the
-  database URLs, and each source's client credentials.
+- The PostgreSQL database, with a logical backup before every activation and your chosen recovery points. Record a snapshot identifier with `caseworkctl apply --backup-reference`.
+- The exact package directory, runtime file, and database identity, together with escrowed database credentials, audit key, optional task-authority signing key, and context-provider reader credentials.
+- The external audit journal and shipped archive. Preserve entries written after the database backup; a restore never rewinds that evidence.
+
+{/* Evidence: crates/registry-caseworkctl/src/lib.rs, Command;
+    crates/registry-casework/src/activation.rs;
+    products/casework/scripts/test-backup-restore.sh. */}
 
 ### Evidence state
 
@@ -216,109 +218,56 @@ Once the copy serves, work through these:
 
 ## Restore Registry Casework
 
-Casework is not the system of record for source-backed work: the BReg source is. A restored
-Casework database therefore catches up with BReg on its own, while the coordination state it
-alone holds returns to the backup point. Restore the latest dump into a database provisioned as
-[Provision PostgreSQL](../../casework/#provision-postgresql) describes, keep the package and the
-audit key the backup was taken under, and start the runtime. Its schema must match the binary,
-and its activation ledger must name the package the runtime loads; see
-[Plan, apply, and serve](../../casework/#plan-apply-and-serve).
+A logical restore returns review requests, task holdings, private drafts, decisions, results, clocks, Directory state, grants, and replay metadata to the backup point. Casework does not reconstruct lost reviews from the source. A producer may already have consumed a later result or applied its own business mutation, so keep the restored service isolated until you reconcile that window.
 
-Check the ledger before you start the runtime. On the freshly provisioned database,
-`caseworkctl status` reports no active package and `caseworkctl doctor` refuses with
-`casework.doctor.check-failed`, because no migration has been applied yet. Once `pg_restore` has
-run, `caseworkctl status` reports the same active package and history it reported at the backup
-point, `caseworkctl plan` reports `changesPending: false` with the only refusal
-`casework.activation.already-active` and `databaseIdCheck: matches`, and `caseworkctl doctor`
-passes. Pass each command the restored runtime file with `--runtime-config`.
+1. Stop the original Casework service and preserve the surviving database when available. Restore the dump into a separately provisioned database with the matching schema ownership and runtime grants. Keep the exact package, `identity.databaseId`, runtime configuration, and audit key the backup used. Use your PostgreSQL client's protected connection configuration, with no password in the command line. A custom-format backup and logical restore use:
 
-What comes back and what does not:
+   ```sh
+   pg_dump --format=custom --file=casework.dump <source-database>
+   pg_restore --exit-on-error --single-transaction \
+     --dbname=<fresh-database> casework.dump
+   ```
 
-- **Source-backed work items are replayed from BReg.** Each source's reconciliation pass
-  rediscovers every submitted change request and re-reads every work item the database holds as
-  active, so a request applied or cancelled after the backup point settles, and a request
-  submitted after it appears as fresh work. That fresh work item has a new identifier, not the one
-  the lost item had, so its audit entries carry another item pseudonym.
-- **Everything Casework alone records is at the backup point.** Claims, private drafts, attempts,
-  item history, clocks, directory changes, absences, task grants, and every unified review
-  (requests, tasks, decisions, and results) are as the backup left them. Later work on them is lost.
-- **The audit file is not rewound.** The live audit file and its shipped archive still hold the
-  entries for the work the restore lost, and the restored runtime appends after them. An item that
-  settled in the lost window settles again after the restore, so its completion is recorded twice
-  under the same item pseudonym. Keep these entries; never restore an older audit file over them.
+   Protect the dump as review data. Restore only into the new isolated database; never target the surviving operator database to test the procedure. A failed restore is a failed recovery, not permission to continue serving a partial copy.
 
-Reconcile the gap before staff resume work:
+2. Run `caseworkctl status --runtime-config FILE` and `caseworkctl plan --runtime-config FILE` while the restored service remains stopped. Status must identify the backup-point activation. An unchanged restored package has `changesPending: false`, matching database identity, and only the already-active apply refusal in its plan. A different package, unsupported schema, or missing grants needs a supported activation recovery before service resumes.
+3. Reconcile every request and decision in the lost window with the producer's retained request identifiers, results, and mutation records. Consult the surviving database and audit archive when available. A restored pending task does not prove that the producer never received its later result. A current-source read can establish current disclosure and reviewability; it cannot recreate a lost Casework decision.
+4. Recover missing producer submissions through that producer's supported recovery mechanism. Casework's own replay state is also at the backup point. Do not substitute a new idempotency key or edit database rows to manufacture a prior decision. If the supported interfaces cannot represent a known post-backup effect, keep the restore stopped and record the recovery limit.
+5. Once reconciliation permits service, run `caseworkctl doctor --runtime-config FILE`, start the matching runtime, and require `/ready` to succeed. Authenticate reviewers again, verify the restored task revision and holding, and use normal revision-fenced operations. Let maintenance repeat erasures whose deadlines the backup restored.
 
-1. **Read the audit archive for the lost window.** Entries between the backup time and the
-   restore time record each lost operation: its event, outcome, and item revision, with the work
-   item, team, queue, and principal as keyed pseudonyms and no payload values. No command turns a
-   pseudonym back into a work item or a person, so use the archive to count and order what was
-   lost, ask the staff who worked in that window to redo their claims, decisions, and directory
-   changes from the restored state, and check the redone work against those counts. Record the backup time and the restore time in the
-   change record.
-2. **Settle attempts the restore left pending.** A pending attempt whose lease has expired may or
-   may not have reached BReg. Check the change request in BReg, then
-   [mark it uncertain](../../casework-retention/#mark-a-stranded-pending-attempt-uncertain) and
-   [settle it](../../casework-retention/#settle-an-uncertain-source-attempt) as applied or not
-   applied.
-3. **Check restored review tasks against BReg before anyone decides them.** A review decided after
-   the backup point comes back as the backup left it, open or held by the reviewer who had claimed
-   it, while BReg may already hold its result and may already have applied the request. No command
-   reconciles the two, so read the BReg request's `data.request.review` projection first. Reviews
-   BReg submitted after the backup point are unknown to the restored Casework; recover them from
-   the BReg side as [Repeat what the backup undid](#repeat-what-the-backup-undid) describes.
+The external audit archive still records the original post-backup operations. Append the restored service's entries after that history, keep both decision records when an authorized decision is repeated, and record backup and recovery times in your change record. Never overwrite the journal with its older backup.
 
-A database restored under a different package refuses to start until `caseworkctl apply`
-activates the configured package, and that apply refuses a package that would strand pinned work;
-see
-[Refuse a package that strands pinned work](../../casework/#refuse-a-package-that-strands-pinned-work).
+{/* Evidence: crates/registry-casework/src/review.rs;
+    crates/registry-casework/src/review/maintenance.rs;
+    crates/registry-casework/src/activation.rs;
+    crates/registry-caseworkctl/src/project.rs, status(), plan(), and doctor();
+    products/casework/scripts/test-backup-restore.sh. */}
 
-{/* Evidence: crates/registry-casework/src/service.rs, reconcile_source_pass()
-    (discover_active, enqueue_local_active_page, synchronize_source_pending);
-    crates/registry-casework-breg/src/lib.rs, discover_active() (bregState eq 'submitted') and
-    occurrence_state(); crates/registry-casework/migrations/0015_unified_reviews.sql and
-    0017_audit_writer.sql (no audit state in the database);
-    crates/registry-casework/src/audit.rs, published_audit_record() (pseudonymized fields);
-    crates/registry-casework/src/runtime.rs, serve_from_path() and check_activation();
-    crates/registry-casework/src/activation.rs, evaluate_effects();
-    crates/registry-caseworkctl/src/lib.rs, AttemptCommand;
-    products/casework/scripts/test-backup-restore.sh, checkpoints "stopping Casework for good and
-    restoring the dump into a fresh database" (status reports no active package, doctor refuses
-    with casework.doctor.check-failed), "checking the restored activation ledger before serving"
-    (status as at the backup point, plan with changesPending false and
-    casework.activation.already-active), "proving Casework-only state is at the backup point"
-    (the decided review held at its backup-point revision), "proving source-backed work is replayed
-    from the registry" (the settled item, the replayed item under a new identifier), and "checking
-    that the audit file continues instead of rewinding" (the lost decision kept, the completion
-    recorded twice). */}
+### Check a logical restore in isolation
+
+The maintained Casework logical backup/restore drill in the matching release source tree uses a synthetic submitted review and an owned disposable Docker database. It checks a backup-point holding and activation ledger, loss of a later decision after logical restore, fresh readiness and reviewer authority, and continuation of the external audit journal.
+
+If you run the drill from a matching source checkout, provide a running Docker daemon, Bash, Curl, jq, Python, and `sha256sum`, plus the documented native build prerequisites. The script builds the matching binaries, owns its local session and database, and removes them when it finishes. It is not a command for a retained operator database. Review the script before executing it, and isolate all drill identities and endpoints from production.
+
+That submitted-context drill does not prove recovery of a producer's business mutation, current-source authorization, or an external task grant. Add those checks when your deployment uses them, and define how you will represent or refuse effects that happened after the backup.
+
+{/* Evidence: products/casework/scripts/test-backup-restore.sh;
+    crates/registry-casework/tests/support/commit_audit_regressions.rs. */}
 
 ### Hand over the Casework audit key
 
-The Casework audit key only pseudonymizes identifiers. Entries are not chained or signed, so a
-rotation has no chain to bridge and nothing to re-sign. Its pseudonyms carry no key version,
-though, so entries written under the old key and the new one look alike in one file. Hand the
-key over this way:
+The audit key pseudonymizes identifiers; entries are not chained or signed and carry no key version. To rotate it:
 
-1. Write the new key into a fresh owner-only secret file, as
-   [Keep the audit file](../../casework-retention/#keep-the-audit-file) shows, and point
-   `audit.hashKeyRef` at it.
-2. Give `audit.path` a fresh file name in the same change, so the file boundary is the key
-   boundary. The writer no longer manages the old path, so ship its active file and every sealed
-   file once the runtime has stopped.
-3. Restart the runtime and run `caseworkctl doctor --runtime-config
-   /etc/registry-casework/runtime.yaml`. Record the rotation time, both file names, and who holds
-   each key in the change record.
-4. Keep the old key under the same controls for as long as you may need to recompute pseudonyms in
-   the entries written under it.
+1. Provision a new owner-only secret file and update `audit.hashKeyRef`.
+2. Select a fresh `audit.path` in the same change, so the file boundary identifies the key boundary. After stopping the old process, ship its remaining active and sealed files.
+3. Restart, run `caseworkctl doctor --runtime-config FILE`, and check the live `/ready` endpoint. Record the rotation time, both file names, and the custodians of each key.
+4. Retain the old key under the same controls while you need to recompute references in entries written under it.
 
-Continuity is a property of the archive, not of the files: prove it by showing that the shipped
-files cover the old path through its last sealed and final active file, the new path from its
-first entry, and no gap in time between the two.
+Prove archive continuity by retaining the old path through its final entry and the new path from its first entry. The key does not recover erased review payloads or recreate lost decisions.
 
-{/* Evidence: crates/registry-platform-audit/src/writer.rs, module docs ("Entries are not
-    chained"); crates/registry-platform-audit/src/lib.rs, KEYED_HASH_PREFIX (no version) and
-    MIN_AUDIT_SECRET_BYTES; crates/registry-caseworkctl/src/project.rs, doctor() resolves
-    audit.hashKeyRef. */}
+{/* Evidence: crates/registry-platform-audit/src/writer.rs;
+    crates/registry-platform-audit/src/lib.rs, AuditKeyHasher;
+    crates/registry-caseworkctl/src/project.rs, doctor(). */}
 
 ## Restore Evidence
 
@@ -385,8 +334,8 @@ the recovery time you promise. Run it at least before going live and after every
 backup tooling.
 
 :::danger[Isolate the drill from production]
-An adopted BReg copy delivers the webhooks pending in its backup, a restored Casework reads and acts
-on the sources it names, Evidence reads the sources in its bundle, and Messaging resumes queued
+An adopted BReg copy delivers the webhooks pending in its backup, a restored Casework reads current context
+from its configured sources it names, Evidence reads the sources in its bundle, and Messaging resumes queued
 sends through its configured providers. Before starting anything, point every event destination,
 Casework source, Evidence source, Messaging provider and callback registration, and OpenID Connect
 client in the drill's runtime files at non-production systems. For Messaging, use local SMTP and
@@ -407,7 +356,7 @@ or production systems. Test credentials alone do not prevent delivery to a real 
 3. Run `bregctl doctor`, `caseworkctl doctor`, and `evidence check
    --require-runtime-dependencies`, start BReg, Casework, and Evidence, and wait for `GET /ready`
    on each. Keep Messaging stopped until step 5.
-4. Read a known record through BReg, a known work item through Casework, and a synthetic assertion
+4. Read a known record through BReg, a known review task through Casework, and a synthetic assertion
    through Evidence. Read one encrypted field, when the project encrypts one, to prove the
    field-encryption key restored.
 5. For Messaging, keep the restored runtime stopped until reconciliation succeeds. For an upgrade

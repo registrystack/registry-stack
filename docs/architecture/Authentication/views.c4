@@ -18,7 +18,6 @@ views {
     '''
     include application, issuer, breg, casework, evidence
     exclude casework.breg_adapter -> breg.api
-    exclude breg.webhooks -> casework.api
     exclude evidence.acquisition -> breg.api
     exclude breg.writes -> evidence.api
     exclude breg.task_grants -> casework.api
@@ -30,13 +29,14 @@ views {
   dynamic view task_token_exchange {
     title 'Authentication / 02. Exchange an approved task'
     description '''
-      This path starts with a source-backed task already approved by an eligible
+      This path starts with a ReviewTask already approved by an eligible
       human in Casework. The agent uses its own registered principal and client key.
       The maintained issuer registration restricts client-credentials bootstrap to
       assertion lookup. Casework requires that scope, the registered agent identity,
       one audience and no grant claims; human routes require the human-identity claim.
       Casework rechecks the immutable grant,
-      current eligibility and authoritative source context before signing.
+      current ReviewTask eligibility and exact context before signing. The sequence shows
+      the optional current-source branch; submitted context uses its admitted snapshot.
       The OAuth issuer verifies that assertion against registered Casework trust and
       derives the source issuer from its verified iss. Casework signs a task assertion;
       the OAuth issuer signs the access token. Key retrieval is shown when needed.
@@ -53,9 +53,9 @@ views {
     taskAgent -> casework.api 'Requests an assertion for the approved grant ID'
     casework.api -> casework.access 'Checks agent kind, one audience, admitted client and assert scope; refuses profile headers, act and grant claims'
     casework.api -> casework.task_grants 'Matches the template agent tuple and current grant'
-    casework.task_grants -> casework.breg_adapter 'Rereads the approved proposal and governed subject fields'
+    casework.task_grants -> casework.breg_adapter 'Uses task-grant-context for only the compiled subject fields'
     casework.breg_adapter -> breg.api 'Uses the separate bounded service-reader identity and profile'
-    breg.api -> casework.breg_adapter 'Returns current proposal identity and disclosed subject facts'
+    breg.api -> casework.breg_adapter 'Returns exact binding and only the purpose-bound subject fields'
     casework.breg_adapter -> casework.task_grants 'Returns source context to compare with the immutable grant'
     casework.task_grants -> casework.task_grants 'Rechecks eligibility, revocation and deadline after source I/O'
     casework.task_grants -> casework.api 'Signs original task context and registry_approver; expiry is at most 60 s and no later than the grant'
@@ -72,8 +72,11 @@ views {
     description '''
       Three credentials carry different authority: bootstrap access token, Casework task
       assertion and exchanged access token. The approved grant is a retained Casework
-      record, not another bearer token. Casework limits a grant to 900 seconds and each
-      assertion to 60 seconds, capped at the original grant deadline. The maintained
+      record, not another bearer token. Immediate grants last at most 900 seconds; explicit
+      deferred BReg or Scheduling grants last at most seven days. Deferred execution checks
+      fresh status; Scheduling may explicitly permit unchecked execution only in the final
+      fifteen minutes. Evidence grants remain immediate. Each assertion lasts at most 60 seconds, capped at
+      the original grant deadline. The maintained
       ThunderID setup issues 300-second access tokens; other issuer registrations own
       their token lifetimes and exchange policy. Every resource request checks both token
       and grant expiry. Existing-token re-exchange can preserve read access after
@@ -126,8 +129,9 @@ views {
       access token without Casework. Each BReg task read and task-bound Evidence request must
       satisfy all current local authorization, token-expiry, grant-expiry and audit
       checks; neither calls Casework status. Reads can therefore continue until the
-      original registry_grant_exp, at most 900 seconds after approval, rather than only
-      until the current 300-second token expires. Re-exchange cannot extend that deadline.
+      original registry_grant_exp: at most 900 seconds for immediate grants, or up to
+      seven days for deferred BReg grants. Evidence grants remain immediate. This window
+      is not shortened to the current 300-second token expiry. Re-exchange cannot extend that deadline.
       Other issuer registrations may disallow this renewal. The source-read and write
       views cover the full request gates. Casework grant descriptions distinguish
       persisted invalidation, expiry and erasure.

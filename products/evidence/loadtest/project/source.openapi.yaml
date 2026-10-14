@@ -5,11 +5,11 @@ info:
 servers:
   - url: http://127.0.0.1:MOCK_PORT
 paths:
-  /people/{person_id}:
+  /people/{record-id}:
     get:
       operationId: getPerson
       parameters:
-        - name: person_id
+        - name: record-id
           in: path
           required: true
           schema:
@@ -22,16 +22,28 @@ paths:
               schema:
                 type: object
                 additionalProperties: false
-                required: [person_id, name, date_of_birth]
+                required: [total, record]
                 properties:
-                  person_id:
-                    type: string
-                    minLength: 1
-                    maxLength: 64
-                  name:
-                    type: string
-                    minLength: 1
-                    maxLength: 100
-                  date_of_birth:
-                    type: string
-                    format: date
+                  total:
+                    type: integer
+                    minimum: 0
+                    maximum: 2
+                  record:
+                    type: object
+                    additionalProperties: false
+                    required: [record_id, birth_date, residence_region, address_canary]
+                    properties:
+                      record_id:
+                        type: string
+                        minLength: 1
+                        maxLength: 64
+                      birth_date:
+                        type: string
+                        format: date
+                      residence_region:
+                        type: string
+                        enum: [north, south]
+                      address_canary:
+                        type: string
+                        minLength: 1
+                        maxLength: 128

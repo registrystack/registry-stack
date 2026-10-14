@@ -76,7 +76,7 @@ only health/readiness probes also answer HEAD.
 A successful `GET /v1/registry` response carries a `Registry-Engine-Version` header with the
 engine release that served it, the value `breg --version` prints. It grants nothing, and the
 concealed 404 does not carry it. Casework reads it to hold its BReg sources to its own release, as
-[Upgrade Casework and BReg in lock-step](../../operate/casework/#upgrade-casework-and-breg-in-lock-step)
+[Change the active Casework package](../../operate/casework/#change-the-active-package)
 describes.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, registry_metadata();

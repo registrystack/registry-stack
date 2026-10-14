@@ -1531,9 +1531,30 @@ impl CaseworkClient {
     }
 }
 
+/// Compute the canonical producer submission digest locally, without I/O.
+#[pyfunction]
+fn submission_digest(
+    py: Python<'_>,
+    producer: &str,
+    source_namespace: &str,
+    request: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    let request: ReviewCreateRequest = input(py, request)?;
+    casework_client_sdk::submission_digest(producer, source_namespace, &request)
+        .map(|digest| digest.as_str().to_owned())
+        .map_err(|_| {
+            binding_error(
+                py,
+                "invalid-request",
+                "Casework client arguments are invalid",
+            )
+        })
+}
+
 #[pymodule]
 fn registry_casework_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<CaseworkClient>()?;
+    module.add_function(wrap_pyfunction!(submission_digest, module)?)?;
     module.add(
         "CaseworkClientError",
         module.py().get_type::<CaseworkClientError>(),

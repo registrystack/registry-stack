@@ -53,6 +53,9 @@ class GateInventoryTest(unittest.TestCase):
         self.casework_checkpoint_runner = (
             ROOT / "products" / "casework" / "scripts" / "check-checkpoint.sh"
         ).read_text(encoding="utf-8")
+        self.casework_schema_runner = (
+            ROOT / "products" / "casework" / "scripts" / "check-schemas.sh"
+        ).read_text(encoding="utf-8")
         self.scheduling_checkpoint_runner = (
             ROOT / "products" / "scheduling" / "scripts" / "check-checkpoint.sh"
         ).read_text(encoding="utf-8")
@@ -845,54 +848,46 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework generated schema drift check",
             ),
             (
-                "cargo test --locked -p registry-casework --features postgres-test --test postgres_transactions",
-                "true # Casework transactions disabled",
-                "Casework claim, reconciliation, and attempt suite",
+                "cargo test --locked -p registry-casework --features postgres-test \\\n"
+                "            --test review_acceptance_postgres \\\n"
+                "            --test review_migration_postgres \\\n"
+                "            --test review_directory_postgres \\\n"
+                "            --test review_postgres \\\n"
+                "            --test review_http \\\n"
+                "            --test review_payment_fixture_postgres \\\n"
+                "            --test breg_review_journey",
+                "true # Casework review transaction aggregate disabled",
+                "Casework current review transaction aggregate",
             ),
             (
-                "cargo test --locked -p registry-casework --features postgres-test --test activation_postgres",
-                "true # Casework package activation disabled",
-                "Casework package activation suite",
+                "cargo test --locked -p registry-casework --features postgres-test --lib task_grants::",
+                "true # Casework task-grant library suite disabled",
+                "Casework current task-grant library suite",
             ),
             (
-                "cargo test --locked -p registry-casework --features postgres-test --test service_visibility",
-                "true # Casework visibility disabled",
-                "Casework caller visibility suite",
+                "the_rewritten_evidence_deployment_loads_through_the_evidence_loader",
+                "rewritten_evidence_loader_disabled",
+                "Casework Evidence deployment loader selection",
             ),
             (
-                "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres --test task_grant_invalidation",
-                "true # Casework assignment, routing, and task-grant suites disabled",
-                "Casework assignment, source routing, and task-grant invalidation suites",
+                "grep -q 'test result: ok\\. 1 passed' \"${RUNNER_TEMP}/casework-evidence-fixture.log\"",
+                "true # Casework Evidence loader assertion disabled",
+                "Casework Evidence deployment loader result assertion",
             ),
             (
-                "-- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget",
-                "-- clocks",
-                "Casework persisted source clock selection",
+                "operator_tests::apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal",
+                "operator_tests::schema_newer_refusal_disabled",
+                "Casework operator schema-newer refusal",
             ),
             (
-                r"grep -q 'test result: ok\. 1 passed'",
-                "true # clock result assertion dropped",
-                "Casework persisted source clock result assertion",
+                "dev::tests::a_retained_split_session_start_leaves_the_ledgers_read_only_to_the_runtime",
+                "dev::tests::split_session_boundary_disabled",
+                "Casework retained split-session runtime boundary",
             ),
             (
-                "cargo test --locked -p registry-casework --features postgres-test --test inbox_ordering_postgres",
-                "true # Casework inbox ordering disabled",
-                "Casework inbox ordering suite",
-            ),
-            (
-                "cargo test --locked -p registry-casework --features postgres-test --test source_retention_postgres",
-                "true # Casework source retention disabled",
-                "Casework source retention suite",
-            ),
-            (
-                "cargo test --locked -p registry-casework --features postgres-test\n          --test review_postgres\n          --test review_http\n          --test review_payment_fixture_postgres\n          --test breg_review_journey",
-                "true # Casework governed review suites disabled",
-                "Casework governed review persistence, HTTP, payment, and BReg suites",
-            ),
-            (
-                "cargo test --locked -p registry-casework --features postgres-test --test review_migration_postgres",
-                "true # Casework governed review schema upgrades disabled",
-                "Casework governed review schema upgrade suite",
+                "grep -q 'test result: ok\\. 2 passed' \"${RUNNER_TEMP}/caseworkctl-apply.log\"",
+                "true # Casework operator assertion disabled",
+                "Casework operator refusal result assertion",
             ),
             (
                 "registry-breg-client-py registry-casework-client-py",
@@ -905,9 +900,19 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework task approval through Evidence, BReg, and Scheduling",
             ),
             (
-                "source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer",
-                "source_backed_dev",
-                "Casework task approval on the source-backed local issuer",
+                "grep -q 'test result: ok\\. 1 passed' \"${RUNNER_TEMP}/casework-task-approval.log\"",
+                "true # Casework task approval assertion disabled",
+                "Casework task approval result assertion",
+            ),
+            (
+                "submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer",
+                "submitted_review_dev",
+                "Casework task approval on the submitted-review local issuer",
+            ),
+            (
+                "grep -q 'test result: ok\\. 1 passed' \"${RUNNER_TEMP}/casework-local-session.log\"",
+                "true # Casework submitted-review assertion disabled",
+                "Casework submitted-review result assertion",
             ),
         ):
             with self.subTest(gate=gate):
@@ -920,11 +925,6 @@ class GateInventoryTest(unittest.TestCase):
     def test_missing_casework_checkpoint_wrapper_steps_are_reported(self) -> None:
         for snippet, replacement, gate in (
             (
-                "python3 products/casework/scripts/generate_openapi.py --check",
-                "true # Casework OpenAPI drift check disabled",
-                "Casework HTTP contract drift check",
-            ),
-            (
                 "python3 products/casework/scripts/check_dependency_direction.py",
                 "true # Casework dependency guard disabled",
                 "Casework dependency-direction guard",
@@ -935,7 +935,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework product script tests",
             ),
             (
-                '"$caseworkctl_bin" test "$work/project"',
+                '"$caseworkctl_bin" --format json test "$project"',
                 "true # Casework authoring journey disabled",
                 "Casework offline authoring journeys",
             ),
@@ -949,6 +949,20 @@ class GateInventoryTest(unittest.TestCase):
                         casework_checkpoint_runner_text=runner,
                     ),
                 )
+
+    def test_missing_casework_schema_runner_step_is_reported(self) -> None:
+        runner = self.casework_schema_runner.replace(
+            "python3 products/casework/scripts/generate_openapi.py --check",
+            "true # Casework OpenAPI drift check disabled",
+            1,
+        )
+        self.assertIn(
+            "Casework HTTP contract drift check",
+            self.module.missing_gates(
+                self.workflow,
+                casework_schema_runner_text=runner,
+            ),
+        )
 
     def test_missing_scheduling_workflow_gates_are_reported(self) -> None:
         for snippet, replacement, gate in (
@@ -1677,21 +1691,15 @@ class GateInventoryTest(unittest.TestCase):
         )
 
     def test_missing_casework_tutorial_gates_are_reported(self) -> None:
-        for snippet, replacement, gate in (
-            (
-                "node docs/site/scripts/run-tutorial.mjs --gate casework\n",
-                "true # Registry Casework tutorial replay disabled",
-                "Registry Casework tutorial replay",
-            ),
-            (
-                "run: npm run check:tutorial:casework:dry-run",
-                "run: true # Registry Casework tutorial dry run disabled",
-                "Registry Casework tutorial command drift",
-            ),
-        ):
-            with self.subTest(gate=gate):
-                text = self.workflow.replace(snippet, replacement, 1)
-                self.assertIn(gate, self.module.missing_gates(text))
+        text = self.workflow.replace(
+            "run: products/casework/scripts/check-review-journeys.sh",
+            "run: true # Registry Casework developer journey disabled",
+            1,
+        )
+        self.assertIn(
+            "Registry Casework developer journey",
+            self.module.missing_gates(text),
+        )
 
     def test_missing_casework_tutorial_path_filter_is_reported(self) -> None:
         classifier = self.classifier.replace(

@@ -226,9 +226,12 @@ project's private state, so no database table carries them.
 
 ## Known gaps
 
-- Only the standalone review surfaces are measured. The work-item inbox,
-  source-owned work through the Base Registry Engine adapter, and attempt
-  recovery need a running BReg source project and are not covered.
+- Only submitted-context reviews are measured. Current-source reads through a
+  purpose-bound BReg provider, including human disclosure and service status,
+  need a configured BReg package and are not covered.
+- The scenario exercises ReviewTask claim and decision traffic, but does not
+  measure due-ordered next-task selection, member holdings, caseload movement,
+  or clock recomputation after staffing changes.
 - Staff traffic comes from one principal, so per-member inbox fan-out across a
   large team is not modeled.
 

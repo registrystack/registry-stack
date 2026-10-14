@@ -2,14 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Rehearse the forward state path from the previous release to this source.
 
-The rehearsal downloads the previous release's published Casework, Evidence,
-and Messaging binaries, authenticates them the way
-release/VERIFY.md describes, and uses them to write real state: a Casework
-review queue with answered and in-flight work, an Evidence audit stream with
-a signed response, and a Messaging package ledger with scheduled and cancelled
-messages. It then points the binaries built from this source at that
-exact state and those exact files, runs the upgrade an operator runs, and
-fails unless the state is still served unchanged and no table lost a row.
+The rehearsal downloads the previous release's published Evidence and Messaging
+binaries, authenticates them the way release/VERIFY.md describes, and uses them
+to write real state: an Evidence audit stream with a signed response and a
+Messaging package ledger with scheduled and cancelled messages. It then points
+the binaries built from this source at that exact state and those exact files,
+runs the upgrade an operator runs, and fails unless the state is still served
+unchanged and no table lost a row.
 A product the previous release did not ship has no state to carry forward,
 so its leg is omitted and the report says why.
 
@@ -83,11 +82,30 @@ STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
 
 BINARIES = (
-    "casework", "caseworkctl", "evidence", "evidencectl",
-    "messaging", "messagingctl",
+    "evidence", "evidencectl", "messaging", "messagingctl",
 )
 PLATFORMS = ("linux-amd64", "macos-arm64")
-PRODUCTS = ("casework", "evidence", "messaging")
+PRODUCTS = ("evidence", "messaging")
+PRODUCT_CHOICES = (*PRODUCTS, "breg", "casework")
+# Keep retired products selectable so a focused request receives their
+# supported transition instead of argparse's generic invalid-choice error.
+BREG_NO_IN_PLACE_UPGRADE = (
+    "BReg's native Record, Dataset, Action, and Proposal model requires a fresh "
+    "database; retired entity/Request state and packages have no in-place upgrade "
+    "path. Start a new native registry and use the maintained BReg operator "
+    "workflow gates for native package successors, history, and backup/restore"
+)
+CASEWORK_NO_IN_PLACE_UPGRADE = (
+    "Casework's current review-only contract requires a fresh database and refuses "
+    "retired schemas before mutation; drain or reconcile legacy review work under "
+    "the release that wrote it, provision a fresh database, then run "
+    "products/casework/scripts/check-review-journeys.sh and "
+    "products/casework/scripts/test-backup-restore.sh"
+)
+RETIRED_PRODUCTS = {
+    "breg": BREG_NO_IN_PLACE_UPGRADE,
+    "casework": CASEWORK_NO_IN_PLACE_UPGRADE,
+}
 # A product joins the rehearsal from the first release that published it, and
 # is downloaded only for the platforms that release publishes it for.
 # release_roster.MESSAGING_FIRST_RELEASE names Messaging's first release; while
@@ -247,19 +265,21 @@ def check_floor_is_current(released: list[str], version: str) -> None:
 
 def select_products(requested: list[str] | None, from_tag: str, platform: str,
                     downloading: bool) -> tuple[list[str], dict[str, str]]:
-    """The legs to run, and why each default leg the start cannot supply is omitted.
+    """The legs to run, and the reason for every default omission.
 
-    A product named with --product that the starting release cannot supply
-    is refused rather than omitted, so a focused run never passes empty.
+    A product named with --product whose rehearsal is unavailable is refused
+    rather than omitted, so a focused run never passes empty.
     """
 
     start = parse_tag(from_tag)
     products: list[str] = []
-    omitted: dict[str, str] = {}
+    omitted = {} if requested else dict(RETIRED_PRODUCTS)
     for product in requested or PRODUCTS:
         reason = None
         platforms = PRODUCT_PLATFORMS.get(product, PLATFORMS)
-        if product == "messaging" and not release_roster.messaging_in_release(start):
+        if product in RETIRED_PRODUCTS:
+            reason = RETIRED_PRODUCTS[product]
+        elif product == "messaging" and not release_roster.messaging_in_release(start):
             first = release_roster.MESSAGING_FIRST_RELEASE
             if first is None:
                 reason = (f"{product} has not joined a release yet "
@@ -947,265 +967,6 @@ def dump_yaml(path: Path, document: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Casework: activate, bootstrap, write review work, upgrade and apply,
-# compare.
-
-
-CASEWORK_ISSUER = "https://issuer.upgrade-rehearsal.invalid"
-CASEWORK_AUDIENCE = "urn:upgrade-rehearsal:casework"
-CASEWORK_KID = "upgrade-rehearsal-rsa"
-CASEWORK_DATABASE_ID = "upgrade-rehearsal-casework"
-CASEWORK_OPERATOR_REFERENCE = "upgrade-rehearsal"
-CASEWORK_ALREADY_ACTIVE = "casework.activation.already-active"
-# What the upgraded runtime appends to the audit stream in `rehearse_casework`:
-# deciding a review task writes one request entry and one response entry.
-# Reading the views and creating a review request write none.
-CASEWORK_UPGRADED_AUDIT_RECORDS = 2
-CASEWORK_ACTORS = {
-    "administrator": ("upgrade-rehearsal-admin", "casework:admin", True),
-    "staff": ("upgrade-rehearsal-staff", "casework:staff", True),
-    "supervisor": ("upgrade-rehearsal-supervisor", "casework:supervisor", True),
-    "requester": ("upgrade-rehearsal-requester", "casework:request", False),
-}
-
-
-class Casework:
-    def __init__(self, work: Path, keys: Keys, postgres: Postgres) -> None:
-        self.work = private_directory(work)
-        self.keys = keys
-        self.postgres = postgres
-        self.secrets = private_directory(work / "secrets")
-        self.audit = private_directory(work / "audit")
-        self.project = work / "project"
-        self.package = work / "package"
-        self.runtime = work / "runtime.yaml"
-        self.port = free_port()
-
-    def provision(self) -> None:
-        migration, runtime = secrets.token_hex(16), secrets.token_hex(16)
-        self.postgres.sql("postgres", f"""
-            CREATE ROLE casework_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-              NOINHERIT NOBYPASSRLS PASSWORD '{migration}';
-            CREATE ROLE casework_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-              NOINHERIT NOBYPASSRLS PASSWORD '{runtime}';
-        """)
-        self.postgres.sql("postgres", "CREATE DATABASE casework;")
-        self.postgres.sql("casework", """
-            REVOKE ALL ON DATABASE casework FROM PUBLIC;
-            GRANT CONNECT ON DATABASE casework TO casework_migration, casework_runtime;
-            ALTER SCHEMA public OWNER TO casework_migration;
-            REVOKE ALL ON SCHEMA public FROM PUBLIC;
-            GRANT USAGE ON SCHEMA public TO casework_runtime;
-            ALTER DEFAULT PRIVILEGES FOR ROLE casework_migration IN SCHEMA public
-              GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO casework_runtime;
-            ALTER DEFAULT PRIVILEGES FOR ROLE casework_migration IN SCHEMA public
-              GRANT USAGE, SELECT ON SEQUENCES TO casework_runtime;
-        """)
-        write_secret(self.secrets / "runtime-url",
-                     self.postgres.url("casework_runtime", runtime, "casework"))
-        write_secret(self.secrets / "migration-url",
-                     self.postgres.url("casework_migration", migration, "casework"))
-        write_secret(self.secrets / "database-root.pem", self.postgres.ca_file.read_bytes())
-        write_secret(self.secrets / "audit-key", secrets.token_hex(32))
-        write_secret(self.secrets / "jwks.json",
-                     json.dumps({"keys": [self.keys.rsa_jwk(CASEWORK_KID)]}))
-
-    def author(self, side: Side) -> None:
-        side.run("caseworkctl", "init", "--template", "standalone-decision", str(self.project))
-        project = load_yaml(self.project / "casework.yaml")
-        producers = project.get("reviewProducers") or []
-        if len(producers) != 1:
-            raise RehearsalError("the Casework starter must declare exactly one producer")
-        producers[0]["issuer"] = CASEWORK_ISSUER
-        producers[0]["subject"] = CASEWORK_ACTORS["requester"][0]
-        dump_yaml(self.project / "casework.yaml", project)
-        side.run("caseworkctl", "package", str(self.project), "--output", str(self.package))
-        dump_yaml(self.runtime, {
-            "apiVersion": "id.registrystack.org/formats/casework/runtime/v1alpha1",
-            "kind": "CaseworkRuntimeConfig",
-            "package": {"root": str(self.package)},
-            "listener": {"bind": f"127.0.0.1:{self.port}",
-                         "tlsTermination": "development-loopback",
-                         "networkExposure": "private-address"},
-            "secretProviders": {"file": {"root": str(self.secrets)}},
-            "database": {"runtimeUrlRef": "secret:file/runtime-url",
-                         "migrationUrlRef": "secret:file/migration-url",
-                         "trustedRootCertificateRef": "secret:file/database-root.pem"},
-            "authentication": {"oidc": {
-                "issuer": CASEWORK_ISSUER, "audience": CASEWORK_AUDIENCE,
-                "scopeClaim": "scope", "allowedClients": "unrestricted",
-                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"},
-                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"}}},
-            "audit": {"path": str(self.audit / "casework.ndjson"),
-                      "hashKeyRef": "secret:file/audit-key"},
-        })
-
-    def activate(self, side: Side, active: str | None = None) -> dict[str, Any]:
-        """Name the database in runtime.yaml, then plan and apply with the
-        migration credential, the upgrade step the Casework changelog names.
-        The first apply on an empty database migrates it and records the
-        first activation.
-
-        `active` is the activation the previous release already recorded. When
-        plan reports that activation as already active with nothing pending,
-        apply would refuse, so nothing is applied. Returns the apply report,
-        or the active activation when nothing was applied."""
-        runtime = load_yaml(self.runtime)
-        runtime.setdefault("identity", {})["databaseId"] = CASEWORK_DATABASE_ID
-        dump_yaml(self.runtime, runtime)
-        config = ["--runtime-config", str(self.runtime)]
-        planned = side.run_json("caseworkctl", "--format", "json", "plan", *config)
-        if planned.get("changesPending") is True:
-            return side.run_json("caseworkctl", "--format", "json", "apply", *config,
-                                 "--operator-reference", CASEWORK_OPERATOR_REFERENCE)
-        if active is None:
-            raise RehearsalError("caseworkctl plan reported nothing pending before the "
-                                 "first activation")
-        current = planned.get("active") or {}
-        refusals = [refusal.get("code") for refusal in planned.get("refusals") or []]
-        if current.get("activationId") != active or refusals != [CASEWORK_ALREADY_ACTIVE]:
-            raise RehearsalError("caseworkctl plan reported nothing pending without naming "
-                                 "the previous release's activation as already active")
-        return current
-
-    def call(self, actor: str, method: str, path: str, body: Any = None,
-             headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
-        subject, scope, human = CASEWORK_ACTORS[actor]
-        claims: dict[str, Any] = {"iss": CASEWORK_ISSUER, "aud": CASEWORK_AUDIENCE,
-                                  "sub": subject, "scope": scope, "client_id": subject}
-        if human:
-            claims["registry_actor_kind"] = "human"
-        request_headers = {
-            "Authorization": "Bearer " + self.keys.mint("RS256", CASEWORK_KID, claims),
-            "Accept": "application/json", "Registry-Casework-Profile": actor,
-            **(headers or {})}
-        if method == "POST":
-            request_headers.setdefault("Idempotency-Key", str(uuid.uuid4()))
-        return http(method, f"http://127.0.0.1:{self.port}{path}",
-                    headers=request_headers, body=body)
-
-    def bootstrap(self) -> None:
-        status, _headers, body = self.call("administrator", "POST", "/v1/directory/bootstrap", {
-            "teamId": "decisions-team", "queueId": "decisions",
-            "staff": [{"issuer": CASEWORK_ISSUER, "subject": CASEWORK_ACTORS["staff"][0]}],
-            "supervisors": [{"issuer": CASEWORK_ISSUER,
-                             "subject": CASEWORK_ACTORS["supervisor"][0]}],
-        }, {"If-Match": '"0"'})
-        expect_status("directory bootstrap", status, body, 200, 201)
-
-    def request_review(self, reference: str) -> str:
-        digest = hashlib.sha256(reference.encode()).hexdigest()
-        status, _headers, body = self.call("requester", "POST", "/v1/review-requests", {
-            "kind": "decision",
-            "subject": {"source": "standalone", "type": "batch", "id": reference,
-                        "version": "1", "digest": f"sha256:{digest}"},
-            "requesterReference": reference,
-            "context": {"strategy": "submitted",
-                        "snapshot": {"summary": f"Upgrade rehearsal {reference}",
-                                     "reference": reference}},
-        })
-        expect_status("review request", status, body, 201)
-        return body["requestId"]
-
-    def tasks(self) -> list[dict[str, Any]]:
-        status, _headers, body = self.call("staff", "GET", "/v1/review-tasks?limit=25")
-        expect_status("review tasks", status, body, 200)
-        return body["items"]
-
-    def task_for(self, request_id: str) -> dict[str, Any]:
-        for task in self.tasks():
-            if task.get("requestId") == request_id:
-                return task
-        raise RehearsalError(f"no review task is open for request {request_id}")
-
-    def claim(self, request_id: str) -> dict[str, Any]:
-        task = self.task_for(request_id)
-        status, _headers, body = self.call(
-            "staff", "POST", f"/v1/review-tasks/{task['taskId']}/claim",
-            headers={"If-Match": f'"{task["revision"]}"'})
-        expect_status("claim review task", status, body, 200)
-        return body
-
-    def decide(self, request_id: str) -> None:
-        task = self.task_for(request_id)
-        status, _headers, body = self.call(
-            "staff", "POST", f"/v1/review-tasks/{task['taskId']}/decisions",
-            {"decision": {"type": "answer", "outcome": "confirmed"}},
-            {"If-Match": f'"{task["revision"]}"'})
-        expect_status("decide review task", status, body, 204)
-
-    def views(self, requests: list[str]) -> dict[str, Any]:
-        views: dict[str, Any] = {"tasks": sorted(
-            (task.get("taskId"), task.get("requestId"), task.get("state"),
-             task.get("revision")) for task in self.tasks())}
-        for request_id in requests:
-            status, _headers, body = self.call("requester", "GET",
-                                               f"/v1/review-requests/{request_id}")
-            expect_status("read review request", status, body, 200)
-            views[f"request/{request_id}"] = body
-            status, _headers, body = self.call("requester", "GET",
-                                               f"/v1/review-requests/{request_id}/result")
-            views[f"result/{request_id}"] = {"status": status, "body": body}
-        return views
-
-
-def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
-                      report: dict[str, Any]) -> None:
-    casework = Casework(work, keys, postgres)
-    casework.provision()
-    casework.author(old)
-    runtime = ["--runtime-config", str(casework.runtime)]
-    seeded = casework.activate(old)["activationId"]
-    ready = f"http://127.0.0.1:{casework.port}/ready"
-    service = Service(old, "casework", [*runtime, "serve"], work / "casework-old.log", ready)
-    try:
-        casework.bootstrap()
-        requests = [casework.request_review(f"before-{index}") for index in range(3)]
-        casework.claim(requests[0])
-        casework.decide(requests[0])
-        casework.claim(requests[1])
-        before_views = casework.views(requests)
-        if (before_views[f"result/{requests[0]}"]["status"] != 200
-                or len(before_views["tasks"]) < 2):
-            raise RehearsalError("the previous release did not record the answered "
-                                 "and in-flight review work the rehearsal compares")
-    finally:
-        service.stop()
-    before_counts = postgres.row_counts("casework")
-    records_before = audit_record_count(casework.audit, "casework.ndjson")
-
-    activation = casework.activate(new, seeded)
-    losses = row_count_losses(before_counts, postgres.row_counts("casework"))
-    service = Service(new, "casework", [*runtime, "serve"], work / "casework-new.log", ready)
-    try:
-        after_views = casework.views(requests)
-        differences = view_differences(before_views, after_views)
-        casework.decide(requests[1])
-        casework.request_review("after-0")
-    finally:
-        service.stop()
-    losses += row_count_losses(before_counts, postgres.row_counts("casework"))
-    records_after = audit_record_count(casework.audit, "casework.ndjson")
-    losses += audit_stream_losses("Casework", records_before, records_after,
-                                  CASEWORK_UPGRADED_AUDIT_RECORDS)
-    new.run_json("caseworkctl", "--format", "json", "check", str(casework.project))
-
-    report["casework"] = {
-        "reviewRequests": len(requests),
-        "tables": len(before_counts),
-        "auditRecordsBefore": records_before,
-        "auditRecordsAfter": records_after,
-        "activationId": activation["activationId"],
-        "activatedOnUpgrade": activation["activationId"] != seeded,
-        "viewDifferences": differences,
-        "rowLosses": losses,
-    }
-    if differences or losses:
-        raise RehearsalError("Casework state did not survive the upgrade: "
-                             + "; ".join(differences + losses))
-
-
-# ---------------------------------------------------------------------------
 # Messaging: activate the starter, schedule and cancel messages, upgrade,
 # compare.
 
@@ -1710,9 +1471,8 @@ def check_binaries(side: Side, expected_version: str | None,
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--to-bin-dir", type=Path,
-                        help="directory holding casework, caseworkctl, "
-                             "evidence, evidencectl, messaging, and messagingctl built "
-                             "from this source")
+                        help="directory holding evidence, evidencectl, "
+                             "messaging, and messagingctl built from this source")
     parser.add_argument("--fetch-only", action="store_true",
                         help="download and authenticate the previous release's binaries "
                              "into WORK_DIR/from-bin, check their versions, and stop")
@@ -1725,7 +1485,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="new directory for the rehearsal's state and logs")
     parser.add_argument("--container-name", default="registry-upgrade-rehearsal-postgres",
                         help="name of the disposable PostgreSQL container")
-    parser.add_argument("--product", action="append", choices=PRODUCTS,
+    parser.add_argument("--product", action="append", choices=PRODUCT_CHOICES,
                         help="rehearse only the named products; repeatable")
     parser.add_argument("--from-bin-dir", type=Path,
                         help="use these previous-release binaries instead of downloading "
@@ -1742,6 +1502,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
+        for product in args.product or []:
+            if product in RETIRED_PRODUCTS:
+                raise RehearsalError(RETIRED_PRODUCTS[product])
         version = workspace_version(ROOT)
         check_floor_is_current(released_versions(ROOT), version)
         from_tag = args.from_tag or select_from_tag(published_tags(), version)
@@ -1794,16 +1557,14 @@ def main(argv: list[str]) -> int:
         keys = Keys(work / "keys")
         postgres = None
         try:
-            if {"casework", "messaging"} & set(products):
+            if "messaging" in products:
                 postgres = Postgres(args.container_name, tls)
             else:
                 Postgres._make_certificates(tls)
             for product in products:
                 print(f"rehearsing {product}: {from_tag} -> workspace {version}", flush=True)
                 leg_work = work / product
-                if product == "casework":
-                    rehearse_casework(leg_work, keys, postgres, old, new, report)
-                elif product == "messaging":
+                if product == "messaging":
                     rehearse_messaging(leg_work, keys, postgres, old, new, report)
                 else:
                     rehearse_evidence(leg_work, keys, tls, old, new, report)

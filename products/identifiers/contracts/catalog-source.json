@@ -90,6 +90,11 @@
       "reason": "Unknown future Base Registry Engine Problem codes are synthetic test inputs outside the active resolver catalog by design."
     },
     {
+      "glob": "crates/registry-breg-client/tests/write_http_boundary.rs",
+      "classification": "fixture",
+      "reason": "The unknown BReg request.plan_refused Problem is a synthetic client decoding fixture, not a current runtime Problem inventory entry."
+    },
+    {
       "glob": "crates/registry-manifest-core/tests/**",
       "classification": "fixture",
       "reason": "Manifest test shapes are local conformance fixtures, not Registry Stack identifier contracts."
@@ -115,6 +120,11 @@
       "reason": "Manifest profile identifiers in fixtures are not Registry Stack resolver contracts."
     },
     {
+      "glob": "products/casework/CHANGELOG.md",
+      "classification": "historical-documentation",
+      "reason": "Casework changelog entries retain previously published CLI schema identifiers after those reports leave the active catalog."
+    },
+    {
       "glob": "products/platform/config-conventions-exceptions.yaml",
       "classification": "planned-resolution",
       "reason": "Exception resolutions name the identifier a deviation moves to; the change that applies a resolution publishes its identifier and deletes the entry."
@@ -133,6 +143,21 @@
       "glob": "release/*.schema.json",
       "classification": "retired-product",
       "reason": "RegistryReleaseLockV1 identifiers belong to retired registryctl release tooling."
+    },
+    {
+      "glob": "release/notes/config-conventions/breg.md",
+      "classification": "historical-documentation",
+      "reason": "The BReg configuration-conventions release note records a previous schema identifier, not an active schema source."
+    },
+    {
+      "glob": "release/notes/config-conventions/casework.md",
+      "classification": "historical-documentation",
+      "reason": "The Casework configuration-conventions release note records previous CLI schema identifiers, not active schemas."
+    },
+    {
+      "glob": "release/notes/config-conventions/evidence.md",
+      "classification": "historical-documentation",
+      "reason": "The Evidence configuration-conventions release note records previous authoring schema identifiers, not active schema sources."
     },
     {
       "glob": "schemas/*.schema.json",
@@ -235,6 +260,22 @@
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
     },
     {
+      "glob": "products/breg/generated/refactor/generated/action-contracts.schema.json",
+      "sourcePath": "crates/registry-breg/src/artifacts.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project."
+    },
+    {
+      "glob": "products/breg/generated/event-schemas/*.schema.json",
+      "sourcePath": "crates/registry-breg/src/proposal_hooks.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Base Registry Engine fixed Proposal lifecycle event schema, reproduced byte-for-byte from its packaged artifact."
+    },
+    {
       "glob": "products/casework/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-casework/src/schema.rs",
       "owner": "casework",
@@ -259,14 +300,6 @@
       "description": "Registry Casework fixture JSON Schema."
     },
     {
-      "glob": "products/casework/generated/simulation/*.schema.json",
-      "sourcePath": "crates/registry-casework-core/src/schema.rs",
-      "owner": "casework",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "description": "Registry Casework simulation JSON Schema."
-    },
-    {
       "glob": "products/casework/generated/holiday-set/*.schema.json",
       "sourcePath": "crates/registry-casework-core/src/schema.rs",
       "owner": "casework",
@@ -287,7 +320,7 @@
       "sourcePath": "products/casework/scripts/generate_cli_schemas.py",
       "owner": "casework",
       "status": "active",
-      "compatibilityLine": "v1alpha3",
+      "compatibilityLine": "v1alpha1",
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test."
     },
     {

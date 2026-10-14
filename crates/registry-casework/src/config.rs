@@ -1573,12 +1573,29 @@ mod tests {
     const SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","reference"],"properties":{"summary":{"type":"string","maxLength":160},"reference":{"type":"string","maxLength":120}}}"#;
 
     fn read_operator(value: &serde_json::Value, directory: &Path) -> RuntimeConfig {
-        let path = directory.join("runtime.yaml");
-        std::fs::write(&path, serde_norway::to_string(value).unwrap()).unwrap();
+        let path = write_operator(value, directory);
         RuntimeConfig::loader()
             .load::<RuntimeConfig>(&path)
             .unwrap()
             .config
+    }
+
+    fn write_operator(value: &serde_json::Value, directory: &Path) -> PathBuf {
+        let path = directory.join("runtime.yaml");
+        std::fs::write(&path, serde_norway::to_string(value).unwrap()).unwrap();
+        path
+    }
+
+    fn operator_value(package: &Path, directory: &Path) -> serde_json::Value {
+        json!({
+            "apiVersion":RUNTIME_CONFIG_API_VERSION,"kind":RUNTIME_CONFIG_KIND,
+            "identity":{"databaseId":"test"},"package":{"root":package},
+            "listener":{"bind":"127.0.0.1:8100","tlsTermination":"development-loopback","networkExposure":"private-address"},
+            "secretProviders":{"file":{"root":directory.join("secrets")}},
+            "database":{"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url"},
+            "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+            "audit":{"path":directory.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
+        })
     }
 
     fn referenced_policy() -> (Vec<u8>, BTreeMap<String, Vec<u8>>, CaseworkProject) {
@@ -1609,6 +1626,91 @@ mod tests {
     }
 
     #[test]
+    fn environment_expressions_substitute_values_but_never_secret_references() {
+        let temp =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let package = temp.path().join("package");
+        let mut document = operator_value(&package, temp.path());
+        document["authentication"]["oidc"]["audience"] =
+            json!("${CASEWORK_CONFIG_SUBSTITUTION_AUDIENCE}");
+        let path = write_operator(&document, temp.path());
+        let config = RuntimeConfig::loader()
+            .load_with::<RuntimeConfig>(&path, |name| {
+                (name == "CASEWORK_CONFIG_SUBSTITUTION_AUDIENCE")
+                    .then(|| "urn:example:substituted".to_owned())
+            })
+            .unwrap()
+            .config;
+        assert_eq!(
+            config.authentication.oidc.provider.audience,
+            "urn:example:substituted"
+        );
+
+        document["database"]["runtimeUrlRef"] = json!("${CASEWORK_CONFIG_SUBSTITUTION_REFERENCE}");
+        let path = write_operator(&document, temp.path());
+        let error = RuntimeConfig::loader()
+            .load_with::<RuntimeConfig>(&path, |name| match name {
+                "CASEWORK_CONFIG_SUBSTITUTION_AUDIENCE" => {
+                    Some("urn:example:substituted".to_owned())
+                }
+                "CASEWORK_CONFIG_SUBSTITUTION_REFERENCE" => {
+                    Some("secret:file/runtime-url".to_owned())
+                }
+                _ => None,
+            })
+            .unwrap_err();
+        let diagnostic = error.deciding_diagnostic();
+        assert_eq!(diagnostic.code, "config.substitution-not-allowed");
+        assert_eq!(diagnostic.path, "/database/runtimeUrlRef");
+    }
+
+    #[test]
+    fn an_authored_project_carrying_an_environment_expression_is_refused() {
+        let authored = STANDALONE.replace(
+            "  id: standalone-decision\n",
+            "  id: ${CASEWORK_TEST_PROJECT_ID:-standalone-decision}\n",
+        );
+        let report = CaseworkProject::read(POLICY_FILE, authored.as_bytes()).unwrap_err();
+        assert_eq!(report.error_count(), 1, "{report:?}");
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.substitution-not-allowed");
+        assert_eq!(diagnostic.path, "/project/id");
+        assert!(!diagnostic.message.contains("CASEWORK_TEST_PROJECT_ID"));
+        assert!(diagnostic.message.contains("runtime.yaml"));
+    }
+
+    #[test]
+    fn a_package_digest_mismatch_is_refused_in_the_shared_shape() {
+        let temp =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let package = temp.path().join("package");
+        write_package(
+            &package,
+            &BTreeMap::from([(POLICY_FILE.to_owned(), STANDALONE.as_bytes().to_vec())]),
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
+        )
+        .unwrap();
+        let found = sha256_uri(&std::fs::read(package.join("SHA256SUMS")).unwrap());
+        let expected = format!("sha256:{}", "0".repeat(64));
+        assert_ne!(expected, found);
+        let mut document = operator_value(&package, temp.path());
+        document["package"]["expectedDigest"] = json!(&expected);
+
+        let error = RuntimeConfig::load(write_operator(&document, temp.path())).unwrap_err();
+        assert_eq!(error.code(), "casework.package.digest-mismatch");
+        assert_eq!(error.pointer(), "/package/expectedDigest");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "package.expectedDigest is {expected} but the package at package.root is {found}; \
+                 deploy the pinned package or update package.expectedDigest"
+            )
+        );
+    }
+
+    #[test]
     fn package_capture_refuses_a_schema_changed_after_verification() {
         let temp =
             tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
@@ -1617,15 +1719,7 @@ mod tests {
         let mut inputs = schemas;
         inputs.insert(POLICY_FILE.to_owned(), authored);
         write_package(&package, &inputs, None, &package_limits(), PACKAGE_COMMAND).unwrap();
-        let operator = json!({
-            "apiVersion":RUNTIME_CONFIG_API_VERSION,"kind":RUNTIME_CONFIG_KIND,
-            "identity":{"databaseId":"test"},"package":{"root":package},
-            "listener":{"bind":"127.0.0.1:8100","tlsTermination":"development-loopback","networkExposure":"private-address"},
-            "secretProviders":{"file":{"root":temp.path().join("secrets")}},
-            "database":{"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url"},
-            "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
-            "audit":{"path":temp.path().join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
-        });
+        let operator = operator_value(&package, temp.path());
         let config = read_operator(&operator, temp.path());
         let loaded = config.load_package().unwrap();
         assert_eq!(loaded.project().review_policies.len(), 1);

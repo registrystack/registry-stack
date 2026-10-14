@@ -75,13 +75,13 @@ choosing a new key.
 
 This crate is private and does not publish a standalone Python distribution.
 
-Task delegation uses the current human profile for template previews, grant
+Task grants use the current human profile for template previews, grant
 approval, listing, and revocation. Approval accepts only the template ID and
 version, with the task revision and a caller-owned idempotency key. The preview
 contains the exact destination, purpose, immutable bounds, derived subjects,
 and lifetime; the grant list omits stored subjects. Agent assertion and grant
 status calls take only a bearer token and grant ID, without human or source
-profile headers. Neither binding retains credentials or resends a mutation
+profile headers. The binding retains no credentials and resends no mutation
 beyond the bounded same-key retry above.
 
 Previews and grant views include `authorizationMode: "deferred"` for a deferred
@@ -92,10 +92,49 @@ fresh assertion when executing; its short credential lifetime does not extend
 the approved deadline. See the [task-grant lifecycle](../../products/casework/TASK_GRANTS.md)
 for expiry, revocation, and changes that require another approval.
 
-Review policies are discovered through `reviewPolicies` (Node) or
-`review_policies` (Python). Admission supplies the exact `policy` binding.
-Review task lists support the five SubjectBinding selectors and `sort`
-(`due`, `subject`, or `reference`). Due-ordered next and holdings use
-`nextReviewTask` / `reviewTaskHoldings` in Node and `next_review_task` /
-`review_task_holdings` in Python. Caseload and clock preview/apply calls
-operate on ReviewTasks and apply only the revision-fenced preview ID.
+`review_policies` and `review_policy` return compiled policy closures. Admission
+supplies the exact `{id, version, digest}` binding in `policy`. Use a
+binding from the reviewed project or explicitly accept a discovered closure;
+keep that binding, complete request, and idempotency key unchanged during
+recovery.
+
+This producer function uses the standalone decision policy. The host supplies
+its declared trusted-producer ID, real immutable subject binding, and retained
+idempotency key. `submission_digest` validates and hashes locally through the
+same Rust implementation as admission, without network or token work.
+
+```python
+from registry_client import casework
+
+client = casework.CaseworkClient("https://casework.example.invalid/")
+
+
+def submit_review(token, producer_id, policy_binding, subject, key):
+    request = {
+        "policy": policy_binding,
+        "subject": subject,
+        "requesterReference": subject["id"],
+        "context": {
+            "mode": "submitted",
+            "snapshot": {"summary": "Confirm the prepared batch", "reference": subject["id"]},
+        },
+    }
+    digest = casework.submission_digest(producer_id, subject["source"], request)
+    return client.create_or_recover_review_request(
+        token, "requester", key, request, digest,
+    )["value"]
+```
+
+Persist the accepted binding and use `review_result` or the authenticated
+`review_results` feed. A `ReviewResult` records a human outcome and grants no
+external apply or write authority; the producer independently authorizes any
+later business mutation. A policy mismatch requires reviewing the changed
+policy, not replacing the expected digest during a retry.
+
+`ReviewStaffingQuery` accepts all five subject selectors together, a visible
+reference, queue, ownership, and `sort` (`due`, `subject`, or `reference`).
+`next_review_task` returns one due-ordered task or None;
+`review_task_holdings` returns a bounded page. Caseload and clock preview/apply
+calls apply only the revision-fenced preview ID. Keep filters and caller
+profiles unchanged across snapshot cursors; after `410 review.result-expired`,
+start again without one.

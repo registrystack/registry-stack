@@ -72,3 +72,6 @@ export interface CaseworkOutcome {
   value: any
   traceId: string
 }
+
+/** Compute the canonical producer submission digest locally, without I/O. */
+export declare function submissionDigest(producer: string, sourceNamespace: string, request: any): string

@@ -12,6 +12,14 @@ STUB = (
 
 
 class TypingContractTests(unittest.TestCase):
+    def test_submission_digest_has_the_canonical_typed_signature(self) -> None:
+        module = ast.parse(STUB.read_text(encoding="utf-8"))
+        helper = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "submission_digest")
+        self.assertEqual([(arg.arg, ast.unparse(arg.annotation)) for arg in helper.args.args], [
+            ("producer", "str"), ("source_namespace", "str"), ("request", "ReviewCreateRequest"),
+        ])
+        self.assertEqual(ast.unparse(helper.returns), "ContentDigest")
+
     def test_review_parity_inventory_is_closed_and_bounded(self) -> None:
         module = ast.parse(STUB.read_text(encoding="utf-8"))
         classes = {

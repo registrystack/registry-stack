@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- BREAKING: replace source-owned WorkItems, prepared attempts and source actions
+  with one ReviewPolicy/ReviewRequest/ReviewTask/Decision/ReviewResult model.
+  Requests submit the exact compiled policy binding and use context `mode`
+  `submitted` or `current-source`. There is no source mutation authority or
+  retired HTTP/CLI compatibility surface. Use a fresh Casework database;
+  retained legacy schemas are refused before mutation, not converted or erased.
+- Keep multi-stage review, independent reviewer thresholds, staffing, bounded
+  task grants, pinned clocks, audited recovery and retention on ReviewTask.
+  Current-source providers expose only purpose-specific read capabilities.
+- Pair native BReg Proposal context through `caseworkctl provider pair`. BReg
+  consumes the correlated result and applies under its own current authority.
+- Refresh canonical, standalone and advanced examples, typed CLI reports,
+  generated contracts and adopter/operator documentation.
+- Export the shared review submission digest helper through Node and Python
+  clients so producers can use exact admission and recovery without implementing
+  the protocol canonicalizer.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries

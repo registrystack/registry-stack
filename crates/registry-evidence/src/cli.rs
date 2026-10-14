@@ -60,13 +60,16 @@ where
 pub enum AuthorityCommand {
     /// Validate package ceilings and durably commit one target authority snapshot.
     Activate {
+        /// Runtime configuration file that binds the package and authority store.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
+        /// Target authority document to validate and activate.
         #[arg(long, value_name = "FILE")]
         document: PathBuf,
     },
     /// Inspect revisions and digests from committed activation history, without identity values.
     History {
+        /// Runtime configuration file that binds the authority store.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
     },

@@ -1598,6 +1598,61 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn("demo/project\tduplicate-key\tpass", stdout)
         self.assertNotIn("demo/project\tanchor", stdout)
 
+    def test_only_format_runs_selected_cells_despite_unrelated_retired_references(self) -> None:
+        (self.root / "products/platform/conformance/yaml/formats.yaml").write_text(
+            "formats:\n  demo/project: {}\n  demo/retired: {}\n", encoding="utf-8"
+        )
+        self.write_expected({
+            "expectedFailures": [{
+                "format": "demo/retired", "case": "retired-case",
+                "reason": "old result", "digest": runner.digest(["old result"]),
+            }],
+            "unreachedFormats": [{"format": "demo/retired", "reason": "old check"}],
+        })
+        code, stdout, stderr = self.run_runner(
+            "--matrix", "--only-format", "demo/project", "--only-case", "duplicate-key"
+        )
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertIn("demo/project\tbaseline\tpass", stdout)
+        self.assertIn("demo/project\tduplicate-key\tpass", stdout)
+        self.assertNotIn("demo/retired\t", stdout)
+
+        # Selector validation still happens before the scoped reference check.
+        code, stdout, stderr = self.run_runner("--only-format", "demo/retired")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("--only-format names demo/retired, which the registry does not", stderr)
+
+    def test_full_run_refuses_unrelated_stale_references(self) -> None:
+        harness_path = self.root / "products/platform/conformance/yaml/formats.yaml"
+        harness_path.write_text("formats:\n  demo/retired: {}\n", encoding="utf-8")
+        code, stdout, stderr = self.run_runner("--matrix")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("formats.yaml names demo/retired, which the registry does not", stderr)
+
+        harness_path.write_text("formats: {}\n", encoding="utf-8")
+        self.write_expected({"expectedFailures": [{
+            "format": "demo/retired", "case": "baseline",
+            "reason": "old result", "digest": runner.digest(["old result"]),
+        }]})
+        code, stdout, stderr = self.run_runner("--matrix")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("expected-failures.yaml names format demo/retired", stderr)
+
+    def test_only_format_still_refuses_bad_selected_and_shared_case_references(self) -> None:
+        selected = ("--only-format", "demo/project")
+        self.write_expected({"expectedFailures": [{
+            "format": "demo/project", "case": "retired-case",
+            "reason": "old result", "digest": runner.digest(["old result"]),
+        }]})
+        code, stdout, stderr = self.run_runner(*selected)
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("expected-failures.yaml names case retired-case", stderr)
+
+        self.write_expected({"inapplicableCases": [{"case": "retired-case", "reason": "old case"}]})
+        code, stdout, stderr = self.run_runner(*selected)
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("expected-failures.yaml names case retired-case", stderr)
+
     def test_a_listed_cell_the_harness_could_not_run_still_fails(self) -> None:
         problem = "fakectl is not in the binary directory"
         self.write_expected(

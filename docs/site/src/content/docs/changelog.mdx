@@ -674,9 +674,8 @@ relevant product pages on this site rather than duplicating release notes.
   --casework-endpoint URL` sets the Casework endpoint of the local BReg review authority, and
   `caseworkctl dev` reports a local session failure under `caseworkctl.dev.*` codes.
 
-{/* Evidence: crates/registry-casework/src/store.rs, fresh_within;
-    crates/registry-caseworkctl/src/source_add.rs, casework_endpoint;
-    products/casework/CHANGELOG.md. */}
+{/* Historical release evidence: products/casework/CHANGELOG.md.
+    Evidence: products/casework/CHANGELOG.md. */}
 
 - BREAKING: Registry Discovery service search accepts `serviceKind=evidence` only and no longer
   takes the `semanticClass` and `operationFamily` filters. A search that sends

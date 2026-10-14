@@ -239,7 +239,7 @@
         "type": "string"
       },
       "ClockPolicy": {
-        "description": "A named clock, chosen by its `type` member (CFG-ID-7). The shared reader's\nunion helper decodes it so every error inside a variant keeps its position\n(CFG-SCHEMA-8). The authored file, the stored record, the digest input, and\nthe HTTP description all carry this one spelling.",
+        "description": "The serialized form of [`ClockPolicy`]: the shape the serializer emits.",
         "oneOf": [
           {
             "additionalProperties": false,
@@ -280,15 +280,7 @@
                 "$ref": "#/components/schemas/ActivityClockAnchor"
               },
               "atRisk": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/WorkingDaysBefore"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null
+                "$ref": "#/components/schemas/WorkingDaysBefore"
               },
               "calendar": {
                 "type": "string"
@@ -300,14 +292,12 @@
                 "$ref": "#/components/schemas/LocalId"
               },
               "reminders": {
-                "default": [],
                 "items": {
                   "$ref": "#/components/schemas/ClockReminder"
                 },
                 "type": "array"
               },
               "steps": {
-                "default": [],
                 "items": {
                   "$ref": "#/components/schemas/ClockStep"
                 },
@@ -324,10 +314,7 @@
               "anchor",
               "calendar",
               "after",
-              "dueTime",
-              "atRisk",
-              "reminders",
-              "steps"
+              "dueTime"
             ],
             "type": "object"
           }
@@ -618,6 +605,11 @@
         ],
         "type": "object"
       },
+      "Digest": {
+        "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
       "DirectoryMember": {
         "additionalProperties": false,
         "description": "A directory-scoped presentation of a person. The optional name belongs to\none team membership and never enters accountable actor identity.",
@@ -789,6 +781,13 @@
           "audience"
         ],
         "type": "object"
+      },
+      "ExternalId": {
+        "description": "An identifier another system issues, written exactly as its issuer gives it.",
+        "maxLength": 512,
+        "minLength": 1,
+        "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+        "type": "string"
       },
       "HolidaySetDocument": {
         "additionalProperties": false,
@@ -1956,7 +1955,7 @@
                 "const": "review.initiator-required"
               },
               "detail": {
-                "const": "This review kind excludes the person who submitted the request, so the request must name its initiator."
+                "const": "This review policy excludes the person who submitted the request, so the request must name its initiator."
               },
               "status": {
                 "const": 422
@@ -2785,13 +2784,17 @@
         "additionalProperties": false,
         "properties": {
           "id": {
-            "type": "string"
+            "$ref": "#/components/schemas/ExternalId",
+            "description": "The producer-issued contract id, kept exactly as written: nonblank, no control characters, and at most 256 UTF-8 bytes. The byte ceiling is enforced by the Casework reader.",
+            "maxLength": 256,
+            "pattern": "\\S",
+            "x-registry-maxBytes": 256
           },
           "revision": {
             "$ref": "#/components/schemas/ContentDigest"
           },
           "schemaDigest": {
-            "$ref": "#/components/schemas/ContentDigest"
+            "$ref": "#/components/schemas/Digest"
           }
         },
         "required": [
@@ -2846,7 +2849,8 @@
             "items": {
               "$ref": "#/components/schemas/ReviewContextCapability"
             },
-            "type": "array"
+            "type": "array",
+            "uniqueItems": true
           },
           "deploymentRef": {
             "type": "string"
@@ -2876,6 +2880,9 @@
               "task-grant-context": {
                 "type": "string"
               }
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/LocalId"
             },
             "type": "object"
           },
@@ -3312,10 +3319,10 @@
         "additionalProperties": false,
         "properties": {
           "digest": {
-            "$ref": "#/components/schemas/ContentDigest"
+            "$ref": "#/components/schemas/Digest"
           },
           "id": {
-            "type": "string"
+            "$ref": "#/components/schemas/LocalId"
           },
           "version": {
             "type": "string"

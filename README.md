@@ -62,9 +62,9 @@ its own deployment contract and adopter tooling, and each one is optional.
 - **Registry Manifest:** portable metadata that describes what a registry
   exposes, rendered without touching the production source.
   Docs: [Registry Manifest reference](https://docs.registrystack.org/dev/products/registry-manifest/reference/).
-- **Registry Casework:** an accountable team inbox for source-owned review work
-  and small human decisions requested by another service. It can run with a
-  governed Base Registry Engine source or in standalone hosted mode.
+- **Registry Casework:** a bounded human-review service with pinned policies,
+  accountable tasks, and correlated results. It runs with submitted snapshots
+  or read-only current-source context; the producer authorizes later changes.
   Docs: [Registry Casework overview](https://docs.registrystack.org/dev/start/casework/).
 - **Registry Scheduling:** a coordinated booking surface over anchored supply:
   published openings, exact-time offerings, arrival windows with channel

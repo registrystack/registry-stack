@@ -343,6 +343,9 @@ handler, declared business refusal, coordinated creates and an optional patch.
 See [native string patterns](native-patterns.md) for stored integrity rules.
 Its synthetic CLI cases assert computed effects and its PostgreSQL journeys
 verify stored values and existing action authority and concurrency contracts.
+For current native Proposal context pairing and independent application authority,
+use the [canonical Casework review](../casework/examples/canonical-review/README.md).
+The status service and human context reader have separate purpose-specific grants.
 
 Run the current deterministic contract checks with:
 

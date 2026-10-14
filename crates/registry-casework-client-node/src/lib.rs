@@ -25,6 +25,19 @@ use uuid::Uuid;
 
 const MAXIMUM_JAVASCRIPT_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
+/// Compute the canonical producer submission digest locally, without I/O.
+#[napi(js_name = "submissionDigest")]
+pub fn submission_digest(
+    producer: String,
+    source_namespace: String,
+    request: Value,
+) -> Result<String> {
+    let request: ReviewCreateRequest = input(request)?;
+    registry_casework_client::submission_digest(&producer, &source_namespace, &request)
+        .map(|digest| digest.as_str().to_owned())
+        .map_err(|_| binding_error("invalid-request", "Casework client arguments are invalid"))
+}
+
 #[napi(object)]
 pub struct CaseworkClientConfig {
     pub base_url: String,

@@ -64,13 +64,15 @@ holds `publish`, and every profile that reads its releases. The list is empty
 when the project declares no dataset.
 
 The `v1alpha4` schema also pins an existing part of the authority-inventory
-wire shape for the Casework `source add` consumer. A successful
+wire shape for exact contract inspection. A successful
 `AccessExplanation.claimContract` has a unique, possibly empty
 `principalClaims` array of nonempty strings and a null `claimContractError`.
 An inventory failure has a null `claimContract` and one pinned
 `claimContractError` value. Every other member of the authority inventory
-remains opaque. This guarantee changes no serialized key or value, so it does
-not require another format version.
+remains opaque. Casework provider pairing separately verifies the sealed,
+purpose-bound review-context export and grants no BReg authority. This
+guarantee changes no serialized key or value, so it does not require another
+format version.
 
 The release that gave each format its own `apiVersion` also respells pinned
 keys and values, under the same `v1alpha4`: the value a consumer compares
@@ -223,11 +225,11 @@ both are small, hand-authored structs whose fields are named directly in
 `registry-breg`.
 
 `AccessExplanation.claimContract` is a partial exception to the normal
-passthrough rule. Casework `source add` reads `principalClaims` to bind its
-source-reader profile to the registry's compiled principal claim. The schema
-therefore pins that one array and the mutually exclusive success/error
-relationship with `claimContractError`. The containing inventory object stays
-open, so `purposeRequired`, `directClaims`, and any later inventory members
+passthrough rule. The schema pins `principalClaims` for exact contract
+inspection and keeps its mutually exclusive success/error relationship with
+`claimContractError`. Casework provider pairing separately verifies the sealed,
+purpose-bound review-context export and grants no BReg authority. The containing
+inventory object stays open, so `purposeRequired`, `directClaims`, and any later inventory members
 remain opaque passthrough data.
 
 `AccessExplanation.consent` is pinned in full on the same ground as

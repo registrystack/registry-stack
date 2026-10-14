@@ -1181,15 +1181,15 @@ formats:
       function: load
       type: CaseworkProject
     check: caseworkctl check {project}
-    example: products/casework/examples/payment-review/casework.yaml
+    example: products/casework/examples/standalone-decision/casework.yaml
     conformance:
       requiredText: /project/id
       optionalText: none
-      integer: /reviewKinds/0/retention/terminalDays
+      integer: /reviewPolicies/0/retention/terminalDays
       boolean: none
       idList: /queues
       set: /accessProfiles/0/requiredScopes
-      reference: /reviewKinds/0/stages/0/queue
+      reference: /reviewPolicies/0/stages/0/queue
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
         whenOmitted: unclassified
@@ -1222,11 +1222,11 @@ formats:
       function: load
       type: RuntimeConfig
     check: caseworkctl check {project} --runtime-config {file}
-    example: products/casework/examples/payment-review/runtime.example.yaml
+    example: products/casework/examples/canonical-review/runtime.example.yaml
     conformance:
       requiredText: /authentication/oidc/audience
       optionalText: /audit/path
-      integer: /reviewCompletionDestinations/payment-results/maximumAttempts
+      integer: none
       boolean: none
     securityMembers:
       - pointer: /listener/bind
@@ -1265,58 +1265,21 @@ formats:
     reader:
       crate: registry-casework-core
       file: crates/registry-casework-core/src/fixture.rs
-      function: read_offline_file
+      function: read
       type: CaseworkFixture
-    check: caseworkctl check {project}
-    example: products/casework/examples/payment-review/fixtures/payment-review.yaml
+    check: caseworkctl test {project}
+    example: products/casework/examples/standalone-decision/fixtures/standalone-decision.yaml
     conformance:
       requiredText: /id
       optionalText: none
       integer: none
-      boolean: none
-      operand: /review/display/amountMinor
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/simulation
-    product: casework
-    title: Casework clock simulation
-    files: [simulations/*.yaml, simulations/*.yml]
-    syntax: yaml
-    audience: authored
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1
-      kind: CaseworkSimulation
-      checkedBy:
-        file: crates/registry-casework-core/src/fixture.rs
-        symbol: CASEWORK_SIMULATION_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1
-      kind: CaseworkSimulation
-    schema:
-      path: products/casework/generated/simulation/simulation.schema.json
-      id: https://id.registrystack.org/schemas/casework/simulation/simulation.v1alpha1.schema.json
-      origin: generated
-      generator: cargo run -p registry-casework-core --features schema --example offline-schemas -- --output products/casework/generated
-      driftCheck: crates/registry-casework-core/src/schema.rs
-    reader:
-      crate: registry-casework-core
-      file: crates/registry-casework-core/src/fixture.rs
-      function: read_offline_file
-      type: CaseworkSimulation
-    check: caseworkctl check {project}
-    example: products/casework/examples/multi-stage-routing-clocks/simulations/friday-review.yaml
-    conformance:
-      requiredText: /subject/recordId
-      optionalText: none
-      integer: /holidayRevisions/office-holidays
       boolean: none
     securityMembers: []
     restrictingMembers: []
   - id: casework/holiday-set
     product: casework
     title: Casework holiday set
-    files: [simulations/holiday-sets/*.yaml, simulations/holiday-sets/*.yml]
+    files: [holiday-sets/*.yaml, holiday-sets/*.yml]
     syntax: yaml
     audience: authored
     stability: unpromised
@@ -1338,10 +1301,10 @@ formats:
     reader:
       crate: registry-casework-core
       file: crates/registry-casework-core/src/fixture.rs
-      function: read_offline_file
+      function: read
       type: CaseworkHolidaySet
     check: caseworkctl check {project}
-    example: products/casework/examples/multi-stage-routing-clocks/simulations/holiday-sets/office-holidays-7.yaml
+    example: products/casework/examples/multi-stage-routing-clocks/holiday-sets/office-holidays-7.yaml
     conformance:
       requiredText: /holidaySet
       optionalText: none
@@ -1386,700 +1349,37 @@ formats:
       boolean: none
     securityMembers: []
     restrictingMembers: []
-  - id: casework/dev-state
+  - id: casework/report
     product: casework
-    title: Casework development environment state
-    files: [.casework/dev/state.json]
-    syntax: json
-    audience: generated
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/dev-state/v1alpha1
-      kind: CaseworkDevState
-      checkedBy:
-        file: crates/registry-caseworkctl/src/dev/mod.rs
-        symbol: DEV_STATE_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/casework/dev-state/v1alpha1
-      kind: CaseworkDevState
-    schema: none
-    reader:
-      crate: registry-caseworkctl
-      file: crates/registry-caseworkctl/src/dev/mod.rs
-      function: read_state
-      type: State
-    check: caseworkctl check {project}
-    example: products/casework/examples/formats/dev-session/.casework/dev/state.json
-    conformance:
-      requiredText: /sourceDigest
-      optionalText: none
-      integer: /caseworkPort
-      boolean: /migrated
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/breg-source-description
-    product: casework
-    title: Base Registry Engine source description for Casework
-    files: [sources/*.json]
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/breg-source-description/v1alpha1
-      kind: CaseworkBregSourceDescription
-      checkedBy:
-        file: crates/registry-casework-breg/src/config.rs
-        symbol: DESCRIPTION_KIND
-    target:
-      apiVersion: id.registrystack.org/formats/casework/breg-source-description/v1alpha1
-      kind: CaseworkBregSourceDescription
-    schema: none
-    reader:
-      crate: registry-casework-breg
-      file: crates/registry-casework-breg/src/config.rs
-      function: validate_description
-      type: untyped
-    check: caseworkctl check {project}
-    example: products/casework/examples/multi-stage-routing-clocks/sources/regional-register.json
-    conformance:
-      requiredText: /sourceId
-      optionalText: none
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
-    notes: Written by `caseworkctl source add` from `bregctl explain change-requests`. One version is read; every paired entity is an entry of `requests`. The two apiVersions earlier releases wrote are refused as retired and the description is imported again.
-  - id: casework/apply-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkApplyReport)
+    title: caseworkctl --format json output (CaseworkReport)
     files: []
     syntax: json
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/casework/apply-report/v1alpha3
-      kind: CaseworkApplyReport
+      apiVersion: id.registrystack.org/formats/casework/report/v1alpha1
+      kind: CaseworkReport
       checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
+        file: crates/registry-caseworkctl/src/report.rs
+        symbol: REPORT_API_VERSION
     target:
-      apiVersion: id.registrystack.org/formats/casework/apply-report/v1alpha3
-      kind: CaseworkApplyReport
+      apiVersion: id.registrystack.org/formats/casework/report/v1alpha1
+      kind: CaseworkReport
     schema:
-      path: products/casework/contracts/cli/ApplyReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/apply-report/apply-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+      path: products/casework/contracts/cli/report.schema.json
+      id: https://id.registrystack.org/schemas/casework/report/report.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-caseworkctl --features schema --example report-schemas -- --output products/casework/contracts/cli
+      driftCheck: crates/registry-caseworkctl/src/schema.rs
     reader: none
     emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/apply-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/attempt-settlement-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkAttemptSettlementReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/attempt-settlement-report/v1alpha3
-      kind: CaseworkAttemptSettlementReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/attempt-settlement-report/v1alpha3
-      kind: CaseworkAttemptSettlementReport
-    schema:
-      path: products/casework/contracts/cli/AttemptSettlementReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/attempt-settlement-report/attempt-settlement-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/attempt-settlement-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/attempt-uncertain-marking-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkAttemptUncertainMarkingReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/attempt-uncertain-marking-report/v1alpha3
-      kind: CaseworkAttemptUncertainMarkingReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/attempt-uncertain-marking-report/v1alpha3
-      kind: CaseworkAttemptUncertainMarkingReport
-    schema:
-      path: products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/attempt-uncertain-marking-report/attempt-uncertain-marking-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/attempt-uncertain-marking-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/check-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkCheckReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/check-report/v1alpha3
-      kind: CaseworkCheckReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/check-report/v1alpha3
-      kind: CaseworkCheckReport
-    schema:
-      path: products/casework/contracts/cli/CheckReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
+      file: crates/registry-caseworkctl/src/report.rs
+      symbol: write
     check: none
     example: products/casework/examples/formats/reports/check-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
-  - id: casework/dev-events-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkDevEventsReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/dev-events-report/v1alpha3
-      kind: CaseworkDevEventsReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/dev-events-report/v1alpha3
-      kind: CaseworkDevEventsReport
-    schema:
-      path: products/casework/contracts/cli/DevEventsReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/dev-events-report/dev-events-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/dev-events-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/dev-grant-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkDevGrantReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/dev-grant-report/v1alpha3
-      kind: CaseworkDevGrantReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/dev-grant-report/v1alpha3
-      kind: CaseworkDevGrantReport
-    schema:
-      path: products/casework/contracts/cli/DevGrantReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/dev-grant-report/dev-grant-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/dev-grant-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/dev-identity-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkDevIdentityReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/dev-identity-report/v1alpha3
-      kind: CaseworkDevIdentityReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/dev-identity-report/v1alpha3
-      kind: CaseworkDevIdentityReport
-    schema:
-      path: products/casework/contracts/cli/DevIdentityReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/dev-identity-report/dev-identity-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/dev-identity-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/dev-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkDevReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/dev-report/v1alpha3
-      kind: CaseworkDevReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/dev-report/v1alpha3
-      kind: CaseworkDevReport
-    schema:
-      path: products/casework/contracts/cli/DevReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/dev-report/dev-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/dev-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/dev-token-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkDevTokenReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/dev-token-report/v1alpha3
-      kind: CaseworkDevTokenReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/dev-token-report/v1alpha3
-      kind: CaseworkDevTokenReport
-    schema:
-      path: products/casework/contracts/cli/DevTokenReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/dev-token-report/dev-token-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/dev-token-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/doctor-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkDoctorReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/doctor-report/v1alpha3
-      kind: CaseworkDoctorReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/doctor-report/v1alpha3
-      kind: CaseworkDoctorReport
-    schema:
-      path: products/casework/contracts/cli/DoctorReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/doctor-report/doctor-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/doctor-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/explain-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkExplainReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/explain-report/v1alpha3
-      kind: CaseworkExplainReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/explain-report/v1alpha3
-      kind: CaseworkExplainReport
-    schema:
-      path: products/casework/contracts/cli/ExplainReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/explain-report/explain-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/explain-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/init-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkInitReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/init-report/v1alpha3
-      kind: CaseworkInitReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/init-report/v1alpha3
-      kind: CaseworkInitReport
-    schema:
-      path: products/casework/contracts/cli/InitReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/init-report/init-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/init-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/lifecycle-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkLifecycleReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/lifecycle-report/v1alpha3
-      kind: CaseworkLifecycleReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/lifecycle-report/v1alpha3
-      kind: CaseworkLifecycleReport
-    schema:
-      path: products/casework/contracts/cli/LifecycleReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/lifecycle-report/lifecycle-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/lifecycle-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/package-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkPackageReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/package-report/v1alpha3
-      kind: CaseworkPackageReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/package-report/v1alpha3
-      kind: CaseworkPackageReport
-    schema:
-      path: products/casework/contracts/cli/PackageReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/package-report/package-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/package-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/plan-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkPlanReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/plan-report/v1alpha3
-      kind: CaseworkPlanReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/plan-report/v1alpha3
-      kind: CaseworkPlanReport
-    schema:
-      path: products/casework/contracts/cli/PlanReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/plan-report/plan-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/plan-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/retention-erase-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkRetentionEraseReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/retention-erase-report/v1alpha3
-      kind: CaseworkRetentionEraseReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/retention-erase-report/v1alpha3
-      kind: CaseworkRetentionEraseReport
-    schema:
-      path: products/casework/contracts/cli/RetentionEraseReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/retention-erase-report/retention-erase-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/retention-erase-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/simulation-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkSimulationReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/simulation-report/v1alpha3
-      kind: CaseworkSimulationReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/simulation-report/v1alpha3
-      kind: CaseworkSimulationReport
-    schema:
-      path: products/casework/contracts/cli/SimulationReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/simulation-report/simulation-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/simulation-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/source-add-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkSourceAddReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/source-add-report/v1alpha3
-      kind: CaseworkSourceAddReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/source-add-report/v1alpha3
-      kind: CaseworkSourceAddReport
-    schema:
-      path: products/casework/contracts/cli/SourceAddReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/source-add-report/source-add-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/source-add-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/status-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkStatusReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/status-report/v1alpha3
-      kind: CaseworkStatusReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/status-report/v1alpha3
-      kind: CaseworkStatusReport
-    schema:
-      path: products/casework/contracts/cli/StatusReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/status-report/status-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/status-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/test-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkTestReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/test-report/v1alpha3
-      kind: CaseworkTestReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/test-report/v1alpha3
-      kind: CaseworkTestReport
-    schema:
-      path: products/casework/contracts/cli/TestReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/test-report/test-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/test-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: casework/usage-report
-    product: casework
-    title: caseworkctl --format json output (CaseworkUsageReport)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/casework/usage-report/v1alpha3
-      kind: CaseworkUsageReport
-      checkedBy:
-        file: crates/registry-caseworkctl/src/lib.rs
-        symbol: cli_api_version
-    target:
-      apiVersion: id.registrystack.org/formats/casework/usage-report/v1alpha3
-      kind: CaseworkUsageReport
-    schema:
-      path: products/casework/contracts/cli/UsageReport.schema.json
-      id: https://id.registrystack.org/schemas/casework/usage-report/usage-report.v1alpha3.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-caseworkctl/src/lib.rs
-      symbol: cli_api_version
-    check: none
-    example: products/casework/examples/formats/reports/usage-report.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-
   # scheduling
   - id: scheduling/project
     product: scheduling
@@ -3316,7 +2616,7 @@ formats:
       function: read_client_document
       type: ClientDocument
     check: evidencectl check {project}
-    example: products/evidence/reference/authoring-projects/example/access/clients/example-caller.yaml
+    example: products/evidence/examples/standalone/access/clients/example-caller.yaml
     conformance:
       requiredText: /clientId
       optionalText: none
@@ -3352,7 +2652,7 @@ formats:
       function: parse_plan
       type: MockPlan
     check: evidencectl source mock check {project}
-    example: products/evidence/reference/authoring-projects/example/mocks/source.yaml
+    example: products/evidence/examples/formats/source-mock/mocks/source.yaml
     conformance:
       requiredText: /openapi
       optionalText: none
@@ -4142,7 +3442,7 @@ formats:
 
 outOfScope:
   - files: products/breg/generated/event-schemas/proposal-lifecycle.schema.json
-    reason: Native Proposal lifecycle event payload, governed by the BReg API contract.
+    reason: Generated Proposal lifecycle event payload, governed by the BReg event contract rather than a configuration format.
   - files: products/breg/generated/*/generated/**
     reason: Compiled package content; the registry/package format governs the envelope.
   - files: products/evidence/contracts/{audit-event,authority-context,definitions,evidence,request,request-batch,request-batch-response,request-batch-audit-event}.schema.yaml
@@ -4167,8 +3467,6 @@ outOfScope:
     reason: Repository pin metadata.
   - files: products/messaging/examples/providers/*/connection.example.yaml
     reason: Fragment of messaging/runtime providers.<id>; governed by that format.
-  - files: products/casework/examples/*/sources/*.breg-runtime.yaml
-    reason: Fragment of breg/runtime pasted by caseworkctl source add; governed by that format.
   - files: products/evidence/fixtures/conformance/**
     reason: Evidence conformance vectors, governed by the Evidence contracts.
   - files: products/render/bundles/*/schemas/*.schema.json

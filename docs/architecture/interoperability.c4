@@ -40,15 +40,15 @@ model {
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/README.md 'Package signing lifecycle'
   }
 
-  casework.breg_adapter .call breg.api 'Reads work and invokes source-authorized actions' {
+  casework.breg_adapter .call breg.api 'Reads exact purpose-bound Proposal context' {
     #optional
     technology 'HTTPS / BReg client / scoped bearer'
     navigateTo casework_source_action
   }
-  breg.webhooks .event casework.api 'Sends signed lifecycle invalidation hints' {
+  breg.api .call casework.api 'Creates and recovers its own pinned Proposal review' {
     #optional
-    technology 'CloudEvents 1.0 binary / HMAC-SHA256 / HTTPS'
-    navigateTo casework_source_event
+    technology 'HTTPS / authenticated producer protocol'
+    navigateTo casework_source_action
   }
   evidence.acquisition .call breg.api 'Reads a fixed, authorized lookup' {
     #optional

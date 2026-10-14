@@ -233,7 +233,7 @@ under it is an idempotency conflict, `409 idempotency.conflict` in BReg and
 request is refused with `410 idempotency.expired` and the key stays spent. In BReg that `410` means
 the first attempt committed: read the record or its history rather than sending the write again
 under a new key. In Casework it means an earlier attempt under the key committed and retention
-erased only its stored response: reconcile by reading the item, review request, or directory before
+erased only its stored response: reconcile by reading the review request, task, or Directory before
 choosing a new key.<DocsetProduct product="registry-messaging"> In Messaging, once retention deletes
 the message record after `retention.recordRetentionDays`, the request hash goes with it and any request under
 the key is refused with `410`.</DocsetProduct>
@@ -273,7 +273,7 @@ hold carries no key and is never resent.
     crates/registry-scheduling-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
     crates/registry-scheduling-client-py/tests/python/test_mutation_retry.py */}
 
-In Casework, every keyed work-item, review task, and directory mutation is resent, and the error's
+In Casework, every keyed review-task and Directory mutation is resent, and the error's
 `mutation_class()` is `Ambiguous` exactly when `is_outcome_unknown()` holds. Review request create
 and cancel carry a key but go through the review client's single exchange and are never resent.
 Grant revocation and the caseload and clock previews carry no key and are never resent either.
@@ -984,18 +984,17 @@ and the optional `code`, `planRefusal`, `refusalCode`, `fieldPath`, `status`, `t
 
 ## Registry Casework
 
-The Casework client owns source work-item, unified review, and directory routes and types, its closed
-problem catalogue, and its attempt recovery contract. It carries no Base Registry Engine routes or
-protocol types, even where the deployment it calls reads source-backed work from a registry.
+The Casework client covers pinned review policies, producer requests and results, human review
+tasks, and Directory operations. A `ReviewResult` records the human outcome. You independently
+authorize any later business mutation in the producer's system.
 
 ### Construct a Casework client
 
 ```rust
-use registry_casework_client::{CaseworkClient, CaseworkClientConfig};
-use url::Url;
+use registry_stack_client::casework::{CaseworkClient, CaseworkClientConfig};
 
 let client = CaseworkClient::new(CaseworkClientConfig::new(
-    Url::parse("https://casework.example.invalid/")?,
+    "https://casework.example.invalid/".parse()?,
 ))?;
 ```
 
@@ -1003,7 +1002,6 @@ let client = CaseworkClient::new(CaseworkClientConfig::new(
 from registry_client import casework
 
 client = casework.CaseworkClient("https://casework.example.invalid/")
-page = client.review_tasks(token, "staff", {"limit": 25})
 ```
 
 ```js
@@ -1012,168 +1010,164 @@ const { casework } = require('@registrystack/client');
 const client = new casework.CaseworkClient({
   baseUrl: 'https://casework.example.invalid/',
 });
-const page = await client.listWorkItems(token, 'staff', 'reviewer', { view: 'my-teams', limit: 25 });
 ```
 
-`CaseworkClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
-`with_max_response_bytes`, `with_user_agent`, `with_trusted_root_certificates`, and
-`with_max_mutation_retries`. The Python constructor takes the same settings as keyword arguments and
-the Node constructor as config members.
-A response is bounded to 4 MiB by default and to 16 MiB at most. The configuration holds no
-credential, and its debug output redacts the base URL, the user agent, and any trusted root
-certificates.
+`CaseworkClientConfig` provides request and connection timeouts, a response-size bound, trusted
+root certificates, a user agent, and a mutation retry ceiling. Python takes these as constructor
+keyword arguments; Node uses config members. Responses are bounded to 4 MiB by default and 16 MiB
+at most. Configuration retains no bearer token or selected profile.
 
 {/* Evidence: crates/registry-casework-client/src/config.rs, CaseworkClientConfig,
-    DEFAULT_MAXIMUM_RESPONSE_BYTES, and MAXIMUM_RESPONSE_BYTES,
-    crates/registry-casework-client/tests/http_boundary.rs,
-    crates/registry-casework-client-py/README.md, crates/registry-stack-client-node/README.md */}
+    DEFAULT_MAXIMUM_RESPONSE_BYTES, MAXIMUM_RESPONSE_BYTES;
+    crates/registry-casework-client-node/client.d.ts, CaseworkClientConfig;
+    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi */}
 
 ### Casework authentication and profiles
 
-In Python and Node, every method takes the request's bearer token and the selected Casework profile
-as its first two arguments, and a source-scoped method takes the selected source profile as its
-third. Unified review task reads take a source profile only when the pinned context strategy is
-`source`; submitted-context tasks need none. In Rust the
-same three values travel together as `CaseworkAuth`, built with `CaseworkAuth::new(token, profile)`
-and extended with `with_source_profile`.
+For producer, human-review, and Directory calls, pass the request's bearer token and Casework
+profile. Rust uses `CaseworkAuth::new(&token, profile)`; Node and Python take these as the first
+two arguments.
+Current-source context operations also take a source profile as an optional final argument, or
+through Rust's `with_source_profile`. Submitted-context reviews need no provider or source profile.
+The selected source profile travels in `Registry-Source-Profile`, never in a decision body.
 
-The client sends those values as `Authorization`, `Registry-Casework-Profile`, and
-`Registry-Source-Profile` on that one call, and retains none of them. The module is for a trusted
-server host: the host holds the session, chooses the profile for the request, and passes both in. A
-browser sends the host's session cookie and never a Casework token.
+Producer authority is separate from human review authority. Agent assertion and grant-status
+calls take only a bearer token and grant ID. The local digest helper takes no credential and
+performs no I/O.
 
-{/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkAuth,
-    crates/registry-casework-client-node/client.d.ts, listWorkItems and assignWorkItem,
-    crates/registry-casework-client-node/README.md, crates/registry-stack-client-node/README.md,
-    crates/registry-casework-client-py/README.md */}
+{/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkAuth;
+    crates/registry-casework-client-node/client.d.ts, taskAssertion, taskGrantStatus;
+    crates/registry-casework-client-py/src/lib.rs, submission_digest */}
+
+### Submit and recover a review
+
+Use `review_policy` (`reviewPolicy` in Node) to discover a compiled closure. Its `identity` is the
+exact `{id, version, digest}` binding admission expects. Use the binding from your reviewed project,
+or explicitly accept the discovered closure before constructing the request. Submitted context
+uses `mode: submitted` and a bounded snapshot; current-source context uses `mode: current-source`
+and a reference binding. The subject supplies all five immutable binding fields.
+
+These host-side functions take your complete `ReviewCreateRequest`, declared trusted-producer ID,
+and retained idempotency key. They use the shared Rust canonicalizer, including its portable JSON
+validation and Unicode key ordering.
+
+```ts
+import { casework } from '@registrystack/client';
+
+const client = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' });
+
+async function submitReview(
+  token: string,
+  producerId: string,
+  request: casework.ReviewCreateRequest,
+  key: string,
+) {
+  const digest = casework.submissionDigest(producerId, request.subject.source, request);
+  return client.createOrRecoverReviewRequest(token, 'requester', key, request, digest);
+}
+```
+
+```python
+def submit_review(token, producer_id, request, key):
+    digest = casework.submission_digest(producer_id, request["subject"]["source"], request)
+    return client.create_or_recover_review_request(token, "requester", key, request, digest)
+```
+
+Rust exposes the same local helper as `submission_digest(producer_id, source_namespace, &request)`.
+Persist the accepted request binding. Recover a lost response with the same policy, subject,
+request body, key, and digest. A changed policy binding requires explicit review before a new
+submission; replacing a digest during recovery can accept different work. Read `review_result`
+with the accepted binding or resume the authenticated `review_results` feed. Producer create and
+cancel calls are never automatically resent.
+
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, submission_digest, ReviewCreateRequest;
+    crates/registry-casework-client/src/client.rs, create_or_recover_review_request;
+    crates/registry-casework-client-node/src/lib.rs, submission_digest;
+    crates/registry-casework-client-py/src/lib.rs, submission_digest;
+    crates/registry-casework-client/tests/submission_digest.rs;
+    crates/registry-casework-client-node/__test__/submission-digest.test.js;
+    crates/registry-casework-client-py/tests/python/test_submission_digest.py */}
 
 ### Casework operations by role
 
-Method names are given in the Rust and Python form. Node uses the camel case form of the same name.
+Rust and Python use snake case; Node uses the corresponding camel case.
 
-- __Service and review descriptions.__ `description`, `review_kinds`, and `review_kind` return the
-  source-neutral configuration the selected profile may read.
-- __Producer.__ `create_or_recover_review_request`, `review_request`, `review_result`,
-  `review_results`, and `cancel_review_request` cover requests inside the producer's exact binding.
-- __Human reviewer.__ `review_tasks`, `review_task`, `review_task_context`, `claim_review_task`,
-  `assign_review_task`, `delegate_review_task`, `release_review_task`, review-task draft methods,
-  `decide_review_task`, `review_history`, and review-note methods cover unified tasks.
-- __Staff on source-backed work.__ `list_work_items`, `next_work_item`, `get_work_item`,
-  `claim_work_item`, `release_work_item`, `get_draft`, `save_draft`, `delete_draft`,
-  `decide_work_item`, `work_item_history`, and `work_item_clocks`, each under the selected source
-  profile, with `recover_decision` and `recover_decision_by_key` for a lost decision response.
-- __Supervisor.__ `holdings`, `assign_work_item`, `delegate_work_item`, `preview_caseload_move`,
-  `apply_caseload_move`, and `review_accountability` for a retained protected record.
-- __Administrator.__ `directory`, `directory_targets`, `bootstrap_directory`,
-  `update_directory_team`, `create_absence`, `update_absence`, `delete_absence`, `holiday_revision`,
-  `create_holiday_revision`, `preview_clock_recompute`, and `apply_clock_recompute`.
+| Caller | Operations | Boundary |
+| --- | --- | --- |
+| Producer | `review_policies`, `review_policy`, request creation, cancellation, result reads and feed | Exact admitted producer and subject binding |
+| Human reviewer | `review_tasks`, `next_review_task`, `review_task_holdings`, task context, claim, release, assignment, delegation, private drafts, decisions, history and notes | Current profile, membership, exclusions, ownership and context disclosure |
+| Deciding caller | `own_review_decisions`, own single-task receipt | Retained authorship, not prior holding |
+| Supervisor | `supervisory_review_tasks`, `review_accountability` | Currently served queues; accountability is a separate audited read |
+| Administrator | Directory, absence, holiday, caseload and clock preview/apply operations | Administration grants no review or external write authority |
 
-Absence reads are scoped rather than reserved to one role: Staff read their own absences,
-Supervisors read absences for staff they currently supervise, and Administrators read all of them. In
-Rust, `absences` reads with the default query and `absences_page` takes one; the Python and Node
-`absences` takes the query as an optional argument.
+`ReviewStaffingQuery` supports queue, ownership, visible reference, and either all five exact
+subject selectors or none. Sort by `due`, `subject`, or `reference`. `next_review_task` is
+due-ordered and returns one task or no task; holdings return a bounded page.
+Caseload and clock apply calls send the reviewed preview ID and caller's key. The runtime
+revision-fences the complete preview set; clock recomputation uses pinned policy meaning.
 
-{/* Evidence: crates/registry-casework-client/src/client.rs, CaseworkClient and absences_page(),
-    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
-    crates/registry-casework-client-py/tests/python/test_capabilities.py,
-    test_all_canonical_operations_are_exported,
-    products/casework/generated/registry-casework.openapi.json */}
+{/* Evidence: crates/registry-casework-client/src/client.rs, review_tasks, next_review_task,
+    review_task_holdings, review_accountability, apply_caseload_move, apply_clock_recompute;
+    crates/registry-casework-core/src/staffing.rs, ReviewStaffingQuery;
+    crates/registry-casework-client-py/tests/python/test_capabilities.py */}
 
 ### Revisions, actions, and recovery
 
-A claim, release, or decision takes the caller-filtered `CaseworkAction` the item carried, which
-holds the exact route and the `if_match` revision to send, so the caller never assembles that route.
-Every other revisioned mutation takes the revision the caller displayed and a caller-chosen
-idempotency key, both as explicit arguments. A Casework client resends a mutation only under the
-same-key retry above, and none replaces a key.
+Task mutations take the task UUID, displayed numeric revision, and caller-chosen idempotency key.
+The client constructs the route and quoted revision header. Follow the
+[same-key retry contract](#unknown-outcomes-and-the-same-key-retry) for ambiguous keyed mutations;
+never invent a replacement key merely because the response was lost.
 
-After a lost response, `recover_decision_by_key` replays the original idempotency key, so recovery
-does not depend on the attempt identifier reaching the caller. `recover_decision` names the attempt
-identifier instead, for a caller that did receive one, including through the
-`Registry-Casework-Attempt` header on a refusal.
+Read `review_task` to recover the caller's retained `decisionReceipt`, or use
+`own_review_decisions` after a fresh sign-in. Receipts disclose the deciding caller's outcome and
+pinned label without private reason or structured result data. Supervisory discovery returns
+bounded task/accountability references with a holder-free state; it grants no decision or context
+authority. The separate audited accountability read has its own retention.
 
-The selected source profile travels only in the `Registry-Source-Profile` header. The decision body
-names the displayed binding and operation, the recovery body is an empty object, and a body that
-still carries `sourceProfileId` is refused as not matching the contract.
-
-{/* Evidence: crates/registry-casework-client/src/client.rs, claim_work_item(),
-    decide_work_item(), recover_decision(), recover_decision_by_key(), and ORIGINAL_ATTEMPT_HEADER,
-    crates/registry-casework-client/tests/http_boundary.rs,
-    crates/registry-stack-client-node/README.md */}
+{/* Evidence: crates/registry-casework-client/src/client.rs, claim_review_task, decide_review_task,
+    own_review_decisions, review_accountability;
+    crates/registry-casework-client/tests/http_boundary.rs;
+    crates/registry-casework-client-node/client.d.ts, ReviewDecisionReceipt, SupervisoryReviewTask */}
 
 ### Casework outcomes
 
-A successful call returns `CaseworkComplete<T>` in Rust, a dict carrying `kind` (`complete`),
-`value`, and `trace_id` in Python, and an object carrying `kind`, `value`, and `traceId` in Node. The
-value is the camel case wire DTO the service returned.
+Successful calls return `CaseworkComplete<T>` in Rust, a Python dict with `kind: complete`,
+`value`, and `trace_id`, or a Node object with `kind`, `value`, and `traceId`. Wire DTO fields remain
+camel case in both language bindings. Result reads instead distinguish `available`, `pending`,
+`concealed_or_unknown`, and `expired`; only `available` carries a result.
 
-A paged read returns `items`, a `status` of `complete`, `budget-exhausted`, or `source-unavailable`,
-and `nextCursor` when another page exists. An empty page and an exhausted budget are both successful
-answers; pass the cursor back through the same method to continue. Source discovery alone does not
-issue a cursor. If a source-backed page reports `budget-exhausted` without a cursor, retry the read
-without a cursor after reconciliation. The retried walk starts from the first position and can
-return items earlier pages already returned: deduplicate work items by `itemId`, and replace
-holdings totals instead of adding to them.
+Pass `nextCursor` unchanged through the same operation with the same caller, profiles, and query.
+Staffing cursors are opaque visibility snapshots valid for at most 15 minutes. Holding,
+membership, or current-source visibility changes can invalidate them. After
+`410 review.result-expired`, restart without the cursor. A broad live-reference query can return
+`422 review.query-too-broad`; narrow the queue or exact subject selectors before retrying.
+An unavailable required provider is a failure, not an empty reviewer inbox.
 
-{/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkComplete,
-    crates/registry-casework-client-node/client.d.ts, CaseworkOutcome and PageStatus,
-    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
-    crates/registry-casework-client-py/README.md,
-    products/casework/README.md, budget-exhausted without a cursor,
-    crates/registry-casework/tests/inbox_ordering_postgres.rs,
-    a_discovery_wait_ends_the_walk_and_a_restart_repeats_earlier_results */}
+{/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkComplete, ReviewResultResponse;
+    crates/registry-casework-client-node/client.d.ts, ReviewResultOutcome;
+    crates/registry-casework/src/review/staffing.rs, QueryTooBroad;
+    crates/registry-casework/tests/review_http.rs */}
 
 ### Casework error contract
 
-`CaseworkClientError` is distinct from every other namespace's error type. Rust answers with
-`Configuration`, `InvalidRequest`, `Transport`, `Problem`, or `Protocol`. A `Problem` carries the
-status, a `CaseworkProblemCode`, the fixed detail, the validated trace identifier, the original
-attempt identifier when the refusal named one, and the review validation detail when the service
-refused a submitted field. A `Protocol` carries a `CaseworkProtocolFailure` of `HeaderBounds`,
-`TraceContext`, `MediaType`, `Body`, `Problem`, or `Status`.
+`CaseworkClientError` is distinct from every other product's error. Rust uses `Configuration`,
+`InvalidRequest`, `Transport`, `Problem`, and `Protocol`. Python raises
+`casework.CaseworkClientError`; Node rejects with the same named error class. The language bindings
+expose `kind`, status, problem code, validated trace context, bounded validation detail, transport
+category, protocol failure, and `outcome_unknown` (Node: `outcomeUnknown`) when applicable.
+Errors do not repeat rejected values or credentials.
 
-`CaseworkProblemCode` registers the closed catalogue the service publishes and answers
-`expected_status` for each code. A code outside the catalogue arrives as `Unknown` rather than a
-parse failure, so an older client keeps the status and trace context of a refusal it does not
-recognize.
+Unknown problem codes retain the status and trace context without gaining known recovery meaning.
+`review.policy-mismatch` is a `409` refusal of the expected policy binding. Validation details name
+a bounded field `path` and closed `reason`, such as `policy-not-allowed`, `schema-mismatch`,
+`outcome-not-declared`, `result-required`, or `constraint-violated`. A `410 idempotency.expired`
+requires reconciling the original task, request, or Directory operation before choosing a new key.
 
-Python raises `casework.CaseworkClientError`, an `Exception` whose attributes are `kind`, `code`,
-`detail`, `status`, `trace_id`, `original_attempt_id`, `validation`, `transport_kind`,
-`protocol_failure`, and the boolean `outcome_unknown`; an absent member is `None`. Node rejects with
-`casework.CaseworkClientError`, an `Error` with `kind`, the boolean `outcomeUnknown`, and the
-optional `code`, `detail`, `status`, `traceId`, `originalAttemptId`, `validation`, `transportKind`,
-and `protocolFailure`; an absent member is undefined.
-
-`kind` is one of:
-
-| Kind | Meaning | Members set |
-| --- | --- | --- |
-| `configuration` | The construction inputs were refused | none |
-| `invalid-request` | An input was refused before any exchange | none |
-| `transport` | The exchange failed below HTTP | `transport_kind` |
-| `problem` | Casework answered with an accepted problem | `status`, `code`, `detail`, `trace_id`, plus `original_attempt_id` on a recoverable attempt and `validation` on a refused review submission |
-| `protocol` | The response violated the contract | `status`, `protocol_failure`, and `trace_id` when one was validated |
-
-A validation member carries the bounded `path` of the refused field and one `reason` from a closed
-set: `kind-not-allowed`, `reference-invalid`, `object-required`, `maximum-bytes-exceeded`,
-`maximum-depth-exceeded`, `schema-mismatch`, `outcome-not-declared`, `reason-required`,
-`text-invalid`, `result-not-declared`, `result-required`, `field-not-declared`,
-`constraint-invalid`, and `constraint-violated`. Neither member repeats a submitted value.
-
-The five result reasons govern a review request's structured result. `result-not-declared` refuses a
-result or a result constraint when the review kind declares no `resultSchema`. `result-required`
-refuses a decision for an outcome whose `resultRequired` is set when the body carries none.
-`field-not-declared` refuses a result constraint that names a property the kind's schema does not
-declare. `constraint-invalid` refuses a constraint that is not a narrowing of the schema: an
-unknown keyword, a bound outside the declared one or on a property whose type the schema does not
-declare inline, or a choice value the schema refuses. `constraint-violated` refuses a submitted
-result that passes the schema but falls outside the item's constraints. `schema-mismatch` covers a
-value outside the schema itself, and both reasons carry the instance path of the offending field.
+See the [Casework API contract](../apis/registry-casework/) for exact Problems and headers.
 
 {/* Evidence: crates/registry-casework-client/src/error.rs, CaseworkClientError,
-    CaseworkProblemCode, CaseworkProtocolFailure, and expected_status(),
-    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
-    CaseworkErrorKind and ValidationDetail, crates/registry-casework-client-py/src/lib.rs,
+    CaseworkProblemCode, CaseworkProtocolFailure, expected_status;
+    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi;
     crates/registry-casework-client-node/client.d.ts, CaseworkClientError */}
 
 <DocsetProduct product="registry-messaging">

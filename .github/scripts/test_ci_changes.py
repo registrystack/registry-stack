@@ -385,6 +385,7 @@ class CiChangesTest(unittest.TestCase):
             "breg_integration",
             "breg_contracts_lanes",
             "full_sweep",
+            "casework_tutorial",
         ):
             with self.subTest(output=name):
                 self.assertEqual(
@@ -406,12 +407,17 @@ class CiChangesTest(unittest.TestCase):
             self.workflow_jobs["platform-coverage-upload"]["if"],
         )
 
-        review_examples = next(
+        developer_journey = next(
             step
             for step in self.workflow_jobs["casework-tutorial"]["steps"]
-            if step.get("name") == "Verify BReg, payment, and standalone review examples"
+            if step.get("name") == "Execute the canonical Casework developer journey"
         )
-        self.assertEqual("needs.changes.outputs.full_sweep == 'true'", review_examples["if"])
+        self.assertNotIn("if", developer_journey)
+        self.assertEqual(
+            "${{ !cancelled() && needs.changes.result == 'success' && "
+            "needs.changes.outputs.casework_tutorial == 'true' }}",
+            self.workflow_jobs["casework-tutorial"]["if"],
+        )
 
     def test_ci_scheduling_graph_retains_every_job_and_aggregate_dependency(
         self,
@@ -1442,7 +1448,7 @@ class CiChangesTest(unittest.TestCase):
             ),
             (
                 "task_grants::local_session_tests::"
-                "source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer",
+                "submitted_review_dev_approves_exchanges_and_revokes_on_stock_issuer",
                 "casework-local-session.log",
             ),
         )

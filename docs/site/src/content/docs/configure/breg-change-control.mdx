@@ -98,6 +98,34 @@ Every uncommitted application requires fresh authenticated and unexpired approva
 when review is required. [Connect a review authority](../../tutorials/review-breg-changes-in-casework/)
 explains that boundary.
 
+## Pair Casework review context
+
+A BReg Proposal can require a ReviewPolicy from a separate Casework service.
+Use the actual compiled policy ID, version, and digest in the BReg review declaration.
+BReg owns the frozen Proposal, sends its bound review request as the trusted producer, and consumes
+only the exact correlated result before its own independently authorized application step.
+
+Expose the Proposal's bounded native review-context contract in the tested BReg package.
+Vendor that exact schema and contract in the Casework policy, then use
+`caseworkctl provider pair` to verify and retain the provider export.
+[Pair BReg review context with Casework](../../tutorials/review-breg-changes-in-casework/) gives the
+preview, apply, and package checks.
+Pairing modifies no BReg grant and activates neither runtime.
+
+A Casework Review holds the policy-bound human review, and its immutable Decision
+records the outcome. BReg remains responsible for source application.
+Give the Casework status service only native `get-review-status` authority.
+A human separately selects a profile authorized for `get-review-context`; the provider forwards the
+human's current bearer for that read. Neither read confers Proposal application authority.
+Bind transport and credential references in each product's operator runtime configuration.
+A configured completion destination sends a payload-free wake so the producer can fetch and
+correlate the retained result; it carries no decision payload or application authority.
+
+{/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs;
+    crates/registry-casework-breg/src/lib.rs;
+    crates/registry-casework/tests/breg_review_journey.rs;
+    products/breg/examples/refactor/facility/registry.yaml. */}
+
 ## Observe and recover an exact submission
 
 Use caller-filtered Action metadata to Start, then use promoted Proposal links

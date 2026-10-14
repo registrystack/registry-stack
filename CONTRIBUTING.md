@@ -179,12 +179,17 @@ Every pull request should make the review path clear:
   that names what would be lost, and the operator decides the next step. Cover
   the refusal with a test. Every retained domain and operational state table
   requires row preservation, and the release upgrade rehearsal checks it for
-  the products it rehearses. v0.40.0 is the one release that does not upgrade
+  the products it rehearses. v0.40.0 does not upgrade
   its predecessor's state in place: an operator applies it to new databases,
   as its release notes state, so it carries no v0.39.0 row forward. BReg's
   fresh installations contain the current caller-scoped replay and verified
   creator structures directly. No installation step converts or discards
-  earlier rows.
+  earlier rows. Casework's review-only replacement is another explicit fresh
+  baseline: it refuses retired WorkItem tables without converting or
+  deleting their data. Operators drain or cancel old reviews, retain the old
+  deployment and audit journal for reconciliation, and install the current
+  model in a fresh database. Its current-schema install and backup/restore
+  checks replace the unsupported in-place Casework rehearsal.
 - Before 1.0, a release reads only the state its immediate predecessor wrote,
   and an operator upgrades one release at a time. v0.40.0 is the exception: it
   does not upgrade state v0.39.0 wrote in place. It refuses a configuration
@@ -193,7 +198,8 @@ Every pull request should make the review path clear:
   Messaging package the earlier release built and a Scheduling database it
   wrote, and is applied to new databases; the BREAKING sections of its release
   notes give each step. v0.40.0 does not upgrade v0.39.0 state in place;
-  apply to a new database. From v0.40.0 onward, keep everything
+  apply to a new database. Except for the Casework fresh baseline described
+  above, from v0.40.0 onward keep everything
   the previous release could have written to a database, package,
   configuration file, or local state readable. Do not add code that reads,
   upgrades, or refuses by name the state of an older release, and remove such

@@ -6,7 +6,8 @@ import { SAFE_SYSTEM_TAGS, SUMMARY_TREND_STATS } from '../../../../scripts/loadt
 import { writeSummary } from '../../../../scripts/loadtest/k6/summary.js';
 import { Workload, firstAuthorization } from '../lib/workload.js';
 
-// Twice the stock burst of 10, sent faster than the one-per-second refill.
+// Twenty requests exceed the stock burst of 16 and arrive faster than the
+// one-per-second refill.
 const ITERATIONS = 20;
 
 export const options = {

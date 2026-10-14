@@ -1872,17 +1872,20 @@ class Lint:
                     find("CFG-EMPTY-4", visit, f"the default {json.dumps(node['default'])[:60]} does not validate against the member's schema",
                          "Declare the default the reader uses, valid under the member's schema")
             if "integer" in types_of(node) and isinstance(node.get("type"), (str, list)) and "const" not in node and "enum" not in node:
-                # A bounded integer type states minimum 0 beside a maximum below its
-                # format's own ceiling; a plain unsigned type only implies it.
-                implicit = str(node.get("format", "")).startswith("uint") and node.get("minimum") == 0 \
+                # Read formats need product bounds; native unsigned limits alone
+                # do not bound configured work. Reports may state the writer's
+                # native range, but still need both bounds explicitly in schema.
+                output = entry is not None and entry.get("reader") == "none"
+                implicit = not output and str(node.get("format", "")).startswith("uint") and node.get("minimum") == 0 \
                     and node.get("maximum", UNSIGNED_CEILING.get(node.get("format"))) == UNSIGNED_CEILING.get(node.get("format"))
                 has_minimum = ("minimum" in node and not implicit) or "exclusiveMinimum" in node
                 has_maximum = "maximum" in node or "exclusiveMaximum" in node
                 if not (has_minimum and has_maximum):
                     missing = [bound for bound, present in (("minimum", has_minimum), ("maximum", has_maximum)) if not present]
                     detail = " (minimum 0 is the unsigned type's implicit bound)" if implicit else ""
-                    find("CFG-QTY-4", visit, f"an integer without a stated {' and '.join(missing)}{detail}",
-                         "Read it with BoundedU32/BoundedU64 and state both bounds")
+                    fix = "State both bounds from the writer's serialized integer type" if output else \
+                        "Read it with BoundedU32/BoundedU64 and state both bounds"
+                    find("CFG-QTY-4", visit, f"an integer without a stated {' and '.join(missing)}{detail}", fix)
             closing = None if visit.conditional else self.closing_problem(document, visit)
             passthrough = self.passthrough_problem(entry, node)
             if passthrough:

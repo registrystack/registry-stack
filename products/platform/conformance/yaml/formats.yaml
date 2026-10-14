@@ -42,19 +42,10 @@ formats:
   # The retired apiVersion and renamed keys each Casework reader refuses by
   # name.
   casework/fixture:
-    project: products/casework/examples/payment-review
+    project: products/casework/examples/standalone-decision
     retiredApiVersions:
       - registry.registrystack.org/casework-fixture/v1alpha1
-    removedKeys:
-      - /name
-      - /source
-      - /expect/targetElapsed
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: fixtures/standalone-decision.yaml}
-  casework/simulation:
-    project: products/casework/examples/multi-stage-routing-clocks
-    removedKeys:
-      - /subject/id
-      - /expect/ruleId
   casework/holiday-set:
     project: products/casework/examples/multi-stage-routing-clocks
   casework/dev-clients:
@@ -69,8 +60,6 @@ formats:
       - /authentication/oidc/jwksSource/kind
       - /authentication/oidc/principalClaim
       - /audit/retainDays
-      - /reviewCompletionDestinations/payment-results/timeoutMilliseconds
-      - /reviewCompletionDestinations/payment-results/retrySeconds
       - /package/expectedPolicyDigest
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
 
@@ -220,9 +209,9 @@ formats:
   evidence/target-authority:
     project: products/evidence/examples/standalone
   evidence/access-client:
-    project: products/evidence/reference/authoring-projects/example
+    project: products/evidence/examples/standalone
   evidence/mock-plan:
-    project: products/evidence/reference/authoring-projects/example
+    project: products/evidence/examples/formats/source-mock
 
   # The bundle is checked through its deployment project's runtime
   # configuration, pointed at the staged copy, and its SHA256SUMS is refreshed

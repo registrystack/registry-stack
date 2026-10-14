@@ -729,9 +729,9 @@ fn source_mock_check_reports_json_diagnostics() {
 }
 
 #[test]
-fn the_reference_authoring_example_mock_plan_checks() {
+fn the_maintained_format_example_mock_plan_checks() {
     let example = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/evidence/reference/authoring-projects/example");
+        .join("../../products/evidence/examples/formats/source-mock");
     let checked = run(
         &example,
         &[

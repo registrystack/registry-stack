@@ -161,6 +161,7 @@ impl ApplyRequest {
 /// The pinned-work verdict an activation reaches.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct PinnedWorkEffect {
     /// `clear`, `acknowledged`, or `refused`.
@@ -186,6 +187,7 @@ pub enum TemplateChange {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct TaskTemplateEffect {
     pub template_id: String,
@@ -196,6 +198,7 @@ pub struct TaskTemplateEffect {
 /// The Casework-specific effects of an activation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct ActivationEffects {
     pub pinned_work: PinnedWorkEffect,
@@ -214,6 +217,7 @@ impl ActivationEffects {
 /// corrects and the next command.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct ActivationRefusal {
     pub code: String,
@@ -271,9 +275,11 @@ pub fn database_id_mismatch_message() -> String {
 /// What `caseworkctl plan` reports. It is read in a read-only transaction.
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct ActivationPlan {
     pub active: Option<Activation>,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
     pub candidate_package_digest: String,
     pub database_id_check: DatabaseIdCheck,
     pub plan_kind: PlanKind,
@@ -306,6 +312,7 @@ pub struct ActivationApplied {
 /// What `caseworkctl status` reports.
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
 #[serde(rename_all = "camelCase")]
 pub struct ActivationStatus {
     pub active: Option<Activation>,

@@ -25,7 +25,11 @@ done
 
 # A debug build that links aws-lc-fips-sys dynamically on macOS finds its
 # library through this path; elsewhere the variable has no effect.
-if [[ -z "${DYLD_FALLBACK_LIBRARY_PATH:-}" ]]; then
+# The maintained Cargo helper also exports a non-DYLD variable, which survives
+# protected macOS launchers that strip DYLD_* before this script starts.
+if [[ -n "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}" ]]; then
+	export DYLD_FALLBACK_LIBRARY_PATH="${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH}${DYLD_FALLBACK_LIBRARY_PATH:+:${DYLD_FALLBACK_LIBRARY_PATH}}"
+elif [[ -z "${DYLD_FALLBACK_LIBRARY_PATH:-}" ]]; then
 	for artifacts in "${bin_dir}"/build/aws-lc-fips-sys-*/out/build/artifacts; do
 		if [[ -d "$artifacts" ]]; then
 			export DYLD_FALLBACK_LIBRARY_PATH="$artifacts"

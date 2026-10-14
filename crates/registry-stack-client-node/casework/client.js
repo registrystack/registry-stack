@@ -166,4 +166,14 @@ for (const [method, jsonIndexes] of [
   };
 }
 
-module.exports = { CaseworkClient, CaseworkClientError };
+// Hash the same sanitized request that admission sends. Rust owns canonical
+// ordering, portable JSON validation, and the producer/namespace binding.
+function submissionDigest(producer, sourceNamespace, request) {
+  try {
+    return native.submissionDigest(producer, sourceNamespace, sanitize(request, 'invalid-request'));
+  } catch (error) {
+    throw normalized(error, 'invalid-request');
+  }
+}
+
+module.exports = { CaseworkClient, CaseworkClientError, submissionDigest };

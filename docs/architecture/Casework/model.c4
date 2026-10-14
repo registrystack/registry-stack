@@ -1,157 +1,135 @@
-// Registry Casework structure, deployment artifacts and public boundaries.
-// Components inside casework are logical responsibilities in one Rust runtime.
-// Source links follow main; the audit model describes the unreleased shared writer.
+// Registry Casework review-only responsibilities and public trust boundaries.
+// Components are logical responsibilities in one runtime. Links follow maintained source.
 model {
   casework_app = external 'Staff application' {
     technology 'Server-side Casework client'
-    description 'Presents a human inbox through an independently deployed host such as Registry App Kit. Browser requests terminate at that host; it calls Casework server to server. The Casework runtime does not ship a staff-facing UI.'
+    description 'Presents visible ReviewTasks through a separately deployed application. Human credentials remain ephemeral server-side inputs; Casework ships no staff UI.'
     link https://github.com/registrystack/registry-stack/blob/main/products/casework/README.md 'Deployment and client boundary'
   }
-  casework_staff = actor 'Staff member' {
-    description 'Claims or receives visible work in a currently served queue, keeps a private source-bound draft, and performs only actions currently granted by both Casework and the source.'
+  casework_staff = actor 'Human reviewer' {
+    description 'Claims or receives a visible ReviewTask, keeps a private Decision draft, and decides under the pinned ReviewPolicy and current Directory and source authority.'
   }
   casework_supervisor = actor 'Supervisor' {
-    description 'Works cases and manages visible assignments for currently supervised queues. For hosted decisions, a Supervisor who currently leads a team serving the item\'s queue can make the separate audited accountability read while its record is retained.'
+    description 'Administers authorized ReviewTask assignments and atomic caseload movement. Protected accountability requires current supervisory authority and remains separately retained.'
   }
   casework_administrator = actor 'Casework administrator' {
-    description 'Bootstraps and maintains the team directory, publishes immutable holiday revisions, and coordinates clock recomputes. Administrator status grants no source record or action authority.'
+    description 'Maintains Directory teams, queue service and immutable calendar revisions. Directory authority grants no producer, source-disclosure or source-apply authority.'
   }
-  casework_requester = external 'Requester service' {
-    description 'Creates and follows source-free hosted decisions under one Requester profile and issuer-qualified service identity. It cannot select a team, actor, outcome vocabulary or callback, and cannot claim or decide work.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/hosted.rs 'Hosted decision storage and service'
+  casework_requester = external 'Trusted review producer' {
+    description 'Creates and recovers ReviewRequests for its configured namespaces and policies. Retains the exact subject, policy and submission binding; fetches authenticated ReviewResults. A standalone producer needs no BReg.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-review-protocol/src/lib.rs 'Product-neutral producer and result contract'
+  }
+  casework_apply_principal = actor 'Source apply principal' {
+    description 'Independently authorized by the source to apply an approved frozen Proposal after fresh source authorization and precondition checks. A ReviewResult supplies no mutation authority.'
   }
   casework_client = library 'Casework client SDKs' {
     technology 'Rust / Node.js / Python'
-    description 'The source-neutral Rust client and its unified Node.js and Python bindings take a bearer, selected Casework profile and, for source-backed operations, explicit source profile on every call. They retain no bearer, follow no redirects, and do not automatically retry mutations.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-client/README.md 'Canonical bounded Rust client'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-client-node/README.md 'Unified Node.js binding'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-client-py/README.md 'Unified Python binding'
+    description 'Bounded source-neutral clients expose policy discovery, request recovery, ReviewTasks, Decision receipts and authenticated results. Thin digest helpers reuse the Rust canonical submission digest. Calls select authorization explicitly; clients do not retry mutations automatically.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-client/README.md 'Rust client'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-client-node/README.md 'Node.js binding'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-client-py/README.md 'Python binding'
   }
   casework_operator = actor 'Casework operator' {
-    description 'Installs reviewed policy and runtime bindings, applies migrations, checks readiness, and performs explicit retention or uncertain-attempt recovery under migration database authority.'
+    description 'Installs a reviewed package and runtime bindings, reviews activation plans, checks readiness and operates backups and the append-only audit archive. Retired WorkItem databases are preserved and refused before mutation; this replacement uses a fresh database.'
   }
   casework_project = artifact 'Casework project' {
-    technology 'YAML and exact imported source descriptions'
-    description 'Declares queues, access profiles, hosted kinds, routing, calendars, clocks, optional source requests and optional task templates. Each task template fixes holder eligibility, the agent, client, resource, scopes, purpose, bounds, source-field mappings and lifetime; proposal identity and subject values come from the source at preview and approval. Evidence templates also require requester tags and a relying-party audience for the officer to review and Casework to sign. Imported source descriptions are metadata for validation and adapter configuration; they grant no runtime authority.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-core/src/config.rs 'Source-neutral project contract'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-core/src/task_grant.rs 'Governed task-template contract'
+    technology 'YAML / local schemas / exact provider exports'
+    description 'Declares ReviewPolicies, trusted producers, optional read-only context providers, queues, profiles, teams, calendars, clocks and ReviewTask grant templates. Stable IDs are separate from labels. Current-source policies pin the producer contract and exact local schema bytes; submitted-context policies need no provider.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-core/src/model.rs 'Authored project and compiled inspection model'
   }
   casework_cli = tool 'caseworkctl' {
-    technology 'Authoring and operator CLI'
-    description 'Initializes, checks, explains, simulates, tests and packages projects. It previews and applies BReg source additions, applies Casework database migrations, checks deployed readiness, and previews or applies bounded retention, stranded pending-attempt markings, and uncertain-attempt settlements. Its local development runtime can compose with a BReg development session and provides token and task-exchange helpers.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-caseworkctl/src/lib.rs 'CLI command surface'
+    description 'Initializes, checks, explains and tests policies, generates types, inspects the single review lifecycle and packages the exact closure. Provider pairing verifies the native producer export and reader authority. Plan, status, apply and doctor operate explicit runtime configuration; dev starts a retained standalone session.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-caseworkctl/src/lib.rs 'Current CLI commands'
   }
   casework_package = artifact 'Casework policy package' {
-    description 'Contains the checked casework.yaml, exact declared source descriptions and a manifest with the policy digest plus each file path, digest and byte count. Operator bindings and secrets remain outside it.'
+    description 'Contains the checked policy and exact local schema and provider dependency closure with a digest manifest. Deployment endpoints and secret values remain outside the package.'
     link https://github.com/registrystack/registry-stack/blob/main/crates/registry-caseworkctl/src/project.rs 'Package assembly'
   }
   casework_runtime_config = artifact 'Casework runtime configuration' {
-    description 'Binds PostgreSQL roles, OIDC verification, listener policy, audit path and hash-key secret, secret providers, each optional BReg adapter\'s reader client and webhook HMAC secrets, and the optional task authority. Task authority fixes the assertion issuer, exchange audience, signing-key reference and status-client resource map. Credentials are secret references rather than inline values.'
+    description 'Binds separate runtime and migration database credentials, OIDC, listener policy, audit destination and hash-key reference, optional provider deployments and optional task authority. Service credentials are purpose-bound; human source reads use the exact human credential.'
     link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/config.rs 'Runtime configuration'
   }
   casework_postgres = database 'Casework PostgreSQL' {
-    technology 'Casework-owned database'
-    description 'Holds the team directory, source subjects and occurrences, claims, private drafts, durable source attempts, immutable task-template versions and task grants, hosted items, clocks, histories, idempotency records, retention tombstones. Revocation; loss of holder eligibility, including release or reassignment; template retirement; source denial, concealment or moved binding; an ineligible Draft or terminal Rejected, Applied or Canceled source request; and changed proposal identity or subjects permanently invalidate an unexpired grant. Expiry makes it inactive, while source-item erasure makes it unavailable and removes disclosed subjects without recording invalidation. Runtime and migration authority are separate.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/schema.rs 'PostgreSQL schema'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/migrations/0014_task_grants.sql 'Task-grant storage and invalidation'
+    description 'Owns pinned ReviewRequests, ReviewTasks, immutable Decisions, one terminal ReviewResult and feed event, exact replay receipts, Directory, clocks, grants and bounded retention. Current-source display values are not retained. Runtime and activation credentials have separate database authority.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/migrations/0001_reviews.sql 'Fresh review-only schema'
   }
   casework_audit_journal = database 'Casework audit journal' {
-    technology 'Per-process JSONL file or stdout'
-    description 'Minimized request and response entries. File appends are durable; stdout is best-effort. A stopped writer makes readiness fail and requires a restart after the destination is repaired. Operators ship streams to append-only storage for tamper evidence.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/runtime.rs 'Audit writer and health gate'
+    technology 'Minimized JSONL / durable file or stdout'
+    description 'Records minimized admission and response entries without context, result fields or human reasons. Operators archive streams for tamper evidence. Audit failure gates protected work or disclosure; a response failure may follow a committed transaction and requires exact recovery.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/audit.rs 'Audit release boundary'
   }
-
   casework = service 'Registry Casework' {
     technology 'Rust / Axum'
-    description 'Runs one source-neutral coordination service. A deployment may serve hosted decisions with no source, BReg-backed work through the implemented adapter, or both. Source-backed deployments may also enable the optional task-grant authority. Nested components are logical responsibilities in this process.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/runtime.rs 'Runtime assembly and workers'
-
-    api = component 'Casework HTTP API' {
-      description 'Serves OIDC-protected directory, inbox, item, claim, assignment, history, action, hosted-decision, clock and optional task-grant routes, plus separately HMAC-verified source-event intake. A configured task authority also serves public signing keys and purpose-specific machine assertion and status routes. Responses are body-limited and no-store; the service has no CORS browser edge.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/http.rs 'Router and HTTP boundary'
+    description 'Runs one review lifecycle for submitted and current-source context. ReviewPolicy, ReviewRequest, ReviewTask, Decision and ReviewResult are its workflow concepts. Sources retain disclosure, reviewability and every eventual mutation.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/runtime.rs 'Runtime assembly'
+    api = component 'Review HTTP API' {
+      description 'Serves policies, producer requests and results, human ReviewTasks and receipts, Directory and optional task-grant routes. Authentication, bounded bodies, no-store responses and audit gates apply at the public router.'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/http.rs 'Router'
     }
-    access = component 'Authentication and profile selection' {
-      description 'Verifies OIDC tokens and selects exactly one Casework profile. Human roles require the configured human-identity claim; Requester is a separate service role. Queue and team membership is checked later by the coordination, hosted and task-grant components. Task assertion and status routes instead require one exact audience, registered client, actor kind and purpose-specific scope, and reject profile headers or existing grant claims. Human caller-visible source reads and actions also require an explicitly selected source profile under the caller token; background synchronization uses the separate bounded reader.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/auth.rs 'Authentication and profile selection'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/task_grants.rs 'Task-grant holder and membership checks'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/hosted.rs 'Hosted Supervisor and queue checks'
+    access = component 'Authentication and current authority' {
+      description 'Verifies OIDC and explicit profiles. Producer, human reviewer and grant-machine authority are separate. Current team service and eligibility are checked for each operation; source disclosure remains an independent live check.'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/auth.rs 'Authentication'
     }
-    coordination = component 'Source-backed coordination' {
-      description 'Assembles caller-visible inbox items only after a current source read, manages revision-fenced claims and actor-private drafts, and reserves exact actor-bound attempts before source writes. Claims coordinate responsibility; they grant no source authority.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/service.rs 'Coordination and attempt orchestration'
-    }
-    hosted = component 'Hosted decision coordination' {
-      description 'Accepts source-free items from Requesters, validates display data, pins the declared kind policy, supports bounded Requester notes and cancellation, coordinates human claims and decisions, and separates requester terminal results from protected actor accountability. A completed result exposes a stable opaque per-person actor reference; a cancellation event carries the Requester\'s reason and no actor reference.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/hosted.rs 'Hosted decision implementation'
+    coordination = component 'Pinned review and staffing' {
+      description 'Admits exact producer, subject, policy and submission bindings. Coordinates stages, thresholds, exclusions, claims, assignment, delegation, private drafts, due-ordered next, holdings and atomic caseload moves. Decisions and receipts commit under revision fences; a terminal settlement also commits one result and feed event.'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/review.rs 'Review lifecycle'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/review/staffing.rs 'Visibility-safe staffing'
     }
     task_grants = component 'Institutional task grants' {
       #optional #taskAuthority
-      technology 'Optional logical authority / signed JWT assertions'
-      description 'Lets an eligible current human holder approve one immutable task for an exact institutional agent. The template fixes the bounds; Casework derives proposal identity and subject values from the source. It stores the grant with a template-defined lifetime capped at 900 seconds, rechecks holder, template, proposal and subject validity, signs an assertion lasting at most 60 seconds, and returns resource-scoped status. It does not issue OAuth access tokens, grant a Casework human profile or delegate the approving person\'s bearer.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/task_grants.rs 'Task approval, assertion and status authority'
+      description 'A current eligible ReviewTask holder approves immutable agent, client, resource, scope, purpose, subject and deadline bounds. Submitted context uses its admitted snapshot; current-source fields require human disclosure at approval and separate purpose-bound rechecks. Immediate and explicit deferred modes retain their own lifetime limits. Casework signs short assertions, while the issuer and resource authorize execution independently.'
+      link https://github.com/registrystack/registry-stack/blob/main/products/casework/TASK_GRANTS.md 'Approval, recheck, revocation and deadlines'
     }
-    source_contract = component 'Source-neutral adapter boundary' {
-      technology 'registry-casework-core'
-      description 'Defines transition hints, authoritative observations, caller reads and exact prepared-attempt capsules without any BReg protocol type. The fixed occurrence reducer owns open, claimed, waiting, synchronizing and terminal transitions.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-core/src/adapter.rs 'SourceAdapter contract'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-core/src/transition.rs 'Occurrence transition table'
+    source_contract = component 'Read-only context provider boundary' {
+      technology 'Source-neutral contract'
+      description 'Separates human-display, field-free service-status, field-limited task-grant-context and routing-context capabilities. Each observation matches the exact SubjectBinding and producer contract. Submitted context requires none; unsupported required capabilities fail compilation.'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-core/src/adapter.rs 'Read-only provider operations'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-core/src/context.rs 'Pinned context and required capabilities'
     }
-    breg_adapter = component 'BReg source adapter' {
+    breg_adapter = component 'BReg review context provider' {
       #optional
-      technology 'registry-casework-breg / maintained BReg client'
-      description 'The one implemented source adapter. A separate private_key_jwt service reader uses its configured reader profile, resource and scopes to discover, refresh and recheck bounded coordination facts. Human caller-scoped reads and promoted lifecycle actions use the acting person\'s ephemeral bearer and explicit BReg profile. Reader OAuth identity is part of the source-binding generation. Signed CloudEvents are invalidation hints only.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-breg/src/lib.rs 'BReg adapter implementation'
+      technology 'registry-casework-breg / public BReg client'
+      description 'Reads only the exact advertised Proposal context operation. Human display forwards the exact human source credential and profile. Service status and other compiled purposes use their separate configured authority and cannot widen display. No BReg database or runtime crate is imported.'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework-breg/src/lib.rs 'Read-only BReg provider'
     }
-    workers = component 'Synchronization, routing and clocks' {
-      description 'Processes queued invalidations, periodically discovers and rereads active source work, repairs missed events, evaluates first-match routing from ephemeral projected facts, and executes pinned clock effects only after a fresh source observation and transactional generation checks. It also runs bounded retention and assignment maintenance.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/clocks.rs 'Clock occurrence and effect processing'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/service.rs 'Synchronization and reconciliation'
+    workers = component 'Clocks, completion and retention' {
+      description 'Evaluates pinned clocks and bounded assignment and retention maintenance. Current-source checks use exact service status. Payload-free completion notifications only wake producers, which fetch authoritative results; delivery failure does not remove the durable result or feed event.'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/runtime.rs 'Background workers'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/review/maintenance.rs 'Retention and completion processing'
     }
     audit = component 'Audit release gate' {
-      description 'Writes request entries before protected work and response entries before disclosure or after mutations commit. A crash after commit can leave a request without a response; domain history records the change.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/runtime.rs 'Audit writer'
+      description 'Admits protected work before execution and confirms minimized response entries before release. Database commits are never described as rolled back merely because their audit response failed.'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/src/audit.rs 'Audit gate'
     }
   }
-
-  casework_staff .call casework_app 'Works a currently visible inbox'
-  casework_supervisor .call casework_app 'Works cases and manages served queues'
-  casework_administrator .call casework_app 'Maintains directory and clock inputs'
+  casework_staff .call casework_app 'Reviews currently visible tasks'
+  casework_supervisor .call casework_app 'Administers authorized ReviewTasks'
+  casework_administrator .call casework_app 'Maintains Directory and calendar inputs'
   casework_app .call issuer 'Obtains a human token'
-  casework_app .call casework_client 'Uses the maintained server-side SDK'
-  casework_client .call casework.api 'Uses the selected Casework and source profiles' {
-    technology 'HTTPS / maintained client / server to server'
-  }
-  casework_requester .call issuer 'Obtains a Requester token'
-  casework_requester .call casework.api 'Creates and follows its own hosted items' {
-    technology 'HTTPS / JSON / Requester bearer'
-    description 'Creates items, adds or pages notes, cancels active items, reads owned items and polls the terminal feed under the same requester identity. Mutations use scoped idempotency keys.'
-  }
-  casework_operator .call casework_cli 'Authors, checks and operates Casework'
-  casework_project .artifactFlow casework_cli 'Supplies authored policy and imported descriptions'
-  casework_cli .artifactFlow casework_package 'Packages the checked policy closure'
-  casework_cli .call tooling 'Runs same-version bregctl check and explain change-requests' {
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-caseworkctl/src/source_add.rs 'Source-add tooling boundary'
-  }
-  casework_cli .artifactFlow project 'Writes reviewed event, reader-profile and development-client additions on --apply' {
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-caseworkctl/src/source_add.rs 'Atomic authored-file updates'
-  }
-  casework_cli .call casework_postgres 'Migrates, diagnoses, erases or settles with migration authority'
-  casework_package .artifactFlow casework 'Production manifest verification and policy load at startup'
-  casework_runtime_config .artifactFlow casework 'Activates deployment bindings and secrets'
-  casework.api .call casework.access 'Authenticates caller routes and selects one profile'
+  casework_app .call casework_client 'Uses the bounded client'
+  casework_client .call casework.api 'Selects explicit Casework and human source authority'
+  casework_requester .call issuer 'Obtains its producer credential'
+  casework_requester .call casework.api 'Creates, recovers and follows exact ReviewRequests'
+  casework.workers .event casework_requester 'Sends a payload-free completion wakeup'
+  casework_apply_principal .call breg.api 'Applies only with independent source authority and current preconditions'
+  casework_operator .call casework_cli 'Authors and operates reviewed policy'
+  casework_project .artifactFlow casework_cli 'Supplies policy and local contract closure'
+  casework_cli .artifactFlow casework_package 'Packages exact reviewed bytes'
+  casework_cli .call tooling 'Verifies the same-version native producer export and reader authority'
+  casework_cli .call casework_postgres 'Plans or applies activation with separate operator authority'
+  casework_package .artifactFlow casework 'Supplies exact activated policy'
+  casework_runtime_config .artifactFlow casework 'Binds deployment endpoints and secret references'
+  casework.api .call casework.access 'Authenticates and selects caller authority'
   casework.access .call issuer 'Resolves configured OIDC keys'
-  casework.api .call casework.coordination 'Dispatches source-backed work'
-  casework.api .call casework.hosted 'Dispatches hosted decisions'
-  casework.api .call casework.task_grants 'Dispatches optional task preview, approval, listing, revocation, assertion and status operations'
-  casework.task_grants .call casework.source_contract 'Applies the source-neutral task-context contract'
-  casework.task_grants .call casework.breg_adapter 'Reads current proposal identity and governed subject facts through the source-neutral contract'
-  casework.coordination .call casework.source_contract 'Applies source-neutral rules'
-  casework.coordination .call casework.breg_adapter 'Invokes the injected SourceAdapter for events, caller reads and actions'
-  casework.workers .call casework.source_contract 'Applies source-neutral observation, routing and clock rules'
-  casework.workers .call casework.breg_adapter 'Invokes the injected SourceAdapter for discovery and authoritative reads'
-  casework.coordination .call casework_postgres 'Commits claims, drafts, attempts, history'
-  casework.hosted .call casework_postgres 'Commits pinned hosted state and terminal records'
-  casework.task_grants .call casework_postgres 'Commits immutable grants, invalidation, history'
-  casework.workers .call casework_postgres 'Claims durable work and fences effects'
-  casework.audit .call casework_audit_journal 'Accepts minimized entries'
+  casework.api .call casework.coordination 'Dispatches the single review lifecycle'
+  casework.api .call casework.task_grants 'Dispatches bounded grant operations'
+  casework.coordination .call casework.source_contract 'Checks required read-only capabilities'
+  casework.coordination .call casework.breg_adapter 'Reads current human display and exact reviewability'
+  casework.task_grants .call casework.source_contract 'Selects only compiled grant-context fields'
+  casework.task_grants .call casework.breg_adapter 'Rechecks exact subject and granted facts'
+  casework.workers .call casework.breg_adapter 'Checks field-free source status for pinned clocks'
+  casework.coordination .call casework_postgres 'Commits review state, staffing, receipts and one terminal result'
+  casework.task_grants .call casework_postgres 'Commits immutable grants and invalidation'
+  casework.workers .call casework_postgres 'Processes pinned clocks, completion and due retention'
+  casework.audit .call casework_audit_journal 'Durably accepts minimized entries'
 }

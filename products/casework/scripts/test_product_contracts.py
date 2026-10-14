@@ -70,6 +70,17 @@ class ProductContractTests(unittest.TestCase):
         self.assertIn("casework-review-status", runtime)
         self.assertNotRegex(runtime, r"(?m)^sources:")
 
+    def test_advanced_example_keeps_two_stages_routing_and_clocks(self):
+        project = (PRODUCT / "examples/multi-stage-routing-clocks/casework.yaml").read_text()
+        fixture = (PRODUCT / "examples/multi-stage-routing-clocks/fixtures/multi-stage-policy.yaml").read_text()
+        self.assertIn("mode: submitted", project)
+        self.assertIn("stage: technical", project)
+        self.assertIn("queue: northern-review", project)
+        self.assertIn("excludePreviousStageReviewers: true", project)
+        self.assertIn("clocks: [review-deadline, response-budget]", project)
+        self.assertIn("policy: regional-review", fixture)
+        self.assertNotRegex(project, r"(?m)^(sources|reviewKinds|reviewProducers):")
+
     def test_project_schema_exposes_one_review_authoring_model(self):
         schema = json.loads((PRODUCT / "generated/project/project.schema.json").read_text())
         properties = schema["properties"]
@@ -116,6 +127,7 @@ class ProductContractTests(unittest.TestCase):
         checkpoint = (PRODUCT / "scripts/check-checkpoint.sh").read_text()
         self.assertIn("examples/canonical-review", checkpoint)
         self.assertIn("examples/standalone-decision", checkpoint)
+        self.assertIn("examples/multi-stage-routing-clocks", checkpoint)
         self.assertNotIn('" simulate "', checkpoint)
         self.assertNotIn("source add", checkpoint)
 

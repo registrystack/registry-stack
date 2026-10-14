@@ -294,7 +294,7 @@ def main() -> int:
         files={OUTPUT:json.dumps(openapi,indent=2,sort_keys=True)+"\n"}
         for name,content in wire["projectDocuments"].items():files[ROOT/"products/casework/generated/project"/name]=content
         for name,content in wire["offlineDocuments"].items():files[ROOT/"products/casework/generated"/name]=content
-        retired=[ROOT/"products/casework/generated/fixture/fixture.schema.json",ROOT/"products/casework/generated/simulation/simulation.schema.json"]
+        retired=[ROOT/"products/casework/generated/simulation/simulation.schema.json"]
         published=ROOT/"docs/site/src/data/casework-api.yaml"
         files[published]=problem_table(published.read_text(),contract)
         stale=[]

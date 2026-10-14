@@ -68,7 +68,6 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --locked --profile ci \
-            -p registry-casework -p registry-caseworkctl \
             -p registry-evidence -p registry-evidencectl \
             -p registry-messaging -p registry-messagingctl --bins
 

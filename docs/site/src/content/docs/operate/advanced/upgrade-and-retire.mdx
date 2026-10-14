@@ -25,7 +25,7 @@ rolling upgrade that mixes releases is not supported:
 
 - **Casework and BReg are checked.** Casework compares BReg's `Registry-Engine-Version` header with
   its own release on every contract read and refuses any other release; see
-  [Upgrade Casework and BReg in lock-step](../../casework/#upgrade-casework-and-breg-in-lock-step).
+  [Change the active Casework package](../../casework/#change-the-active-package).
 - **Adopter tooling is checked.** `evidencectl` refuses an `evidence` or `bregctl` binary of
   another version.
 - **Clients are not checked.** Clients send no version, and runtimes accept any caller. Pre-1.0
@@ -89,23 +89,16 @@ toolset, so a binary that cannot run leaves the installed toolset selected.
    When an apply stops, fix the cause and rerun it with the same `database.roles`; changing roles
    during recovery is refused. Casework reports each BReg source as unavailable until step 5
    finishes.
-5. **Upgrade Casework.** Settle pending attempts first because an upgrade can strand them. When
-   step 4 changed a BReg source's `registryRevision`, check and repin that source as
-   [Check a BReg source's pinned revision](../../casework/#check-a-breg-sources-pinned-revision)
-   describes. `caseworkctl source add` now derives the generated `casework-reader` profile from the
-   BReg project's one compiled `principalClaim`; if it refuses mixed claims, align every entity
-   profile and action grant, including module-contributed grants and a `casework-reader` profile an
-   earlier `source add` generated, to one claim and repeat the command. Package the Casework
-   project again, point `package.root` at the package, and repin `package.expectedDigest` when set.
-   If a development session borrows another project's issuer, replace `principalClaim: sub` in
-   every Casework access profile with a stable claim such as `registry_principal`, then register
-   that claim for each client in both projects' `dev-clients.yaml`. Stop every v0.40.0 `casework`
-   process before the apply. Migration 0022 validates the task-grant tables under an exclusive lock
-   and installs the deferred-grant window constraints and assignment generation trigger. Run
-   `caseworkctl plan --runtime-config FILE`, then `caseworkctl apply --runtime-config FILE`; the
-   removed `casework migrate` and `caseworkctl db` commands are not aliases. Start `casework` and
-   run `caseworkctl doctor --runtime-config FILE`; see
-   [Plan, apply, and serve](../../casework/#plan-apply-and-serve).
+5. **Upgrade Casework.** The current review-only model requires a fresh database when replacing
+   a retired WorkItem schema. Preserve the old database, binary, package, and audit until its work
+   and accountability obligations are resolved; the new runtime refuses that schema before mutation
+   and performs no in-place conversion. For a deployment already on the review-only baseline,
+   package the candidate policy and run `caseworkctl plan --runtime-config FILE` before applying.
+   Finish affected reviews if the candidate would remove pinned policy or authority; there is no
+   orphan bypass. Re-pair a changed native context export with `caseworkctl provider pair` and verify
+   the exact contract before packaging. Stop the earlier runtime, run `caseworkctl apply`, then
+   `caseworkctl doctor` with the same runtime file, package, and database. Require readiness before
+   resuming staff traffic; see [plan, apply, and serve](../../casework/#plan-apply-and-serve).
 6. **Upgrade Evidence.** Replace any `evidencectl build` invocation with `evidencectl package`, and
    remove `--generate-keys` from `evidencectl init` or `evidencectl new`. Re-import a BReg source
    when its export changed, then package a fresh candidate with the new `evidencectl package`.
@@ -306,17 +299,17 @@ in this sequence.
 
 ### Retire Casework
 
-1. Stop staff access. Settle every pending and uncertain attempt, as
-   [Settle an uncertain source attempt](../../casework-retention/#settle-an-uncertain-source-attempt)
-   describes, so no change is left half-applied at a source.
-2. Finish or close the reviews Casework hosts for BReg. A review left open makes BReg wait for a
-   result that never comes; close it from BReg with
-   [`bregctl review-recovery close`](../../breg/#resubmit-or-close-a-review-the-authority-lost).
-3. Casework has no export command. Keep a final `pg_dump` for as long as your policy holds its
-   decisions and accountability records, or erase source-backed payload copies first with
-   [`caseworkctl retention erase`](../../casework-retention/#erase-source-backed-payload-copies).
-4. Stop the runtime, ship the final audit file, its sealed files, and the `caseworkctl` companion
-   file, then revoke Casework's client credentials at each BReg source's identity provider.
+1. Stop new producer submissions and staff mutations. Finish pending review rounds, or cancel them
+   through each bound producer's supported interface. Confirm that consumers have correlated the
+   terminal results before removing their review authority.
+2. Preserve the retained results and accountability your institution requires. A final `pg_dump`
+   contains the retained database state; Casework exposes no general export or source-attempt
+   settlement command. Apply the pinned retention policy while the service is still maintained.
+3. Stop the runtime, archive its external audit files and key under your retention policy, and keep
+   the matching package and binary with retained backups. A database backup does not contain the
+   external audit journal.
+4. Revoke Casework's status-reader and institutional-agent credentials in the relevant issuers.
+   Keep source application credentials under their separate owner's retirement procedure.
 
 ### Retire Base Registry Engine
 
@@ -346,7 +339,7 @@ in this sequence.
     crates/registry-platform-audit/src/writer.rs, for_process();
     products/messaging/RUNTIME-CONFIG.md, Providers and Provider callbacks;
     crates/registry-messaging/src/runtime.rs, Listeners::serve_until();
-    crates/registry-caseworkctl/src/lib.rs, no export command, RetentionCommand, AttemptCommand;
+    crates/registry-casework/src/review/maintenance.rs; products/casework/README.md;
     crates/registry-schedulingctl/src/lib.rs, no export command; crates/registry-scheduling/src/runtime.rs,
     outbox workers spawned by the runtime; products/scheduling/README.md, the schedulingctl audit file;
     crates/registry-bregctl/src/lib.rs, DataCommand::Export, ImportAuthorityCommand,

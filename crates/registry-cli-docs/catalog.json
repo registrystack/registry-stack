@@ -983,8 +983,8 @@
               "environment": null
             },
             {
-              "display": "--entity <ENTITY>",
-              "description": "Compiled entity to export (evidence-source only)",
+              "display": "--record-type <ID>",
+              "description": "Compiled Record type to export (evidence-source only)",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -4408,7 +4408,7 @@
               "invocation": "bregctl import-authority open",
               "about": "Open one bounded authority for an `import` grant of the active package",
               "long_about": null,
-              "usage": "bregctl import-authority open [OPTIONS] --runtime-config <ABSOLUTE_FILE> --entity <ENTITY> --profile <PROFILE> --max-items <COUNT> --operator-reference <REFERENCE> --reason <TEXT>",
+              "usage": "bregctl import-authority open [OPTIONS] --runtime-config <ABSOLUTE_FILE> --record-type <ID> --profile <PROFILE> --max-items <COUNT> --operator-reference <REFERENCE> --reason <TEXT>",
               "arguments": [],
               "options": [
                 {
@@ -4421,8 +4421,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--entity <ENTITY>",
-                  "description": "Entity the authority admits creates for",
+                  "display": "--record-type <ID>",
+                  "description": "Record type the authority admits creates for",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4431,7 +4431,7 @@
                 },
                 {
                   "display": "--profile <PROFILE>",
-                  "description": "Access profile holding the entity's `import` grant",
+                  "description": "Access profile holding the Record type's `import` grant",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5065,7 +5065,7 @@
       "options": [
         {
           "display": "--format <FORMAT>",
-          "description": "Output format: human for terminal reading or json for automation",
+          "description": "Write human diagnostics and reports, or one typed JSON report",
           "always_required": false,
           "repeatable": false,
           "default_values": [
@@ -5107,7 +5107,7 @@
           "arguments": [
             {
               "display": "<DIRECTORY>",
-              "description": "New directory for the standalone ReviewPolicy project",
+              "description": "New project directory; existing destinations are never overwritten",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5118,7 +5118,7 @@
           "options": [
             {
               "display": "--template <TEMPLATE>",
-              "description": "Built-in project template to write",
+              "description": "Starter to create (standalone-decision)",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5129,7 +5129,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5174,7 +5174,7 @@
           "options": [
             {
               "display": "--production",
-              "description": "Require production-ready policy configuration",
+              "description": "Check the exact package closure required for production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5183,7 +5183,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Treat warnings as refusals",
+              "description": "Refuse authored warnings as well as errors",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5192,7 +5192,7 @@
             },
             {
               "display": "--against-breg-package <DIRECTORY>",
-              "description": "Verified native BReg package whose provider contracts must match",
+              "description": "Compare imported provider contracts with this sealed native BReg package",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5201,7 +5201,7 @@
             },
             {
               "display": "--provider-id <PROVIDER_ID>",
-              "description": "Limit native contract comparison to this configured context provider",
+              "description": "Limit native package comparison to this declared provider",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5210,7 +5210,7 @@
             },
             {
               "display": "--bregctl-bin <BINARY>",
-              "description": "Matching-release bregctl executable used to verify the native package",
+              "description": "Matching bregctl executable used for native package verification",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5230,7 +5230,7 @@
             },
             {
               "display": "--environment",
-              "description": "Resolve environment substitutions in the runtime configuration",
+              "description": "Resolve configured environment substitutions while checking the runtime file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5239,7 +5239,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5299,7 +5299,7 @@
           "options": [
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5333,7 +5333,7 @@
           "arguments": [
             {
               "display": "<PROJECT>",
-              "description": "Existing authored Casework project directory",
+              "description": "Existing authored Casework project and its offline fixtures",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5343,8 +5343,17 @@
           ],
           "options": [
             {
+              "display": "--deny-warnings",
+              "description": "Refuse authored warnings as well as errors",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5389,7 +5398,7 @@
           "options": [
             {
               "display": "--output <DIRECTORY>",
-              "description": "New directory for the generated bindings",
+              "description": "Directory for generated TypeScript and Python contracts",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5398,7 +5407,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5433,7 +5442,7 @@
           "options": [
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5460,13 +5469,13 @@
             {
               "name": "pair",
               "invocation": "caseworkctl provider pair",
-              "about": "Pair one configured provider with an exact review-context export from a BReg package",
+              "about": "Verify native context and reader authority, then optionally retain its provider export",
               "long_about": null,
               "usage": "caseworkctl provider pair [OPTIONS] --provider-id <PROVIDER_ID> --breg-package <DIRECTORY> --action-id <ACTION_ID> <PROJECT>",
               "arguments": [
                 {
                   "display": "<PROJECT>",
-                  "description": "Existing authored Casework project directory",
+                  "description": "Existing Casework project with the exact vendored schema and context pin",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5477,7 +5486,7 @@
               "options": [
                 {
                   "display": "--provider-id <PROVIDER_ID>",
-                  "description": "Configured context provider to pair",
+                  "description": "Declared Casework context provider to pair",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5486,7 +5495,7 @@
                 },
                 {
                   "display": "--breg-package <DIRECTORY>",
-                  "description": "Verified native BReg package that owns the context contract",
+                  "description": "Sealed native BReg package directory containing the action's context export",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5495,7 +5504,7 @@
                 },
                 {
                   "display": "--action-id <ACTION_ID>",
-                  "description": "Exact Action ID whose review-context contract is imported",
+                  "description": "BReg action that declares the required review context",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5504,7 +5513,7 @@
                 },
                 {
                   "display": "--bregctl-bin <BINARY>",
-                  "description": "Matching-release bregctl executable used to verify the native package",
+                  "description": "Matching bregctl executable used to verify the producer package",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -5515,7 +5524,7 @@
                 },
                 {
                   "display": "--apply",
-                  "description": "Write the verified provider description and bind it in the project",
+                  "description": "Write the verified provider export and description reference after validation",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -5524,7 +5533,7 @@
                 },
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Output format: human for terminal reading or json for automation",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -5561,7 +5570,7 @@
           "options": [
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5606,7 +5615,7 @@
           "options": [
             {
               "display": "--output <DIRECTORY>",
-              "description": "New directory for the verified policy package",
+              "description": "New directory for the exact package closure; required unless --dry-run",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5615,7 +5624,7 @@
             },
             {
               "display": "--revision <REVISION>",
-              "description": "Optional source revision label covered by the package digest",
+              "description": "One printable source revision recorded in the package",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5624,7 +5633,7 @@
             },
             {
               "display": "--dry-run",
-              "description": "Compile and report the package closure without writing a package",
+              "description": "Inspect the file closure and digest without writing a package",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5633,7 +5642,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5678,7 +5687,7 @@
         {
           "name": "doctor",
           "invocation": "caseworkctl doctor",
-          "about": "Inspect activation, schema readiness and local runtime configuration",
+          "about": "Inspect database, active package and audit readiness without applying changes",
           "long_about": null,
           "usage": "caseworkctl doctor [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
@@ -5694,7 +5703,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5722,7 +5731,7 @@
         {
           "name": "plan",
           "invocation": "caseworkctl plan",
-          "about": "Compare a verified policy package with the currently activated package",
+          "about": "Read and explain the candidate activation plan without changing the database",
           "long_about": null,
           "usage": "caseworkctl plan [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
@@ -5738,7 +5747,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5766,7 +5775,7 @@
         {
           "name": "status",
           "invocation": "caseworkctl status",
-          "about": "Report the active policy package and runtime readiness",
+          "about": "Read the active package identity and database activation ledger",
           "long_about": null,
           "usage": "caseworkctl status [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
@@ -5782,7 +5791,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5810,7 +5819,7 @@
         {
           "name": "apply",
           "invocation": "caseworkctl apply",
-          "about": "Activate a verified policy package using current migration authority",
+          "about": "Apply the reviewed package and fresh-schema activation with the migration credential",
           "long_about": null,
           "usage": "caseworkctl apply [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
@@ -5826,7 +5835,7 @@
             },
             {
               "display": "--operator-reference <OPERATOR_REFERENCE>",
-              "description": "Operator reference recorded with the activation",
+              "description": "Operator change or approval reference recorded with activation",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5835,7 +5844,7 @@
             },
             {
               "display": "--backup-reference <BACKUP_REFERENCE>",
-              "description": "Backup reference recorded with the activation; repeat for multiple references",
+              "description": "Backup reference recorded with activation; repeat for additional references",
               "always_required": false,
               "repeatable": true,
               "default_values": [],
@@ -5844,7 +5853,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5936,7 +5945,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Output format: human for terminal reading or json for automation",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -6027,7 +6036,7 @@
                 },
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Output format: human for terminal reading or json for automation",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6083,7 +6092,7 @@
                 },
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Output format: human for terminal reading or json for automation",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6130,7 +6139,7 @@
               "options": [
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Output format: human for terminal reading or json for automation",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6186,7 +6195,7 @@
               "options": [
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Output format: human for terminal reading or json for automation",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6260,7 +6269,7 @@
                 },
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Output format: human for terminal reading or json for automation",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6305,7 +6314,7 @@
               "options": [
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Output format: human for terminal reading or json for automation",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -8198,6 +8207,97 @@
       ],
       "constraints": [],
       "subcommands": [
+        {
+          "name": "authority",
+          "invocation": "evidence authority",
+          "about": "Atomically activate separately governed target authority for the next restart",
+          "long_about": null,
+          "usage": "evidence authority <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "activate",
+              "invocation": "evidence authority activate",
+              "about": "Validate package ceilings and durably commit one target authority snapshot",
+              "long_about": null,
+              "usage": "evidence authority activate --runtime-config <FILE> --document <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file that binds the package and authority store",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--document <FILE>",
+                  "description": "Target authority document to validate and activate",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "history",
+              "invocation": "evidence authority history",
+              "about": "Inspect revisions and digests from committed activation history, without identity values",
+              "long_about": null,
+              "usage": "evidence authority history --runtime-config <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file that binds the authority store",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
         {
           "name": "check",
           "invocation": "evidence check",

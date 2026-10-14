@@ -68,7 +68,7 @@ symbols, completion, and hover for their modeled local authoring edges.
 | Product | Indexed relationships |
 |---|---|
 | BReg | Authored modules, record types and extensions, value types, fields including implicit `id`, selectors, constraints, read paths, record and project access profiles, Action inputs/plans/commit guards, Proposal permissions/attachments/review context, review authorities, datasets, vocabularies, and governed function/hook/SQL files. Module assets resolve relative to the module. |
-| Casework | Queues, access profiles, review kinds/stages/outcomes/producers, clocks/calendars, source bindings and imported request fields, task templates, runtime source names, and development directory clients. |
+| Casework | Queues, access profiles, teams, review policies with policy-scoped stages, outcomes and inline routing fields, trusted producers, read-only context providers and runtime deployment bindings, clocks, calendars and holiday sets, task templates, current fixtures, schema files, and development directory clients. Source namespaces remain opaque external names. |
 | Scheduling | Services/offerings/openings/holiday sets, local location/pool/window records, exception reopening targets scoped to location, and fixture offering names. |
 | Messaging | Providers, sender profiles, template identities and version-specific metadata files, access profiles, runtime providers, locale and part names and their Jinja body files, provider scripts, and fixed template schema/sample file symbols. |
 | Discovery | Origin, mapping, requirement, and evidence-type-list declarations. External evidence type identifiers are not treated as local references. |

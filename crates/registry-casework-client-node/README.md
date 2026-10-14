@@ -3,8 +3,9 @@
 This internal napi-rs binding supplies the `casework` module assembled into
 `@registrystack/client`. Applications should use that unified package.
 
-Every operation accepts a bearer token and an explicit Casework profile for
-that call. Source-reading operations also require an explicit source profile.
+Producer, human-review, and Directory calls take a bearer token and an explicit
+Casework profile. Current-source context operations also take the caller's source
+profile; submitted-context reviews need no provider or source profile.
 The binding does not retain credentials and exposes no browser credential API.
 
 `reviewTasks(token, profile, { ownership: 'assigned-to-me' })` filters the
@@ -35,13 +36,13 @@ I/O, and every response row must match it. Unknown or inaccessible requests
 produce a neutral empty page under current list semantics. The reference
 grants no decision, content, or accountability authority.
 
-Task delegation uses the current human profile for template previews, grant
+Task grants use the current human profile for template previews, grant
 approval, listing, and revocation. Approval accepts only the template ID and
 version, with the task revision and a caller-owned idempotency key. The preview
 contains the exact destination, purpose, immutable bounds, derived subjects,
 and lifetime; the grant list omits stored subjects. Agent assertion and grant
 status calls take only a bearer token and grant ID, without human or source
-profile headers. Neither binding retains credentials or resends a mutation
+profile headers. The binding retains no credentials and resends no mutation
 beyond the bounded same-key retry below.
 
 Previews and grant views include `authorizationMode: "deferred"` for a deferred
@@ -65,10 +66,47 @@ attempt under the key committed and only its stored response was erased by
 retention: reconcile the original operation, by reading the task, review
 request, or directory, before choosing a new key.
 
-Review policies are discovered through `reviewPolicies` (Node) or
-`review_policies` (Python). Admission supplies the exact `policy` binding.
-Review task lists support the five SubjectBinding selectors and `sort`
-(`due`, `subject`, or `reference`). Due-ordered next and holdings use
-`nextReviewTask` / `reviewTaskHoldings` in Node and `next_review_task` /
-`review_task_holdings` in Python. Caseload and clock preview/apply calls
-operate on ReviewTasks and apply only the revision-fenced preview ID.
+`reviewPolicies` and `reviewPolicy` return compiled policy closures. Admission
+supplies the exact `{ id, version, digest }` in `policy`. Use a binding from the
+reviewed project or explicitly accept a discovered closure; keep that binding,
+the complete request, and the idempotency key unchanged during recovery.
+
+This producer function uses the standalone decision policy. The host supplies
+its declared trusted-producer ID, real immutable subject binding, and retained
+idempotency key. `submissionDigest` validates and hashes locally through the
+same Rust implementation as admission; it performs no network or token work.
+
+```js
+const { casework } = require('@registrystack/client');
+const client = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' });
+
+async function submitReview(token, producerId, policyBinding, subject, key) {
+  const request = {
+    policy: policyBinding,
+    subject,
+    requesterReference: subject.id,
+    context: {
+      mode: 'submitted',
+      snapshot: { summary: 'Confirm the prepared batch', reference: subject.id },
+    },
+  };
+  const digest = casework.submissionDigest(producerId, subject.source, request);
+  const { value: accepted } = await client.createOrRecoverReviewRequest(
+    token, 'requester', key, request, digest,
+  );
+  return accepted;
+}
+```
+
+Persist the accepted binding and use `reviewResult` or the authenticated
+`reviewResults` feed. A `ReviewResult` records a human outcome and grants no
+external apply or write authority; the producer independently authorizes any
+later business mutation. A policy mismatch requires reviewing the changed
+policy, not replacing the expected digest during a retry.
+
+`ReviewStaffingQuery` accepts all five subject selectors together, a visible
+reference, queue, ownership, and `sort` (`due`, `subject`, or `reference`).
+`nextReviewTask` returns one due-ordered task or null; `reviewTaskHoldings`
+returns a bounded page. Caseload and clock preview/apply calls apply only the
+revision-fenced preview ID. Keep filters and caller profiles unchanged across
+snapshot cursors; after `410 review.result-expired`, start again without one.

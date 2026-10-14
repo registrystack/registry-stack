@@ -1088,6 +1088,29 @@ class QuantityTests(ConventionsTestCase):
         self.queue()["retryCount"] = {"type": "integer", "format": "uint16", "minimum": 0, "maximum": 65535}
         self.assertFinding(self.repo.run(), "CFG-QTY-4", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/retryCount"))
 
+    def test_cfg_qty_4_accepts_explicit_native_output_range(self) -> None:
+        self.repo.report["properties"]["filesChecked"] = {
+            "type": "integer", "format": "uint64", "minimum": 0, "maximum": 2**64 - 1,
+        }
+        self.assertNoFinding(self.repo.run(), "CFG-QTY-4")
+        self.repo.report["properties"]["filesChecked"] = {
+            "type": "integer", "format": "int64", "minimum": -(2**63), "maximum": 2**63 - 1,
+        }
+        self.assertNoFinding(self.repo.run(), "CFG-QTY-4")
+
+    def test_cfg_qty_4_output_still_requires_both_bounds(self) -> None:
+        self.repo.report["properties"]["filesChecked"] = {
+            "type": "integer", "format": "uint64", "minimum": 0,
+        }
+        self.assertFinding(self.repo.run(), "CFG-QTY-4", R, at(REPORT_SCHEMA, "/properties/filesChecked"))
+
+    def test_cfg_qty_4_read_back_format_still_requires_semantic_bounds(self) -> None:
+        self.repo.fmt(P)["audience"] = "generated"
+        self.queue()["retryCount"] = {
+            "type": "integer", "format": "uint64", "minimum": 0, "maximum": 2**64 - 1,
+        }
+        self.assertFinding(self.repo.run(), "CFG-QTY-4", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/retryCount"))
+
     def test_cfg_qty_4_accepts_a_bounded_type_whose_stated_minimum_is_zero(self) -> None:
         self.queue()["leewayMilliseconds"] = {"type": "integer", "format": "uint64", "minimum": 0, "maximum": 300000}
         self.assertNoFinding(self.repo.run(), "CFG-QTY-4")

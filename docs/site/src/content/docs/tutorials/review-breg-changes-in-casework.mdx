@@ -1,89 +1,166 @@
 ---
-title: Connect a review authority
-description: Bind an independently configured review authority to a native BReg Proposal Action without sharing application authority.
+title: Pair Base Registry Engine review context with Casework
+description: Verify a sealed Base Registry Engine (BReg) context export, pair its read-only provider with a Casework policy, and package the exact contract.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
 last_reviewed: "2026-09-20"
-doc_type: how-to
-tutorial_test:
-  toolset: breg
-  skip: requires an independently operated review authority, policy, and producer credentials
+doc_type: tutorial
 persona:
   - operator
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: casework
+  skip: requires the reader's tested sealed BReg package and matching Casework project; native pairing and producer/provider composition have owning product tests
 ---
 
-If you are connecting Base Registry Engine (BReg) to Registry Casework or another
-conforming review authority, bind one exact policy and authenticated producer
-connection. BReg retains the Proposal and applies its frozen effects; the
-authority owns policy and decisions.
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-## Prepare both contracts
+If you already own a Base Registry Engine (BReg) registry and want people to review its Proposals in Casework, pair the
+producer's exact context export with a Casework policy. You will produce a checked Casework package;
+BReg keeps responsibility for submission, cancellation, result correlation, and later application.
 
-Start with a checked Proposal Action such as the generated `facility-registry`
-project. Prepare the authority independently with its admitted source namespace,
-producer identity, policy, and producer context schema. Obtain the immutable
-policy ID, version, and digest from that authority. Replace the example's synthetic
-pin in `execution.proposal.review.policy`; set the logical `authority` and
-`source` to the configured connection.
+<QuickstartMeta
+  outcome="A Casework package paired with an exact native BReg review-context export."
+  time="About 10 minutes after both authored projects are ready"
+  level="Authoring and package verification"
+  prerequisites={['Matching bregctl and caseworkctl binaries', 'A tested sealed BReg package exporting the action review context', 'A Casework project declaring the same provider, contract, and schema', 'A shell']}
+/>
 
-Keep both products' databases, credentials, and grants separate. A review result
-does not grant BReg target authority, and a BReg profile does not grant a Casework
-decision. Human context reads remain subject to current Proposal and record
-permissions. The authority receives the bound context, never raw attachment bytes.
+{/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs;
+    crates/registry-casework-breg/tests/context_provider.rs;
+    crates/registry-casework/tests/breg_review_journey.rs. */}
 
-## Bind the deployment
+## Prepare the matching inputs
 
-In BReg runtime configuration, map `reviewAuthorities.<authority>` to the exact
-endpoint, producer ID, requester profile, recovery window, and maintained
-credential. Use secret references. For local evaluation, the project's
-`dev-clients.yaml` accepts the same logical authority with a dedicated issuer
-client whose scopes and identity the authority admits. The client needs no BReg
-record profile.
+Use the BReg package produced by your registry's normal schema-test and packaging procedure.
+Pairing consumes its sealed native export; it does not infer a contract from a running source or
+modify BReg's access grants.
 
-Automatic application is the default. BReg's built-in executor uses its compiled
-system grant for the exact frozen submission, so you configure no executor OAuth
-client or self-HTTP endpoint. For explicit manual application, author
-`execution.proposal.application.mode: manual` and grant the intended caller
-Proposal Apply separately.
+In your Casework project, declare a current-source ReviewPolicy with the native export's exact
+contract ID, revision, and schema digest, and vendor its bounded display schema.
+The provider's source namespace and purpose-specific service profile must match the producer.
+The maintained canonical example uses provider `facility-proposal-context`, namespace
+`facility-registry`, and action `correct-address`.
+For another action, use your own matching declarations rather than renaming an unrelated export.
 
-A missing review binding disables dependent operations while generated CRUD,
-immediate Actions, and no-review Proposals remain usable. Restore the exact
-binding to resume retained work. An outage never downgrades review to approval.
+Set the paths to your prepared project and sealed package, plus the provider and action IDs
+from those matching declarations:
 
-## Check before submitting
-
-```sh
-bregctl check ./facility-registry
-bregctl --format json explain proposals ./facility-registry
+```sh test-skip="the reader supplies the exact project and tested producer package"
+casework_project=/absolute/path/to/casework-project
+breg_package=/absolute/path/to/breg-build/package
+provider_id=facility-proposal-context
+action_id=correct-address
 ```
 
-Check the policy pin, source namespace, producer admission, current endpoint,
-and selected authority profile on both sides. Compilation proves the BReg
-configuration; it does not authenticate the external service or evaluate policy.
-Use your authority's maintained deployment and policy checks before admitting work.
+[Author a Casework policy](../../configure/casework/#choose-context-custody) describes those inputs.
+A BReg build package and an editable registry source directory are different artifacts.
+Use the package directory containing its manifest and checksums, not the editable source directory.
 
-## Submit and observe
+{/* Evidence: products/casework/examples/canonical-review/casework.yaml;
+    crates/registry-caseworkctl/src/provider_pair.rs;
+    crates/registry-breg/src/package.rs. */}
 
-Select the Action from BReg metadata, Start a draft, and use its promoted Submit
-link. The submission binds the exact plan, targets, Action revision, context,
-attachments, and policy. BReg correlates the authenticated result to that frozen
-binding and obtains fresh unexpired approval before an uncommitted application.
+## Preview and apply pairing
 
-Observe the Proposal through its authorized Get. Preserve `actionRevision`,
+Preview the matching pairing without writing:
+
+```sh
+caseworkctl provider pair "$casework_project" \
+  --provider-id "$provider_id" \
+  --breg-package "$breg_package" --action-id "$action_id"
+```
+
+Inspect the reported native contract and registry revision, then write that verified export:
+
+```sh
+caseworkctl provider pair "$casework_project" \
+  --provider-id "$provider_id" \
+  --breg-package "$breg_package" --action-id "$action_id" --apply
+```
+
+Pairing verifies the already-vendored schema and contract against the sealed BReg package, writes
+the exact provider export and its description reference, and records the producer revision. It provisions no credential and activates neither service.
+If it refuses a contract mismatch, regenerate the producer export, vendor its exact schema, and update
+the policy's contract pin before retrying. Preserve the previous package until you have checked the
+candidate; replacing a contract does not reinterpret accepted reviews.
+
+{/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs;
+    crates/registry-caseworkctl/src/provider_pair.rs, captured_native_file. */}
+
+## Check and package the paired project
+
+Compare the complete imported contract with the same BReg package, inspect the compiled policy,
+and build a fresh Casework package:
+
+```sh
+caseworkctl check "$casework_project" --against-breg-package "$breg_package"
+caseworkctl explain "$casework_project"
+caseworkctl package "$casework_project" --output ./paired-casework-package
+```
+
+A successful check confirms the exported contract, registry revision, and exact schema bytes.
+The package contains the reviewed policy and its local dependency closure.
+This offline result establishes authoring consistency; it does not establish source reachability or
+human disclosure in a deployment.
+
+Before enabling the BReg producer, put the actual compiled Casework policy binding in BReg's required
+review declaration. Rebuild the tested BReg package and recheck pairing when that package changes.
+A synthetic example policy digest is not a production binding.
+
+{/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs;
+    crates/registry-caseworkctl/src/project.rs;
+    products/breg/examples/refactor/facility/registry.yaml. */}
+
+## Bind transport and authority
+
+Configure the provider deployment reference in Casework's runtime file with the BReg endpoint,
+`statusProfile`, token endpoint, exact audience/resource/scopes, and secret references.
+The status profile needs only native `get-review-status` authority.
+A human caller separately selects an authorized `Registry-Source-Profile`; the provider forwards that
+human's current bearer for `get-review-context`. A status credential cannot supply displayed fields.
+
+Deploy and activate each product through its own operator procedure.
+The BReg producer submits a frozen Proposal using the compiled review binding, Casework records the
+human outcome as an immutable Decision, and BReg authenticates and correlates the result before its separately authorized
+application step. Casework performs no source action.
+A missing, changed, concealed, or non-reviewable subject cannot become a disclosed human task.
+
+{/* Evidence: products/casework/RUNTIME-CONFIG.md;
+    products/casework/DEV-SOURCES.md;
+    crates/registry-casework-breg/src/lib.rs;
+    crates/registry-casework/tests/breg_review_journey.rs. */}
+
+## Apply and observe the exact BReg submission
+
+BReg Proposal application defaults to the restricted built-in executor. It needs
+no executor OAuth client or self-HTTP endpoint. Author
+`execution.proposal.application.mode: manual` only when a separately authorized
+caller must apply. External recovery of automatic work requires a verified human
+and an explicit BReg operation grant. A Casework Decision grants no source
+application authority.
+
+The BReg `reviewAuthorities` binding names the exact endpoint, producer identity,
+requester profile, and renewable credential. An absent optional authority disables
+only operations requiring it. Generated CRUD, immediate Actions, and no-review
+Proposals remain available; an outage never implies approval. Every uncommitted
+review-required application obtains fresh authenticated and unexpired approval
+for the exact frozen binding.
+
+Observe the Proposal through an authorized Get and preserve `actionRevision`,
 `submissionVersion`, and `effectDigest`. Applied work includes retained local
-application evidence. Blocked work exposes safe recovery information and permitted
-transitions. Revise or Rebase requires a new submission; an earlier approval
-cannot authorize changed contents. Recover an uncertain command with its original
-prepared request rather than inferring execution from later state.
+application evidence; blocked work includes a safe reason, recovery hint, and
+currently authorized promoted links. Revise or Rebase makes the earlier binding
+stale and requires resubmission and new review when applicable. Do not silently
+follow its successor.
 
-If review cannot progress, inspect the exact Proposal and authority work under
-their separate grants. Repair the binding or use an authorized Cancel, Rebase,
-or recovery operation that the Proposal currently promotes. Never edit either
-product's work tables to force a result.
+Recover an uncertain Start, Submit, or Apply with its original prepared command
+and idempotency key. A later observation is not proof that the uncertain command
+executed. Repair a named binding or use the currently authorized recovery
+transition; never force either product's work tables to a result.
 
 {/* Evidence: products/breg/examples/refactor/facility/registry.yaml;
     crates/registry-breg/src/runtime_config.rs; crates/registry-breg/src/review_store.rs;
@@ -91,6 +168,7 @@ product's work tables to force a result.
 
 ## Next
 
-- [Declare Actions and Proposals](../../configure/breg-change-control/)
-- [Deploy a registry](../../operate/breg/)
-- [Base Registry Engine API reference](../../reference/breg-api/#proposals)
+- [Declare Actions and Proposals](../../configure/breg-change-control/) for BReg grants and application.
+- [Deploy Registry Casework](../../operate/casework/) for activation and recovery.
+- [Registry Casework API](../../reference/apis/registry-casework/) for task reads and decisions.
+- [How Casework works](../../explanation/how-casework-works/) for policy and source boundaries.
