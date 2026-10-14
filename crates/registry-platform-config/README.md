@@ -77,6 +77,13 @@ The effective digest of a loaded file is the `sha256:` label of the canonical
 JSON of the substituted document, so a comment or formatting change does not
 change it.
 
+## Secret references
+
+`registry-platform-yaml` owns the pure `SecretReference` grammar, provider
+discriminator, redacted debug form, serialization, and schema. This crate keeps
+the runtime facade that maps parse failures to `SecretError` and resolves an
+accepted reference through the explicitly enabled environment or file provider.
+
 ## Shared blocks
 
 `blocks` holds the sections each runtime embeds unchanged:

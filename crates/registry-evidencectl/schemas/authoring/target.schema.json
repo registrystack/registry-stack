@@ -7,9 +7,26 @@
       ],
       "type": "string"
     },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
     "LocalId": {
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
       "type": "string"
     },
     "TargetAccessTokenAlgorithm": {
@@ -65,7 +82,7 @@
           ]
         },
         "hashKeyRef": {
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         },
         "hashKeyVersion": {
           "format": "uint32",
@@ -123,61 +140,104 @@
       ],
       "type": "object"
     },
+    "TargetClaimName": {
+      "description": "The name of one direct JWT claim, within 128 ASCII bytes. Dots are literal characters. Omit to retain the governed runtime's default claim name; claim-role uniqueness and reserved names are revalidated with the complete authentication configuration.",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,127}$",
+      "type": "string"
+    },
     "TargetClaimNames": {
       "additionalProperties": false,
       "properties": {
         "actorKind": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "approver": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "grantBounds": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "grantClient": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "grantExp": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "grantId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "grantResource": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "grantSourceIssuer": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "purpose": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetClaimName"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -251,14 +311,14 @@
           "additionalProperties": false,
           "properties": {
             "passwordRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "type": {
               "const": "basic",
               "type": "string"
             },
             "usernameRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             }
           },
           "required": [
@@ -278,7 +338,7 @@
               ]
             },
             "tokenRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "type": {
               "const": "bearer",
@@ -301,7 +361,7 @@
               ]
             },
             "tokenRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "type": {
               "const": "static-authorization",
@@ -325,7 +385,7 @@
               "type": "string"
             },
             "valueRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             }
           },
           "required": [
@@ -354,10 +414,10 @@
               ]
             },
             "clientIdRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "clientSecretRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "credentialPlacement": {
               "$ref": "#/$defs/TargetCredentialPlacement"
@@ -423,10 +483,10 @@
               ]
             },
             "clientAssertionKeyRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "clientIdRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "maximumCacheSeconds": {
               "format": "uint64",
@@ -499,6 +559,14 @@
         "root"
       ],
       "type": "object"
+    },
+    "TargetIssuerId": {
+      "description": "An absolute Evidence issuer URI identifier, including URNs, within 512 Unicode characters and without whitespace or control characters. It names the signer and is never fetched; it is not an OIDC issuer or a network origin.",
+      "format": "uri",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:[^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+      "type": "string"
     },
     "TargetJwksSource": {
       "oneOf": [
@@ -629,15 +697,23 @@
         "assertionIssuers": {
           "additionalProperties": {
             "items": {
+              "maxLength": 512,
+              "minLength": 1,
               "type": "string"
             },
+            "maxItems": 8,
+            "minItems": 1,
             "type": "array",
             "uniqueItems": true
           },
-          "type": [
-            "object",
-            "null"
-          ]
+          "description": "External client identifiers mapped to the exact issuer strings they may assert. Omit to apply no assertion-issuer rule. A present map has one to 32 clients, each within 128 bytes, with one to eight distinct nonempty issuers within 512 bytes.",
+          "maxProperties": 32,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
+          },
+          "type": "object"
         },
         "audience": {
           "type": "string"
@@ -737,9 +813,13 @@
       "additionalProperties": false,
       "properties": {
         "expectedDigest": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Digest"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "root": {
@@ -864,7 +944,7 @@
       "additionalProperties": false,
       "properties": {
         "issuer": {
-          "type": "string"
+          "$ref": "#/$defs/TargetIssuerId"
         },
         "providerId": {
           "type": "string"
@@ -893,7 +973,7 @@
               "$ref": "#/$defs/TargetSigningAlgorithm"
             },
             "privateKeyRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "publicJwkFile": {
               "type": "string"
@@ -976,7 +1056,7 @@
           "type": "integer"
         },
         "secretRef": {
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         }
       },
       "required": [
@@ -1050,6 +1130,7 @@
       "additionalProperties": {
         "$ref": "#/$defs/TargetConnection"
       },
+      "description": "Explicit HTTP source bindings. An empty mapping grants no HTTP bindings;\nit is valid for extract-only projects. Every declared HTTP Source must\nstill resolve its named connection when the project is checked.",
       "propertyNames": {
         "$ref": "#/$defs/LocalId"
       },

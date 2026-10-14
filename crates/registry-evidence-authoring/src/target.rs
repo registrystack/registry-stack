@@ -109,6 +109,9 @@ pub struct EvidenceTarget {
     pub service: TargetService,
     pub listener: TargetListener,
     pub authentication: TargetAuthentication,
+    /// Explicit HTTP source bindings. An empty mapping grants no HTTP bindings;
+    /// it is valid for extract-only projects. Every declared HTTP Source must
+    /// still resolve its named connection when the project is checked.
     pub connections: BTreeMap<LocalId, TargetConnection>,
     pub secret_providers: TargetSecretProviders,
     pub signer: TargetSigner,

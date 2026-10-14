@@ -15,122 +15,64 @@ use zeroize::Zeroizing;
 /// Maximum accepted size of one resolved secret value.
 pub const MAX_SECRET_BYTES: usize = 64 * 1024;
 
-/// Closed set of secret providers supported by [`SecretResolver`].
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum SecretProvider {
-    /// An exact process environment variable.
-    Environment,
-    /// One owner-only file immediately below the configured root.
-    File,
-}
+pub use registry_platform_yaml::SecretProvider;
+use registry_platform_yaml::SecretReference as PureSecretReference;
 
-/// Parsed `secret:...` reference whose debug form never exposes the name.
-#[derive(Clone, Eq, PartialEq)]
-pub struct SecretReference {
-    reference: String,
-    provider: SecretProvider,
-    name_start: usize,
-}
+/// Runtime facade over the pure secret reference parsed by
+/// `registry-platform-yaml`.
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SecretReference(PureSecretReference);
 
 impl SecretReference {
     /// Parse one exact `secret:env/NAME` or `secret:file/name` reference.
     pub fn parse(reference: impl Into<String>) -> Result<Self, SecretError> {
-        let reference = reference.into();
-        if let Some(name) = reference.strip_prefix("secret:env/") {
-            if valid_environment_name(name) {
-                return Ok(Self {
-                    reference,
-                    provider: SecretProvider::Environment,
-                    name_start: "secret:env/".len(),
-                });
-            }
-        } else if let Some(name) = reference.strip_prefix("secret:file/") {
-            if valid_file_name(name) {
-                return Ok(Self {
-                    reference,
-                    provider: SecretProvider::File,
-                    name_start: "secret:file/".len(),
-                });
-            }
-        }
-        Err(SecretError::InvalidReference)
+        PureSecretReference::new(reference)
+            .map(Self)
+            .map_err(|_| SecretError::InvalidReference)
     }
 
     #[must_use]
     pub fn provider(&self) -> SecretProvider {
-        self.provider
+        self.0.provider()
     }
 
     #[must_use]
     pub fn name(&self) -> &str {
-        &self.reference[self.name_start..]
+        self.0.name()
     }
 
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.reference
-    }
-}
-
-impl PartialOrd for SecretReference {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for SecretReference {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.reference.cmp(&other.reference)
-    }
-}
-
-impl std::hash::Hash for SecretReference {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.reference.hash(state);
+        self.0.as_str()
     }
 }
 
 impl serde::Serialize for SecretReference {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.reference)
+        self.0.serialize(serializer)
     }
 }
 
 impl<'de> serde::Deserialize<'de> for SecretReference {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
-        Self::parse(value).map_err(|_| {
-            registry_platform_yaml::Invalid::expected(
-                "an exact secret:env/NAME or secret:file/name reference",
-                "Write the reference as secret:env/NAME or secret:file/name.",
-            )
-            .into_error()
-        })
+        PureSecretReference::deserialize(deserializer).map(Self)
     }
 }
 
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for SecretReference {
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        "SecretReference".into()
+        PureSecretReference::schema_name()
     }
 
-    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({
-            "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
-            "type": "string",
-            "pattern": crate::blocks::SECRET_REFERENCE_PATTERN
-        })
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        PureSecretReference::json_schema(generator)
     }
 }
 
 impl fmt::Debug for SecretReference {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SecretReference")
-            .field("provider", &self.provider)
-            .field("name", &"[REDACTED]")
-            .finish()
+        self.0.fmt(formatter)
     }
 }
 
@@ -232,24 +174,6 @@ impl SecretResolver {
         };
         validate_secret(bytes)
     }
-}
-
-fn valid_environment_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    matches!(bytes.first(), Some(b'A'..=b'Z'))
-        && bytes.len() <= 128
-        && bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_')
-}
-
-fn valid_file_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    matches!(bytes.first(), Some(b'a'..=b'z'))
-        && bytes.len() <= 128
-        && bytes[1..].iter().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
-        })
 }
 
 fn read_environment(name: &str) -> Result<Zeroizing<Vec<u8>>, SecretError> {
