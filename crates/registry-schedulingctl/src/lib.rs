@@ -1159,7 +1159,9 @@ mod tests {
         let audit = registry_scheduling::audit::SchedulingAudit::new(
             registry_platform_audit::AuditWriter::from_line_sink(Box::new(Refusing)),
         );
+        // A stream append waits on the Tokio timer.
         let unavailable = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
             .build()
             .unwrap()
             .block_on(audit.activation_request(uuid::Uuid::new_v4(), json!({})))

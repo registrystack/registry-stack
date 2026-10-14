@@ -247,7 +247,7 @@ fn compile_profile_module(bytes: &[u8]) -> registry_breg::model::CompiledRegistr
     .unwrap()
 }
 
-async fn fresh_fingerprint(registry: &registry_breg::model::CompiledRegistry) -> String {
+pub(super) async fn fresh_fingerprint(registry: &registry_breg::model::CompiledRegistry) -> String {
     let fresh = TestDatabase::create(1).await;
     let (migration, task) = fresh.connect_migration().await;
     install_compiled_schema(&migration, registry, &fresh.runtime_role)

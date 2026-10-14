@@ -10,6 +10,12 @@
 //! after the entry's bytes are `fsync`ed, and appends arriving during one
 //! durable write share the next write and `fsync` (group commit). The `stdout`
 //! destination writes one line and flushes; it is best-effort by nature.
+//!
+//! A destination can refuse entries in two ways. A failed write stops the
+//! writer until the process restarts. A `stdout` destination that holds one
+//! line past a fixed write deadline is stalled instead: the writer refuses
+//! entries while the stall lasts and accepts them again once the destination
+//! takes the line it holds.
 
 use std::{
     fs::{self, File, OpenOptions, TryLockError},
@@ -21,9 +27,10 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc, Mutex as StdMutex,
+        mpsc::{Receiver, SyncSender, TrySendError},
+        Arc, Condvar, Mutex as StdMutex, MutexGuard, PoisonError,
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use serde::{Deserialize, Serialize};
@@ -87,6 +94,18 @@ const _: () = assert!(SEQUENCE_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
 const _: () = assert!(SEQUENCE_TEMPORARY_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
 const _: () = assert!(TORN_LINE_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
 const DETACHED_LOCK_ATTEMPTS: usize = 1024;
+/// How long a stream destination may hold one line. Past it the destination
+/// is stalled: the caller waiting on a line is refused, and so is every later
+/// append until the destination takes the line it holds. It is shorter than
+/// the request timeouts products default to, so a stalled destination is
+/// answered as an unavailable audit destination and not as a timed-out
+/// request.
+const STREAM_WRITE_DEADLINE: Duration = Duration::from_secs(5);
+/// How many lines may wait behind the one a stream destination is writing. A
+/// line waits only while an earlier one is written, so a full queue means the
+/// destination is not keeping up, and refusing the next line bounds the
+/// memory held for it.
+const STREAM_QUEUE_LINES: usize = 4096;
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 const TIME_FORMAT: &[FormatItem<'static>] =
     format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
@@ -231,6 +250,11 @@ pub enum AuditUnavailableReason {
     /// An earlier write failed, so the writer refuses every later append until
     /// the process restarts.
     Stopped,
+    /// A stream destination is not taking lines: it did not take this one
+    /// within the write deadline, it is still holding an earlier one past
+    /// that deadline, or its queue is full. Unlike [`Self::Stopped`], the
+    /// writer accepts entries again once the destination does.
+    Stalled,
 }
 
 /// The writer did not accept an entry. Products map this to their existing
@@ -773,7 +797,7 @@ impl Drop for InFlightResponse {
 
 enum WriterInner {
     File(Arc<GroupCommitFile>),
-    Stream(Arc<LineStream>, DetachedLines),
+    Stream(LineStream),
 }
 
 impl std::fmt::Debug for AuditWriter {
@@ -811,6 +835,10 @@ impl AuditWriter {
 
     /// A writer over an arbitrary line sink, with `stdout` semantics. For
     /// tests that need to observe emitted lines without a file.
+    ///
+    /// Like `stdout`, the sink is written on a thread of its own, and an
+    /// append waits for it on the Tokio timer: the runtime that appends needs
+    /// its time driver.
     #[must_use]
     pub fn from_line_sink(sink: Box<dyn Write + Send>) -> Self {
         Self {
@@ -822,6 +850,10 @@ impl AuditWriter {
     /// Append one entry. For the file destination this returns only after the
     /// entry's bytes are durable. Canceling the caller does not cancel an
     /// enqueued file write or the other entries in its group commit.
+    ///
+    /// For a stream destination this returns once the line is written and
+    /// flushed, or refuses with [`AuditUnavailableReason::Stalled`] when the
+    /// destination has not taken it within the write deadline.
     ///
     /// An accepted `response` entry answers the oldest [`AuditRequest`] still
     /// open under the same schema and correlation with no response of its own
@@ -867,12 +899,7 @@ impl AuditWriter {
                     .await
                     .map_err(|_| AuditUnavailable::new(AuditUnavailableReason::Stopped))?
             }
-            WriterInner::Stream(stream, _) => {
-                let stream = Arc::clone(stream);
-                tokio::task::spawn_blocking(move || stream.append(&line))
-                    .await
-                    .map_err(|_| AuditUnavailable::new(AuditUnavailableReason::Stopped))?
-            }
+            WriterInner::Stream(stream) => stream.append(line).await,
         }
     }
 
@@ -890,7 +917,11 @@ impl AuditWriter {
     ///
     /// That pairing holds while the process runs. A process killed or
     /// exited without unwinding, or a runtime shut down while an entry is
-    /// being written, can leave a request entry without its response.
+    /// being written, can leave a request entry without its response. So can
+    /// a stalled stream destination: the one line it is holding when the
+    /// write deadline passes is refused to its caller and still written when
+    /// the destination takes it, which leaves a refused request's entry
+    /// unpaired, or a response entry followed by the unfinished one.
     pub async fn begin(
         &self,
         schema: impl Into<String>,
@@ -944,14 +975,15 @@ impl AuditWriter {
     }
 
     /// Block until every response entry a dropped [`AuditRequest`] handed
-    /// to a stream destination has been written. Those entries are written
-    /// on a dedicated thread so a drop never blocks the runtime; this is for
-    /// tests and shutdown paths that read the stream right after a drop. A
-    /// file destination queues its entries into the group commit instead,
-    /// and this returns at once for it.
+    /// to a stream destination has been written or refused. Those entries
+    /// are written on the stream's own thread so a drop never blocks the
+    /// runtime; this is for tests and shutdown paths that read the stream
+    /// right after a drop, and it waits as long as the destination holds a
+    /// line. A file destination queues its entries into the group commit
+    /// instead, and this returns at once for it.
     pub fn wait_for_detached_entries(&self) {
-        if let WriterInner::Stream(_, detached) = self.inner.as_ref() {
-            detached.wait();
+        if let WriterInner::Stream(stream) = self.inner.as_ref() {
+            stream.wait_for_detached();
         }
     }
 
@@ -966,19 +998,22 @@ impl AuditWriter {
         };
         match self.inner.as_ref() {
             WriterInner::File(file) => file.enqueue_detached(line),
-            // A dedicated thread writes it, so a drop never blocks a runtime
-            // thread on a slow stream, and the thread is joined when the
-            // writer is dropped, so shutdown does not lose it.
-            WriterInner::Stream(_, detached) => detached.send(line),
+            // The stream's thread writes it, so a drop never blocks a runtime
+            // thread on a slow stream, and dropping the writer gives that
+            // thread one deadline to write what is queued, so shutdown does
+            // not lose it.
+            WriterInner::Stream(stream) => stream.append_detached(line),
         }
     }
 
     /// Report whether the writer can still accept entries. For the file
     /// destination this also confirms the writer still owns the active file.
+    /// A stream destination holding one line past the write deadline is not
+    /// ready until it takes that line.
     pub async fn ready(&self) -> bool {
         match self.inner.as_ref() {
             WriterInner::File(file) => file.ready().await,
-            WriterInner::Stream(stream, _) => stream.healthy(),
+            WriterInner::Stream(stream) => stream.healthy(),
         }
     }
 
@@ -1139,155 +1174,377 @@ impl Drop for AuditRequest {
     }
 }
 
-/// The unfinished response entries dropped requests hand to a stream
-/// destination, written in order on one dedicated thread.
-struct DetachedLines {
-    stream: Arc<LineStream>,
-    sender: StdMutex<Option<std::sync::mpsc::Sender<String>>>,
-    thread: StdMutex<Option<std::thread::JoinHandle<()>>>,
-    /// Lines handed over and not yet written, with a signal on each write.
-    pending: Arc<(StdMutex<usize>, std::sync::Condvar)>,
-}
-
-impl DetachedLines {
-    fn new(stream: Arc<LineStream>) -> Self {
-        Self {
-            stream,
-            sender: StdMutex::new(None),
-            thread: StdMutex::new(None),
-            pending: Arc::new((StdMutex::new(0), std::sync::Condvar::new())),
-        }
-    }
-
-    fn send(&self, line: String) {
-        let Ok(mut sender) = self.sender.lock() else {
-            tracing::error!("an unfinished response entry was not written");
-            return;
-        };
-        if sender.is_none() {
-            let (lines, received) = std::sync::mpsc::channel::<String>();
-            let stream = Arc::clone(&self.stream);
-            let pending = Arc::clone(&self.pending);
-            let spawned = std::thread::Builder::new()
-                .name("audit-detached".to_owned())
-                .spawn(move || {
-                    for line in received {
-                        if stream.append(&line).is_err() {
-                            tracing::error!("an unfinished response entry was not accepted");
-                        }
-                        let (count, written) = &*pending;
-                        if let Ok(mut count) = count.lock() {
-                            *count = count.saturating_sub(1);
-                        }
-                        written.notify_all();
-                    }
-                });
-            match spawned {
-                Ok(thread) => {
-                    if let Ok(mut slot) = self.thread.lock() {
-                        *slot = Some(thread);
-                    }
-                    *sender = Some(lines);
-                }
-                Err(error) => {
-                    tracing::error!(%error, "an unfinished response entry was not written");
-                    return;
-                }
-            }
-        }
-        if let Ok(mut count) = self.pending.0.lock() {
-            *count += 1;
-        }
-        if sender
-            .as_ref()
-            .is_some_and(|lines| lines.send(line).is_err())
-        {
-            tracing::error!("an unfinished response entry was not written");
-            if let Ok(mut count) = self.pending.0.lock() {
-                *count = count.saturating_sub(1);
-            }
-        }
-    }
-
-    fn wait(&self) {
-        let (count, written) = &*self.pending;
-        let Ok(mut count) = count.lock() else {
-            return;
-        };
-        while *count > 0 {
-            count = match written.wait(count) {
-                Ok(count) => count,
-                Err(_) => return,
-            };
-        }
-    }
-}
-
-impl Drop for DetachedLines {
-    /// Close the queue and let the thread write what is left.
-    fn drop(&mut self) {
-        if let Ok(mut sender) = self.sender.lock() {
-            sender.take();
-        }
-        let thread = self.thread.lock().ok().and_then(|mut thread| thread.take());
-        if let Some(thread) = thread {
-            let _ = thread.join();
-        }
-    }
-}
-
 impl WriterInner {
     fn stream(out: Box<dyn Write + Send>) -> Self {
-        let stream = Arc::new(LineStream::new(out));
-        Self::Stream(Arc::clone(&stream), DetachedLines::new(stream))
+        Self::Stream(LineStream::new(out))
     }
 }
 
+/// One line handed to a stream destination's thread.
+struct StreamJob {
+    line: String,
+    /// Where the caller waiting on the line hears its outcome. `None` for the
+    /// unfinished response of a dropped request, which nobody waits on.
+    written: Option<tokio::sync::oneshot::Sender<Result<(), AuditUnavailable>>>,
+}
+
+/// What a stream destination reports to the operational log. No report
+/// carries entry content.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StreamEvent {
+    /// The destination has held one line past the write deadline.
+    StallStarted,
+    /// The destination took the line it was holding, after this long.
+    StallEnded(Duration),
+    /// A line was written although its caller had stopped waiting on it.
+    WrittenAfterRefusal,
+    /// An unfinished response entry was refused.
+    DetachedNotAccepted,
+    /// The writer was dropped while the destination still held a line.
+    AbandonedAtDrop,
+}
+
+/// A stream destination. One thread owns the sink and writes the lines handed
+/// to it in order, so a destination that stops taking lines holds that thread
+/// and never a caller: a caller waits one deadline at most.
+///
+/// [`LineStream::append`] waits on the Tokio timer, so the runtime it is
+/// called on must have its time driver enabled.
 struct LineStream {
-    out: StdMutex<Box<dyn Write + Send>>,
-    healthy: AtomicBool,
+    /// The queue to the thread. `None` when the thread did not start.
+    jobs: Option<SyncSender<StreamJob>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    state: Arc<StreamState>,
+}
+
+/// What a stream destination's thread shares with its callers.
+struct StreamState {
+    /// Set by a failed write and never cleared.
+    failed: AtomicBool,
+    /// How long the destination may hold one line.
+    deadline: Duration,
+    progress: StdMutex<StreamProgress>,
+    /// Signaled when a detached line settles and when the thread ends.
+    changed: Condvar,
+    /// Lines handed to the thread so far.
     #[cfg(test)]
-    before_lock_hook: Option<Arc<dyn Fn() + Send + Sync>>,
+    handed_over: AtomicUsize,
+    /// Every report so far, so a test can observe what was logged.
+    #[cfg(test)]
+    events: StdMutex<Vec<StreamEvent>>,
+}
+
+#[derive(Default)]
+struct StreamProgress {
+    /// When the write in progress started.
+    writing_since: Option<Instant>,
+    /// Whether the write in progress was already reported as stalled.
+    stall_reported: bool,
+    /// Detached lines handed over and neither written nor refused yet.
+    detached: usize,
+    /// Whether the thread has ended.
+    ended: bool,
 }
 
 impl LineStream {
     fn new(out: Box<dyn Write + Send>) -> Self {
-        Self {
-            out: StdMutex::new(out),
-            healthy: AtomicBool::new(true),
+        Self::with_limits(out, STREAM_WRITE_DEADLINE, STREAM_QUEUE_LINES)
+    }
+
+    fn with_limits(out: Box<dyn Write + Send>, deadline: Duration, queue_lines: usize) -> Self {
+        let state = Arc::new(StreamState {
+            failed: AtomicBool::new(false),
+            deadline,
+            progress: StdMutex::default(),
+            changed: Condvar::new(),
             #[cfg(test)]
-            before_lock_hook: None,
+            handed_over: AtomicUsize::new(0),
+            #[cfg(test)]
+            events: StdMutex::default(),
+        });
+        let (jobs, queued) = std::sync::mpsc::sync_channel(queue_lines);
+        let spawned = std::thread::Builder::new()
+            .name("audit-stream".to_owned())
+            .spawn({
+                let state = Arc::clone(&state);
+                move || state.run(out, queued)
+            });
+        match spawned {
+            Ok(thread) => Self {
+                jobs: Some(jobs),
+                thread: Some(thread),
+                state,
+            },
+            Err(error) => {
+                state.failed.store(true, Ordering::Release);
+                tracing::error!(%error, "audit stream thread did not start; refusing audited requests");
+                Self {
+                    jobs: None,
+                    thread: None,
+                    state,
+                }
+            }
         }
     }
 
     fn healthy(&self) -> bool {
-        self.healthy.load(Ordering::Acquire)
+        !self.state.failed() && !self.state.stalled()
     }
 
-    fn append(&self, line: &str) -> Result<(), AuditUnavailable> {
-        if !self.healthy() {
+    /// Hand `line` to the thread and wait, one deadline at most, until it is
+    /// written and flushed.
+    async fn append(&self, line: String) -> Result<(), AuditUnavailable> {
+        if self.state.failed() {
             return Err(AuditUnavailable::new(AuditUnavailableReason::Stopped));
         }
-        #[cfg(test)]
-        if let Some(hook) = &self.before_lock_hook {
-            hook();
+        if self.state.stalled() {
+            return Err(AuditUnavailable::new(AuditUnavailableReason::Stalled));
         }
-        let mut out = self
-            .out
-            .lock()
-            .map_err(|_| AuditUnavailable::new(AuditUnavailableReason::Stopped))?;
-        // A prior holder can stop the stream while this append waits.
-        if !self.healthy() {
+        let (written, mut outcome) = tokio::sync::oneshot::channel();
+        // The wait is set up before the line is handed over: a runtime
+        // without a time driver panics here, and its caller is refused with
+        // nothing queued.
+        let answered = tokio::time::timeout(self.state.deadline, &mut outcome);
+        self.hand_over(StreamJob {
+            line,
+            written: Some(written),
+        })?;
+        match answered.await {
+            Ok(Ok(result)) => result,
+            // The thread ended without answering.
+            Ok(Err(_)) => Err(AuditUnavailable::new(AuditUnavailableReason::Stopped)),
+            Err(_) => {
+                // Closing settles it: either the line was answered as the
+                // deadline passed, or the thread now finds this caller gone.
+                outcome.close();
+                match outcome.try_recv() {
+                    Ok(result) => result,
+                    Err(_) => {
+                        // Looked at for its report. This wait began before
+                        // the line was handed over, so the write in progress
+                        // can still be younger than the deadline: its stall
+                        // is then reported by the next append or readiness
+                        // check that sees it, or as the write ends.
+                        self.state.stalled();
+                        Err(AuditUnavailable::new(AuditUnavailableReason::Stalled))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Hand `line` to the thread without waiting for its outcome.
+    fn append_detached(&self, line: String) {
+        self.state.progress().detached += 1;
+        let handed_over = self.hand_over(StreamJob {
+            line,
+            written: None,
+        });
+        if handed_over.is_err() {
+            self.state.report(StreamEvent::DetachedNotAccepted);
+            self.state.settle_detached();
+        }
+    }
+
+    /// Queue `job` behind the line being written, without waiting for room.
+    fn hand_over(&self, job: StreamJob) -> Result<(), AuditUnavailable> {
+        let Some(jobs) = &self.jobs else {
+            return Err(AuditUnavailable::new(AuditUnavailableReason::Stopped));
+        };
+        match jobs.try_send(job) {
+            Ok(()) => {
+                #[cfg(test)]
+                self.state.handed_over.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            Err(TrySendError::Full(_)) => {
+                Err(AuditUnavailable::new(AuditUnavailableReason::Stalled))
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                Err(AuditUnavailable::new(AuditUnavailableReason::Stopped))
+            }
+        }
+    }
+
+    /// Block until every detached line handed over is written or refused, or
+    /// the thread has ended.
+    fn wait_for_detached(&self) {
+        let mut progress = self.state.progress();
+        while progress.detached > 0 && !progress.ended {
+            progress = self
+                .state
+                .changed
+                .wait(progress)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+}
+
+impl Drop for LineStream {
+    /// Close the queue and give the thread one deadline to write what is
+    /// left. A destination still holding a line after that keeps the thread,
+    /// not the caller dropping the writer.
+    fn drop(&mut self) {
+        self.jobs.take();
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        let (progress, _) = self
+            .state
+            .changed
+            .wait_timeout_while(self.state.progress(), self.state.deadline, |progress| {
+                !progress.ended
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        let ended = progress.ended;
+        drop(progress);
+        if ended {
+            // A sink that panicked already ended the thread and stopped the
+            // stream; there is nothing further to report here.
+            let _ = thread.join();
+        } else {
+            self.state.report(StreamEvent::AbandonedAtDrop);
+        }
+    }
+}
+
+/// Marks the stream stopped when its thread ends, however it ends, so no
+/// caller waits on a thread that is gone.
+struct StreamEnd<'a>(&'a StreamState);
+
+impl Drop for StreamEnd<'_> {
+    fn drop(&mut self) {
+        self.0.failed.store(true, Ordering::Release);
+        self.0.progress().ended = true;
+        self.0.changed.notify_all();
+    }
+}
+
+impl StreamState {
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+
+    /// The progress record. Each holder leaves it consistent, so a poisoned
+    /// lock is still read.
+    fn progress(&self) -> MutexGuard<'_, StreamProgress> {
+        self.progress.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether the destination has held the line being written for a whole
+    /// deadline. The first caller to see a stall reports it.
+    fn stalled(&self) -> bool {
+        let mut progress = self.progress();
+        let stalled = progress
+            .writing_since
+            .is_some_and(|since| since.elapsed() >= self.deadline);
+        let report = stalled && !progress.stall_reported;
+        progress.stall_reported |= stalled;
+        drop(progress);
+        if report {
+            self.report(StreamEvent::StallStarted);
+        }
+        stalled
+    }
+
+    fn settle_detached(&self) {
+        let mut progress = self.progress();
+        progress.detached = progress.detached.saturating_sub(1);
+        drop(progress);
+        self.changed.notify_all();
+    }
+
+    /// The thread: write each line handed over, in order, until the queue
+    /// closes.
+    fn run(&self, mut out: Box<dyn Write + Send>, jobs: Receiver<StreamJob>) {
+        let _end = StreamEnd(self);
+        for StreamJob { line, written } in jobs {
+            match written {
+                Some(written) => {
+                    // The caller stopped waiting and was refused, so its line
+                    // is not written.
+                    if written.is_closed() {
+                        continue;
+                    }
+                    let result = self.write(out.as_mut(), &line);
+                    if written.send(result).is_err() && result.is_ok() {
+                        self.report(StreamEvent::WrittenAfterRefusal);
+                    }
+                }
+                None => {
+                    if self.write(out.as_mut(), &line).is_err() {
+                        self.report(StreamEvent::DetachedNotAccepted);
+                    }
+                    self.settle_detached();
+                }
+            }
+        }
+    }
+
+    /// Write one line and flush it. A failed write stops the stream until
+    /// restart.
+    fn write(&self, out: &mut dyn Write, line: &str) -> Result<(), AuditUnavailable> {
+        if self.failed() {
             return Err(AuditUnavailable::new(AuditUnavailableReason::Stopped));
         }
-        match out.write_all(line.as_bytes()).and_then(|()| out.flush()) {
-            Ok(()) => Ok(()),
+        self.progress().writing_since = Some(Instant::now());
+        let written = out.write_all(line.as_bytes()).and_then(|()| out.flush());
+        // A failure is recorded before the write stops counting as in
+        // progress, so no append sees a stream that is neither stalled nor
+        // stopped.
+        if written.is_err() {
+            self.failed.store(true, Ordering::Release);
+        }
+        let mut progress = self.progress();
+        let reported = std::mem::take(&mut progress.stall_reported);
+        let took = progress.writing_since.take().map(|since| since.elapsed());
+        drop(progress);
+        match written {
+            Ok(()) => {
+                if let Some(took) = took.filter(|took| reported || *took >= self.deadline) {
+                    // A stall no append or readiness check saw has its start
+                    // reported here, so no end is reported without a start.
+                    if !reported {
+                        self.report(StreamEvent::StallStarted);
+                    }
+                    self.report(StreamEvent::StallEnded(took));
+                }
+                Ok(())
+            }
             Err(error) => {
-                self.healthy.store(false, Ordering::Release);
                 tracing::error!(%error, "audit stream write failed; refusing later audited requests");
                 Err(AuditUnavailable::new(AuditUnavailableReason::WriteFailed))
             }
         }
+    }
+
+    fn report(&self, event: StreamEvent) {
+        match event {
+            StreamEvent::StallStarted => tracing::error!(
+                deadline_ms = self.deadline.as_millis(),
+                "audit stream has held one entry past the write deadline; refusing audited \
+                 requests until it takes the entry"
+            ),
+            StreamEvent::StallEnded(took) => tracing::warn!(
+                held_ms = took.as_millis(),
+                "audit stream took the entry it was holding; accepting audited requests again"
+            ),
+            StreamEvent::WrittenAfterRefusal => tracing::warn!(
+                "an audit entry was written after its request stopped waiting for it"
+            ),
+            StreamEvent::DetachedNotAccepted => {
+                tracing::error!("an unfinished response entry was not accepted");
+            }
+            StreamEvent::AbandonedAtDrop => tracing::error!(
+                "audit stream still held an entry when its writer was dropped; entries queued \
+                 behind it may not be written"
+            ),
+        }
+        #[cfg(test)]
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(event);
     }
 }
 
@@ -3773,29 +4030,38 @@ mod tests {
         }
 
         let (entered, first_write) = std::sync::mpsc::channel();
-        let (queued, second_append) = std::sync::mpsc::channel();
         let (release, failure_gate) = std::sync::mpsc::channel();
         let writes = Arc::new(AtomicU64::new(0));
-        let mut stream = LineStream::new(Box::new(FailOnce {
+        let writer = AuditWriter::from_line_sink(Box::new(FailOnce {
             entered,
             release: failure_gate,
             writes: writes.clone(),
         }));
-        let calls = AtomicU64::new(0);
-        stream.before_lock_hook = Some(Arc::new(move || {
-            if calls.fetch_add(1, Ordering::Relaxed) == 1 {
-                queued.send(()).expect("second append passed readiness");
+        let state = stream_state(&writer);
+        let append = |correlation: &'static str| {
+            let writer = writer.clone();
+            move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime")
+                    .block_on(writer.append(request(correlation)))
             }
-        }));
+        };
         std::thread::scope(|scope| {
-            let first = scope.spawn(|| stream.append("first\n"));
+            let first = scope.spawn(append("first"));
             first_write
                 .recv_timeout(Duration::from_secs(5))
                 .expect("first write started");
-            let second = scope.spawn(|| stream.append("second\n"));
-            second_append
-                .recv_timeout(Duration::from_secs(5))
-                .expect("second append queued");
+            let second = scope.spawn(append("second"));
+            let waiting = std::time::Instant::now();
+            while state.handed_over.load(Ordering::SeqCst) < 2 {
+                assert!(
+                    waiting.elapsed() < Duration::from_secs(5),
+                    "second append queued"
+                );
+                std::thread::yield_now();
+            }
             release.send(()).expect("release failed write");
             assert_eq!(
                 first
@@ -5459,16 +5725,20 @@ mod tests {
             }
             panic!("the sink never received write {writes}");
         }
-    }
 
-    impl Write for GatedSink {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        /// Count one write and hold it until the test releases the gate.
+        fn hold(&self) {
             self.entered.fetch_add(1, Ordering::SeqCst);
             let mut open = self.open.0.lock().expect("gate");
             while !*open {
                 open = self.open.1.wait(open).expect("gate");
             }
-            drop(open);
+        }
+    }
+
+    impl Write for GatedSink {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.hold();
             self.buffer.write(bytes)
         }
 
@@ -5853,5 +6123,377 @@ mod tests {
         drop(runtime);
         drop(request);
         assert_paired(&settled_lines(&writer, &buffer), "unfinished");
+    }
+
+    /// A stream deadline short enough to reach a stall without a long wait.
+    const TEST_DEADLINE: Duration = Duration::from_millis(200);
+
+    /// A stream writer over `sink` with its own deadline and queue size.
+    fn limited(
+        sink: impl Write + Send + 'static,
+        deadline: Duration,
+        queue_lines: usize,
+    ) -> AuditWriter {
+        AuditWriter {
+            inner: Arc::new(WriterInner::Stream(LineStream::with_limits(
+                Box::new(sink),
+                deadline,
+                queue_lines,
+            ))),
+            open: Arc::default(),
+        }
+    }
+
+    fn stream_state(writer: &AuditWriter) -> Arc<StreamState> {
+        match writer.inner.as_ref() {
+            WriterInner::Stream(stream) => Arc::clone(&stream.state),
+            WriterInner::File(_) => panic!("a stream writer"),
+        }
+    }
+
+    /// What the stream reported to the operational log, in order.
+    fn reported(state: &StreamState) -> Vec<StreamEvent> {
+        state.events.lock().expect("events").clone()
+    }
+
+    async fn readiness_becomes(writer: &AuditWriter, ready: bool) {
+        for _ in 0..500 {
+            if writer.ready().await == ready {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the writer never reported ready = {ready}");
+    }
+
+    fn correlations(buffer: &SharedBuffer) -> Vec<String> {
+        buffered_lines(buffer)
+            .iter()
+            .map(|line| {
+                line["correlation"]
+                    .as_str()
+                    .expect("correlation")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_stream_refuses_the_append_at_the_deadline_and_later_ones_at_once() {
+        // The sink never takes a line.
+        let sink = GatedSink::new();
+        let writer = limited(sink.clone(), TEST_DEADLINE, 16);
+        let started = std::time::Instant::now();
+        let refused = writer
+            .append(request("stuck"))
+            .await
+            .expect_err("refused at the deadline");
+        let waited = started.elapsed();
+        assert_eq!(refused.reason(), AuditUnavailableReason::Stalled);
+        assert!(waited >= TEST_DEADLINE, "{waited:?}");
+        assert!(waited < Duration::from_secs(5), "{waited:?}");
+
+        readiness_becomes(&writer, false).await;
+        let state = stream_state(&writer);
+        for correlation in ["later-1", "later-2"] {
+            let refused = writer
+                .append(request(correlation))
+                .await
+                .expect_err("refused while stalled");
+            assert_eq!(refused.reason(), AuditUnavailableReason::Stalled);
+        }
+        let refused = writer
+            .begin(
+                SCHEMA,
+                "later-3",
+                json!({"operationId": "read"}),
+                unfinished(),
+            )
+            .await
+            .expect_err("refused while stalled");
+        assert_eq!(refused.reason(), AuditUnavailableReason::Stalled);
+        // Refused at once: a line that waited out a deadline would have been
+        // handed to the stream first.
+        assert_eq!(
+            state.handed_over.load(Ordering::SeqCst),
+            1,
+            "no later line was queued"
+        );
+        assert_eq!(
+            sink.entered.load(Ordering::SeqCst),
+            1,
+            "no later line reached the sink"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn readiness_follows_a_stall_and_returns_once_the_stream_drains() {
+        let sink = GatedSink::new();
+        let writer = limited(sink.clone(), TEST_DEADLINE, 16);
+        let state = stream_state(&writer);
+        assert!(writer.ready().await);
+
+        let stuck = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.append(request("stuck")).await }
+        });
+        sink.wait_entered(1).await;
+        // A second line queues behind the stuck one before the stall shows.
+        let queued = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.append(request("queued")).await }
+        });
+        for outcome in [stuck.await, queued.await] {
+            let refused = outcome.expect("join").expect_err("refused at the deadline");
+            assert_eq!(refused.reason(), AuditUnavailableReason::Stalled);
+        }
+        assert!(!writer.ready().await, "a stalled stream is not ready");
+        let refused = writer
+            .append(request("refused"))
+            .await
+            .expect_err("refused while stalled");
+        assert_eq!(refused.reason(), AuditUnavailableReason::Stalled);
+
+        // The sink takes the line it was holding: the stream recovers with no
+        // restart.
+        sink.release();
+        readiness_becomes(&writer, true).await;
+        writer.append(request("after")).await.expect("accepted");
+
+        // The line being written when its caller was refused is written
+        // once. The line whose caller gave up in the queue is not.
+        assert_eq!(correlations(&sink.buffer), ["stuck", "after"]);
+        let reported = reported(&state);
+        assert!(
+            matches!(
+                reported.as_slice(),
+                [
+                    StreamEvent::StallStarted,
+                    StreamEvent::StallEnded(_),
+                    StreamEvent::WrittenAfterRefusal
+                ]
+            ),
+            "{reported:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stall_nothing_looked_at_reports_its_start_before_its_end() {
+        let sink = GatedSink::new();
+        let writer = limited(sink.clone(), TEST_DEADLINE, 16);
+        let state = stream_state(&writer);
+        // The held line is an unfinished response, which nobody waits on, and
+        // no append or readiness check looks at the stream while it is held.
+        writer.append_detached(&AuditEntry::response(SCHEMA, "held", unfinished()));
+        sink.wait_entered(1).await;
+        tokio::time::sleep(TEST_DEADLINE).await;
+        assert!(reported(&state).is_empty());
+
+        sink.release();
+        writer.wait_for_detached_entries();
+        assert_eq!(correlations(&sink.buffer), ["held"]);
+        let reported = reported(&state);
+        assert!(
+            matches!(
+                reported.as_slice(),
+                [StreamEvent::StallStarted, StreamEvent::StallEnded(_)]
+            ),
+            "{reported:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_write_error_still_stops_the_stream_after_its_sink_recovers() {
+        /// Holds its first write until released, then fails it. Every later
+        /// write would succeed.
+        struct FailsHeldWrite {
+            gate: GatedSink,
+            failed: bool,
+        }
+
+        impl Write for FailsHeldWrite {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.gate.hold();
+                if self.failed {
+                    return self.gate.buffer.write(bytes);
+                }
+                self.failed = true;
+                Err(io::Error::other("stream closed"))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let gate = GatedSink::new();
+        let writer = limited(
+            FailsHeldWrite {
+                gate: gate.clone(),
+                failed: false,
+            },
+            TEST_DEADLINE,
+            16,
+        );
+        let state = stream_state(&writer);
+        let refused = writer
+            .append(request("stuck"))
+            .await
+            .expect_err("refused at the deadline");
+        assert_eq!(refused.reason(), AuditUnavailableReason::Stalled);
+        readiness_becomes(&writer, false).await;
+
+        // The stall ends in a failed write. Unlike a stall, that is final.
+        gate.release();
+        let mut reason = AuditUnavailableReason::Stalled;
+        for _ in 0..500 {
+            reason = writer
+                .append(request("later"))
+                .await
+                .expect_err("refused")
+                .reason();
+            if reason == AuditUnavailableReason::Stopped {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(reason, AuditUnavailableReason::Stopped);
+        tokio::time::sleep(TEST_DEADLINE * 2).await;
+        assert!(!writer.ready().await, "a failed write stays failed");
+        let refused = writer.append(request("last")).await.expect_err("stopped");
+        assert_eq!(refused.reason(), AuditUnavailableReason::Stopped);
+        assert_eq!(gate.entered.load(Ordering::SeqCst), 1);
+        assert!(buffered_lines(&gate.buffer).is_empty());
+        assert_eq!(reported(&state), [StreamEvent::StallStarted]);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_stream_leaves_the_runtime_to_other_tasks() {
+        let sink = GatedSink::new();
+        let writer = limited(sink.clone(), TEST_DEADLINE, 16);
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let ticking = tokio::spawn({
+            let ticks = Arc::clone(&ticks);
+            async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    ticks.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
+        let refused = writer
+            .append(request("stuck"))
+            .await
+            .expect_err("refused at the deadline");
+        assert_eq!(refused.reason(), AuditUnavailableReason::Stalled);
+        // This runtime has one worker: the other task only ran if the
+        // stalled append left that worker free.
+        let ticks = ticks.load(Ordering::SeqCst);
+        assert!(ticks >= 2, "{ticks} ticks during the stalled append");
+        ticking.abort();
+    }
+
+    #[test]
+    fn dropping_the_writer_waits_at_most_one_deadline_for_a_blocked_stream() {
+        // The sink never takes a line.
+        let sink = GatedSink::new();
+        let writer = limited(sink.clone(), TEST_DEADLINE, 16);
+        let state = stream_state(&writer);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime
+            .block_on(writer.append(request("stuck")))
+            .expect_err("refused at the deadline");
+        // The write began after the refused caller's wait did, so the stall
+        // is reported once a readiness check finds the line held a whole
+        // deadline.
+        runtime.block_on(readiness_becomes(&writer, false));
+        writer.append_detached(&AuditEntry::response(SCHEMA, "queued", unfinished()));
+
+        let started = std::time::Instant::now();
+        drop(writer);
+        let waited = started.elapsed();
+        assert!(waited >= TEST_DEADLINE, "{waited:?}");
+        assert!(waited < Duration::from_secs(5), "{waited:?}");
+        assert!(buffered_lines(&sink.buffer).is_empty());
+        assert_eq!(
+            reported(&state),
+            [StreamEvent::StallStarted, StreamEvent::AbandonedAtDrop]
+        );
+    }
+
+    #[test]
+    fn dropping_the_writer_writes_the_entries_still_queued() {
+        let (writer, buffer) = buffered();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let request = runtime
+            .block_on(writer.begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                unfinished(),
+            ))
+            .expect("request");
+        drop(request);
+        drop(writer);
+        assert_paired(&buffered_lines(&buffer), "unfinished");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_full_stream_queue_refuses_a_line_instead_of_growing() {
+        let sink = GatedSink::new();
+        // One line may wait behind the one being written. The deadline is
+        // long, so every refusal here is the queue's and not a stall's.
+        let writer = limited(sink.clone(), Duration::from_secs(60), 1);
+        let state = stream_state(&writer);
+        let writing = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.append(request("writing")).await }
+        });
+        sink.wait_entered(1).await;
+        writer.append_detached(&AuditEntry::response(SCHEMA, "queued", unfinished()));
+
+        let started = std::time::Instant::now();
+        let refused = writer
+            .append(request("refused"))
+            .await
+            .expect_err("the queue is full");
+        assert_eq!(refused.reason(), AuditUnavailableReason::Stalled);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(reported(&state).is_empty());
+        writer.append_detached(&AuditEntry::response(
+            SCHEMA,
+            "refused-detached",
+            unfinished(),
+        ));
+        assert_eq!(reported(&state), [StreamEvent::DetachedNotAccepted]);
+
+        sink.release();
+        writing.await.expect("join").expect("written");
+        writer.wait_for_detached_entries();
+        assert_eq!(correlations(&sink.buffer), ["writing", "queued"]);
+        assert_eq!(reported(&state), [StreamEvent::DetachedNotAccepted]);
+    }
+
+    #[test]
+    fn a_runtime_without_a_timer_refuses_the_append_before_queueing_its_line() {
+        let (writer, buffer) = buffered();
+        let state = stream_state(&writer);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let refused = runtime
+            .block_on(writer.append(request("no-timer")))
+            .expect_err("refused without a timer");
+        assert_eq!(refused.reason(), AuditUnavailableReason::Stopped);
+        // The caller was refused, so its line must never reach the sink.
+        assert_eq!(state.handed_over.load(Ordering::SeqCst), 0);
+        drop(writer);
+        assert!(buffered_lines(&buffer).is_empty());
     }
 }

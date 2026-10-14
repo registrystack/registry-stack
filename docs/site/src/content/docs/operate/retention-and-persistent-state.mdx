@@ -60,6 +60,28 @@ Never truncate, rewrite, or reserialize the active audit file as part of cleanup
 treats any external change to it as a fault and stops, and audited requests fail closed until a
 restart. Copy sealed files to append-only storage before the audit retention period deletes them.
 
+A `stdout` destination can also stall, and a stall ends without a restart.
+When the log collector stops reading the stream and the writer has held one entry for 5 seconds,
+the writer refuses the request waiting on that entry, refuses later audited requests at once, and
+reports not ready.
+When the collector takes the entry, the writer accepts entries again.
+The 5 seconds are fixed, with no configuration key.
+The writer also bounds the entries waiting behind the one it is writing: a request that finds that
+queue full is refused at once, with no stall logged and with the writer still able to report
+ready, so readiness alone does not show it.
+A collector that reads slowly without stopping has the same effect: a request whose entry waits 5
+seconds behind earlier entries is refused and its entry is not written, although the writer held
+no single entry for 5 seconds, logs no stall, and still reports ready.
+A write the stream refuses is a different fault: it stops the writer until a restart, as a failed
+file write does.
+
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, STREAM_WRITE_DEADLINE,
+    STREAM_QUEUE_LINES, AuditUnavailableReason::Stalled, LineStream::append, StreamState::run,
+    a_stalled_stream_refuses_the_append_at_the_deadline_and_later_ones_at_once,
+    readiness_follows_a_stall_and_returns_once_the_stream_drains,
+    a_full_stream_queue_refuses_a_line_instead_of_growing, and
+    a_write_error_still_stops_the_stream_after_its_sink_recovers. */}
+
 A crash, a killed process, or a full disk can leave the active file's final line incomplete (any
 byte other than a newline at end of file). The next start recovers it without operator action: the
 writer copies the bytes after the last complete line to the owner-only (`0600`) side file

@@ -2342,6 +2342,7 @@ mod tests {
             },
             actions: CompiledActionInventory::default(),
             recipients: Default::default(),
+            generated_ddl_sha256: None,
         }
     }
 

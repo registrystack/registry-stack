@@ -55,7 +55,7 @@ jobs:
           submodules: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.11.16"
 
@@ -297,7 +297,7 @@ jobs:
           cp dist/RELEASE_BINARY_SHARD dist/RELEASE_BUILDER_IMAGE binary-shard/
 
       - name: Upload canonical Linux binary shard
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: canonical-linux-binaries-${{ matrix.group }}-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shard
@@ -327,31 +327,31 @@ jobs:
           submodules: false
 
       - name: Download canonical Linux core binary shard
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: canonical-linux-binaries-core-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/core
 
       - name: Download canonical Linux breg binary shard
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: canonical-linux-binaries-breg-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/breg
 
       - name: Download canonical Linux Casework binary shard
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: canonical-linux-binaries-casework-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/casework
 
       - name: Download canonical Linux Scheduling binary shard
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: canonical-linux-binaries-scheduling-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/scheduling
 
       - name: Download canonical Linux Messaging binary shard
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: canonical-linux-binaries-messaging-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/messaging
@@ -513,7 +513,7 @@ jobs:
           cp -R dist/images candidate-canonical/dist/images
 
       - name: Upload canonical build products
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: candidate-canonical-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-canonical
@@ -537,7 +537,7 @@ jobs:
           submodules: false
 
       - name: Setup Node for exact release docs archive
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.11.0
           cache: npm
@@ -558,7 +558,7 @@ jobs:
             --verify-lock
 
       - name: Upload exact release docs archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: candidate-docs-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz
@@ -712,7 +712,7 @@ jobs:
           release/scripts/check-glibc-floor.sh candidate-platform/platform/*
 
       - name: Upload native platform payload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: candidate-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-platform
@@ -782,7 +782,7 @@ jobs:
           fi
 
       - name: Upload native macOS release shard
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: candidate-native-macos-arm64-${{ needs.validate.outputs.version }}-${{ matrix.group }}-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-native-shard
@@ -842,7 +842,7 @@ jobs:
           cache: false
 
       - name: Setup minimum Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.11.0
           package-manager-cache: false
@@ -856,7 +856,7 @@ jobs:
           printf 'MINIMUM_NODE_BIN=%s\n' "${minimum_node_bin}" >> "${GITHUB_ENV}"
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # The napi-rs CLI's toolchain dependencies require Node 24.12 or
           # later. Package smokes independently exercise the retained minimum
@@ -1379,7 +1379,7 @@ jobs:
           done
 
       - name: Upload native client packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: candidate-clients-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-client-package
@@ -1414,7 +1414,7 @@ jobs:
           submodules: false
 
       - name: Download exact build products
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: candidate-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: inputs
@@ -2121,7 +2121,7 @@ jobs:
             --output candidate/release-candidate-manifest.json
 
       - name: Upload one candidate manifest and bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -2153,7 +2153,7 @@ jobs:
           submodules: false
 
       - name: Download compact candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate

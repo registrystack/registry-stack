@@ -1195,6 +1195,13 @@ fn snapshot_where_sql(
                     validate_field_value(value, &field.field_type)
                         .map_err(|_| ReadServiceError::CursorInvalid)?;
                     let sort_parameter = builder.push_string(value.clone());
+                    // The sort value is read out of a retained revision
+                    // document, where a revision written before a field
+                    // existed carries no value for it, so NULL is possible
+                    // even for a field the active package requires. The
+                    // continuation therefore keeps the form that admits
+                    // NULLS LAST and never the row comparison a current
+                    // list uses for a required stored field.
                     predicates.push(format!(
                         "({typed} > ${sort_parameter}::text::{cast}
                           OR {typed} IS NULL

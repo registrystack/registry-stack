@@ -79,7 +79,7 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # minor line, so a patch release does not move it, or to a later release up to
 # the workspace version: the forward state path then starts at that release,
 # and this source reads no state an earlier release wrote.
-FORWARD_PATH_FLOOR = (0, 40, 0)
+FORWARD_PATH_FLOOR = (0, 41, 0)
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
 

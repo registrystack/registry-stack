@@ -2737,7 +2737,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-breg"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "chrono",
  "jsonschema",
@@ -2772,7 +2772,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-client"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2793,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-verifier"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2811,7 +2811,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "oxiri",
  "registry-platform-canonical-json",
@@ -2825,7 +2825,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "registry-platform-crypto",
@@ -2840,7 +2840,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -2850,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-yaml",
@@ -2865,7 +2865,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -2887,7 +2887,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-hooks"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-yaml",
@@ -2900,7 +2900,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "http",
  "serde",
@@ -2910,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2938,7 +2938,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-script"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "rhai",
  "serde",
@@ -2948,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
@@ -2964,7 +2964,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-yaml"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "saphyr-parser",
  "serde",
@@ -3646,7 +3646,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -3764,9 +3764,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
 dependencies = [
  "bytes",
  "libc",
@@ -3997,9 +3997,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.27.0"
+version = "1.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97277d36b9c3ace13e58fa6e753f8b0bbbf302a18dd193240d70f9e29681059a"
+checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -4836,9 +4836,9 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 dependencies = [
  "zeroize_derive",
 ]

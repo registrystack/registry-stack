@@ -2463,6 +2463,37 @@ formats:
       - pointer: /package/expectedDigest
         whenOmitted: open
     restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers]
+  - id: messaging/dev-state
+    product: messaging
+    title: Development environment state
+    files: [.messaging/dev/session.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/messaging/dev-state/v1alpha1
+      kind: MessagingDevState
+      checkedBy:
+        file: crates/registry-messagingctl/src/dev/mod.rs
+        symbol: DEV_STATE_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/messaging/dev-state/v1alpha1
+      kind: MessagingDevState
+    schema: none
+    reader:
+      crate: registry-messagingctl
+      file: crates/registry-messagingctl/src/dev/mod.rs
+      function: read_session
+      type: SessionRecord
+    check: messagingctl check --dev-state {file}
+    example: products/messaging/examples/formats/dev-session/.messaging/dev/session.json
+    conformance:
+      requiredText: /owner
+      optionalText: /borrowedIssuer/clients/case-system/actorKind
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
   - id: messaging/template-schema
     product: messaging
     title: Messaging template data schema

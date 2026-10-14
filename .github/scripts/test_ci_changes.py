@@ -2481,7 +2481,7 @@ class CiChangesTest(unittest.TestCase):
             breg_job,
         )
         self.assertIn(
-            "uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7",
+            "uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884",
             breg_job,
         )
         self.assertIn('version: "0.11.16"', breg_job)
@@ -2506,7 +2506,7 @@ class CiChangesTest(unittest.TestCase):
         )[0]
 
         self.assertIn(
-            "uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+            "uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
             discovery_job,
         )
         self.assertIn("node-version: 24.11.0", discovery_job)

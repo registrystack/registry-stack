@@ -279,7 +279,15 @@ async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them
             .iter()
             .map(|statement| statement.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["entity.asset.index.reference:site"]
+        vec![
+            "entity.asset.index.by-owner.drop",
+            "entity.asset.index.by-owner",
+            "entity.asset.index.reference:site",
+            "entity.asset.source-view",
+            "entity.site.source-view",
+        ],
+        "the baseline states a script this compiler does not generate for its \
+         model, so the plan also refreshes the authored index and source views"
     );
     let upgraded = apply(
         &database,

@@ -9,4 +9,4 @@ import registry_client.messaging as messaging
 import registry_client.scheduling as scheduling
 
 __all__ = ["breg", "casework", "coordinator", "discovery", "evidence", "messaging", "scheduling"]
-__version__ = "0.41.0"
+__version__ = "0.42.0"

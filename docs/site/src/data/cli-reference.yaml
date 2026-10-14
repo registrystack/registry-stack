@@ -7,5 +7,5 @@
 # New binary trees listed in unreviewed_binaries stay draft and out of the
 # published index until human review.
 status: current
-last_reviewed: 2026-10-10
+last_reviewed: 2026-10-13
 unreviewed_binaries: [coordinator, coordinatorctl]

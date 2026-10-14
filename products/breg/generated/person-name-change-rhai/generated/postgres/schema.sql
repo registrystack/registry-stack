@@ -277,12 +277,12 @@ CREATE POLICY "registry_cr_action_rls_update_dae2d276bc5aa099d631361e" ON regist
                AND cr_state.state IN ('submitted')
         ) AND record_lifecycle = 'active');
 CREATE VIEW registry_source."person"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_person_person_code_33b91e7fc3da213f" AS "person_code", "breg_f_person_display_name_f08a3f8b05183d6e" AS "display_name"
                     FROM registry_data."breg_e_person_6ebfb4811e7ddd30"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."person_name_change_request"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_person_name_change_request_person_cc5b080f72b4a1d8" AS "person", "breg_f_person_name_change_request_given_name_9f3e31ef6d412c0f" AS "given_name", "breg_f_person_name_change_request_family_name_ac07313e43a28c09" AS "family_name", "breg_f_person_name_change_request_handling_af9ab6ccc32e36c2" AS "handling"
                     FROM registry_data."breg_e_person_name_change_request_a6bb1be7a36a0200"
                    WHERE record_lifecycle = 'active';

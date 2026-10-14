@@ -105,32 +105,32 @@ CREATE POLICY "registry_rls_select_696447534bd69f9bcb52c653" ON registry_data."b
 CREATE POLICY "registry_rls_select_728026190d9ed6553169955b" ON registry_data."breg_e_tenure_right_privacy_notice_7b8d3060e21a4d4c" FOR SELECT USING ((NULLIF(current_setting('registry.access_profile', true), '') = 'tenure-right-consent-steward' AND NULLIF(current_setting('registry.principal', true), '') IS NOT NULL AND jsonb_typeof(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 'array' AND jsonb_array_length(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 0) AND (record_lifecycle = 'active'));
 CREATE POLICY "registry_rls_insert_45b35a4e56bef12aa7f5a918" ON registry_data."breg_e_tenure_right_privacy_notice_7b8d3060e21a4d4c" FOR INSERT WITH CHECK ((NULLIF(current_setting('registry.access_profile', true), '') = 'tenure-right-consent-steward' AND NULLIF(current_setting('registry.principal', true), '') IS NOT NULL AND jsonb_typeof(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 'array' AND jsonb_array_length(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 0) AND record_lifecycle = 'active');
 CREATE VIEW registry_source."parcel"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_parcel_parcel_code_8f8dce3a4709fe8e" AS "parcel_code", "breg_f_parcel_district_f1a3aa10c39c2de5" AS "district", "breg_f_parcel_area_square_metres_ac90914e55ced047" AS "area_square_metres"
                     FROM registry_data."breg_e_parcel_3ddf85fb8fcb0a36"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."tenure_right"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_tenure_right_parcel_9cd3b977841b47b0" AS "parcel", "breg_f_tenure_right_holder_name_1f90fab436cd2cc2" AS "holder_name", "breg_f_tenure_right_tenure_kind_dff02bd960927da9" AS "tenure_kind", "breg_f_tenure_right_encumbered_48511851d7873545" AS "encumbered"
                     FROM registry_data."breg_e_tenure_right_23fd8a60171c5172"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."tenure_right_consent_decision"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_tenure_right_consent_decision_subject_d8cf00dce7c1d74e" AS "subject", "breg_f_tenure_right_consent_decision_link_163a7b4e89c8b4f4" AS "link", "breg_f_tenure_right_consent_decision_notice_a22a05b7550c4011" AS "notice", "breg_f_tenure_right_consent_decision_clause_0c6f101117b6a1e8" AS "clause", "breg_f_tenure_right_consent_decision_recipient_013a7cb57170bba1" AS "recipient", "breg_f_tenure_right_consent_decision_purpose_c081de5183ded0f1" AS "purpose", "breg_f_tenure_right_consent_decision_scope_32d178e8bf55950b" AS "scope", "breg_f_tenure_right_consent_decision_decision_8a2af2fa5fbefe4a" AS "decision", "breg_f_tenure_right_consent_decision_effective_5d7fbcc9f29d6285" AS "effective_at", "breg_f_tenure_right_consent_decision_expires_a_7263621adf996cbe" AS "expires_at", "breg_f_tenure_right_consent_decision_channel_bf3a00e952ed935f" AS "channel", "breg_f_tenure_right_consent_decision_evidence_4a025c5a0a40a92d" AS "evidence", "breg_f_tenure_right_consent_decision_witness_6c2e9b14c0c72667" AS "witness", "breg_f_tenure_right_consent_decision_invalidat_5f1e07a23bc8d29b" AS "invalidation_reason", "breg_f_tenure_right_consent_decision_source_re_6e30f11898a71d45" AS "source_reference"
                     FROM registry_data."breg_e_tenure_right_consent_decision_9a01dd5894ff6684"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."tenure_right_consent_link"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_tenure_right_consent_link_subject_4e176132151cbe63" AS "subject", "breg_f_tenure_right_consent_link_principal_4a5bcb7edec47507" AS "principal", "breg_f_tenure_right_consent_link_active_e4f82b44b20d7498" AS "active"
                     FROM registry_data."breg_e_tenure_right_consent_link_5ec8a1976ed58439"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."tenure_right_notice_clause"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_tenure_right_notice_clause_notice_1a210efdbd53e75f" AS "notice", "breg_f_tenure_right_notice_clause_recipient_bcd9a57cb6b6b683" AS "recipient", "breg_f_tenure_right_notice_clause_purpose_cf6e5c299d875d2d" AS "purpose", "breg_f_tenure_right_notice_clause_scope_086addf2d2644953" AS "scope", "breg_f_tenure_right_notice_clause_data_life_6011a2bb42d50065" AS "data_life", "breg_f_tenure_right_notice_clause_description_a618e94af0ef0082" AS "description"
                     FROM registry_data."breg_e_tenure_right_notice_clause_04211cc06b25f6ac"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."tenure_right_privacy_notice"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_tenure_right_privacy_notice_notice_vers_b70623c061d002dc" AS "notice_version", "breg_f_tenure_right_privacy_notice_language_8da34fb364e72f8f" AS "language", "breg_f_tenure_right_privacy_notice_title_dd96e7d6c48e7963" AS "title", "breg_f_tenure_right_privacy_notice_text_42a9f6b653caa3bd" AS "text", "breg_f_tenure_right_privacy_notice_text_uri_2dedb4f580fa76f4" AS "text_uri", "breg_f_tenure_right_privacy_notice_controller__9afc17d1a429033f" AS "controller_name", "breg_f_tenure_right_privacy_notice_controller__5850341ad6e49edd" AS "controller_contact", "breg_f_tenure_right_privacy_notice_jurisdictio_97afdcd41ec128c9" AS "jurisdiction", "breg_f_tenure_right_privacy_notice_legal_basis_2f0fffec918e7978" AS "legal_basis", "breg_f_tenure_right_privacy_notice_rights_stat_709b2653c7d55d5a" AS "rights_statement", "breg_f_tenure_right_privacy_notice_rights_uri_4c85c1a64ebc413a" AS "rights_uri", "breg_f_tenure_right_privacy_notice_withdrawal__a5c9c4b5bb22cd83" AS "withdrawal_method", "breg_f_tenure_right_privacy_notice_published_a_2abf1b68ffbe5e94" AS "published_at"
                     FROM registry_data."breg_e_tenure_right_privacy_notice_7b8d3060e21a4d4c"
                    WHERE record_lifecycle = 'active';

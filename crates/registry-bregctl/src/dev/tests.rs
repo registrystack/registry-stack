@@ -126,6 +126,114 @@ fn dev_token_requests_each_clients_registered_resource_or_the_default() {
     assert_eq!(requests[1]["scope"], "registry:generic:operate");
 }
 
+/// A session whose `source` client is registered for `resource` and whose
+/// `operator` client is not, with its issuer placed on a local listener.
+fn external_resource_session(resource: &str) -> (tempfile::TempDir, State, TcpListener) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let (temporary, mut state, mut clients, files) = fixture();
+    state.issuer_port = listener.local_addr().unwrap().port();
+    let client = clients
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "source")
+        .unwrap();
+    client.access_profiles.clear();
+    client.scopes = vec!["messaging:send".into()];
+    clients.issuer.resources.push(config::IssuerResource {
+        audience: resource.into(),
+        scopes: vec!["messaging:send".into()],
+    });
+    clients
+        .issuer
+        .client_resources
+        .insert("source".into(), resource.into());
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    (temporary, state, listener)
+}
+
+/// The form fields `token_async` posts for `client`, read by a stand-in
+/// token endpoint on `listener` that answers with one compact token.
+fn token_request_form(listener: TcpListener, state: &State, client: &str) -> Vec<(String, String)> {
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            assert!(request.len() < 32 * 1024);
+            stream.read_exact(&mut byte).unwrap();
+            request.push(byte[0]);
+        }
+        let head = String::from_utf8(request.clone()).unwrap();
+        let length = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap();
+        assert!(length < 32 * 1024);
+        let mut body = vec![0; length];
+        stream.read_exact(&mut body).unwrap();
+        request.extend(body);
+        let response = br#"{"access_token":"a.b.c","token_type":"Bearer","expires_in":300}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            response.len()
+        )
+        .unwrap();
+        stream.write_all(response).unwrap();
+        String::from_utf8(request).unwrap()
+    });
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(token_async(state, client)).unwrap();
+    let request = server.join().unwrap();
+    assert!(request.starts_with("POST /oauth2/token HTTP/1.1"));
+    let form = request.split("\r\n\r\n").nth(1).unwrap();
+    url::form_urlencoded::parse(form.as_bytes())
+        .into_owned()
+        .collect()
+}
+
+/// Every value the form carries for `name`, in the order sent.
+fn form_values<'a>(form: &'a [(String, String)], name: &str) -> Vec<&'a str> {
+    form.iter()
+        .filter(|(field, _)| field == name)
+        .map(|(_, value)| value.as_str())
+        .collect()
+}
+
+#[test]
+fn dev_token_requests_the_clients_registered_external_resource() {
+    let resource = "urn:example:messaging";
+    let (_temporary, state, listener) = external_resource_session(resource);
+
+    let form = token_request_form(listener, &state, "source");
+    assert_eq!(form_values(&form, "client_id"), ["source"]);
+    assert_eq!(form_values(&form, "resource"), [resource]);
+    assert_eq!(form_values(&form, "scope"), ["messaging:send"]);
+}
+
+#[test]
+fn dev_token_for_an_unmapped_client_requests_the_breg_audience_only() {
+    let resource = "urn:example:messaging";
+    let (_temporary, state, listener) = external_resource_session(resource);
+
+    let form = token_request_form(listener, &state, "operator");
+    assert_eq!(form_values(&form, "client_id"), ["operator"]);
+    assert_eq!(form_values(&form, "resource"), [state.audience()]);
+    assert_ne!(state.audience(), resource);
+    assert_eq!(form_values(&form, "scope"), ["registry:generic:operate"]);
+}
+
 pub(super) fn fixture() -> (tempfile::TempDir, State, Clients, BTreeMap<String, Vec<u8>>) {
     let temporary = tempfile::tempdir().expect("temporary");
     let project = fs::canonicalize(temporary.path()).expect("canonical");

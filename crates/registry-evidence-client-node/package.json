@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/evidence-client",
-  "version": "0.41.0",
+  "version": "0.42.0",
   "description": "Node.js binding for the Evidence relying-party client, via napi-rs.",
   "license": "Apache-2.0",
   "publishConfig": { "access": "public", "provenance": true },
@@ -41,6 +41,6 @@
     "check:types": "napi build --platform --js index.js.check --dts index.d.ts.check && cmp index.js index.js.check && cmp index.d.ts index.d.ts.check && rm -f index.js.check index.d.ts.check"
   },
   "devDependencies": {
-    "@napi-rs/cli": "3.10.6"
+    "@napi-rs/cli": "3.10.8"
   }
 }

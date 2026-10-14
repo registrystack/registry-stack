@@ -256,6 +256,12 @@ pub use capture::AuditCapture;
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{self, Write},
+        sync::{Arc, Condvar, Mutex},
+        time::Duration,
+    };
+
     use serde_json::json;
 
     use super::*;
@@ -320,5 +326,74 @@ mod tests {
             .is_err());
         assert!(capture.entries().is_empty());
         assert!(!audit.ready().await);
+    }
+
+    /// A line sink that holds every write until the test opens it, as a
+    /// standard output nobody reads does.
+    #[derive(Clone, Default)]
+    struct HeldSink(Arc<(Mutex<bool>, Condvar)>);
+
+    impl HeldSink {
+        fn open(&self) {
+            *self.0 .0.lock().expect("held sink") = true;
+            self.0 .1.notify_all();
+        }
+    }
+
+    impl Write for HeldSink {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let mut open = self.0 .0.lock().expect("held sink");
+            while !*open {
+                open = self.0 .1.wait(open).expect("held sink");
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Whether the destination reports `ready` within `limit`.
+    async fn readiness_becomes(audit: &SchedulingAudit, ready: bool, limit: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + limit;
+        while tokio::time::Instant::now() < deadline {
+            if audit.ready().await == ready {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_destination_is_not_ready_until_it_drains() {
+        let sink = HeldSink::default();
+        let audit = SchedulingAudit::new(AuditWriter::from_line_sink(Box::new(sink.clone())));
+        assert!(audit.ready().await);
+
+        // The destination stops taking lines. The request waiting on it is
+        // answered with a refusal, and readiness follows the stall.
+        let answered = tokio::time::timeout(
+            Duration::from_secs(15),
+            audit.request(Uuid::new_v4(), json!({"operation": "hold.create"})),
+        )
+        .await;
+        let not_ready_while_stalled =
+            readiness_becomes(&audit, false, Duration::from_secs(2)).await;
+        sink.open();
+        assert!(
+            matches!(answered, Ok(Err(_))),
+            "a request waiting on a stalled destination is refused: {answered:?}"
+        );
+        assert!(not_ready_while_stalled);
+
+        // The destination drains: readiness returns and requests are accepted
+        // again, with no restart.
+        assert!(readiness_becomes(&audit, true, Duration::from_secs(5)).await);
+        audit
+            .request(Uuid::new_v4(), json!({"operation": "hold.create"}))
+            .await
+            .expect("the drained destination accepts requests");
     }
 }

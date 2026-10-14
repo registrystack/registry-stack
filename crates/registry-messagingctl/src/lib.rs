@@ -301,9 +301,12 @@ struct PackageSource {
     ArgGroup::new("checked")
         .required(true)
         .multiple(true)
-        .args(["runtime_config", "package", "project"])
+        .args(["runtime_config", "package", "project", "dev_state"])
 ))]
 struct CheckArgs {
+    /// Generated development session state. Checked offline without secrets.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["runtime_config", "package", "project"])]
+    dev_state: Option<PathBuf>,
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
@@ -873,6 +876,23 @@ fn config_refusal(error: &RuntimeConfigError) -> Outcome {
 /// authoring project, and report what the runtime would serve, rendering
 /// each template's sample in every locale it declares.
 fn check(args: &CheckArgs) -> Outcome {
+    if let Some(path) = &args.dev_state {
+        return match dev::check_session_file(path) {
+            Ok(report) if args.deny_warnings && report.warning_count() > 0 => {
+                Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, &report)
+            }
+            Ok(report) => Outcome::new(
+                json!({
+                    "ok": true,
+                    "devState": path,
+                    "filesChecked": report.files_checked().unwrap_or(1),
+                    "diagnostics": report.to_json_value(),
+                }),
+                View::Check,
+            ),
+            Err(failure) => Outcome::diagnosed(failure.exit, &failure.report),
+        };
+    }
     let given = match (&args.package, &args.project) {
         (Some(root), _) => Some((root, load_package(root))),
         (None, Some(root)) => Some((root, load_project(root))),
@@ -1893,6 +1913,9 @@ fn render_init(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
 }
 
 fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    if let Some(path) = report["devState"].as_str() {
+        return writeln!(stdout, "ok: {path}");
+    }
     match report["runtimeConfig"].as_str() {
         Some(path) => writeln!(stdout, "ok: {path}")?,
         None => writeln!(stdout, "ok: {}", text(&report["project"]))?,

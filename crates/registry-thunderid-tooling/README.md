@@ -126,6 +126,11 @@ attributes remain forbidden even for these fixtures.
 `local::start(&Session, docker_path, cancellation_callback)` bootstraps already
 rendered state, waits for the exact loopback issuer, and returns a bounded public
 RS256 JWKS snapshot. `local::stop` selects only the exact session-owned container.
+`local::snapshot(port).await` reads the same bounded public snapshot from an
+already-running issuer at the exact numeric loopback origin. It uses no proxy,
+follows no redirects, bounds each response at 256 KiB, accepts only discovery
+bound to that origin and its `/oauth2/jwks` endpoint, and performs no start,
+stop, reset, or other lifecycle operation.
 The shared runner bounds commands and HTTP responses, reads owner-only secret
 files into the child environment, and discards command output other than owned
 container IDs. Product CLIs retain their own policy, status UI, and cancellation

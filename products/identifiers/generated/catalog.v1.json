@@ -3927,7 +3927,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "ae4d993064b0c9a50d7f9ca8bcc3d2c4c7bec294351e262989005993dde4b0ea",
+        "sha256": "418c01044f59d6445e770292d1f68ce360c0820c17376c9e8bbf48742d0147e0",
         "mediaType": "application/schema+json"
       }
     },
@@ -3945,7 +3945,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "4669ca761bddd4b14b5b41ef56f335238af437e3ada7bc79b6e0783e8d992e12",
+        "sha256": "cc160dbd2e323f1660286697ec2280312df074c4a135ecf2fd26e7193d241f8b",
         "mediaType": "application/schema+json"
       }
     },

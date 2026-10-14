@@ -2584,6 +2584,8 @@ async fn token_async_with_claims(
         String::from_utf8(key_bytes.to_vec()).context("the retained client key is unreadable")?;
     let key = registry_platform_crypto::PrivateJwk::parse(&key_text)
         .map_err(|_| anyhow::anyhow!("the retained client key is unusable"))?;
+    let clients = retained_clients(&root)?;
+    let resource = config::client_resource(state, &clients, token_client_id);
     let provider = dev_token_provider(
         endpoint,
         token_client_id.to_owned(),

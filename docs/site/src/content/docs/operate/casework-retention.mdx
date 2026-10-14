@@ -371,10 +371,18 @@ call is refused while the process keeps running. The runtime log carries `audit 
 with the cause. Treat it as a disk, permission, or lock problem at the audit path rather than a
 database outage, fix it, and restart the process.
 
-{/* Evidence: crates/registry-platform-audit/src/writer.rs, AuditWriter::append() and
-    AuditWriter::ready();
+A `stdout` destination whose collector stops reading is a stall, not a failed write.
+After the writer has held one entry for 5 seconds, audited calls fail with `service.unavailable`
+and `GET /ready` answers `503` until the collector takes the entry; the writer then accepts
+entries again with no restart.
+The runtime log does not name a stall, so `GET /ready` and the refused calls are the signal.
+
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, AuditWriter::append(),
+    AuditWriter::ready(), STREAM_WRITE_DEADLINE, AuditUnavailableReason::Stalled, and
+    readiness_follows_a_stall_and_returns_once_the_stream_drains;
     crates/registry-casework/src/service.rs, ready();
-    crates/registry-casework/src/http.rs, ready(). */}
+    crates/registry-casework/src/http.rs, ready();
+    crates/registry-casework/src/main.rs, initialize_logging(). */}
 
 ## Troubleshooting
 

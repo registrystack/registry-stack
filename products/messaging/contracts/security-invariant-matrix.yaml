@@ -34,10 +34,22 @@ invariants:
       and explicit JWKS URI through the shared checked URL type, refusing
       backslashes and rewritten host text with value-free diagnostics. Issuer
       comparison stays textual and existing HTTPS and loopback policy applies.
+      For a development session borrowing a ready BReg issuer, `messagingctl`
+      obtains each requester client's credential only through public
+      `bregctl dev export-client`, then uses the explicit Messaging resource,
+      the profile's scopes, `scopeClaim: scope`, and a bounded static RS256
+      key snapshot to acquire and authenticate a real token before reporting
+      ready. A later `dev token` requires that ready state, re-exports and
+      compares the credential and endpoint, and authenticates the new token
+      against the retained keys and caller identity before publishing it.
+      Messaging reads no private BReg state and has no owner lifecycle action.
     refusal: >-
       Refuse with profile.not-authorized for a sender profile, template, or
       direct content outside the profile, and with operation.not-authorized
-      for an operator; accept nothing.
+      for an operator; accept nothing. Refuse a borrowed development session
+      or token before readiness or header publication when its issuer,
+      resource, credential, scopes, keys, or caller identity do not match the
+      foreground session's capture.
     negativeTest:
       path: crates/registry-messaging/src/http.rs
       name: only_the_sender_role_submits_and_only_through_what_its_profile_lists

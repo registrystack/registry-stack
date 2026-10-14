@@ -2949,6 +2949,7 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 31,
           "type": "array"
         },
         "id": {

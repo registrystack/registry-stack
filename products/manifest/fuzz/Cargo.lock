@@ -342,7 +342,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "registry-manifest-cli"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "registry-manifest-core",
  "registry-platform-buildinfo",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "oxiri",
  "registry-platform-canonical-json",
@@ -378,11 +378,11 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-buildinfo"
-version = "0.41.0"
+version = "0.42.0"
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-yaml",
@@ -407,7 +407,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-yaml"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "saphyr-parser",
  "serde",

@@ -1510,6 +1510,523 @@ fn unchanged_derived_relation_emits_compiler_owned_view_replacement() {
     );
 }
 
+#[test]
+fn authored_index_ends_with_the_record_id_and_a_reference_index_does_not() {
+    let candidate = compile_variant(Variant::ReferenceConstraintIndex);
+    let names = &candidate.physical_names().entities["asset"];
+    let statement = |id: &str| {
+        candidate
+            .ddl()
+            .statements
+            .iter()
+            .find(|statement| statement.id == id)
+            .expect("candidate carries the statement")
+            .sql
+            .as_str()
+    };
+    let column = |field: &str| format!("\"{}\"", names.fields[field]);
+
+    assert_eq!(
+        statement("entity.asset.index.code-idx"),
+        format!(
+            "CREATE INDEX \"{}\" ON registry_data.\"{}\" ({}, record_id)",
+            names.indexes["code-idx"],
+            names.table,
+            column("code"),
+        )
+    );
+    assert_eq!(
+        statement("entity.asset.index.reference:site"),
+        format!(
+            "CREATE INDEX \"{}\" ON registry_data.\"{}\" ({})",
+            names.indexes["reference:site"],
+            names.table,
+            column("site"),
+        )
+    );
+}
+
+/// The plan for rebuilding `ReferenceConstraintIndex` unchanged over
+/// `baseline`: no model change, and whatever the compiler owes the database.
+fn unchanged_rebuild_plan(
+    baseline: &registry_breg::package::CompiledRegistryMigrationBaseline,
+) -> registry_breg::package::MigrationPlan {
+    let candidate = compile_variant(Variant::ReferenceConstraintIndex);
+    let change_set = registry_breg::package::compiled_registry_change_set_from_baseline(
+        baseline,
+        &candidate,
+        PRIOR_REVISION,
+    );
+    assert!(
+        change_set.changes.is_empty(),
+        "unchanged authored input has no model change"
+    );
+    change_set_to_applicable_migration_plan(&change_set)
+        .expect("an unchanged rebuild is applicable without review")
+}
+
+#[test]
+fn unchanged_rebuild_over_a_baseline_without_the_generated_ddl_digest_refreshes_compiler_owned_ddl()
+{
+    let previous = compile_variant(Variant::ReferenceConstraintIndex);
+    let mut baseline = registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
+        PRIOR_REVISION,
+        &previous,
+    );
+    baseline.generated_ddl_sha256 = None;
+    let plan = unchanged_rebuild_plan(&baseline);
+
+    assert_eq!(
+        plan.statements
+            .iter()
+            .map(|statement| statement.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "entity.asset.index.code-idx.drop",
+            "entity.asset.index.code-idx",
+            "entity.asset.source-view",
+            "entity.site.source-view",
+        ],
+        "the reference index has no compiler-owned key column and is left in place"
+    );
+    let index_name = &previous.physical_names().entities["asset"].indexes["code-idx"];
+    assert_eq!(
+        plan.statements[0].sql,
+        format!("DROP INDEX IF EXISTS registry_data.\"{index_name}\"")
+    );
+    let candidate_statement = |id: &str| {
+        previous
+            .ddl()
+            .statements
+            .iter()
+            .find(|statement| statement.id == id)
+            .expect("candidate carries the statement")
+    };
+    assert_eq!(
+        &plan.statements[1],
+        candidate_statement("entity.asset.index.code-idx")
+    );
+    for replacement in &plan.statements[2..] {
+        assert_eq!(
+            replacement
+                .sql
+                .strip_prefix("CREATE OR REPLACE VIEW ")
+                .expect("a retained source view is replaced in place"),
+            candidate_statement(&replacement.id)
+                .sql
+                .strip_prefix("CREATE VIEW ")
+                .expect("candidate carries the generated source view")
+        );
+    }
+}
+
+#[test]
+fn unchanged_rebuild_over_a_baseline_with_another_generated_ddl_digest_refreshes_compiler_owned_ddl(
+) {
+    let previous = compile_variant(Variant::ReferenceConstraintIndex);
+    let mut absent = registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
+        PRIOR_REVISION,
+        &previous,
+    );
+    let mut different = absent.clone();
+    absent.generated_ddl_sha256 = None;
+    // A well-formed digest that is not the one this compiler generates for the
+    // baseline model: the script an earlier compiler installed.
+    different.generated_ddl_sha256 = Some(PRIOR_REVISION.to_owned());
+
+    let plan = unchanged_rebuild_plan(&different);
+    assert_eq!(plan.statements.len(), 4);
+    assert_eq!(plan.statements, unchanged_rebuild_plan(&absent).statements);
+}
+
+#[test]
+fn unchanged_rebuild_over_a_baseline_with_this_compilers_generated_ddl_digest_plans_nothing() {
+    let previous = compile_variant(Variant::ReferenceConstraintIndex);
+    let baseline = registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
+        PRIOR_REVISION,
+        &previous,
+    );
+    assert!(
+        baseline.generated_ddl_sha256.is_some(),
+        "a baseline built from a compiled registry states its generated script"
+    );
+    assert!(unchanged_rebuild_plan(&baseline).statements.is_empty());
+}
+
+#[test]
+fn model_change_over_a_baseline_without_the_generated_ddl_digest_carries_the_refresh_too() {
+    let previous_source = source_for_variant(Variant::ReferenceConstraintIndex);
+    let previous = compile_source(&previous_source);
+    // One optional field more on `site`; `asset` and its indexes are untouched.
+    let mut module: serde_json::Value =
+        serde_json::from_slice(&previous_source.module_bytes).expect("fixture module is JSON");
+    let site = module["entities"]
+        .as_array_mut()
+        .expect("module lists entities")
+        .iter_mut()
+        .find(|entity| entity["id"] == "site")
+        .expect("fixture declares site");
+    site["fields"]
+        .as_array_mut()
+        .expect("site lists fields")
+        .push(serde_json::json!({
+            "id": "label", "type": "string", "maximumLength": 16,
+            "classification": "internal"
+        }));
+    let module_bytes = serde_json::to_vec(&module).expect("module serializes");
+    let parsed = parse_module_yaml(&module_bytes).expect("changed module parses");
+    let candidate = compile_source(&SourceFixture {
+        project_bytes: project_bytes(&module_digest(&parsed)),
+        module_bytes,
+    });
+
+    let same_compiler = registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
+        PRIOR_REVISION,
+        &previous,
+    );
+    let mut earlier_compiler = same_compiler.clone();
+    earlier_compiler.generated_ddl_sha256 = None;
+    let statement_ids = |baseline| {
+        let change_set = registry_breg::package::compiled_registry_change_set_from_baseline(
+            baseline,
+            &candidate,
+            PRIOR_REVISION,
+        );
+        change_set_to_applicable_migration_plan(&change_set)
+            .expect("an optional field is applicable without review")
+            .statements
+            .into_iter()
+            .map(|statement| statement.id)
+            .collect::<Vec<_>>()
+    };
+
+    // The changed entity's own source view is replaced either way.
+    let same = statement_ids(&same_compiler);
+    assert!(same.iter().any(|id| id == "entity.site.source-view"));
+    let owed_to_an_earlier_compiler = [
+        "entity.asset.index.code-idx.drop",
+        "entity.asset.index.code-idx",
+        "entity.asset.source-view",
+    ];
+    for id in owed_to_an_earlier_compiler {
+        assert!(
+            !same.iter().any(|planned| planned == id),
+            "a same-compiler predecessor owes no refresh of {id}"
+        );
+    }
+    let earlier = statement_ids(&earlier_compiler);
+    assert_eq!(
+        earlier.len(),
+        same.len() + owed_to_an_earlier_compiler.len()
+    );
+    for id in same
+        .iter()
+        .map(String::as_str)
+        .chain(owed_to_an_earlier_compiler)
+    {
+        assert_eq!(
+            earlier.iter().filter(|planned| *planned == id).count(),
+            1,
+            "{id} is planned once over an earlier compiler's baseline"
+        );
+    }
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn reviewed_change_over_a_baseline_without_the_generated_ddl_digest_carries_the_refresh_too() {
+    let previous_source = source_for_variant(Variant::ReferenceConstraintIndex);
+    let previous = compile_source(&previous_source);
+    // A route change needs review and owes the database no statement.
+    let mut module: serde_json::Value =
+        serde_json::from_slice(&previous_source.module_bytes).expect("fixture module is JSON");
+    let asset = module["entities"]
+        .as_array_mut()
+        .expect("module lists entities")
+        .iter_mut()
+        .find(|entity| entity["id"] == "asset")
+        .expect("fixture declares asset");
+    asset["route"] = json!("equipment");
+    let module_bytes = serde_json::to_vec(&module).expect("module serializes");
+    let parsed = parse_module_yaml(&module_bytes).expect("changed module parses");
+    let candidate_source = SourceFixture {
+        project_bytes: project_bytes(&module_digest(&parsed)),
+        module_bytes,
+    };
+    let candidate = compile_source(&candidate_source);
+
+    let same_compiler = registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
+        PRIOR_REVISION,
+        &previous,
+    );
+    let mut earlier_compiler = same_compiler.clone();
+    earlier_compiler.generated_ddl_sha256 = None;
+    let reviewed_statements =
+        |baseline: &registry_breg::package::CompiledRegistryMigrationBaseline| {
+            prepare_package(build_request(
+                Some(PRIOR_REVISION),
+                candidate_source.project_bytes.clone(),
+                candidate_source.module_bytes.clone(),
+                PackageMigrationPlanInput::ReviewedSuccessorFromBaseline {
+                    prior_baseline: Box::new(baseline.clone()),
+                    prior_schema_fingerprint: PRIOR_FINGERPRINT.to_owned(),
+                    migrations: vec![metadata_only_source_between(&previous, &candidate)],
+                },
+            ))
+            .expect("reviewed route change prepares")
+            .manifest()
+            .migration_plan
+            .statements
+            .clone()
+        };
+
+    assert!(reviewed_statements(&same_compiler).is_empty());
+
+    // The reviewed executor drops every managed read view once the plan
+    // carries a non-spatial view statement, so the source-view refresh brings
+    // the complete candidate view set, after the authored index is rebuilt.
+    let earlier = reviewed_statements(&earlier_compiler);
+    let candidate_views = candidate
+        .ddl()
+        .statements
+        .iter()
+        .filter(|statement| statement.kind == registry_breg::generated_ddl::DdlStatementKind::View)
+        .map(|statement| statement.id.as_str());
+    assert_eq!(
+        earlier
+            .iter()
+            .map(|statement| statement.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "entity.asset.index.code-idx.drop",
+            "entity.asset.index.code-idx",
+        ]
+        .into_iter()
+        .chain(candidate_views)
+        .collect::<Vec<_>>()
+    );
+    assert!(earlier
+        .iter()
+        .any(|statement| statement.id == "entity.asset.source-view"
+            && statement.sql.starts_with("CREATE VIEW registry_source.")));
+}
+
+#[test]
+fn baseline_without_the_generated_ddl_digest_loads_and_roundtrips_without_the_key() {
+    let compiled = compile_variant(Variant::Base);
+    let stated = registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
+        PRIOR_REVISION,
+        &compiled,
+    );
+    let mut value = serde_json::to_value(&stated).expect("baseline serializes");
+    let digest = value
+        .as_object_mut()
+        .expect("baseline is an object")
+        .remove("generatedDdlSha256")
+        .expect("a baseline from a compiled registry carries the digest");
+    assert_eq!(
+        digest.as_str(),
+        stated.generated_ddl_sha256.as_deref(),
+        "the digest is one string member"
+    );
+
+    let bytes = canonicalize_json(&value).expect("baseline canonicalizes");
+    let parsed: registry_breg::package::CompiledRegistryMigrationBaseline =
+        serde_json::from_slice(&bytes).expect("a baseline without the digest loads");
+    assert_eq!(parsed.generated_ddl_sha256, None);
+    assert_eq!(
+        canonicalize_json(&serde_json::to_value(&parsed).unwrap()).unwrap(),
+        bytes,
+        "an absent digest does not change signed baseline bytes"
+    );
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn baseline_from_a_compiled_registry_states_the_digest_of_its_generated_script() {
+    let compiled = compile_variant(Variant::ReferenceConstraintIndex);
+    let baseline = registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
+        PRIOR_REVISION,
+        &compiled,
+    );
+    assert_eq!(
+        baseline.generated_ddl_sha256,
+        Some(digest(compiled.ddl().script().as_bytes()))
+    );
+}
+
+/// Publish the initial `ReferenceConstraintIndex` package and read it back as
+/// a predecessor.
+#[cfg(feature = "tooling")]
+fn published_predecessor() -> (
+    tempfile::TempDir,
+    PreparedPackage,
+    registry_breg::package::VerifiedPredecessorPackage,
+) {
+    let source = source_for_variant(Variant::ReferenceConstraintIndex);
+    let initial = prepare_package(build_request(
+        None,
+        source.project_bytes,
+        source.module_bytes,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    ))
+    .expect("initial package prepares");
+    let root = tempfile::Builder::new()
+        .prefix("registry-generated-ddl-digest-")
+        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .unwrap();
+    let package = root.path().join("predecessor");
+    initial.publish_to_directory(&package).unwrap();
+    let predecessor = load_predecessor_package(
+        &package,
+        &PackageLoadContext {
+            database_initialization_environment: "local",
+        },
+    )
+    .expect("the initial package is a readable predecessor");
+    (root, initial, predecessor)
+}
+
+/// Build the unchanged successor over `baseline`, publish it under `name`, and
+/// read it back as the package an apply would verify.
+#[cfg(feature = "tooling")]
+fn verified_unchanged_successor(
+    root: &std::path::Path,
+    name: &str,
+    baseline: registry_breg::package::CompiledRegistryMigrationBaseline,
+) -> registry_breg::package::VerifiedPackage {
+    let source = source_for_variant(Variant::ReferenceConstraintIndex);
+    let package_digest = baseline.package_digest.clone();
+    let successor = prepare_package(build_request(
+        Some(&package_digest),
+        source.project_bytes,
+        source.module_bytes,
+        PackageMigrationPlanInput::SuccessorFromBaseline {
+            prior_baseline: Box::new(baseline),
+        },
+    ))
+    .expect("the unchanged successor prepares");
+    let package = root.join(name);
+    successor.publish_to_directory(&package).unwrap();
+    registry_breg::package::load_package(
+        &package,
+        &PackageLoadContext {
+            database_initialization_environment: "local",
+        },
+    )
+    .expect("the unchanged successor verifies")
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn loaded_predecessor_baseline_states_the_digest_of_its_packaged_ddl_script() {
+    let (_root, initial, predecessor) = published_predecessor();
+    let entry = initial
+        .manifest()
+        .files
+        .iter()
+        .find(|entry| entry.role == PackageFileRole::GeneratedDdl)
+        .expect("the package lists its generated DDL script");
+    assert_eq!(entry.path, "database/ddl.sql");
+    assert_eq!(
+        entry.sha256,
+        digest(&initial.file_bytes()["database/ddl.sql"])
+    );
+    assert_eq!(
+        predecessor.migration_baseline().generated_ddl_sha256,
+        Some(entry.sha256.clone())
+    );
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn unchanged_rebuild_is_empty_over_a_same_compiler_predecessor_and_not_over_an_earlier_one() {
+    let (root, _initial, predecessor) = published_predecessor();
+
+    let same_compiler = verified_unchanged_successor(
+        root.path(),
+        "same-compiler",
+        predecessor.migration_baseline().clone(),
+    );
+    assert!(same_compiler
+        .manifest()
+        .migration_plan
+        .statements
+        .is_empty());
+    assert!(registry_breg::migration::successor_plan_is_empty(
+        &same_compiler
+    ));
+    assert!(
+        registry_breg::migration::successor_plan_is_empty_for_predecessor(
+            &same_compiler,
+            &predecessor
+        )
+    );
+
+    // A predecessor built before the digest existed states none, so the plan
+    // cannot tell its installed DDL from this compiler's and refreshes it.
+    let mut earlier_baseline = predecessor.migration_baseline().clone();
+    earlier_baseline.generated_ddl_sha256 = None;
+    let earlier_compiler =
+        verified_unchanged_successor(root.path(), "earlier-compiler", earlier_baseline);
+    let plan = &earlier_compiler.manifest().migration_plan;
+    assert!(plan.changes.is_empty());
+    assert_eq!(
+        plan.statements
+            .iter()
+            .map(|statement| statement.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "entity.asset.index.code-idx.drop",
+            "entity.asset.index.code-idx",
+            "entity.asset.source-view",
+            "entity.site.source-view",
+        ]
+    );
+    assert!(!registry_breg::migration::successor_plan_is_empty(
+        &earlier_compiler
+    ));
+    assert!(
+        !String::from_utf8_lossy(&canonical(&plan.prior_baseline)).contains("generatedDdlSha256"),
+        "the successor signs the baseline it was planned over, without a digest"
+    );
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn malformed_generated_ddl_digest_in_a_baseline_is_refused() {
+    let (_root, _initial, predecessor) = published_predecessor();
+    let stated = predecessor
+        .migration_baseline()
+        .generated_ddl_sha256
+        .clone()
+        .expect("a loaded predecessor states its generated DDL digest");
+    let hex = stated
+        .strip_prefix("sha256:")
+        .expect("the digest names its algorithm");
+    for malformed in [
+        String::new(),
+        hex.to_owned(),
+        format!("sha256:{}", hex.to_uppercase()),
+        format!("sha256:{}", &hex[1..]),
+        format!("sha512:{hex}"),
+    ] {
+        let source = source_for_variant(Variant::ReferenceConstraintIndex);
+        let mut baseline = predecessor.migration_baseline().clone();
+        baseline.generated_ddl_sha256 = Some(malformed.clone());
+        let refusal = prepare_package(build_request(
+            Some(predecessor.package_digest()),
+            source.project_bytes,
+            source.module_bytes,
+            PackageMigrationPlanInput::SuccessorFromBaseline {
+                prior_baseline: Box::new(baseline),
+            },
+        ))
+        .unwrap_err();
+        assert_eq!(refusal, PackageError::MigrationPlan, "{malformed:?}");
+    }
+}
+
 #[cfg(feature = "tooling")]
 #[test]
 fn unrelated_reviewed_change_rebuilds_every_view_around_a_retained_derived_relation() {

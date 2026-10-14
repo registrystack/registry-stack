@@ -20,6 +20,18 @@ entries:
       - {path: crates/registry-messaging/src/http.rs, name: a_client_without_a_profile_or_scope_is_not_authorized}
       - {path: crates/registry-messaging/src/http.rs, name: only_the_sender_role_submits_and_only_through_what_its_profile_lists}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_submission_outside_the_callers_role_or_profile_is_refused_before_the_store}
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_configuration_uses_scope_and_static_issuer_keys}
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_client_tokens_preserve_messaging_authorization}
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_token_refuses_changed_client_credentials}
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_token_refuses_changed_principal}
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_token_requires_ready_session}
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: paired_issuer_options_require_an_explicit_resource}
+      - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: a_refused_borrow_records_no_issuer_and_starts_no_container}
+      - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: an_issuer_that_is_not_one_exact_loopback_origin_is_refused}
+      - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: a_report_naming_another_client_is_refused}
+      - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: an_exported_client_id_file_that_is_not_the_client_is_refused}
+      - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: clients_reporting_different_issuers_are_refused}
+      - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: a_refused_token_refresh_writes_no_header_and_keeps_no_scratch_copy}
   - id: MESSAGING-SEC-02
     tests:
       - {path: crates/registry-messaging-core/src/wire.rs, name: a_submission_is_closed_and_selects_exactly_one_content_source}

@@ -224,7 +224,12 @@ bounds change. If you omit `id`, the compiler derives a content-based fallback t
 another entity and changes when the constraint changes.
 
 `indexes[]` declares btree indexes, each with an `id` and ordered `fields`, such as
-`{id: asset-class, fields: [asset-class]}`. The compiler indexes every `reference` field
+`{id: asset-class, fields: [asset-class]}`. Every list orders by the record id last, so the
+compiler appends the record id as the last column of each declared index: list the fields a
+list compares with `eq` first, then the field it sorts by, and the index serves that page in order.
+A leading field filtered any other way, such as with `gt`, `ne`, or `in`, still narrows the read,
+but the filtered set is then ordered for each page.
+The compiler indexes every `reference` field
 unless a declared index or a unique constraint without `when` already leads with it.
 `bregctl check` reports `breg.entity.list-unindexed-filter` or `breg.entity.list-unindexed-sort` for a
 filterable or sortable list field that no index leads with. The finding fails a check only under

@@ -229,9 +229,18 @@ pub struct CompiledRegistryMigrationBaseline {
     pub actions: CompiledActionInventory,
     #[serde(default, skip_serializing_if = "CompiledRecipients::is_empty")]
     pub recipients: CompiledRecipients,
+    /// The digest of the `database/ddl.sql` script the baseline package
+    /// carries: the DDL its own compiler generated for this model. A plan
+    /// compares it with the script the current compiler generates for the
+    /// same model and refreshes compiler-owned DDL when the two differ, or
+    /// when the baseline states none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_ddl_sha256: Option<String>,
 }
 
 impl CompiledRegistryMigrationBaseline {
+    /// The baseline of a registry this compiler compiled, so the script it
+    /// states is the one this compiler generates.
     pub fn from_compiled(package_digest: &str, compiled: &CompiledRegistry) -> Self {
         Self {
             package_digest: package_digest.to_owned(),
@@ -246,6 +255,7 @@ impl CompiledRegistryMigrationBaseline {
             queries: compiled.queries().clone(),
             actions: compiled.actions().clone(),
             recipients: compiled.recipients().clone(),
+            generated_ddl_sha256: Some(digest(compiled.ddl().script().as_bytes())),
         }
     }
 }
@@ -2038,6 +2048,14 @@ fn additive_migration_plan(
         &previous.physical_names,
         &previous.actions,
     );
+    // The statements below compare this compiler's DDL for the baseline model
+    // with its DDL for the candidate, which is the installed schema only when
+    // this compiler also generated the baseline package's script. A baseline
+    // that states another script, or none, was installed by another compiler,
+    // so the plan also refreshes the DDL this compiler owns over every
+    // retained entity.
+    let refresh_compiler_owned_ddl = previous.generated_ddl_sha256.as_deref()
+        != Some(digest(previous_ddl.script().as_bytes()).as_str());
     // Automatic apply may reconcile candidate policies before executing DDL.
     // Only retire obsolete policies here; reconciliation owns candidate creates.
     let (policy_drops, _) = successor_managed_policy_delta(&previous_ddl, candidate.ddl());
@@ -2193,6 +2211,41 @@ fn additive_migration_plan(
             continue;
         }
         let previous_entity = &previous.entities[entity_id];
+        if refresh_compiler_owned_ddl {
+            // PostgreSQL replaces the source view without rewriting stored
+            // rows, keeps its owner and grants, and sets its options to
+            // exactly the ones the statement names.
+            let source_view_id = format!("entity.{entity_id}.source-view");
+            replacement_statement_ids.insert(source_view_id.clone());
+            new_statement_ids.insert(source_view_id);
+            // An authored index carries compiler-owned key columns after its
+            // declared fields, so it is dropped and built again; each build
+            // reads the entity table once. A reference index has no
+            // compiler-owned key column and stays in place. An authored index
+            // whose declared fields or columns changed belongs to the
+            // reviewed change that moves them.
+            for index_id in candidate_entity.indexes.keys() {
+                let index_statement_id = format!("entity.{entity_id}.index.{index_id}");
+                if index_id.starts_with(REFERENCE_INDEX_PREFIX)
+                    || !previous_entity.indexes.contains_key(index_id)
+                    || statement_sql(&previous_ddl, &index_statement_id)
+                        != statement_sql(candidate.ddl(), &index_statement_id)
+                {
+                    continue;
+                }
+                removed_dependency_statements.push(DdlStatement {
+                    id: format!("{index_statement_id}.drop"),
+                    kind: DdlStatementKind::Index,
+                    sql: format!(
+                        "DROP INDEX IF EXISTS registry_data.{}",
+                        quote_identifier(
+                            &previous.physical_names.entities[entity_id].indexes[index_id]
+                        )
+                    ),
+                });
+                new_statement_ids.insert(index_statement_id);
+            }
+        }
         for (field_id, field) in &candidate_entity.fields {
             // Added checks always scan existing data, including when a previously
             // unconstrained column is present. Changes/removals require reviewed
@@ -2425,6 +2478,13 @@ fn additive_migration_plan(
         reviewed_descriptors: Vec::new(),
         prior_schema_fingerprint: None,
     }
+}
+
+fn statement_sql<'a>(ddl: &'a DdlInventory, id: &str) -> Option<&'a str> {
+    ddl.statements
+        .iter()
+        .find(|statement| statement.id == id)
+        .map(|statement| statement.sql.as_str())
 }
 
 /// Name prefixes of the generated per-row probe helpers, membership and
@@ -3849,7 +3909,15 @@ fn load_predecessor_closure(
     let governed = package_predecessor_governed_model(&manifest, &loaded)?;
     validate_predecessor_registry_bindings(&manifest, &governed)?;
     let package_digest = shared.digest().to_owned();
-    let migration_baseline = governed.migration_baseline(&package_digest);
+    // The closure read above held the packaged script to this digest. The
+    // script itself is not compared with the current compiler's output here:
+    // the plan does that, and refreshes compiler-owned DDL when they differ.
+    let generated_ddl_sha256 = manifest
+        .files
+        .iter()
+        .find(|entry| entry.role == PackageFileRole::GeneratedDdl)
+        .map(|entry| entry.sha256.clone());
+    let migration_baseline = governed.migration_baseline(&package_digest, generated_ddl_sha256);
     validate_migration_baseline(&migration_baseline)?;
     let history_schema_descriptor = governed.history_schema_descriptor(&package_digest)?;
 
@@ -4009,7 +4077,11 @@ struct PredecessorGovernedModel {
 }
 
 impl PredecessorGovernedModel {
-    fn migration_baseline(&self, package_digest: &str) -> CompiledRegistryMigrationBaseline {
+    fn migration_baseline(
+        &self,
+        package_digest: &str,
+        generated_ddl_sha256: Option<String>,
+    ) -> CompiledRegistryMigrationBaseline {
         CompiledRegistryMigrationBaseline {
             package_digest: package_digest.to_owned(),
             registry_id: self.registry_id.clone(),
@@ -4023,6 +4095,7 @@ impl PredecessorGovernedModel {
             queries: self.queries.clone(),
             actions: self.actions.clone(),
             recipients: self.recipients.clone(),
+            generated_ddl_sha256,
         }
     }
 
@@ -4770,6 +4843,13 @@ fn expected_migration_plan(
 }
 
 fn validate_migration_baseline(baseline: &CompiledRegistryMigrationBaseline) -> Result<()> {
+    if baseline
+        .generated_ddl_sha256
+        .as_deref()
+        .is_some_and(|stated| !valid_digest(stated))
+    {
+        return Err(PackageError::MigrationPlan);
+    }
     let bytes = canonicalize_json(
         &serde_json::to_value(baseline).map_err(|_| PackageError::MigrationPlan)?,
     )

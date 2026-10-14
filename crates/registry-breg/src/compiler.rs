@@ -3189,6 +3189,10 @@ fn valid_relative_sql_path(path: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
+/// PostgreSQL allows 32 key columns in an index, and an authored index ends
+/// with the record identifier.
+const MAX_AUTHORED_INDEX_FIELDS: usize = 31;
+
 fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
     let fields: BTreeMap<&str, &FieldSource> = entity
         .fields
@@ -3216,6 +3220,15 @@ fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 "breg.index.fields-invalid",
                 "entities[].indexes[].fields",
                 "an index has an empty, duplicate, or unresolved field set",
+            ));
+        }
+        if index.fields.len() > MAX_AUTHORED_INDEX_FIELDS {
+            errors.push(Diagnostic::error(
+                "breg.index.fields-too-many",
+                "entities[].indexes[].fields",
+                &format!(
+                    "an index may declare at most {MAX_AUTHORED_INDEX_FIELDS} fields; the record identifier takes the last of the 32 key columns PostgreSQL allows in an index"
+                ),
             ));
         }
         if index.fields.iter().any(|field| {

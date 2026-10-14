@@ -13,6 +13,10 @@ entities:
       - id: by-establishment-kind
         fields:
           - establishment-kind
+      - id: by-establishment-kind-and-code
+        fields:
+          - establishment-kind
+          - establishment-code
       - id: by-operating-status
         fields:
           - operating-status

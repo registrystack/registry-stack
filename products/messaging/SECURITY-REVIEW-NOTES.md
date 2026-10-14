@@ -942,24 +942,66 @@ non-TLS host connection, and checks passwords with SCRAM; the runtime
 connects with the least-privilege runtime role and migrates with the
 migration role, as in production.
 
-A session token is signed with the session's own ES256 key, carries the
-scopes and actor kind of the one access profile that names its client, and
-expires in an hour; the runtime verifies it against the session's static key
-set, so the key never leaves the session directory and no issuer runs. The
-mock gateway compares the static bearer token in constant time, signs each
-delivery report with the session's HMAC key, reads no field of a send, and
-logs nothing a send carries. Stopping the session removes both containers
-with their volumes; the next start in the project removes any container the
-previous record names before it replaces the session directory, and a second
-start is refused while one runs.
+A standalone session token is signed with the session's own ES256 key,
+carries the scopes and actor kind of the one access profile that names its
+client, and expires in an hour; the runtime verifies it against the session's
+static key set, so the key never leaves the session directory and no issuer
+runs.
+
+The paired `--issuer-project OWNER --resource URI` options instead compose
+with one ready BReg development issuer. Messaging gathers the distinct
+`requesterClients` from its already checked access profiles and invokes the
+public `bregctl dev export-client` command for each one. It does not read
+`.breg/dev/state.json`, `clients.json`, or a credential path itself. The
+explicit resource binds this invocation to the intended Messaging audience,
+and a real OAuth grant proves every client's registration. The shared
+`PrivateKeyJwt` client signs with the exported key,
+uses the issuer URL as the assertion audience, and requests that resource and
+the profile's scopes. The generated runtime reads scopes from `scope`, admits
+only those requester clients, and verifies RS256 tokens against the bounded
+public key snapshot returned by `registry-thunderid-tooling::local::snapshot`.
+An actual token for every client must resolve through `MessagingAuthenticator`
+before the session reports ready. No assertion issuer is configured, so an
+exchanged token remains refused under the ordinary runtime rule.
+
+The typed `MessagingDevState` in `session.json` records the public issuer
+binding for that foreground invocation. Static public keys and client
+credentials stay in separate owner-only session files; no bearer token or
+private key is written into the state document. A borrowed `dev token`
+requires that session to be ready, re-exports into a new owner-only scratch
+directory, compares the credential and endpoint with the capture, requests a
+fresh token, and verifies it against the retained keys and same caller
+identity before atomically replacing the header. A retained BReg restart
+therefore works; a changed credential, endpoint, signing key, or principal
+requires a fresh Messaging start. Each fresh start discards the previous
+Messaging state and captures current public trust. Messaging never starts,
+stops, resets, or removes the owner session, and no owner UUID or private
+metadata becomes part of its lifecycle.
+
+The mock gateway compares the static bearer token in constant time, signs
+each delivery report with the session's HMAC key, reads no field of a send,
+and logs nothing a send carries. Stopping the session removes only the
+PostgreSQL and Mailpit containers it started, with their volumes; the next
+start in the project removes any Messaging container the previous record
+names before it replaces the session directory, and a second start is refused
+while one runs.
 
 Residual risk: the audit journal and log of the last session stay in
 `.messaging/dev` until the next start. Neither carries a payload value
 (MESSAGING-SEC-08). A session killed with SIGKILL leaves its containers
-running until the next start in the same project removes them.
+running until the next start in the same project removes them. A borrowed
+session keeps each exported client assertion key in the owner-only
+`.messaging/dev/credentials/<client>/assertion-key.jwk` after it stops, and
+after a start refused once the export ran, until the next start in the
+project replaces the session directory; a `dev token` killed before it
+returns can leave a second owner-only copy under
+`.messaging/dev/.client-check-*` for the same time. These are development
+client keys for the borrowed loopback issuer.
 
-Tests: the `dev` unit tests in `crates/registry-messagingctl/src/dev/`, and
-`products/messaging/scripts/test-dev.sh`.
+Tests: the `dev` unit tests in `crates/registry-messagingctl/src/dev/`,
+`products/messaging/scripts/test-dev.sh`, and
+`products/messaging/scripts/test-dev-shared-issuer.sh`. The contract mapping
+names the borrowed-issuer unit tests; this note does not claim they ran.
 
 ## AWS SMS request signing
 

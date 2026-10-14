@@ -3551,9 +3551,9 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 
 [[package]]
 name = "napi"
-version = "3.14.0"
+version = "3.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15301c22171e8397a7b17beb3c75bf486bf67ca3bdad8ea347835b770df61969"
+checksum = "a4e2cf85c02d9b057898c485b824c3c416b65193689e2b7f517efc94b86ed24c"
 dependencies = [
  "bitflags",
  "ctor",
@@ -3576,9 +3576,9 @@ checksum = "b899b545d3aa6dca985939059f258c5488d34e4ecf39c274e20009748f4b846d"
 
 [[package]]
 name = "napi-derive"
-version = "3.6.11"
+version = "3.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "903796e3a3f79eb7e52b1548c11f1817cddec62b0e347a3e97af88b1bd76fd53"
+checksum = "92cec6048ac04041ac8055bdce1ec4f353416cd443ba9222bf73af790c3d4495"
 dependencies = [
  "convert_case 0.12.0",
  "ctor",
@@ -3854,7 +3854,7 @@ dependencies = [
  "oxiri 0.2.11",
  "oxrdf",
  "ryu-js",
- "thiserror 2.0.21",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -3866,7 +3866,7 @@ dependencies = [
  "oxilangtag",
  "oxiri 0.2.11",
  "rand 0.9.5",
- "thiserror 2.0.21",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4840,7 +4840,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-breg"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -4905,7 +4905,7 @@ dependencies = [
 
 [[package]]
 name = "registry-breg-client"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -4931,7 +4931,7 @@ dependencies = [
 
 [[package]]
 name = "registry-breg-client-node"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -4948,7 +4948,7 @@ dependencies = [
 
 [[package]]
 name = "registry-breg-client-py"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -4964,7 +4964,7 @@ dependencies = [
 
 [[package]]
 name = "registry-breg-mcp"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5007,7 +5007,7 @@ dependencies = [
 
 [[package]]
 name = "registry-breg-review"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -5048,7 +5048,7 @@ dependencies = [
 
 [[package]]
 name = "registry-bregctl"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "anstream",
  "anstyle",
@@ -5086,7 +5086,7 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "sha2 0.11.0",
- "signal-hook 0.4.4",
+ "signal-hook 0.4.5",
  "tempfile",
  "thiserror 2.0.21",
  "time",
@@ -5101,7 +5101,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5155,7 +5155,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework-breg"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -5182,7 +5182,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework-client"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5207,7 +5207,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework-client-node"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -5222,7 +5222,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework-client-py"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -5236,7 +5236,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework-core"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5258,7 +5258,7 @@ dependencies = [
 
 [[package]]
 name = "registry-caseworkctl"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -5285,7 +5285,7 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "sha2 0.11.0",
- "signal-hook 0.4.4",
+ "signal-hook 0.4.5",
  "tempfile",
  "tokio",
  "tokio-postgres",
@@ -5295,7 +5295,7 @@ dependencies = [
 
 [[package]]
 name = "registry-cli-docs"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "clap",
  "registry-breg",
@@ -5320,7 +5320,7 @@ dependencies = [
 
 [[package]]
 name = "registry-cli-reference"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "clap",
  "serde",
@@ -5430,7 +5430,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "axum-test",
@@ -5460,7 +5460,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery-client"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -5489,7 +5489,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery-client-node"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -5502,7 +5502,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery-client-py"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -5515,7 +5515,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery-profile"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "registry-platform-canonical-json",
  "serde",
@@ -5527,7 +5527,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discoveryctl"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "clap",
@@ -5553,7 +5553,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "assert-json-diff",
  "async-trait",
@@ -5615,7 +5615,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-authoring"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "anyhow",
  "jsonschema",
@@ -5630,7 +5630,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-client"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -5661,7 +5661,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-client-node"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -5685,7 +5685,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-client-py"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -5709,7 +5709,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-oid4vci"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5748,7 +5748,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-verifier"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -5768,7 +5768,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidencectl"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5803,7 +5803,7 @@ dependencies = [
  "serde_norway",
  "serde_path_to_error",
  "sha2 0.11.0",
- "signal-hook 0.4.4",
+ "signal-hook 0.4.5",
  "tempfile",
  "tokio",
  "tower",
@@ -5814,7 +5814,7 @@ dependencies = [
 
 [[package]]
 name = "registry-language-server"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -5833,7 +5833,7 @@ dependencies = [
 
 [[package]]
 name = "registry-linkml"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "registry-platform-yaml",
  "serde",
@@ -5844,7 +5844,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-cli"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "jsonschema",
  "registry-manifest-core",
@@ -5858,7 +5858,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "oxiri 0.3.1",
  "oxjsonld",
@@ -5874,7 +5874,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messaging"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5930,7 +5930,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messaging-client"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "registry-messaging-core",
@@ -5946,7 +5946,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messaging-client-node"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -5959,7 +5959,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messaging-client-py"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -5972,7 +5972,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messaging-core"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "hex",
@@ -5989,7 +5989,7 @@ dependencies = [
 
 [[package]]
 name = "registry-messagingctl"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "aws-lc-rs",
  "axum",
@@ -6005,15 +6005,17 @@ dependencies = [
  "registry-platform-buildinfo",
  "registry-platform-crypto",
  "registry-platform-dispatch",
+ "registry-platform-httputil",
  "registry-platform-oidc",
  "registry-platform-testing",
  "registry-platform-yaml",
+ "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustix 1.1.5",
  "serde",
  "serde_json",
  "serde_norway",
- "signal-hook 0.4.4",
+ "signal-hook 0.4.5",
  "tempfile",
  "tokio",
  "tokio-postgres",
@@ -6026,7 +6028,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-activation"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "chrono",
  "serde",
@@ -6039,7 +6041,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-audit"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "hmac 0.13.0",
  "regex",
@@ -6059,7 +6061,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "proptest",
@@ -6076,11 +6078,11 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-buildinfo"
-version = "0.41.0"
+version = "0.42.0"
 
 [[package]]
 name = "registry-platform-calendar"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -6089,7 +6091,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -6099,7 +6101,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-yaml",
@@ -6116,7 +6118,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -6142,7 +6144,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-dispatch"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -6156,7 +6158,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-hooks"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "registry-platform-canonical-json",
@@ -6176,7 +6178,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "http",
@@ -6192,7 +6194,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -6228,7 +6230,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -6249,7 +6251,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ratelimit"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "thiserror 2.0.21",
  "tokio",
@@ -6257,7 +6259,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-script"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "rhai",
  "serde",
@@ -6268,7 +6270,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -6286,7 +6288,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sqlite"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "rusqlite",
  "rustix 1.1.5",
@@ -6299,7 +6301,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-testing"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -6324,7 +6326,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-yaml"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "regex",
  "saphyr-parser",
@@ -6336,7 +6338,7 @@ dependencies = [
 
 [[package]]
 name = "registry-record"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "schemars",
  "serde",
@@ -6347,7 +6349,7 @@ dependencies = [
 
 [[package]]
 name = "registry-render"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -6385,7 +6387,7 @@ dependencies = [
 
 [[package]]
 name = "registry-review-client"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "chrono",
@@ -6404,7 +6406,7 @@ dependencies = [
 
 [[package]]
 name = "registry-review-protocol"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "chrono",
  "registry-platform-canonical-json",
@@ -6418,7 +6420,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -6466,7 +6468,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling-client"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "chrono",
@@ -6483,7 +6485,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling-client-node"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "chrono",
  "napi",
@@ -6497,7 +6499,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling-client-py"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "chrono",
  "pyo3",
@@ -6511,7 +6513,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling-core"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -6531,7 +6533,7 @@ dependencies = [
 
 [[package]]
 name = "registry-schedulingctl"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6552,7 +6554,7 @@ dependencies = [
 
 [[package]]
 name = "registry-stack-client"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "chrono",
  "registry-breg-client",
@@ -6569,7 +6571,7 @@ dependencies = [
 
 [[package]]
 name = "registry-thunderid-tooling"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
@@ -6764,9 +6766,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.5.0"
+version = "3.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fae7019994ae0fe4ada40b732f798f3ff26f0f04facb1477f1bf37eb4f18a2d3"
+checksum = "ab5023804cbe0304cbe06197ac16e645a0a0d0ffa2953bf735c15c2fa0213350"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -7287,9 +7289,9 @@ dependencies = [
 
 [[package]]
 name = "signal-hook"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a0c28ca5908dbdbcd52e6fdaa00358ab88637f8ab33e1f188dd510eb44b53d"
+checksum = "b29ffa27d3d59a049bb328258de100f8012848d1b08d444e08bbc02ac468435e"
 dependencies = [
  "libc",
  "signal-hook-registry",
@@ -7662,7 +7664,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -7856,9 +7858,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
 dependencies = [
  "bytes",
  "libc",
@@ -8161,9 +8163,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.27.0"
+version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2038684e0058edba0d17302619f62eabce4a8e11c6ac59506996a8d79848851d"
+checksum = "a5129de2ccc97808c4583d48f1fb44576d015cf241e432800572bda11ef30c3b"
 dependencies = [
  "cc",
  "regex",
@@ -8174,9 +8176,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-language"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca0d1bf6fdd806e43ae5198f82f527056d359def39e54e67a0f478ac09dac081"
+checksum = "d0af592be68c579aa78a16846bd19422978c3c52e438523d45ff5d1bff1f9d4a"
 
 [[package]]
 name = "tree-sitter-yaml"
@@ -8836,9 +8838,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.27.0"
+version = "1.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97277d36b9c3ace13e58fa6e753f8b0bbbf302a18dd193240d70f9e29681059a"
+checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -9787,9 +9789,9 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 dependencies = [
  "zeroize_derive",
 ]

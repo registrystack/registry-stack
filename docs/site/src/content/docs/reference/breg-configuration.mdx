@@ -60,15 +60,21 @@ declared field type and that the condition is valid for the event trigger.
 
 ## Indexes
 
-`entities[].indexes` declares btree indexes by `id` and ordered `fields`. Every `reference`
+`entities[].indexes` declares btree indexes by `id` and ordered `fields`. The compiler appends the
+record id as the last column of each declared index, because every list orders by the record id
+last; do not declare it. An index declares at most 31 fields: the appended record id takes the last
+of the 32 key columns PostgreSQL allows in an index, and the compiler refuses a longer index with
+`breg.index.fields-too-many`. Every `reference`
 field is indexed automatically unless a declared index or a unique constraint without `when`
 already leads with it. `bregctl check` reports the authoring findings
 `breg.entity.list-unindexed-filter` and `breg.entity.list-unindexed-sort` for a filterable or sortable
 list field that no index leads with. They fail a check only under `--deny-warnings`, and are not
 raised when a package is built.
 
-{/* Evidence: crates/registry-breg/src/compiler.rs, compile_entities() and
-    unindexed_list_findings(); crates/registry-breg/src/model.rs, leading_field_indexed(). */}
+{/* Evidence: crates/registry-breg/src/compiler.rs, compile_entities(), validate_indexes(), and
+    unindexed_list_findings(); crates/registry-breg/src/model.rs, leading_field_indexed();
+    crates/registry-breg/src/generated_ddl.rs;
+    crates/registry-breg/tests/compiler_contract.rs. */}
 
 ## Attachment storage
 

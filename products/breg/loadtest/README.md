@@ -235,6 +235,185 @@ counters, manifest, safety scan and raw k6 results. The build sampler counts
 command lines matching Cargo/rustc, including wrappers, so its peaks are
 conservative overlap indicators rather than exact compiler-process counts.
 
+## Baseline and saturation cause
+
+The 2026-10-12 baseline used a release build at `ac52a5892` with a fresh
+100,000-establishment seed, 2,000 businesses, 5,000 assignments, the stock
+four-connection pool, and `RANDOM_SEED=20260902`. The cursor-smoke check
+passed. The steady profile ran once at each rate: three minutes at 50
+operations/s and one minute at each lower rate. The machine was the same shared
+Apple M5 Max with macOS 26.4.1 and Docker PostgreSQL, and start/end one-minute
+host load averages ranged from 13.77 to 26.52, so all figures are directional.
+
+| Offered operations/s | Completed operations/s | Dropped iterations | p50 (ms) | p95 (ms) | p99 (ms) | SLO thresholds |
+|---:|---:|---:|---:|---:|---:|---|
+| 10 | 9.978 | 0 | 18.12 | 158.46 | 186.85 | pass |
+| 20 | 19.902 | 0 | 22.16 | 226.60 | 362.70 | fail |
+| 30 | 29.942 | 0 | 145.89 | 641.22 | 821.09 | fail |
+| 40 | 39.656 | 0 | 475.63 | 1,280.92 | 1,417.61 | fail |
+| 50 | 47.989 | 179 | 261.30 | 4,356.70 | 5,045.86 | fail |
+
+No run returned an HTTP 504, and sampled lock waiters peaked at 1. The 50
+operations/s run issued 10,899 HTTP requests. The September series above
+returned 2,938–3,929 HTTP 504 responses at the same rate; this baseline did not
+isolate which change since then removed them.
+
+The saturating statement is the filtered, sorted collection page. At 10
+operations/s the per-operation latencies were:
+
+| Operation | p50 (ms) | p95 (ms) | p99 (ms) |
+|---|---:|---:|---:|
+| `filtered_list` | 140.06 | 181.13 | 204.73 |
+| `filtered_list` continuation page | 140.89 | 179.82 | 197.51 |
+| `lookup_by_code` | 14.75 | 26.76 | 49.98 |
+| `get` | 14.02 | 28.69 | 63.36 |
+| `create` | 21.83 | 31.44 | 47.90 |
+| `patch` | 23.27 | 31.16 | 33.35 |
+| `patch` prefetch | 14.05 | 17.57 | 18.75 |
+
+At 50 operations/s, `pg_stat_activity` sampled every 200 ms showed the
+collection page statement in 1,834 of 1,875 active client backend samples, and
+at least three of the four connections were busy in 500 of 691 samples. Every
+other operation queues behind it: the `get` median rose from 14 ms at 10
+operations/s to 450 ms at 40.
+
+`EXPLAIN (ANALYZE, BUFFERS)` on that statement, under the runtime's role and
+settings, read 33,379 rows and sorted them to return a 51-row page, in 100–140
+ms. [Issue #1564](https://github.com/registrystack/registry-stack/issues/1564)
+records the plan experiments and tracks the fix.
+
+## Results with index-served list pages
+
+The same procedure was repeated on 2026-10-12 against a release build in which
+a filtered, sorted collection page is served from a declared index: entity
+source views carry no security barrier, every authored index ends in the record
+id, and the continuation is a row comparison where the sort field cannot be
+null. The seed sizes, connection pool, `RANDOM_SEED`, machine, and run lengths
+were those of the baseline. Start/end one-minute host load averages ranged
+from 5.64 to 10.98, lower than during the baseline, so the comparison is
+directional too.
+
+| Offered operations/s | Completed operations/s | Dropped iterations | p50 (ms) | p95 (ms) | p99 (ms) | SLO thresholds |
+|---:|---:|---:|---:|---:|---:|---|
+| 10 | 10.015 | 0 | 11.81 | 15.92 | 18.05 | pass |
+| 20 | 20.000 | 0 | 11.59 | 15.91 | 17.62 | pass |
+| 30 | 30.000 | 0 | 11.56 | 15.92 | 18.13 | pass |
+| 40 | 39.999 | 0 | 11.59 | 15.92 | 20.19 | pass |
+| 50 | 49.996 | 0 | 11.63 | 16.65 | 19.90 | pass |
+
+No run returned an HTTP 504, and sampled lock waiters peaked at 0. The 50
+operations/s run issued 11,087 HTTP requests. At 10 operations/s the
+per-operation latencies were:
+
+| Operation | p50 (ms) | p95 (ms) | p99 (ms) |
+|---|---:|---:|---:|
+| `filtered_list` | 12.38 | 15.55 | 16.90 |
+| `filtered_list` continuation page | 11.78 | 13.85 | 15.59 |
+| `lookup_by_code` | 11.76 | 13.98 | 15.53 |
+| `get` | 11.67 | 13.70 | 15.06 |
+| `create` | 15.77 | 19.71 | 23.46 |
+| `patch` | 16.97 | 18.07 | 18.81 |
+| `patch` prefetch | 11.75 | 13.84 | 15.11 |
+
+The read-only sweep, held two minutes at each rate, located the next ceiling:
+
+| Offered operations/s | Completed operations/s | Dropped iterations | p95 (ms) | p99 (ms) | HTTP 504 | SLO thresholds |
+|---:|---:|---:|---:|---:|---:|---|
+| 75 | 74.993 | 0 | 15.84 | 21.53 | 0 | pass |
+| 100 | 99.996 | 0 | 18.75 | 22.40 | 0 | pass |
+| 150 | 149.983 | 0 | 23.24 | 400.68 | 0 | pass |
+| 250 | 211.105 | 2,409 | 10,001.44 | 10,001.94 | 4,945 | fail |
+
+At 250 operations/s every operation slowed by the same amount, and sampled
+lock waiters and blocked backends stayed at 0. That pattern fits the
+four-connection pool running out of capacity; the next section measures it.
+
+## What sets the ceiling
+
+Follow-up runs on 2026-10-12 used the same build, seed sizes, `RANDOM_SEED`,
+and machine. The mixed `steady` profile ran one minute at each rate against the
+stock four-connection pool, with start/end one-minute host load averages
+between 3.30 and 5.50:
+
+| Offered operations/s | Completed operations/s | Dropped iterations | p50 (ms) | p95 (ms) | p99 (ms) | HTTP 504 | SLO thresholds |
+|---:|---:|---:|---:|---:|---:|---:|---|
+| 50 | 50.006 | 0 | 10.84 | 15.36 | 18.93 | 0 | pass |
+| 75 | 74.998 | 0 | 10.98 | 16.63 | 22.91 | 0 | pass |
+| 100 | 99.997 | 0 | 12.80 | 20.75 | 31.30 | 0 | pass |
+| 150 | 149.967 | 0 | 13.58 | 24.08 | 32.02 | 0 | pass |
+| 200 | 199.612 | 0 | 59.37 | 270.15 | 329.64 | 0 | fail |
+| 250 | 202.682 | 1,194 | 3,786.22 | 6,584.32 | 6,722.03 | 0 | fail |
+| 300 | 217.706 | 2,550 | 6,718.80 | 10,001.16 | 10,001.72 | 2,527 | fail |
+| 400 | 293.723 | 3,439 | 10,001.03 | 10,002.17 | 10,002.52 | 14,078 | fail |
+
+Completed operations include the ones answered with HTTP 504. A repeat at 250
+operations/s completed 196.439 operations/s with 1,386 dropped iterations.
+Throughput levels off near 200 operations/s, which is about 245 HTTP requests/s.
+
+The database is not what runs out. During the repeat at 250 operations/s,
+`pg_stat_activity` sampled every 200 ms showed no busy backend in 114 of 293
+samples, one in 101, two in 60, three in 16, and all four in 2. Active
+transactions were 3 ms old at the median and 14 ms at p95.
+
+Each HTTP request writes two audit entries, one before its work and one after,
+and waits for each to be synced: every run wrote exactly twice as many entries
+as it issued requests (7,402 entries for 3,701 requests at 50 operations/s).
+A request takes its pooled connection before the first entry and returns it
+after the second, so a connection is held across both syncs while PostgreSQL
+is idle for most of that time. At 245 requests/s over four connections, each
+request holds its connection for about 16 ms.
+
+The sync is expensive on this machine. Appending one audit-sized line and
+syncing it 300 times took a mean of 3.47 ms (p95 4.16 ms) with `F_FULLFSYNC`,
+which is the call Rust's `File::sync_all` makes on macOS, against 0.25 ms with
+`F_BARRIERFSYNC` and 0.03 ms with `fsync(2)`. Two syncs account for about 7 ms
+of the 11 ms a request takes at low rates. These runs did not measure the sync
+cost of a Linux deployment disk, so the absolute figures are specific to this
+machine; the connection being held across both syncs is not.
+
+A one-off build with the pool raised to 16 connections, and nothing else
+changed, moved the ceiling. This is not a supported setting of the load-test
+environment: the pool size is fixed in the `bregctl dev` runtime configuration.
+Host load averages were higher, between 5.83 and 20.76, with unrelated system
+processes busy:
+
+| Offered operations/s | Completed operations/s | Dropped iterations | p50 (ms) | p95 (ms) | p99 (ms) | HTTP 504 | SLO thresholds |
+|---:|---:|---:|---:|---:|---:|---:|---|
+| 150 | 149.951 | 0 | 14.27 | 24.42 | 32.96 | 0 | pass |
+| 250 | 249.787 | 0 | 19.58 | 42.73 | 164.08 | 0 | pass |
+| 300 | 299.933 | 0 | 14.80 | 31.71 | 118.28 | 0 | pass |
+| 400 | 399.900 | 0 | 18.75 | 111.36 | 386.03 | 0 | fail |
+| 500 | 499.854 | 0 | 17.12 | 206.42 | 298.08 | 0 | fail |
+| 600 | 599.481 | 0 | 50.21 | 329.01 | 487.68 | 0 | fail |
+| 800 | 589.568 | 6,728 | 3,735.69 | 10,001.67 | 10,002.33 | 14,818 | fail |
+| 1,000 | 721.921 | 9,462 | 8,448.03 | 10,001.67 | 10,002.63 | 22,622 | fail |
+
+Two earlier runs in that series disagree with the table and are kept in the
+evidence. A first run at 300 operations/s completed 267.558 with 1,143 dropped
+iterations while the one-minute load average rose from 9.19 to 20.76, and a
+first run at 600 completed 581.456 with 370 dropped iterations. Sampled during
+the 600 run in the table, no backend was busy in 55 of 272 samples and three
+to seven of the 16 were busy in 158, and 101 backend samples were waiting on a
+row or transaction lock.
+
+Past the ceiling the service does not shed load. A request waits for a
+connection until the 10-second HTTP request deadline answers it with a 504; the
+pool's own wait timeout defaults to 30 seconds, so it never answers first. The
+requests that time out have usually just been given a connection: the 800 and
+1,000 operations/s runs returned 37,440 HTTP 504 responses and wrote 37,395
+`unfinished` audit entries, each for a request that had started its work.
+That work is discarded, so successful responses fall as the offered rate
+rises: 16,984, then 15,977, then 8,109 at 250, 300, and 400 operations/s on
+four connections, and 44,354, then 32,728, then 34,712 at 600, 800, and 1,000
+on 16.
+
+The read-only `burst` profile on four connections recovers from overload
+without a restart. With a 150 operations/s peak it passed with no dropped
+iteration and a peak p99 of 22.47 ms. With the default 250 operations/s peak,
+above the ceiling, it completed 213.381 operations/s at the peak with 325
+dropped iterations and a p99 of 2,091.21 ms, returned no HTTP error, and the
+recovery phase returned to 50.009 operations/s with a p99 of 15.65 ms.
+
 ## Verification
 
 ```bash

@@ -69,18 +69,18 @@
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.7.4",
-    "@astrojs/starlight": "^0.42.5",
+    "@astrojs/starlight": "^0.42.6",
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/public-sans": "^5.3.0",
-    "astro": "7.3.5",
+    "astro": "7.3.8",
     "astro-mermaid": "^2.1.0",
     "mermaid": "^11.17.2",
-    "starlight-openapi": "^0.26.3"
+    "starlight-openapi": "^0.27.0"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
-    "@astrojs/markdown-remark": "7.3.1",
-    "@redocly/cli": "^2.57.0",
+    "@astrojs/markdown-remark": "7.3.2",
+    "@redocly/cli": "^2.60.0",
     "@vvago/vale": "^3.24.0",
     "github-slugger": "^2.0.0",
     "linkinator": "^8.1.0",

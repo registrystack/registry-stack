@@ -98,27 +98,27 @@ CREATE POLICY "registry_rls_select_e2344d3c9ec5ca699285815e" ON registry_data."b
 CREATE POLICY "registry_rls_select_c45b26bc68254393ceed284a" ON registry_data."breg_e_person_privacy_notice_33176351cbd95cfa" FOR SELECT USING ((NULLIF(current_setting('registry.access_profile', true), '') = 'person-consent-steward' AND NULLIF(current_setting('registry.principal', true), '') IS NOT NULL AND jsonb_typeof(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 'array' AND jsonb_array_length(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 0) AND (record_lifecycle = 'active'));
 CREATE POLICY "registry_rls_insert_8def55f080a8d15a5f1daffa" ON registry_data."breg_e_person_privacy_notice_33176351cbd95cfa" FOR INSERT WITH CHECK ((NULLIF(current_setting('registry.access_profile', true), '') = 'person-consent-steward' AND NULLIF(current_setting('registry.principal', true), '') IS NOT NULL AND jsonb_typeof(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 'array' AND jsonb_array_length(NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb) = 0) AND record_lifecycle = 'active');
 CREATE VIEW registry_source."person"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_person_person_code_33b91e7fc3da213f" AS "person_code", "breg_f_person_legal_name_223940d7af1e1d37" AS "legal_name", "breg_f_person_district_07fd98df6f1427b1" AS "district"
                     FROM registry_data."breg_e_person_6ebfb4811e7ddd30"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."person_consent_decision"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_person_consent_decision_subject_da151d9ec8dd4596" AS "subject", "breg_f_person_consent_decision_link_8045cfdec2efbdd9" AS "link", "breg_f_person_consent_decision_notice_812ae94ec270f2e0" AS "notice", "breg_f_person_consent_decision_clause_53760b0e96507be6" AS "clause", "breg_f_person_consent_decision_recipient_01eee14e543f0ded" AS "recipient", "breg_f_person_consent_decision_purpose_095b26b2691d4462" AS "purpose", "breg_f_person_consent_decision_scope_252e5c1148cd3415" AS "scope", "breg_f_person_consent_decision_decision_cec0416a3d33b849" AS "decision", "breg_f_person_consent_decision_effective_at_8a2677c350b7f6e1" AS "effective_at", "breg_f_person_consent_decision_expires_at_0a209617daa58979" AS "expires_at", "breg_f_person_consent_decision_channel_09f3e59b8102e8be" AS "channel", "breg_f_person_consent_decision_evidence_49590dc3c9aed3fb" AS "evidence", "breg_f_person_consent_decision_witness_8aee9021dc8c61de" AS "witness", "breg_f_person_consent_decision_invalidation_re_b783aad6e9f9eceb" AS "invalidation_reason", "breg_f_person_consent_decision_source_referenc_c6c163422217ee60" AS "source_reference"
                     FROM registry_data."breg_e_person_consent_decision_b47c52d9d8e08a56"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."person_consent_link"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_person_consent_link_subject_40edc30098d6d859" AS "subject", "breg_f_person_consent_link_principal_4df8f00d533888a4" AS "principal", "breg_f_person_consent_link_active_55eb892abf58c9d6" AS "active"
                     FROM registry_data."breg_e_person_consent_link_0faf6a40b5b00c64"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."person_notice_clause"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_person_notice_clause_notice_fa0fbbce159f2996" AS "notice", "breg_f_person_notice_clause_recipient_0830fdff09c280eb" AS "recipient", "breg_f_person_notice_clause_purpose_e87c569ee9f2365e" AS "purpose", "breg_f_person_notice_clause_scope_e86e5add881b435d" AS "scope", "breg_f_person_notice_clause_data_life_7a4a81aa1b4d252a" AS "data_life", "breg_f_person_notice_clause_description_1d4803ac026c4ca1" AS "description"
                     FROM registry_data."breg_e_person_notice_clause_a93369c803c4f0be"
                    WHERE record_lifecycle = 'active';
 CREATE VIEW registry_source."person_privacy_notice"
-                 WITH (security_invoker=true, security_barrier=true)
+                 WITH (security_invoker=true)
                  AS SELECT record_id AS "id", "breg_f_person_privacy_notice_notice_version_e48352b006654555" AS "notice_version", "breg_f_person_privacy_notice_language_99c6dbbcc795aa3d" AS "language", "breg_f_person_privacy_notice_title_a55c81f92bc62d11" AS "title", "breg_f_person_privacy_notice_text_5b968ba5fa0b740c" AS "text", "breg_f_person_privacy_notice_text_uri_88d330c2c5168ca0" AS "text_uri", "breg_f_person_privacy_notice_controller_name_ebafd975ba796de6" AS "controller_name", "breg_f_person_privacy_notice_controller_contac_dc23776879385d48" AS "controller_contact", "breg_f_person_privacy_notice_jurisdiction_a7d6414fc47767ba" AS "jurisdiction", "breg_f_person_privacy_notice_legal_basis_ee569a21cbf59bc6" AS "legal_basis", "breg_f_person_privacy_notice_rights_statement_12e898a8cc307f93" AS "rights_statement", "breg_f_person_privacy_notice_rights_uri_86fb8aa76cee6f80" AS "rights_uri", "breg_f_person_privacy_notice_withdrawal_method_ce5d85da31ffef47" AS "withdrawal_method", "breg_f_person_privacy_notice_published_at_72540cb60e6af174" AS "published_at"
                     FROM registry_data."breg_e_person_privacy_notice_33176351cbd95cfa"
                    WHERE record_lifecycle = 'active';

@@ -52,11 +52,11 @@ class ReleaseSelectionTest(unittest.TestCase):
             MODULE.select_from_tag(["v0.34.0"], "0.33.0")
 
     def test_refuses_a_start_before_the_immediate_predecessor(self) -> None:
-        for tag in ("v0.39.0", "v0.33.0", "v0.1.0"):
+        for tag in ("v0.40.0", "v0.39.0", "v0.33.0", "v0.1.0"):
             with self.subTest(tag=tag), self.assertRaisesRegex(Error, "immediate predecessor"):
-                MODULE.check_forward_path(tag, "0.41.0")
-        MODULE.check_forward_path("v0.40.0", "0.40.0")
-        MODULE.check_forward_path("v0.40.0", "0.41.0")
+                MODULE.check_forward_path(tag, "0.42.0")
+        MODULE.check_forward_path("v0.41.0", "0.41.0")
+        MODULE.check_forward_path("v0.41.0", "0.42.0")
 
     def test_refuses_a_floor_behind_the_release_before_the_workspace_version(self) -> None:
         released = ["0.9.0", "0.37.0", "0.38.0", "0.39.0"]
@@ -203,6 +203,7 @@ class ReleaseSelectionTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()), \
                 unittest.mock.patch.object(MODULE, "fetch_release", side_effect=fetch) as fetched, \
                 unittest.mock.patch.object(MODULE, "Postgres", side_effect=AssertionError("started")), \
+                unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 40, 0)), \
                 unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.41.0"):
             work = Path(temporary) / "work"
             report = Path(temporary) / "report.json"
@@ -394,6 +395,7 @@ class ProductSelectionTest(unittest.TestCase):
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(stderr), \
                 unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.41.0"), \
+                unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 40, 0)), \
                 unittest.mock.patch.object(MODULE.release_roster, "MESSAGING_FIRST_RELEASE",
                                            (0, 41, 0)):
             work = Path(temporary) / "work"

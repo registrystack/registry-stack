@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/discovery-client",
-  "version": "0.41.0",
+  "version": "0.42.0",
   "description": "Node.js binding for the Registry Discovery client, via napi-rs.",
   "license": "Apache-2.0",
   "publishConfig": { "access": "public", "provenance": true },
@@ -26,8 +26,8 @@
     "normalize:loader": "node scripts/normalize-napi-loader.js"
   },
   "devDependencies": {
-    "@napi-rs/cli": "3.10.6",
-    "@types/node": "24.19.1",
+    "@napi-rs/cli": "3.10.8",
+    "@types/node": "24.19.2",
     "typescript": "6.0.3"
   }
 }

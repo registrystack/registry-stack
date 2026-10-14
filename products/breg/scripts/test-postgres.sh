@@ -105,6 +105,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_migration \
     --test postgres_spatial_migration \
     --test postgres_reference_indexes \
+    --test postgres_list_page_plans \
     --test postgres_fixture_journeys \
     --test postgres_statistics \
     --test postgres_statistics_http \
