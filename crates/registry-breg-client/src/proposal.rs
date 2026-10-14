@@ -814,6 +814,13 @@ impl BaseRegistryClient {
             || document.subject.source.len() > 512
             || document.context.reference.is_empty()
             || document.context.reference.len() > 2048
+            || document.context.contract.as_ref().is_some_and(|contract| {
+                !contract.id.starts_with("urn:registry:breg:review-context:")
+                    || contract.id.len() > 2048
+                    || contract.id.chars().any(char::is_control)
+                    || !digest(&contract.revision)
+                    || !digest(&contract.schema_digest)
+            })
             || document.authority.is_some() != document.policy.is_some()
             || document.policy.as_ref().is_some_and(|policy| {
                 !digest(&policy.digest) || policy.id.is_empty() || policy.version.is_empty()
@@ -834,8 +841,10 @@ impl BaseRegistryClient {
                     .as_deref()
                     .is_some_and(|id| Uuid::parse_str(id).is_err())
             })
-            || is_context && (document.context.id.is_none() || document.context.fields.is_none())
-            || !is_context && (document.context.id.is_some() || document.context.fields.is_some())
+            || is_context
+                && (document.context.contract.is_none() || document.context.fields.is_none())
+            || !is_context
+                && (document.context.contract.is_some() || document.context.fields.is_some())
         {
             return Err(refusal());
         }
@@ -1391,6 +1400,7 @@ mod tests {
                                 "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
                             ),
                             ("cache-control", "no-store"),
+                            ("vary", "authorization, accept"),
                         ],
                         Json(value.lock().unwrap().clone()),
                     )
@@ -1409,6 +1419,27 @@ mod tests {
             .unwrap();
         assert_eq!(
             accepted.value.context.contract.unwrap().schema_digest,
+            REVISION
+        );
+        let actions = json!([{"actionId":"correct-address","accessProfile":"author","operations":["get-review-context"]}]);
+        let purpose = BRegProposalReviewBinding::from_metadata(
+            &actions,
+            &client.source_binding(),
+            "author",
+            "correct-address",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            client
+                .read_proposal_review_by_id(&purpose, ID)
+                .await
+                .unwrap()
+                .value
+                .context
+                .contract
+                .unwrap()
+                .schema_digest,
             REVISION
         );
         let mut refused = Vec::new();
@@ -1456,6 +1487,10 @@ mod tests {
             *response.lock().unwrap() = changed;
             assert!(client
                 .read_proposal_review_context(&promoted)
+                .await
+                .is_err());
+            assert!(client
+                .read_proposal_review_by_id(&purpose, ID)
                 .await
                 .is_err());
         }

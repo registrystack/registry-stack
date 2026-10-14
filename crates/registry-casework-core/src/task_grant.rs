@@ -598,12 +598,15 @@ impl TaskTemplate {
                 "Write a purpose, such as eligibility.review.",
             );
         }
-        if self.subjects.is_empty() || self.subjects.len() > 32 {
+        // Review-backed grants can use fixed bounds without disclosing source
+        // claims. Their runtime still rechecks the exact source status.
+        if (self.subjects.is_empty() && self.review_policies.is_empty()) || self.subjects.len() > 32
+        {
             findings.push(
                 "casework.task-template.subjects-out-of-range",
                 "/subjects",
-                "expected 1 to 32 subject claims",
-                "Map at least one token claim, and no more than 32, to a source field.",
+                "expected at most 32 subject claims; legacy templates require at least one",
+                "Map no more than 32 token claims to source fields. Only review-policy-backed templates may omit source claims.",
             );
         }
         for (claim, field) in &self.subjects {

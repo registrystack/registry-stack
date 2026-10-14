@@ -39,6 +39,50 @@ fn task_template() -> Value {
     json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["review-team"],"eligibleProfiles":["reviewer"],"source":"notice-source","reviewPolicies":["notice-review"],"agent":{"issuer":"https://agent.example","subject":"summary-agent"},"client":"summary-client","resource":"urn:registry:records","scopes":["records:get"],"purpose":"prepare-summary","bounds":{"type":"breg","permissions":[{"collection":"records","operations":["get"]}]},"subjects":{"region":"region"},"lifetimeSeconds":900})
 }
 #[test]
+fn fixed_review_grants_need_status_without_disclosing_source_claims() {
+    let mut value = source_value();
+    let mut template = task_template();
+    template["subjects"] = json!({});
+    value["taskTemplates"] = json!([template.clone()]);
+    let project = decode(value.clone());
+    project.compile_policy("notice-review").unwrap();
+    assert_eq!(
+        project.required_context_capabilities(&project.review_policies[0]),
+        std::collections::BTreeSet::from([
+            ReviewContextCapability::HumanDisplay,
+            ReviewContextCapability::ServiceStatus,
+        ])
+    );
+    let decoded: TaskTemplate = serde_json::from_value(template.clone()).unwrap();
+    assert!(decoded
+        .disclosed_subjects(&Default::default())
+        .unwrap()
+        .is_empty());
+    template["reviewPolicies"] = json!([]);
+    let legacy: TaskTemplate = serde_json::from_value(template.clone()).unwrap();
+    assert!(legacy
+        .findings(&project)
+        .iter()
+        .any(|finding| finding.code == "casework.task-template.subjects-out-of-range"));
+    template["reviewPolicies"] = json!(["notice-review"]);
+    template["subjects"] = Value::Object(
+        (0..32)
+            .map(|index| (format!("claim-{index}"), json!("region")))
+            .collect(),
+    );
+    let maximum: TaskTemplate = serde_json::from_value(template.clone()).unwrap();
+    assert!(!maximum
+        .findings(&project)
+        .iter()
+        .any(|finding| finding.code == "casework.task-template.subjects-out-of-range"));
+    template["subjects"]["claim-32"] = json!("region");
+    let oversized: TaskTemplate = serde_json::from_value(template).unwrap();
+    assert!(oversized
+        .findings(&project)
+        .iter()
+        .any(|finding| finding.code == "casework.task-template.subjects-out-of-range"));
+}
+#[test]
 fn submitted_context_compiles_without_a_provider_and_pins_clocks_and_authority() {
     let project = decode(project_value());
     let closure = project.compile_policy("notice-review").unwrap();
