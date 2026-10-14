@@ -22,7 +22,7 @@ pub const SCHEMAS_DIRECTORY: &str = "schemas";
 /// Recorded request and response pairs a project is replayed against.
 pub const FIXTURES_DIRECTORY: &str = "fixtures";
 /// Key material a project needs to run locally.
-pub const SECRETS_DIRECTORY: &str = "secrets";
+pub const SECRETS_DIRECTORY: &str = ".generated/secrets";
 /// Caller access material.
 pub const ACCESS_DIRECTORY: &str = "access";
 /// Access policy documents, below [`ACCESS_DIRECTORY`].

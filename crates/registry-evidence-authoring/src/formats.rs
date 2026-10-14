@@ -18,37 +18,18 @@ use registry_platform_yaml::{
     ApiVersion, Decoded, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Node, Reader,
     Refusal, RemovedKey, Report, ScalarHook, ScalarSite, Severity,
 };
-use serde::de::{DeserializeOwned, IgnoredAny};
+use serde::de::DeserializeOwned;
 
-use crate::{
-    finding::Finding,
-    model::{AccessPolicy, Question},
-    validate::{validate_access_policy, validate_question},
-};
+use crate::finding::Finding;
 
 /// The `apiVersion` of the project marker, `evidence-project.yaml`.
 pub const AUTHORING_PROJECT_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/authoring-project/v1alpha1";
 /// The `kind` of the project marker.
 pub const AUTHORING_PROJECT_KIND: &str = "EvidenceAuthoringProject";
-/// The `apiVersion` of a question under `questions/`.
-pub const QUESTION_API_VERSION: &str = "id.registrystack.org/formats/evidence/question/v1alpha1";
-/// The `kind` of a question.
-pub const QUESTION_KIND: &str = "EvidenceQuestion";
 /// The published `$id` of the project marker's JSON Schema.
 pub const AUTHORING_PROJECT_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json";
-/// The published `$id` of a question's JSON Schema.
-pub const QUESTION_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json";
-/// The published `$id` of a local access policy's JSON Schema.
-pub const ACCESS_POLICY_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/evidence/access-policy/access-policy.v1alpha1.schema.json";
-/// The `apiVersion` of a local access policy under `access/policies/`.
-pub const ACCESS_POLICY_API_VERSION: &str =
-    "id.registrystack.org/formats/evidence/access-policy/v1alpha1";
-/// The `kind` of a local access policy.
-pub const ACCESS_POLICY_KIND: &str = "EvidenceAccessPolicy";
 /// The published `$id` of a local access client's JSON Schema.
 pub const ACCESS_CLIENT_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/evidence/access-client/access-client.v1alpha1.schema.json";
@@ -57,20 +38,6 @@ pub const ACCESS_CLIENT_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/access-client/v1alpha1";
 /// The `kind` of a local access client.
 pub const ACCESS_CLIENT_KIND: &str = "EvidenceAccessClient";
-/// The published `$id` of an authored source's JSON Schema.
-pub const SOURCE_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/evidence/source/source.v1alpha1.schema.json";
-/// The published `$id` of a selector profile's JSON Schema.
-pub const SELECTOR_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/evidence/selector/selector.v1alpha1.schema.json";
-/// The `apiVersion` of an authored source under `sources/`.
-pub const SOURCE_API_VERSION: &str = "id.registrystack.org/formats/evidence/source/v1alpha1";
-/// The `kind` of an authored source.
-pub const SOURCE_KIND: &str = "EvidenceSource";
-/// The `apiVersion` of an authored selector under `selectors/`.
-pub const SELECTOR_API_VERSION: &str = "id.registrystack.org/formats/evidence/selector/v1alpha1";
-/// The `kind` of an authored selector.
-pub const SELECTOR_KIND: &str = "EvidenceSelector";
 /// The `apiVersion` of a deployment target's `governance.yaml`.
 pub const TARGET_GOVERNANCE_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/target-governance/v1alpha1";
@@ -114,32 +81,6 @@ pub const AUTHORING_PROJECT: FormatSpec<'static> = FormatSpec {
             replacement: "Remove `project`; `kind: EvidenceAuthoringProject` names the project.",
         },
     ],
-};
-
-/// One authored question.
-pub const QUESTION: FormatSpec<'static> = FormatSpec {
-    kind: QUESTION_KIND,
-    envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(QUESTION_API_VERSION)],
-        retired_api_versions: &[],
-    },
-    removed_keys: &[RemovedKey {
-        pointer: "/answers/*/id",
-        replacement: "Rename `answers[].id` to `answers[].uri`.",
-    }],
-};
-
-/// One local access policy.
-pub const ACCESS_POLICY: FormatSpec<'static> = FormatSpec {
-    kind: ACCESS_POLICY_KIND,
-    envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(ACCESS_POLICY_API_VERSION)],
-        retired_api_versions: &[],
-    },
-    removed_keys: &[RemovedKey {
-        pointer: "/version",
-        replacement: NO_FORMAT_VERSION,
-    }],
 };
 
 /// One local access client.
@@ -200,41 +141,14 @@ pub const MOCK_PLAN: FormatSpec<'static> = FormatSpec {
     }],
 };
 
-/// One authored source under `sources/`.
-pub const SOURCE: FormatSpec<'static> = FormatSpec {
-    kind: SOURCE_KIND,
-    envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(SOURCE_API_VERSION)],
-        retired_api_versions: &[],
-    },
-    removed_keys: &[RemovedKey {
-        pointer: "/transport",
-        replacement: "Declare type instead; keep the value.",
-    }],
-};
-
-/// One authored selector under `selectors/`.
-pub const SELECTOR: FormatSpec<'static> = FormatSpec {
-    kind: SELECTOR_KIND,
-    envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(SELECTOR_API_VERSION)],
-        retired_api_versions: &[],
-    },
-    removed_keys: &[],
-};
-
 /// The formats an authoring project's files may declare by envelope, for a
 /// read that identifies a file by its `kind`.
 pub const ENVELOPED_FORMATS: &[FormatSpec<'static>] = &[
-    AUTHORING_PROJECT,
-    QUESTION,
-    ACCESS_POLICY,
+    crate::project::PROJECT,
+    crate::target::TARGET,
+    crate::target::AUTHORITY,
     ACCESS_CLIENT,
-    TARGET_GOVERNANCE,
-    TARGET_SETTINGS,
     MOCK_PLAN,
-    SOURCE,
-    SELECTOR,
 ];
 
 /// The code a `${...}` expression in an authored file is refused with.
@@ -349,84 +263,6 @@ pub fn decode_authored<T: DeserializeOwned>(
         .decode(bytes, &Expect::one(format))
 }
 
-/// The members an authored source may write, across both transports. Only
-/// the names matter here: the body is passed on as a value and checked
-/// against the bundle schema when it is compiled.
-#[derive(Default, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-#[allow(
-    dead_code,
-    reason = "the fields exist so the reader can name unknown members"
-)]
-struct SourceMembers {
-    authentication: IgnoredAny,
-    #[serde(rename = "baseUrl")]
-    base_url: IgnoredAny,
-    batch: IgnoredAny,
-    #[serde(rename = "behaviorRevision")]
-    behavior_revision: IgnoredAny,
-    connection: IgnoredAny,
-    evidence: IgnoredAny,
-    #[serde(rename = "extractProfile")]
-    extract_profile: IgnoredAny,
-    #[serde(rename = "extractScript")]
-    extract_script: IgnoredAny,
-    #[serde(rename = "factSchema")]
-    fact_schema: IgnoredAny,
-    #[serde(rename = "forwardAccessAttribution")]
-    forward_access_attribution: IgnoredAny,
-    #[serde(rename = "maximumExtractAgeSeconds")]
-    maximum_extract_age_seconds: IgnoredAny,
-    posture: IgnoredAny,
-    request: IgnoredAny,
-    #[serde(rename = "responseSchema")]
-    response_schema: IgnoredAny,
-    #[serde(rename = "tlsTrustProfile")]
-    tls_trust_profile: IgnoredAny,
-    r#type: IgnoredAny,
-    #[serde(rename = "unresolvedProblem")]
-    unresolved_problem: IgnoredAny,
-}
-
-/// The members an authored selector profile may write.
-#[derive(Default, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-#[allow(
-    dead_code,
-    reason = "the fields exist so the reader can name unknown members"
-)]
-struct SelectorMembers {
-    fields: IgnoredAny,
-    #[serde(rename = "maximumAggregateBytes")]
-    maximum_aggregate_bytes: IgnoredAny,
-}
-
-/// Read one authored source or selector: the envelope is checked and every
-/// top-level member is held to the closed set the format writes, then the
-/// body is returned as the JSON value the compiler passes into the bundle,
-/// without `apiVersion` and `kind`.
-///
-/// # Errors
-///
-/// Returns every diagnostic the reader found.
-pub fn read_envelope_body(
-    file: &str,
-    bytes: &[u8],
-    format: &FormatSpec<'_>,
-) -> Result<Decoded<serde_json::Value>, Report> {
-    let mut decoded = decode_authored::<serde_json::Value>(file, bytes, format)?;
-    if format.kind == SOURCE_KIND {
-        decoded.document.decode::<SourceMembers>()?;
-    } else if format.kind == SELECTOR_KIND {
-        decoded.document.decode::<SelectorMembers>()?;
-    }
-    if let serde_json::Value::Object(body) = &mut decoded.value {
-        body.remove("apiVersion");
-        body.remove("kind");
-    }
-    Ok(decoded)
-}
-
 /// Read an authored file whose grammar Registry Stack does not own, such as
 /// a reviewed JSON Schema, through the shared YAML subset alone: no envelope
 /// and no typed decoding, but the same size bound, the same refusals, and no
@@ -438,43 +274,6 @@ pub fn read_envelope_body(
 pub fn scan_authored(file: &str, bytes: &[u8]) -> Result<Option<Node>, Report> {
     let mut hook = AuthoredExpressions;
     Reader::new(file).with_hook(&mut hook).scan(bytes)
-}
-
-/// Read and check one authored question: the reader's diagnostics first, then
-/// every finding of the authoring checks, placed where each is written.
-///
-/// # Errors
-///
-/// Returns the report when the question has any error.
-pub fn check_question(file: &str, bytes: &[u8]) -> Result<Decoded<Question>, Report> {
-    let decoded = decode_authored::<Question>(file, bytes, &QUESTION)?;
-    let report = findings_report(
-        &decoded.document,
-        "question",
-        validate_question(&decoded.value),
-    );
-    if report.has_errors() {
-        return Err(report);
-    }
-    Ok(decoded)
-}
-
-/// Read and check one local access policy.
-///
-/// # Errors
-///
-/// Returns the report when the policy has any error.
-pub fn check_access_policy(file: &str, bytes: &[u8]) -> Result<Decoded<AccessPolicy>, Report> {
-    let decoded = decode_authored::<AccessPolicy>(file, bytes, &ACCESS_POLICY)?;
-    let report = findings_report(
-        &decoded.document,
-        "access-policy",
-        validate_access_policy(&decoded.value),
-    );
-    if report.has_errors() {
-        return Err(report);
-    }
-    Ok(decoded)
 }
 
 /// Every finding of an authoring check as an error diagnostic, placed at the
@@ -626,219 +425,4 @@ pub fn schema_modeline(schema_id: &str) -> String {
 #[must_use]
 pub fn envelope_lines(api_version: &str, kind: &str) -> String {
     format!("apiVersion: {api_version}\nkind: {kind}\n")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::marker::default_project_marker_document;
-
-    const MARKER: &str = "apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\nkind: EvidenceAuthoringProject\n";
-
-    fn codes(report: &Report) -> Vec<&str> {
-        report
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| diagnostic.code.as_str())
-            .collect()
-    }
-
-    #[test]
-    fn the_default_marker_reads_as_the_project_marker() {
-        let document = read_authored(
-            "evidence-project.yaml",
-            default_project_marker_document().as_bytes(),
-            &AUTHORING_PROJECT,
-        )
-        .expect("the default marker is valid");
-        assert_eq!(document.envelope().kind, AUTHORING_PROJECT_KIND);
-        assert!(default_project_marker_document().starts_with("# yaml-language-server: $schema="));
-    }
-
-    #[test]
-    fn the_retired_marker_members_are_refused_with_their_replacement() {
-        let report = read_authored(
-            "evidence-project.yaml",
-            format!("{MARKER}version: 1\nproject: evidence-authoring\n").as_bytes(),
-            &AUTHORING_PROJECT,
-        )
-        .expect_err("removed keys are refused");
-        assert_eq!(codes(&report), ["config.removed-key", "config.removed-key"]);
-    }
-
-    #[test]
-    fn the_retired_answer_id_is_refused_with_its_replacement() {
-        let text = format!(
-            "apiVersion: {QUESTION_API_VERSION}\nkind: {QUESTION_KIND}\nanswers:\n  - concept: is_adult\n    id: urn:example:concept:is-adult\n    type: boolean\n"
-        );
-        let report = read_authored("question.yaml", text.as_bytes(), &QUESTION)
-            .expect_err("the removed key is refused");
-        let removed: Vec<_> = report
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.code == "config.removed-key")
-            .collect();
-        assert_eq!(removed.len(), 1);
-        assert_eq!(removed[0].path, "/answers/0/id");
-        assert!(
-            removed[0].suggested_action.contains("answers[].uri"),
-            "the refusal names the replacement"
-        );
-    }
-
-    #[test]
-    fn a_source_or_selector_is_read_by_its_envelope_and_returned_without_it() {
-        for (format, kind, api_version, member) in [
-            (&SOURCE, SOURCE_KIND, SOURCE_API_VERSION, "request"),
-            (&SELECTOR, SELECTOR_KIND, SELECTOR_API_VERSION, "fields"),
-        ] {
-            let text = format!("apiVersion: {api_version}\nkind: {kind}\n{member}: {{}}\n");
-            let decoded = read_envelope_body("body.yaml", text.as_bytes(), format)
-                .expect("a file with its header is read");
-            assert_eq!(decoded.value, serde_json::json!({ member: {} }));
-
-            let report =
-                read_envelope_body("body.yaml", format!("{member}: {{}}\n").as_bytes(), format)
-                    .expect_err("a file without its header is refused");
-            assert_eq!(codes(&report), ["config.missing-envelope"]);
-        }
-    }
-
-    #[test]
-    fn an_unknown_member_of_a_source_or_selector_is_reported_at_its_key() {
-        for (format, kind, api_version, known) in [
-            (
-                &SOURCE,
-                SOURCE_KIND,
-                SOURCE_API_VERSION,
-                "type: sqlite-extract\n",
-            ),
-            (
-                &SELECTOR,
-                SELECTOR_KIND,
-                SELECTOR_API_VERSION,
-                "fields: {}\n",
-            ),
-        ] {
-            let header = format!("apiVersion: {api_version}\nkind: {kind}\n{known}");
-            let text = format!("{header}stray: \"MARKER\"\nx-note: \"MARKER\"\n");
-            let report = read_envelope_body("body.yaml", text.as_bytes(), format)
-                .expect_err("a member outside the closed shape is refused");
-            let found: Vec<_> = report
-                .diagnostics()
-                .iter()
-                .map(|diagnostic| {
-                    let source = diagnostic.source.as_ref().unwrap();
-                    (
-                        diagnostic.code.as_str(),
-                        diagnostic.path.as_str(),
-                        source.line,
-                        source.column,
-                    )
-                })
-                .collect();
-            let line = header.lines().count();
-            assert_eq!(
-                found,
-                [
-                    ("config.unknown-key", "/stray", Some(line + 1), Some(1)),
-                    ("config.unknown-key", "/x-note", Some(line + 2), Some(1)),
-                ]
-            );
-            assert!(!format!("{:?}", report.diagnostics()).contains("MARKER"));
-        }
-    }
-
-    #[test]
-    fn a_source_tagged_by_transport_is_told_to_declare_type() {
-        let text = format!(
-            "apiVersion: {SOURCE_API_VERSION}\nkind: {SOURCE_KIND}\ntransport: sqlite-extract\n"
-        );
-        let report = read_envelope_body("sources/record.yaml", text.as_bytes(), &SOURCE)
-            .expect_err("the old tag is refused");
-        let found: Vec<_> = report
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
-            .collect();
-        assert_eq!(found, [("config.removed-key", "/transport")]);
-        assert!(format!("{:?}", report.diagnostics()).contains("Declare type instead"));
-    }
-
-    #[test]
-    fn a_marker_without_an_envelope_is_refused() {
-        let report = read_authored(
-            "evidence-project.yaml",
-            b"version: 1\nproject: evidence-authoring\n",
-            &AUTHORING_PROJECT,
-        )
-        .expect_err("the envelope is required");
-        assert!(codes(&report).contains(&"config.missing-envelope"));
-    }
-
-    #[test]
-    fn an_environment_expression_is_refused_in_an_authored_value_and_key() {
-        let text = format!("{MARKER}note: ${{HOME}}\n");
-        let report = read_authored("evidence-project.yaml", text.as_bytes(), &AUTHORING_PROJECT)
-            .expect_err("authored files are not expanded");
-        let diagnostic = &report.diagnostics()[0];
-        assert_eq!(diagnostic.code, SUBSTITUTION_NOT_ALLOWED);
-        assert_eq!(diagnostic.path, "/note");
-        assert!(!diagnostic.message.contains("HOME"));
-        assert!(diagnostic.suggested_action.contains("not expanded"));
-        let source = diagnostic.source.as_ref().expect("placed");
-        assert_eq!((source.line, source.column), (Some(3), Some(7)));
-    }
-
-    #[test]
-    fn text_that_only_resembles_an_expression_is_left_alone() {
-        assert!(!contains_environment_expression("costs ${ and more"));
-        assert!(!contains_environment_expression("${1ABC}"));
-        assert!(contains_environment_expression("prefix-${NAME:-fallback}"));
-        assert!(contains_environment_expression("${_X}"));
-    }
-
-    #[test]
-    fn a_document_of_exactly_the_size_cap_is_read_and_one_byte_more_is_refused() {
-        let cap = registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES;
-        let mut text = default_project_marker_document().to_owned();
-        while text.len() < cap {
-            let room = cap - text.len();
-            let line = if room > 81 { 80 } else { room - 1 };
-            text.push('#');
-            text.push_str(&" ".repeat(line.saturating_sub(1)));
-            text.push('\n');
-        }
-        assert_eq!(text.len(), cap);
-        read_authored("evidence-project.yaml", text.as_bytes(), &AUTHORING_PROJECT)
-            .expect("a file of exactly the cap is accepted");
-        text.push('\n');
-        let report = read_authored("evidence-project.yaml", text.as_bytes(), &AUTHORING_PROJECT)
-            .expect_err("one byte over the cap is refused");
-        assert_eq!(codes(&report), ["yaml.too-large"]);
-    }
-
-    #[test]
-    fn finding_codes_name_their_area_once() {
-        assert_eq!(
-            finding_code("question", "question-text"),
-            "evidence.question.text"
-        );
-        assert_eq!(
-            finding_code("question", "answer-concept-unique"),
-            "evidence.question.answer-concept-unique"
-        );
-        assert_eq!(
-            finding_code("access-policy", "access-policy-grant-kind"),
-            "evidence.access-policy.grant-kind"
-        );
-        assert_eq!(
-            finding_code("derivation", "derivation-compile"),
-            "evidence.derivation.compile"
-        );
-        assert_eq!(
-            finding_code("schema", "evidence.answer-schema.open-object"),
-            "evidence.answer-schema.open-object"
-        );
-    }
 }

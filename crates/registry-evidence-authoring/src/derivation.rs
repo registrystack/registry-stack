@@ -46,82 +46,96 @@ fn parser() -> rhai::Engine {
     engine
 }
 
-/// Parse the authored program as Rhai and reserve `derive` exclusively for
-/// the generated binding wrapper. Function discovery comes from the AST, so
-/// strings, comments, and whitespace cannot masquerade as entry points.
+/// Validate the reviewed named Function against its one interface. The parser
+/// cannot load imports, print, or execute the supplied program.
 #[must_use]
-pub fn validate_authored_answer(source: &str) -> Vec<Finding> {
-    let one = |code, message: &str| vec![Finding::new(FieldPath::root(), code, message)];
+pub fn validate_function(
+    source: &str,
+    interface: crate::project::FunctionInterface,
+) -> Vec<Finding> {
     let Ok(ast) = parser().compile(source) else {
-        return one(
-            "derivation-compile",
-            "authored derivation does not compile as Rhai",
-        );
+        return vec![Finding::new(
+            FieldPath::root(),
+            "function-compile",
+            "Function does not compile as Rhai",
+        )];
     };
-    let mut names = BTreeSet::new();
-    let mut answers = 0;
-    for function in ast.iter_functions() {
-        if !names.insert(function.name) {
-            return one(
-                "derivation-function-unique",
-                "authored derivation function names must be unique",
-            );
-        }
-        if function.name == "derive" {
-            return one(
-                "derivation-reserved-entry-point",
-                "the `derive` entry point is reserved for the generated concept binding",
-            );
-        }
-        if function.name == "answer" {
-            if function.params.len() != 3 {
-                return one(
-                    "derivation-answer-signature",
-                    "authored derivation must declare answer(facts, selectors, context)",
-                );
-            }
-            answers += 1;
-        }
+    let (entry, arities) = interface.entry_point();
+    let entries = ast
+        .iter_functions()
+        .filter(|function| function.name == entry)
+        .collect::<Vec<_>>();
+    if entries.len() != 1 || !arities.contains(&entries[0].params.len()) {
+        return vec![Finding::new(
+            FieldPath::root(),
+            "function-signature",
+            "Function must expose exactly one entry point with its declared interface signature",
+        )];
     }
-    if answers != 1 {
-        return one(
-            "derivation-answer-count",
-            "authored derivation must declare exactly one answer(facts, selectors, context)",
-        );
+    if ast.iter_functions().any(|function| {
+        [
+            "prepare",
+            "extract",
+            "derive",
+            "prepare_batch",
+            "extract_batch",
+        ]
+        .contains(&function.name)
+            && function.name != entry
+    }) {
+        return vec![Finding::new(
+            FieldPath::root(),
+            "function-interface",
+            "Function cannot expose another interface entry point",
+        )];
     }
     Vec::new()
 }
 
-/// Name every fact the `answer` function reads that `declared` does not hold.
-///
-/// A fact read is an index read with a string literal key (`facts["status"]`)
-/// or a property read (`facts.status`, `facts?.status`) on the first parameter
-/// of `answer`, however that parameter is named. Only the first key of a chain
-/// is a fact name: `facts.address.region` reads the fact `address`.
-///
-/// The operands of one `??` fallback are read together: when any of them reads
-/// a declared fact, none of its reads is named, so `facts.new ?? facts.old`
-/// stays valid while a source moves from one name to the other.
-///
-/// The check is deliberately partial, and never refuses a program it cannot
-/// read. A computed key (`facts[key]`) is not a literal read, so it is the
-/// way to read a fact the check should not see, and like a read inside another
-/// function the facts are passed to, it is left to the fixtures. So is an
-/// `answer` that rebinds or writes its first parameter anywhere, through
-/// `let`, `const`, an assignment to it or to one of its keys, a `for` loop
-/// variable, or a `catch` variable. A program the other derivation checks
-/// refuse reports nothing here, because those checks already name what is
-/// wrong with it.
-///
-/// Each undeclared fact is named once, in name order.
+/// Source-batch call sites use the existing source interface with exactly two
+/// arguments. This only inspects the reviewed program; it never evaluates it.
 #[must_use]
-pub fn validate_answer_fact_reads(source: &str, declared: &BTreeSet<String>) -> Vec<Finding> {
+pub fn validate_batch_function(
+    source: &str,
+    interface: crate::project::FunctionInterface,
+) -> Vec<Finding> {
+    let findings = validate_function(source, interface);
+    if !findings.is_empty() {
+        return findings;
+    }
+    let ast = parser().compile(source).expect("validated Function");
+    let (entry, _) = interface.entry_point();
+    if ast
+        .iter_functions()
+        .find(|function| function.name == entry)
+        .is_none_or(|function| function.params.len() != 2)
+    {
+        return vec![Finding::new(
+            FieldPath::root(),
+            "batch-function-signature",
+            "source batch Functions must expose the two-argument source interface",
+        )];
+    }
+    Vec::new()
+}
+
+/// Check named assertion Function reads against its acquired private FactSet.
+#[must_use]
+pub fn validate_derive_fact_reads(source: &str, declared: &BTreeSet<String>) -> Vec<Finding> {
+    validate_entry_fact_reads(source, "derive", declared)
+}
+
+fn validate_entry_fact_reads(
+    source: &str,
+    entry: &str,
+    declared: &BTreeSet<String>,
+) -> Vec<Finding> {
     let Ok(ast) = parser().compile(source) else {
         return Vec::new();
     };
     let mut answers = ast
         .iter_functions()
-        .filter(|function| function.name == "answer" && function.params.len() == 3);
+        .filter(|function| function.name == entry && function.params.len() == 3);
     let (Some(answer), None) = (answers.next(), answers.next()) else {
         return Vec::new();
     };
@@ -130,7 +144,7 @@ pub fn validate_answer_fact_reads(source: &str, declared: &BTreeSet<String>) -> 
     // pinned rhai the latter copies every function when its target module is
     // empty, which a fresh clone always is.
     let mut body = ast.clone_functions_only();
-    body.retain_functions(|_, _, name, params| name == "answer" && params == 3);
+    body.retain_functions(|_, _, name, params| name == entry && params == 3);
 
     let mut rebound = false;
     let mut read = BTreeSet::new();

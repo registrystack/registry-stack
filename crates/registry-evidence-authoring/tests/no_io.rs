@@ -69,7 +69,7 @@
 
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
-use registry_evidence_authoring::validate_authored_answer;
+use registry_evidence_authoring::{project::FunctionInterface, validate_function};
 
 /// Spellings that would take this crate outside its own arguments, each with
 /// the reason it is refused.
@@ -898,7 +898,7 @@ fn an_authored_import_does_not_read_the_file_it_names() {
 
     let program = |module: &PathBuf| {
         format!(
-            "import \"{}\" as imported;\nfn answer(facts, selectors, context) {{ #{{}} }}\n",
+            "import \"{}\" as imported;\nfn derive(facts, selectors, context) {{ #{{}} }}\n",
             module.display()
         )
     };
@@ -911,7 +911,7 @@ fn an_authored_import_does_not_read_the_file_it_names() {
 
     for module in [&parsable, &unparsable, &absent] {
         assert_eq!(
-            validate_authored_answer(&program(module)),
+            validate_function(&program(module), FunctionInterface::AssertionDerive),
             Vec::new(),
             "reading a derivation that imports `{}` reported something, so \
              something read the path",
@@ -1040,7 +1040,7 @@ fn reading_an_authored_import_never_opens_the_path_it_names() {
     );
 
     let program = format!(
-        "import \"{}\" as imported;\nfn answer(facts, selectors, context) {{ #{{}} }}\n",
+        "import \"{}\" as imported;\nfn derive(facts, selectors, context) {{ #{{}} }}\n",
         module.display()
     );
 
@@ -1072,7 +1072,7 @@ fn reading_an_authored_import_never_opens_the_path_it_names() {
     );
 
     let subject = outcome_within(Duration::from_secs(30), move || {
-        let _ = validate_authored_answer(&program);
+        let _ = validate_function(&program, FunctionInterface::AssertionDerive);
     });
     assert!(
         matches!(subject, Outcome::Finished(_)),
