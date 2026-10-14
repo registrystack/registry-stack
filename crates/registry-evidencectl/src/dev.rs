@@ -296,6 +296,11 @@ fn issuer_label(name_prefix: &str, issuer_session_id: &str) -> String {
     format!("{name_prefix}-{}", &issuer_session_id[..12])
 }
 
+/// The private bind-mount root owned by one local issuer generation.
+fn generated_issuer_root(generated_root: &Path, issuer_session_id: &str) -> PathBuf {
+    generated_root.join(format!("issuer-{issuer_session_id}"))
+}
+
 #[derive(Debug, Args)]
 pub struct SupervisorArgs {
     #[arg(long)]
@@ -2543,7 +2548,7 @@ fn prepare_and_start(
                 id: issuer_session_id.clone(),
             },
             ports.issuer,
-            generated.join("issuer"),
+            generated_issuer_root(&generated, &issuer_session_id),
             compiled.local_audience.clone(),
             issuer_clients,
         )?;
@@ -2833,7 +2838,7 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
 
     let pin = registry_thunderid_tooling::version::ThunderIdPin::load()?;
     let issuer_label = issuer_label(&state.name_prefix, &state.issuer_session_id);
-    let issuer_root = dev_root.join("generated/issuer");
+    let issuer_root = generated_issuer_root(&dev_root.join("generated"), &state.issuer_session_id);
     let issuer_session = registry_thunderid_tooling::container::Session {
         label: &issuer_label,
         id: &state.issuer_session_id,
@@ -3637,6 +3642,27 @@ mod tests {
             "evidence-dev-0123456789ab"
         );
         assert_eq!(issuer_label("ci-4711", session), "ci-4711-0123456789ab");
+    }
+
+    #[test]
+    fn each_issuer_generation_owns_one_removable_bind_root() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let generated = temporary.path().join("generated");
+        create_private_directory(&generated).expect("private generated directory");
+        let first_id = "0123456789abcdef0123456789abcdef0123456789abcdef";
+        let second_id = "fedcba9876543210fedcba9876543210fedcba9876543210";
+
+        let first = generated_issuer_root(&generated, first_id);
+        assert_eq!(first, generated_issuer_root(&generated, first_id));
+        let second = generated_issuer_root(&generated, second_id);
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(generated.as_path()));
+        assert_eq!(second.parent(), Some(generated.as_path()));
+
+        create_private_directory(&first).expect("first issuer root");
+        create_private_directory(&second).expect("second issuer root");
+        remove_private_tree(&generated).expect("remove generated roots");
+        assert!(!generated.exists());
     }
 
     #[test]

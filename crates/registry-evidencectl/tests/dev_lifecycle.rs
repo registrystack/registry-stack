@@ -27,17 +27,6 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
     let started =
         fixture.dev_start_named(&evidence, &docker, evidence_port, issuer_port, &name_prefix);
     assert_success(&started, "issuer-backed dev start");
-    let containers = Command::new(&docker)
-        .args(["ps", "--format", "{{.Names}}", "--filter"])
-        .arg(format!("name=thunderid-{name_prefix}-"))
-        .output()
-        .expect("list issuer containers");
-    assert_success(&containers, "docker ps");
-    assert_eq!(
-        String::from_utf8_lossy(&containers.stdout).lines().count(),
-        1,
-        "the issuer container carries the selected name prefix"
-    );
     let stdout = String::from_utf8_lossy(&started.stdout);
     assert!(
         stdout.contains(&format!(
@@ -67,6 +56,22 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
         state["tokenUrl"],
         format!("http://127.0.0.1:{issuer_port}/oauth2/token")
     );
+    let first_issuer_root = issuer_mount_root(&docker, &name_prefix);
+    assert_eq!(
+        first_issuer_root.file_name().and_then(|name| name.to_str()),
+        state["issuerSessionId"]
+            .as_str()
+            .map(|session| format!("issuer-{session}"))
+            .as_deref()
+    );
+    assert_eq!(
+        first_issuer_root
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str()),
+        Some("generated")
+    );
+    assert!(first_issuer_root.is_dir());
 
     let token = evidencectl()
         .args(["dev", "token", "local-tutorial-caller"])
@@ -101,6 +106,7 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
     assert_eq!(stopped["status"], "stopped");
     assert!(stopped["caller"].is_null());
     assert!(!fixture.root.join(".evidence/dev/control.sock").exists());
+    assert!(!first_issuer_root.exists());
     assert_success(&fixture.dev_clean(), "dev clean");
     assert!(!fixture.root.join(".evidence/dev").exists());
 
@@ -113,7 +119,22 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
         &name_prefix,
     );
     assert_success(&restarted, "immediate fresh dev start after clean");
+    let restarted_state = read_json(&fixture.root.join(".evidence/dev/state.json"));
+    let second_issuer_root = issuer_mount_root(&docker, &name_prefix);
+    assert_eq!(
+        second_issuer_root
+            .file_name()
+            .and_then(|name| name.to_str()),
+        restarted_state["issuerSessionId"]
+            .as_str()
+            .map(|session| format!("issuer-{session}"))
+            .as_deref()
+    );
+    assert_ne!(first_issuer_root, second_issuer_root);
+    assert!(second_issuer_root.is_dir());
+    assert!(!first_issuer_root.exists());
     assert_success(&fixture.dev_stop(), "fresh dev stop");
+    assert!(!second_issuer_root.exists());
     assert_success(&fixture.dev_clean(), "fresh dev clean");
     assert!(!fixture.root.join(".evidence/dev").exists());
 }
@@ -806,6 +827,41 @@ fn installed_or_env(variable: &str, binary: &str) -> PathBuf {
         .map(|directory| directory.join(binary))
         .find(|candidate| candidate.is_file())
         .unwrap_or_else(|| panic!("set {variable} for the exact lifecycle gate"))
+}
+
+fn issuer_mount_root(docker: &Path, name_prefix: &str) -> PathBuf {
+    let containers = Command::new(docker)
+        .args(["ps", "--format", "{{.Names}}", "--filter"])
+        .arg(format!("name=thunderid-{name_prefix}-"))
+        .output()
+        .expect("list issuer containers");
+    assert_success(&containers, "docker ps");
+    let names: Vec<_> = String::from_utf8_lossy(&containers.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        names.len(),
+        1,
+        "the issuer container carries the selected name prefix"
+    );
+
+    let inspected = Command::new(docker)
+        .args(["inspect", "--format", "{{json .Mounts}}"])
+        .arg(&names[0])
+        .output()
+        .expect("inspect issuer container");
+    assert_success(&inspected, "docker inspect");
+    let mounts: Value = serde_json::from_slice(&inspected.stdout).expect("container mounts");
+    let mounts = mounts.as_array().expect("container mount array");
+    let secrets = mounts
+        .iter()
+        .find(|mount| mount["Destination"] == "/opt/thunderid/config/secrets")
+        .expect("issuer secrets mount");
+    PathBuf::from(secrets["Source"].as_str().expect("issuer mount source"))
+        .parent()
+        .expect("issuer state root")
+        .to_path_buf()
 }
 
 fn unused_port_pair() -> (u16, u16) {
