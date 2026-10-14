@@ -155,6 +155,8 @@ pub struct ReviewAuthoritySource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(remote = "Self", deny_unknown_fields, rename_all = "kebab-case")]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "mode"))]
+// Authored once per bounded package, rather than allocated per Record.
+#[allow(clippy::large_enum_variant)]
 pub enum ActionExecutionSource {
     Immediate {},
     Proposal { proposal: ProposalPolicySource },

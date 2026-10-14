@@ -966,7 +966,10 @@ async fn retired_plan_problems_have_only_generic_unknown_problem_semantics() {
         "traceId": TRACE_ID,
         "fieldPath": "/private/legacy-location",
         "refusalCode": "private-legacy-refusal",
-    })).with_header("cache-control", "no-store");
+    }))
+    .without_header("content-type")
+    .with_header("content-type", "application/problem+json")
+    .with_header("cache-control", "no-store");
     let fixture = single_attempt_client(vec![metadata_response(), retired]).await;
     let metadata = fixture
         .client

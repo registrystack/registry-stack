@@ -1262,6 +1262,7 @@ mod tests {
                                 "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
                             ),
                             ("cache-control", "no-store"),
+                            ("vary", "authorization, accept"),
                         ],
                         Json(value.lock().unwrap().clone()),
                     )
@@ -1332,6 +1333,7 @@ mod tests {
         }
         server.abort();
     }
+
     fn application_status_document(state: &str, mode: &str) -> Value {
         let mut value = document();
         value["effectDigest"] = json!(REVISION);
@@ -1392,7 +1394,8 @@ mod tests {
 
     #[test]
     fn application_status_rejects_unbound_inconsistent_and_unbounded_retry_claims() {
-        let cases: &[(&str, fn(&mut Value))] = &[
+        type CorruptDocument = fn(&mut Value);
+        let cases: &[(&str, CorruptDocument)] = &[
             ("missing frozen digest", |v| {
                 v.as_object_mut().unwrap().remove("effectDigest");
             }),
