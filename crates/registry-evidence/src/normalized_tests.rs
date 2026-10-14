@@ -93,8 +93,15 @@ const REQUIREMENT_AUDIENCE: &str = "urn:example:normalized:requirement:audience"
 const REQUIREMENT_HOLDER: &str = "urn:example:normalized:requirement:holder";
 const REQUIREMENT_CONTEXT: &str = "urn:example:normalized:requirement:context";
 const REQUIREMENT_GRANT: &str = "urn:example:normalized:requirement:grant";
+const REQUIREMENT_ACTOR: &str = "urn:example:normalized:requirement:actor";
+const REQUIREMENT_CLASSIC: &str = "urn:example:normalized:requirement:classic-chain";
+const REQUIREMENT_SET: &str = "urn:example:normalized:requirement:fetch-set";
 const CONCEPT_AUDIENCE: &str = "urn:example:normalized:concept:active:audience";
 const CONCEPT_HOLDER: &str = "urn:example:normalized:concept:active:holder";
+const CONCEPT_GRANT: &str = "urn:example:normalized:concept:active:grant";
+const CONCEPT_ACTOR: &str = "urn:example:normalized:concept:active:actor";
+const CONCEPT_CLASSIC: &str = "urn:example:normalized:concept:active:classic";
+const CONCEPT_SET: &str = "urn:example:normalized:concept:active:fetch-set";
 
 struct NormalizedRuntime {
     transit: TransitServer,
@@ -129,6 +136,9 @@ impl TransitServer {
                         if worker_stop.load(Ordering::Acquire) {
                             break;
                         }
+                        stream
+                            .set_nonblocking(false)
+                            .expect("synthetic Transit connection is blocking");
                         serve_transit_request(&mut stream, &worker_signatures);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -163,7 +173,7 @@ impl Drop for TransitServer {
 
 fn serve_transit_request(stream: &mut UnixStream, signatures: &AtomicUsize) {
     stream
-        .set_read_timeout(Some(Duration::from_millis(100)))
+        .set_read_timeout(Some(Duration::from_secs(2)))
         .expect("synthetic Transit read timeout");
     let Some((method, path, body)) = read_transit_request(stream) else {
         return;
@@ -652,8 +662,18 @@ async fn normalized_compiler_retains_source_batch_and_authenticated_provenance()
         .json(&grant)
         .await;
     grant_response.assert_status_ok();
+    let grant_bytes = grant_response.as_bytes();
+    let grant_policy = verification_policy_for(
+        &fixture.runtime,
+        &grant,
+        grant_bytes,
+        "urn:example:normalized:evidence:grant",
+        CONCEPT_GRANT,
+    );
+    verify_flattened_jws(grant_bytes, fixture.runtime.jwks(), &grant_policy)
+        .expect("the actor-neutral task profile issues independently verifiable Evidence");
     let grant_jws: FlattenedJws =
-        serde_json::from_str(&grant_response.text()).expect("grant response is JWS");
+        serde_json::from_slice(grant_bytes).expect("grant response is JWS");
     let grant_evidence = decode_evidence(&grant_jws);
     assert_eq!(grant_evidence.supports_requirement, REQUIREMENT_GRANT);
 
@@ -704,7 +724,290 @@ async fn normalized_compiler_retains_source_batch_and_authenticated_provenance()
     }
 }
 
+#[tokio::test]
+async fn normalized_authority_without_profile_actor_retains_definition_actor_ceiling() {
+    let fixture = normalized_runtime_with_actor_profile().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+
+    Mock::given(method("POST"))
+        .and(path("/records"))
+        .and(header(
+            "authorization",
+            format!("Bearer {SOURCE_TOKEN}").as_str(),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active": true})))
+        .expect(2)
+        .mount(&fixture.source)
+        .await;
+
+    let signatures_before = fixture.transit.signatures();
+    for (actor_kind, record_id) in [
+        ("service", "service-actor-private"),
+        ("human", "human-actor-private"),
+    ] {
+        let evidence_request = request(REQUIREMENT_ACTOR, "actor-check", Some(record_id));
+        let response = http
+            .post("/v1/evidence")
+            .add_header(
+                "authorization",
+                format!("Bearer {}", access_token_for_actor(actor_kind, None)),
+            )
+            .json(&evidence_request)
+            .await;
+        response.assert_status_ok();
+        let bytes = response.as_bytes();
+        let policy = verification_policy_for(
+            &fixture.runtime,
+            &evidence_request,
+            bytes,
+            "urn:example:normalized:evidence:actor",
+            CONCEPT_ACTOR,
+        );
+        verify_flattened_jws(bytes, fixture.runtime.jwks(), &policy)
+            .expect("each permitted actor receives independently verifiable Evidence");
+    }
+    assert_eq!(
+        fixture.transit.signatures(),
+        signatures_before + 2,
+        "each permitted actor reaches the signer once"
+    );
+
+    let source_calls_before = fixture
+        .source
+        .received_requests()
+        .await
+        .expect("source journal is available")
+        .len();
+    let signatures_before = fixture.transit.signatures();
+    let forbidden = request(
+        REQUIREMENT_ACTOR,
+        "actor-check",
+        Some("agent-actor-private"),
+    );
+    let forbidden_token = access_token_for_actor(
+        "agent",
+        Some(task_grant_claims_for_purpose(
+            "agent-actor-private",
+            REQUIREMENT_ACTOR,
+            "actor-check",
+        )),
+    );
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {forbidden_token}"))
+        .json(&forbidden)
+        .await;
+    assert_eq!(response.status_code(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(response.json::<Value>()["code"], "evidence.denied");
+    assert_eq!(
+        fixture
+            .source
+            .received_requests()
+            .await
+            .expect("source journal is available")
+            .len(),
+        source_calls_before,
+        "the actor outside the Definition ceiling reaches no Source"
+    );
+    assert_eq!(
+        fixture.transit.signatures(),
+        signatures_before,
+        "the actor outside the Definition ceiling reaches no signer"
+    );
+
+    let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
+    for private in [
+        "service-actor-private",
+        "human-actor-private",
+        "agent-actor-private",
+    ] {
+        assert!(!audit.contains(private), "audit disclosed {private}");
+    }
+}
+
+#[tokio::test]
+async fn normalized_compiler_retains_classic_and_set_search_acquisition() {
+    let fixture = normalized_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let search_response = json!({
+        "found": true,
+        "search_ok": true,
+        "classic_ref": "classic-private-ref",
+        "left_ref": "left-private-ref",
+        "right_ref": "right-private-ref"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_response))
+        .expect(2)
+        .mount(&fixture.source)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/classic-fetch"))
+        .and(body_json(json!({
+            "classic_ref": "classic-private-ref",
+            "left_ref": "left-private-ref",
+            "right_ref": "right-private-ref",
+            "search_ok": true
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active": true})))
+        .expect(1)
+        .mount(&fixture.source)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/set-left"))
+        .and(body_json(json!({"resolved_ref": "left-private-ref"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active": true})))
+        .expect(1)
+        .mount(&fixture.source)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/set-right"))
+        .and(body_json(json!({"resolved_ref": "right-private-ref"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active": true})))
+        .expect(1)
+        .mount(&fixture.source)
+        .await;
+
+    let signatures_before = fixture.transit.signatures();
+    for (requirement, purpose, concept) in [
+        (REQUIREMENT_CLASSIC, "classic-check", CONCEPT_CLASSIC),
+        (REQUIREMENT_SET, "fetch-set-check", CONCEPT_SET),
+    ] {
+        let evidence_request = request(requirement, purpose, Some("selector-private-record"));
+        let response = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {}", access_token(None)))
+            .json(&evidence_request)
+            .await;
+        response.assert_status_ok();
+        let bytes = response.as_bytes();
+        let evidence_type = format!(
+            "urn:example:normalized:evidence:{}",
+            purpose.trim_end_matches("-check")
+        );
+        let policy = verification_policy_for(
+            &fixture.runtime,
+            &evidence_request,
+            bytes,
+            &evidence_type,
+            concept,
+        );
+        verify_flattened_jws(bytes, fixture.runtime.jwks(), &policy)
+            .expect("normalized multi-source Evidence verifies independently");
+        let jws: FlattenedJws = serde_json::from_slice(bytes).expect("response is JWS JSON");
+        let evidence = decode_evidence(&jws);
+        assert_eq!(
+            evidence.supported_values[0].value,
+            PublicValue::Boolean(true)
+        );
+        let released = serde_json::to_string(&evidence).expect("Evidence serializes");
+        for private in [
+            "selector-private-record",
+            "classic-private-ref",
+            "left-private-ref",
+            "right-private-ref",
+        ] {
+            assert!(!released.contains(private), "Evidence disclosed {private}");
+        }
+    }
+    assert_eq!(
+        fixture.transit.signatures(),
+        signatures_before + 2,
+        "each complete acquisition signs exactly one response"
+    );
+
+    let source_requests = fixture
+        .source
+        .received_requests()
+        .await
+        .expect("source journal is available");
+    assert_eq!(
+        source_requests
+            .iter()
+            .map(|request| request.url.path())
+            .collect::<Vec<_>>(),
+        vec![
+            "/search",
+            "/classic-fetch",
+            "/search",
+            "/set-left",
+            "/set-right"
+        ],
+        "compiled acquisition preserves declared source order"
+    );
+    fixture.source.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "found": false,
+            "search_ok": false,
+            "classic_ref": "unresolved-classic-private-ref",
+            "left_ref": "unresolved-left-private-ref",
+            "right_ref": "unresolved-right-private-ref"
+        })))
+        .expect(1)
+        .mount(&fixture.source)
+        .await;
+    let signatures_before = fixture.transit.signatures();
+    let unavailable = request(
+        REQUIREMENT_SET,
+        "fetch-set-check",
+        Some("unresolved-selector-private-record"),
+    );
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .json(&unavailable)
+        .await;
+    assert_eq!(
+        response.status_code(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(response.json::<Value>()["code"], "evidence.unavailable");
+    assert_eq!(
+        fixture
+            .source
+            .received_requests()
+            .await
+            .expect("source journal is available")
+            .iter()
+            .map(|request| request.url.path())
+            .collect::<Vec<_>>(),
+        vec!["/search"],
+        "a search no-match stops every fetch-set member"
+    );
+    assert_eq!(
+        fixture.transit.signatures(),
+        signatures_before,
+        "a search no-match reaches no signer"
+    );
+
+    let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
+    for private in [
+        "selector-private-record",
+        "classic-private-ref",
+        "left-private-ref",
+        "right-private-ref",
+        "unresolved-selector-private-record",
+        "unresolved-classic-private-ref",
+        "unresolved-left-private-ref",
+        "unresolved-right-private-ref",
+    ] {
+        assert!(!audit.contains(private), "audit disclosed {private}");
+    }
+}
+
 async fn normalized_runtime() -> NormalizedRuntime {
+    normalized_runtime_with(false).await
+}
+
+async fn normalized_runtime_with_actor_profile() -> NormalizedRuntime {
+    normalized_runtime_with(true).await
+}
+
+async fn normalized_runtime_with(include_optional_actor_profile: bool) -> NormalizedRuntime {
     let source = MockServer::start().await;
     let temporary = tempfile::tempdir().expect("temporary normalized deployment");
     let package_root = temporary.path().join("package");
@@ -820,7 +1123,7 @@ cases:
     ))
     .expect("normalized artifacts compile in the runtime kernel");
     let bundle = Bundle::load(&package_root).expect("normalized package loads");
-    let authority = normalized_authority();
+    let authority = normalized_authority(include_optional_actor_profile);
     let mut outside_ceiling = serde_json::to_value(&authority).expect("authority serializes");
     outside_ceiling["accessProfiles"]["direct"]["grants"][0]["representations"] =
         json!(["sd-jwt-vc-batch"]);
@@ -832,6 +1135,20 @@ cases:
     );
     let compiled_authority = target::compile_authority(&authority, &project)
         .expect("normalized authority compiles inside project ceilings");
+    assert!(
+        compiled_authority["accessProfiles"]["task"]
+            .get("actorKind")
+            .is_none(),
+        "the compiler retains an actor-neutral authenticated-grant profile"
+    );
+    if include_optional_actor_profile {
+        assert!(
+            compiled_authority["accessProfiles"]["actor-open"]
+                .get("actorKind")
+                .is_none(),
+            "the compiler retains an actor-neutral request profile"
+        );
+    }
     let authority_bytes =
         serde_norway::to_string(&compiled_authority).expect("compiled authority serializes");
     let authority = AuthorityDocument::parse("compiled-authority.yaml", authority_bytes.as_bytes())
@@ -884,7 +1201,7 @@ audit:
 authority:
   root: {}
   target: local
-acquisitionCapabilities: [source-batch]
+acquisitionCapabilities: [source-batch, search-then-fetch-set]
 outboundTls:
   systemRoots: true
   trustProfiles: {{}}
@@ -915,9 +1232,9 @@ outboundTls:
 }
 
 fn normalized_project() -> EvidenceProject {
-    serde_json::from_value(json!({
+    let mut document = json!({
         "id": "normalized-retention",
-        "acquisitionCapabilities": ["source-batch"],
+        "acquisitionCapabilities": ["source-batch", "search-then-fetch-set"],
         "maximumHolderBoundBatchSize": 2,
         "selectorProfiles": {
             "record-by-id": {
@@ -1024,8 +1341,139 @@ fn normalized_project() -> EvidenceProject {
                 ["signed-jws"]
             )
         }
-    }))
-    .expect("normalized project is structurally valid")
+    });
+    document["functions"]
+        .as_array_mut()
+        .expect("Functions are a sequence")
+        .extend([
+            json!({"id": "prepare-search", "interface": "source-prepare/v1", "source": "functions/prepare-search.rhai"}),
+            json!({"id": "extract-search", "interface": "source-extract/v1", "source": "functions/extract-search.rhai"}),
+            json!({"id": "prepare-classic-fetch", "interface": "source-prepare/v1", "source": "functions/prepare-classic-fetch.rhai"}),
+            json!({"id": "extract-classic-fetch", "interface": "source-extract/v1", "source": "functions/extract-classic-fetch.rhai"}),
+            json!({"id": "prepare-set-left", "interface": "source-prepare/v1", "source": "functions/prepare-set-left.rhai"}),
+            json!({"id": "extract-set-left", "interface": "source-extract/v1", "source": "functions/extract-set-left.rhai"}),
+            json!({"id": "prepare-set-right", "interface": "source-prepare/v1", "source": "functions/prepare-set-right.rhai"}),
+            json!({"id": "extract-set-right", "interface": "source-extract/v1", "source": "functions/extract-set-right.rhai"}),
+            json!({"id": "derive-classic", "interface": "assertion-derive/v1", "source": "functions/derive-classic.rhai"}),
+            json!({"id": "derive-set", "interface": "assertion-derive/v1", "source": "functions/derive-set.rhai"}),
+        ]);
+    document["sources"]["search"] = chained_source(
+        "/search",
+        "prepare-search",
+        "extract-search",
+        ["found", "search_ok", "classic_ref", "left_ref", "right_ref"],
+        json!({
+            "found": {"type": "boolean"},
+            "search_ok": {"type": "boolean"},
+            "classic_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64},
+            "left_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64},
+            "right_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64}
+        }),
+        json!({
+            "search_ok": {"type": "boolean"},
+            "classic_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64},
+            "left_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64},
+            "right_ref": {"type": "string", "minimumBytes": 1, "maximumBytes": 64}
+        }),
+    );
+    document["sources"]["classic-fetch"] = chained_source(
+        "/classic-fetch",
+        "prepare-classic-fetch",
+        "extract-classic-fetch",
+        ["active"],
+        json!({"active": {"type": "boolean"}}),
+        json!({"classic_active": {"type": "boolean"}}),
+    );
+    document["sources"]["set-left"] = chained_source(
+        "/set-left",
+        "prepare-set-left",
+        "extract-set-left",
+        ["active"],
+        json!({"active": {"type": "boolean"}}),
+        json!({"left_active": {"type": "boolean"}}),
+    );
+    document["sources"]["set-right"] = chained_source(
+        "/set-right",
+        "prepare-set-right",
+        "extract-set-right",
+        ["active"],
+        json!({"active": {"type": "boolean"}}),
+        json!({"right_active": {"type": "boolean"}}),
+    );
+    document["assertionDefinitions"]["actor"] = definition(
+        REQUIREMENT_ACTOR,
+        "actor-check",
+        "audience-scoped",
+        ["request"],
+        ["service", "human"],
+        ["signed-jws"],
+    );
+    let mut classic = definition(
+        REQUIREMENT_CLASSIC,
+        "classic-check",
+        "audience-scoped",
+        ["request"],
+        ["service"],
+        ["signed-jws"],
+    );
+    classic["acquisition"] =
+        json!({"type": "search-then-fetch", "search": "search", "fetch": "classic-fetch"});
+    classic["derive"] = json!({"function": "derive-classic"});
+    document["assertionDefinitions"]["classic"] = classic;
+    let mut fetch_set = definition(
+        REQUIREMENT_SET,
+        "fetch-set-check",
+        "audience-scoped",
+        ["request"],
+        ["service"],
+        ["signed-jws"],
+    );
+    fetch_set["acquisition"] = json!({
+        "type": "search-then-fetch-set",
+        "search": "search",
+        "fetch": [
+            {"source": "set-left", "factInputs": ["left_ref"]},
+            {"source": "set-right", "factInputs": ["right_ref"]}
+        ],
+        "maximumAcquisitionMilliseconds": 8000
+    });
+    fetch_set["derive"] = json!({"function": "derive-set"});
+    document["assertionDefinitions"]["fetch-set"] = fetch_set;
+    serde_json::from_value(document).expect("normalized project is structurally valid")
+}
+
+fn chained_source<const N: usize>(
+    path: &str,
+    prepare: &str,
+    extract: &str,
+    projected: [&str; N],
+    properties: Value,
+    facts: Value,
+) -> Value {
+    let projection = projected
+        .iter()
+        .map(|name| format!("/{name}"))
+        .collect::<Vec<_>>();
+    let required = projected.to_vec();
+    json!({
+        "type": "http-json",
+        "connection": "records",
+        "acquisitionPosture": "record-transformed",
+        "selectors": [{"role": "subject", "profiles": ["record-by-id"]}],
+        "request": {"method": "POST", "path": path, "fixedHeaders": [{"name": "Accept", "value": "application/json"}]},
+        "response": {
+            "projection": projection,
+            "shape": {"type": "object", "required": required, "properties": properties},
+            "maximumBytes": 4096
+        },
+        "prepare": {"function": prepare},
+        "extract": {"function": extract},
+        "facts": facts,
+        "limits": {"attemptTimeoutMilliseconds": 2000, "maximumConcurrency": 8},
+        "adapterParameters": {},
+        "adapterParametersSchema": {"type": "object", "additionalProperties": false, "properties": {}, "required": []},
+        "preparationLimits": {"query": "forbidden", "jsonBody": "required", "maximumJsonDepth": 8, "maximumCollectionItems": 16, "maximumStringBytes": 128, "maximumNormalizedBytes": 4096}
+    })
 }
 
 fn definition<const O: usize, const A: usize, const R: usize>(
@@ -1062,8 +1510,8 @@ fn definition<const O: usize, const A: usize, const R: usize>(
     })
 }
 
-fn normalized_authority() -> EvidenceTargetAuthority {
-    serde_json::from_value(json!({
+fn normalized_authority(include_optional_actor_profile: bool) -> EvidenceTargetAuthority {
+    let mut document = json!({
         "target": "local",
         "project": "normalized-retention",
         "accessProfiles": {
@@ -1074,12 +1522,13 @@ fn normalized_authority() -> EvidenceTargetAuthority {
                 "grants": [
                     grant("audience", "audience-check", "audience-scoped", "request", ["signed-jws", "unsigned-json", "sd-jwt-vc"], None),
                     grant("holder", "holder-check", "holder-bound", "request", ["sd-jwt-vc", "sd-jwt-vc-batch"], None),
-                    grant("context", "context-check", "audience-scoped", "authenticated-context", ["signed-jws"], Some("verified_context.record_id"))
+                    grant("context", "context-check", "audience-scoped", "authenticated-context", ["signed-jws"], Some("verified_context.record_id")),
+                    grant("classic", "classic-check", "audience-scoped", "request", ["signed-jws"], None),
+                    grant("fetch-set", "fetch-set-check", "audience-scoped", "request", ["signed-jws"], None)
                 ]
             },
             "task": {
                 "authority": "organizational",
-                "actorKind": "agent",
                 "requesterTags": ["fixture-agency"],
                 "requesterClients": ["evidence-task-agent"],
                 "grantSourceIssuer": "https://tasks.invalid",
@@ -1088,8 +1537,17 @@ fn normalized_authority() -> EvidenceTargetAuthority {
                 ]
             }
         }
-    }))
-    .expect("normalized target authority is structurally valid")
+    });
+    if include_optional_actor_profile {
+        document["accessProfiles"]["actor-open"] = json!({
+            "authority": "organizational",
+            "requesterTags": ["fixture-agency"],
+            "grants": [
+                grant("actor", "actor-check", "audience-scoped", "request", ["signed-jws"], None)
+            ]
+        });
+    }
+    serde_json::from_value(document).expect("normalized target authority is structurally valid")
 }
 
 fn grant<const R: usize>(
@@ -1155,6 +1613,94 @@ fn scripts() -> BTreeMap<String, String> {
 }"#
             .to_owned(),
         ),
+        (
+            "functions/prepare-search.rhai".to_owned(),
+            r#"fn prepare(selectors, context) {
+    #{query: [], body: #{record_id: selectors["subject"]["values"]["record-id"]}}
+}"#
+            .to_owned(),
+        ),
+        (
+            "functions/extract-search.rhai".to_owned(),
+            r#"fn extract(response, context) {
+    if !response["found"] { return #{outcome: "no_match"}; }
+    #{outcome: "match", facts: #{
+        search_ok: response["search_ok"],
+        classic_ref: response["classic_ref"],
+        left_ref: response["left_ref"],
+        right_ref: response["right_ref"]
+    }}
+}"#
+            .to_owned(),
+        ),
+        (
+            "functions/prepare-classic-fetch.rhai".to_owned(),
+            r#"fn prepare(selectors, context) {
+    #{query: [], body: #{
+        classic_ref: context.prior_facts.classic_ref,
+        left_ref: context.prior_facts.left_ref,
+        right_ref: context.prior_facts.right_ref,
+        search_ok: context.prior_facts.search_ok
+    }}
+}"#
+            .to_owned(),
+        ),
+        (
+            "functions/extract-classic-fetch.rhai".to_owned(),
+            r#"fn extract(response, context) {
+    #{outcome: "match", facts: #{classic_active: response["active"]}}
+}"#
+            .to_owned(),
+        ),
+        (
+            "functions/prepare-set-left.rhai".to_owned(),
+            r#"fn prepare(selectors, context) {
+    #{query: [], body: #{resolved_ref: context.prior_facts.left_ref}}
+}"#
+            .to_owned(),
+        ),
+        (
+            "functions/extract-set-left.rhai".to_owned(),
+            r#"fn extract(response, context) {
+    #{outcome: "match", facts: #{left_active: response["active"]}}
+}"#
+            .to_owned(),
+        ),
+        (
+            "functions/prepare-set-right.rhai".to_owned(),
+            r#"fn prepare(selectors, context) {
+    #{query: [], body: #{resolved_ref: context.prior_facts.right_ref}}
+}"#
+            .to_owned(),
+        ),
+        (
+            "functions/extract-set-right.rhai".to_owned(),
+            r#"fn extract(response, context) {
+    #{outcome: "match", facts: #{right_active: response["active"]}}
+}"#
+            .to_owned(),
+        ),
+        (
+            "functions/derive-classic.rhai".to_owned(),
+            r#"fn derive(facts, selectors, context) {
+    [#{output: "active", value: facts.classic_active}]
+}"#
+            .to_owned(),
+        ),
+        (
+            "functions/derive-set.rhai".to_owned(),
+            r#"fn derive(facts, selectors, context) {
+    [#{output: "active", value:
+        facts.search_ok
+        && facts.classic_ref == "classic-private-ref"
+        && facts.left_ref == "left-private-ref"
+        && facts.right_ref == "right-private-ref"
+        && facts.left_active
+        && facts.right_active
+    }]
+}"#
+            .to_owned(),
+        ),
     ])
 }
 
@@ -1187,6 +1733,10 @@ fn authenticator() -> Authenticator {
 }
 
 fn access_token(extra: Option<Value>) -> String {
+    access_token_for_actor("service", extra)
+}
+
+fn access_token_for_actor(actor_kind: &str, extra: Option<Value>) -> String {
     let now = Utc::now().timestamp();
     let mut claims = json!({
         "iss": TOKEN_ISSUER,
@@ -1195,7 +1745,7 @@ fn access_token(extra: Option<Value>) -> String {
         "iat": now - 1,
         "exp": now + 298,
         "client_id": "evidence-task-agent",
-        "registry_actor_kind": "service",
+        "registry_actor_kind": actor_kind,
         "evidence_tags": ["fixture-agency"],
         "evidence_audience": EVIDENCE_AUDIENCE
     });
@@ -1222,6 +1772,10 @@ fn task_grant_claims(record_id: &str) -> Value {
 }
 
 fn task_grant_claims_for(record_id: &str, requirement: &str) -> Value {
+    task_grant_claims_for_purpose(record_id, requirement, "grant-check")
+}
+
+fn task_grant_claims_for_purpose(record_id: &str, requirement: &str, purpose: &str) -> Value {
     let now = Utc::now().timestamp();
     json!({
         "registry_actor_kind": "agent",
@@ -1229,7 +1783,7 @@ fn task_grant_claims_for(record_id: &str, requirement: &str) -> Value {
         "registry_grant_source_issuer": "https://tasks.invalid",
         "registry_grant_client": "evidence-task-agent",
         "registry_grant_resource": TOKEN_AUDIENCE,
-        "registry_purpose": "grant-check",
+        "registry_purpose": purpose,
         "registry_grant_exp": now + 298,
         "registry_grant_bounds": {"type": "evidence", "requirement": requirement},
         "registry_approver": "h:normalized-approver",
@@ -1325,6 +1879,22 @@ fn verification_policy(
     request: &EvidenceRequest,
     serialized: &[u8],
 ) -> EvidenceVerificationPolicy {
+    verification_policy_for(
+        runtime,
+        request,
+        serialized,
+        "urn:example:normalized:evidence:audience",
+        CONCEPT_AUDIENCE,
+    )
+}
+
+fn verification_policy_for(
+    runtime: &EvidenceRuntime,
+    request: &EvidenceRequest,
+    serialized: &[u8],
+    evidence_type: &str,
+    concept: &str,
+) -> EvidenceVerificationPolicy {
     let jws: FlattenedJws = serde_json::from_slice(serialized).expect("response is JWS JSON");
     let evidence = decode_evidence(&jws);
     let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
@@ -1339,7 +1909,7 @@ fn verification_policy(
     policy.issued_by = runtime.bundle().config.issuer.id.clone();
     policy.provided_by = runtime.bundle().config.service.provider_id.clone();
     policy.requirement = request.requirement.clone();
-    policy.evidence_type = "urn:example:normalized:evidence:audience".to_owned();
+    policy.evidence_type = evidence_type.to_owned();
     policy.purpose = request.purpose.clone();
     policy.audience = EVIDENCE_AUDIENCE.to_owned();
     policy.configuration_revision = runtime
@@ -1357,7 +1927,7 @@ fn verification_policy(
         .collect();
     policy.expected_outputs = vec![ExpectedOutput {
         handle: "active".to_owned(),
-        concept: CONCEPT_AUDIENCE.to_owned(),
+        concept: concept.to_owned(),
         required: true,
         form: ExpectedValueForm::Boolean,
     }];
