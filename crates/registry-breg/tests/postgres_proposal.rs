@@ -102,6 +102,232 @@ fn registry(automatic: bool) -> registry_breg::CompiledRegistry {
     compile(registry_source(automatic))
 }
 
+async fn proposal_state_lock_wait(fixture: &client_http::ClientFixture, minimum: i64) -> bool {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiting: i64 = fixture
+                .database
+                .admin
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity
+                 WHERE datname=current_database() AND wait_event_type='Lock'
+                   AND query LIKE '%registry_proposal_state%'
+                   AND (query LIKE '%FOR UPDATE%' OR query LIKE '%FOR SHARE%')",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if waiting >= minimum {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn coherent_observation_waits_for_automatic_application() {
+    use std::time::Duration;
+    let fixture =
+        client_http::ClientFixture::start(registry(true), claims("author", "zone-a")).await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Coherent", "coherent-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("coherent-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+    let table = &fixture.registry.entities()["target"].physical_table;
+    // Pause the actual automatic write after it owns the lifecycle row. The
+    // advisory lock is only a deterministic fixture barrier, not a runtime hook.
+    fixture.database.admin.batch_execute(&format!(
+        "CREATE FUNCTION registry_data.pause_application() RETURNS trigger LANGUAGE plpgsql AS $body$
+         BEGIN PERFORM pg_advisory_xact_lock(732995001); RETURN NEW; END $body$;
+         CREATE TRIGGER pause_application BEFORE UPDATE ON registry_data.\"{table}\"
+         FOR EACH ROW EXECUTE FUNCTION registry_data.pause_application()"
+    )).await.unwrap();
+    let (barrier, barrier_task) = fixture.database.connect_migration().await;
+    barrier
+        .execute("SELECT pg_advisory_lock(732995001)", &[])
+        .await
+        .unwrap();
+    let mutations = fixture.mutations.clone();
+    let applying =
+        tokio::spawn(async move { mutations.run_automatic_proposal_once_for_test().await });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting: i64 = fixture
+                .database
+                .admin
+                .query_one(
+                    "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted
+                 AND database=(SELECT oid FROM pg_database WHERE datname=current_database())",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if waiting != 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("automatic writer reached the fixture barrier while owning Proposal state");
+    {
+        let observation = client.read_proposal(&submitted);
+        tokio::pin!(observation);
+        let query = BRegProposalQuery::default();
+        let listing = client.list_proposals(&collection, &query);
+        tokio::pin!(listing);
+        let waited = tokio::select! {
+            _ = &mut observation => false,
+            _ = &mut listing => false,
+            waited = proposal_state_lock_wait(&fixture, 2) => waited,
+        };
+        // Always release the writer, including on the pre-fix failure path.
+        barrier
+            .execute("SELECT pg_advisory_unlock(732995001)", &[])
+            .await
+            .unwrap();
+        assert!(applying.await.unwrap().unwrap());
+        assert!(
+            waited,
+            "a composed observation must wait for the lifecycle writer"
+        );
+        let current = observation.await.unwrap().value;
+        assert_eq!(current.state(), BRegProposalState::Applied);
+        assert_eq!(
+            current.application().unwrap().effect_digest.as_str(),
+            submitted.effect_digest().unwrap()
+        );
+        let page = listing.await.unwrap().value;
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].state(), BRegProposalState::Applied);
+        assert_eq!(page.items[0].effect_digest(), submitted.effect_digest());
+        drop(barrier);
+        barrier_task.abort();
+    }
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn coherent_observation_fences_review_approval_and_job_creation() {
+    let mut source = registry_source(true);
+    source["reviewAuthorities"] =
+        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+    let policy =
+        json!({"id":"name-correction","version":"1","digest":format!("sha256:{}", "b".repeat(64))});
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+    let review = std::sync::Arc::new(LocalReview {
+        calls: 0.into(),
+        mode: 0.into(),
+        result_id: uuid::Uuid::new_v4(),
+    });
+    let injected = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("author", "zone-a"),
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+        },
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Reviewed coherent", "coherent-review-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("coherent-review-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let row = fixture.database.admin.query_one("SELECT create_request,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions", &[]).await.unwrap();
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(row.get(0)).unwrap();
+    let accepted = registry_review_client::ReviewRequestAccepted {
+        request_id: uuid::Uuid::new_v4(),
+        subject: create.subject,
+        policy: serde_json::from_value(policy).unwrap(),
+        submission_digest: serde_json::from_value(json!(row.get::<_, String>(1))).unwrap(),
+    };
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1", &[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
+    let result = review.result(&accepted);
+    let (mut reader, reader_task) = fixture.database.connect_migration().await;
+    let read = reader.transaction().await.unwrap();
+    // A read may already have observed job absence. Approval plus job enqueue
+    // must wait for that same lifecycle observation to finish.
+    read.query_one("SELECT proposal_id FROM registry_internal.registry_proposal_state WHERE proposal_id=$1 FOR UPDATE", &[&uuid::Uuid::parse_str(submitted.id()).unwrap()]).await.unwrap();
+    assert_eq!(
+        read.query_one(
+            "SELECT count(*) FROM registry_internal.registry_proposal_application_jobs",
+            &[]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        0
+    );
+    let (mut writer, writer_task) = fixture.database.connect_migration().await;
+    let write = writer.transaction().await.unwrap();
+    let retained = {
+        let reconciliation = registry_breg::review_store::reconcile_result(
+            &write,
+            "local-review",
+            &accepted,
+            &result,
+        );
+        tokio::pin!(reconciliation);
+        let waited = tokio::select! {
+            _ = &mut reconciliation => false,
+            waited = proposal_state_lock_wait(&fixture, 1) => waited,
+        };
+        let retained: i64 = read
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_proposal_review_results",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        read.commit().await.unwrap();
+        assert!(
+            waited,
+            "approval and automatic enqueue must take state before submission/job locks"
+        );
+        reconciliation.await.unwrap();
+        retained
+    };
+    write.commit().await.unwrap();
+    assert_eq!(retained, 0);
+    let current = client.read_proposal(&submitted).await.unwrap().value;
+    assert_eq!(current.state(), BRegProposalState::Submitted);
+    assert_eq!(
+        serde_json::to_value(current).unwrap()["applicationStatus"]["state"],
+        "pending"
+    );
+    assert_eq!(
+        fixture
+            .database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_proposal_application_jobs",
+                &[]
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        1
+    );
+    drop(reader);
+    drop(writer);
+    reader_task.abort();
+    writer_task.abort();
+    fixture.finish().await;
+}
+
 #[test]
 fn proposal_input_disclosure_grants_require_declared_inputs_and_get_authority() {
     for (readable, operations) in [
@@ -2617,7 +2843,7 @@ async fn compatibility_inventory_refuses_rebound_frozen_review_subject_context_a
         ),
         (
             "context",
-            json!({"strategy":"source","binding":{"reference":"breg:wrong:correct-name:other:1"}}),
+            json!({"mode":"current-source","binding":{"reference":"breg:wrong:correct-name:other:1"}}),
         ),
         ("policy-id", json!("other-policy")),
         ("policy-version", json!("2")),

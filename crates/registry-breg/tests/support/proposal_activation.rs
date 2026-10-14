@@ -238,12 +238,11 @@ pub async fn verified_successor(
         .unwrap();
     let path = directory.path().join("package");
     candidate.publish_to_directory(&path).unwrap();
-    let package = load_package(
+    load_package(
         &path,
         &PackageLoadContext {
             database_initialization_environment: "local",
         },
     )
-    .unwrap();
-    package
+    .unwrap()
 }

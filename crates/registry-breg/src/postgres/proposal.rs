@@ -175,8 +175,12 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::PreconditionFailed)?;
-                let document =
-                    proposal_store::load_document(guarded.transaction(), id, false).await?;
+                let document = proposal_store::load_document(
+                    guarded.transaction(),
+                    id,
+                    proposal_store::DocumentLock::None,
+                )
+                .await?;
                 let etag = self.coordinator.proposal_etag(&document, &authority)?;
                 guarded
                     .commit()
@@ -268,7 +272,12 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            let document = proposal_store::load_document(guarded.transaction(), id, true).await?;
+            let document = proposal_store::load_document(
+                guarded.transaction(),
+                id,
+                proposal_store::DocumentLock::Update,
+            )
+            .await?;
             self.coordinator
                 .authorize_proposal_document(
                     guarded.transaction(),
@@ -555,7 +564,14 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            let document = proposal_store::load_document(guarded.transaction(), id, false).await?;
+            // Keep the lifecycle, frozen submission, review and application
+            // projection coherent while current target authority is checked.
+            let document = proposal_store::load_document(
+                guarded.transaction(),
+                id,
+                proposal_store::DocumentLock::Share,
+            )
+            .await?;
             self.coordinator
                 .authorize_proposal_document(
                     guarded.transaction(),
@@ -642,7 +658,12 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            let document = proposal_store::load_document(guarded.transaction(), id, false).await?;
+            let document = proposal_store::load_document(
+                guarded.transaction(),
+                id,
+                proposal_store::DocumentLock::Share,
+            )
+            .await?;
             self.coordinator
                 .authorize_proposal_review_read(
                     guarded.transaction(),
@@ -831,8 +852,12 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-                let document =
-                    proposal_store::load_document(guarded.transaction(), id, false).await?;
+                let document = proposal_store::load_document(
+                    guarded.transaction(),
+                    id,
+                    proposal_store::DocumentLock::Share,
+                )
+                .await?;
                 match self
                     .coordinator
                     .authorize_proposal_document(
