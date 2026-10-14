@@ -3409,6 +3409,315 @@ async fn declared_existence_disclosure_mode_governs_the_public_collapse() {
     );
 }
 
+async fn activated_authority_fixture() -> (PreparedAcceptance, Arc<EvidenceRuntime>) {
+    let server = MockServer::start().await;
+    let profiles = RefCell::new(None);
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        |root| {
+            let path = root.join("evidence.yaml");
+            let mut config: Value =
+                serde_norway::from_slice(&fs::read(&path).expect("fixture config"))
+                    .expect("fixture YAML");
+            let mut access = config
+                .as_object_mut()
+                .expect("config object")
+                .remove("authorityProfiles")
+                .expect("target profiles");
+            for profile in access
+                .as_object_mut()
+                .expect("profiles object")
+                .values_mut()
+            {
+                profile["actorKind"] = json!("service");
+                for grant in profile["grants"].as_array_mut().expect("grants") {
+                    grant["responseFormats"] = json!(["signed-jws"]);
+                }
+            }
+            *profiles.borrow_mut() =
+                Some(serde_json::from_value(access).expect("target profiles decode"));
+            config["project"] = json!("wire-fixture");
+            for definition in config["requirements"].as_array_mut().expect("definitions") {
+                definition["representations"] = json!(["signed-jws"]);
+                definition["grantCeiling"] = json!({
+                    "authorities": ["statutory"], "actorKinds": ["service"],
+                    "valueOrigins": ["request", "authenticated-grant"],
+                    "audiences": [EVIDENCE_AUDIENCE]
+                });
+            }
+            fs::write(
+                path,
+                serde_norway::to_string(&config).expect("normalized config serializes"),
+            )
+            .expect("normalized config writes before package freeze");
+            regenerate_discovery_description(root);
+        },
+    );
+    let bundle =
+        crate::bundle::Bundle::load(&prepared.bundle_root).expect("portable package loads");
+    let authority_root = prepared.temporary.path().join("authority");
+    let document = crate::authority::AuthorityDocument {
+        target: "local".to_owned(),
+        project: "wire-fixture".to_owned(),
+        access_profiles: profiles.into_inner().expect("compiled profiles"),
+    };
+    crate::authority::activate(
+        &authority_root,
+        "local",
+        &bundle.config,
+        bundle.package_digest(),
+        &document,
+    )
+    .expect("authority activation is durable");
+    let mut runtime_config: Value =
+        serde_norway::from_slice(&fs::read(&prepared.runtime_path).expect("runtime config"))
+            .expect("runtime YAML");
+    runtime_config["authority"] = json!({"root": authority_root, "target": "local"});
+    make_file_writable(&prepared.runtime_path);
+    fs::write(
+        &prepared.runtime_path,
+        serde_norway::to_string(&runtime_config).expect("runtime serializes"),
+    )
+    .expect("runtime authority binding writes");
+    make_file_read_only(&prepared.runtime_path);
+    DeploymentInputs::load(&prepared.runtime_path).expect("normalized deployment inputs load");
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("normalized runtime captures active authority"),
+    );
+    (
+        PreparedAcceptance {
+            temporary: prepared.temporary,
+            bundle_root: prepared.bundle_root,
+            runtime_path: prepared.runtime_path,
+            server,
+            audit_path: prepared.audit_path,
+        },
+        runtime,
+    )
+}
+
+#[tokio::test]
+async fn target_audience_ceiling_refuses_before_source_effects() {
+    let (prepared, runtime) = activated_authority_fixture().await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let claims = |audience: &str, actor: &str| {
+        let now = Utc::now().timestamp();
+        signed_access_token(json!({
+            "iss": TOKEN_ISSUER, "aud": TOKEN_AUDIENCE, "sub": "ceiling-caller",
+            "iat": now - 1, "exp": now + 299, "client_id": "evidence-task-agent",
+            "registry_actor_kind": actor, "evidence_tags": ["fixture-agency"],
+            "evidence_audience": audience
+        }))
+    };
+    let credential = prepared.temporary.path().join("secrets/source-a-token");
+    fs::remove_file(&credential).expect("remove credential to prove refusal precedes resolution");
+    for token in [
+        claims("urn:outside:audience", "service"),
+        claims(EVIDENCE_AUDIENCE, "human"),
+    ] {
+        let discovery = http
+            .get("/v1/evidence-definitions")
+            .add_header("authorization", format!("Bearer {token}"))
+            .await;
+        discovery.assert_status_ok();
+        assert!(discovery
+            .json::<EvidenceDefinitions>()
+            .definitions
+            .is_empty());
+        http.post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&adult_request())
+            .await
+            .assert_status_forbidden();
+    }
+    let allowed = claims(EVIDENCE_AUDIENCE, "service");
+    http.post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {allowed}"))
+        .add_header("accept", EVIDENCE_UNSIGNED_MEDIA_TYPE)
+        .json(&adult_request())
+        .await
+        .assert_status_forbidden();
+    assert!(prepared
+        .server
+        .received_requests()
+        .await
+        .expect("source journal")
+        .is_empty());
+    write_secret(
+        credential.parent().expect("secret root"),
+        "source-a-token",
+        BEARER,
+    );
+    mount_adult_source(&prepared.server, None).await;
+    http.post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {allowed}"))
+        .json(&adult_request())
+        .await
+        .assert_status_ok();
+}
+
+#[tokio::test]
+async fn release_audit_binds_activated_authority_revision_and_effective_grants() {
+    let (prepared, runtime) = activated_authority_fixture().await;
+    let revision = runtime
+        .bundle()
+        .authority_revision()
+        .expect("active authority")
+        .to_owned();
+    let effective = runtime
+        .bundle()
+        .effective_grant_digest()
+        .expect("effective ceiling intersection")
+        .to_owned();
+    mount_adult_source_expecting(&prepared.server, None, 3).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let token = access_token(None);
+    http.post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&adult_request())
+        .await
+        .assert_status_ok();
+    http.post("/v1/evidence/batch")
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&adult_request_batch(2))
+        .await
+        .assert_status_ok();
+    let audit = fs::read_to_string(&prepared.audit_path).expect("durable release audit");
+    let events = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit JSON"))
+        .collect::<Vec<_>>();
+    // Both single and request-batch event streams bind the captured authority.
+    let mut release_count = 0;
+    for event in events {
+        let event = event.get("record").unwrap_or(&event);
+        if event.get("authorityRevision").is_some() {
+            assert_eq!(event["authorityRevision"], revision);
+            assert_eq!(event["effectiveGrantDigest"], effective);
+            if event["phase"] == "disclosure-release" {
+                release_count += 1;
+            }
+        }
+    }
+    assert_eq!(
+        release_count, 2,
+        "both exact-byte disclosure events bind authority"
+    );
+}
+
+#[tokio::test]
+async fn configuration_revision_pin_precedes_authority_and_uri_only_uses_active_revision() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_runtime_authenticator(
+            &prepared.runtime_path,
+            Arc::new(CountingAuthenticator {
+                delegate: authenticator(),
+                authenticate_calls: Arc::clone(&calls),
+            }),
+        )
+        .await
+        .expect("runtime initializes"),
+    );
+    let source_credential = prepared.temporary.path().join("secrets/source-a-token");
+    fs::remove_file(&source_credential)
+        .expect("stale pin must precede source credential resolution");
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let token = access_token(None);
+    let mut request = adult_request();
+    let active = runtime
+        .bundle()
+        .configuration_revision(&request.requirement)
+        .expect("active definition revision")
+        .to_owned();
+    request.expected_configuration_revision = Some(format!("sha256:{}", "0".repeat(64)));
+    assert_ne!(
+        request.expected_configuration_revision.as_deref(),
+        Some(active.as_str())
+    );
+    let stale = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&request)
+        .await;
+    stale.assert_status_forbidden();
+    assert_eq!(stale.json::<Value>()["code"], json!("evidence.denied"));
+    let mut batch = request_batch_from_request(&request, 2);
+    batch.expected_configuration_revision = request.expected_configuration_revision.clone();
+    let stale_batch = http
+        .post("/v1/evidence/batch")
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&batch)
+        .await;
+    stale_batch.assert_status_forbidden();
+    assert_eq!(
+        calls.load(Ordering::Acquire),
+        0,
+        "stale pins precede identity and authority resolution"
+    );
+    assert!(prepared
+        .server
+        .received_requests()
+        .await
+        .expect("source journal")
+        .is_empty());
+    assert!(fs::read_to_string(&prepared.audit_path)
+        .expect("audit readable")
+        .is_empty());
+
+    let mut local_handle = adult_request();
+    local_handle.requirement = runtime
+        .bundle()
+        .config
+        .requirements
+        .iter()
+        .find(|definition| definition.id == request.requirement)
+        .expect("definition")
+        .handle
+        .clone();
+    http.post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&local_handle)
+        .await
+        .assert_status_bad_request();
+    assert_eq!(
+        calls.load(Ordering::Acquire),
+        0,
+        "local handles are not wire identities"
+    );
+
+    write_secret(
+        source_credential.parent().expect("secret root"),
+        "source-a-token",
+        BEARER,
+    );
+    mount_adult_source_expecting(&prepared.server, None, 2).await;
+    for expected in [Some(active.clone()), None] {
+        let mut current = adult_request();
+        current.expected_configuration_revision = expected;
+        let response = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&current)
+            .await;
+        response.assert_status_ok();
+        let serialized =
+            serde_json::to_vec(&response.json::<FlattenedJws>()).expect("JWS serializes");
+        let policy = verification_policy(&runtime, &current, &serialized);
+        let assertion = verify_flattened_jws(&serialized, runtime.jwks(), &policy)
+            .expect("independent verifier accepts the active revision");
+        assert_eq!(assertion.configuration_revision, active);
+    }
+    assert_eq!(calls.load(Ordering::Acquire), 2);
+}
+
 #[tokio::test]
 async fn request_nonce_is_strict_and_never_reaches_source_or_audit() {
     let fixture = acceptance_runtime().await;
@@ -7098,7 +7407,7 @@ async fn sd_jwt_vc_demo_serves_a_credential_for_curl() {
                             break (
                                 String::from_utf8(bytes).expect("credential is ASCII"),
                                 verified,
-                            )
+                            );
                         }
                         Err(error) => *last_failure.borrow_mut() = Some(format!("{error:?}")),
                     }
@@ -10681,6 +10990,7 @@ fn adult_request_batch(count: usize) -> EvidenceRequestBatch {
 fn request_batch_from_request(template: &EvidenceRequest, count: usize) -> EvidenceRequestBatch {
     EvidenceRequestBatch {
         requirement: template.requirement.clone(),
+        expected_configuration_revision: None,
         purpose: template.purpose.clone(),
         items: (0..count)
             .map(|_| EvidenceRequestBatchItem {
@@ -10746,6 +11056,7 @@ fn request(requirement: &str, purpose: &str, subjects: Vec<RequestedSubject>) ->
     EvidenceRequest {
         request_nonce: fresh_request_nonce(),
         requirement: requirement.to_owned(),
+        expected_configuration_revision: None,
         purpose: purpose.to_owned(),
         subjects,
         holder_keys: Vec::new(),

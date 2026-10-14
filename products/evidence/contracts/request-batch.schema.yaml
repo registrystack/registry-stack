@@ -10,6 +10,14 @@ properties:
     format: uri
     minLength: 1
     maxLength: 512
+  expectedConfigurationRevision:
+    type: string
+    pattern: '^sha256:[a-f0-9]{64}$'
+    description: >-
+      Optional independent pin on the discovered definition revision. A mismatch
+      refuses before authority resolution, credentials, or source I/O. Omission
+      resolves the active revision, which the signed assertion carries. The
+      Requirement URI remains the public identity; a local handle is not accepted.
   purpose:
     type: string
     pattern: '^[a-z][a-z0-9._:-]{0,127}$'

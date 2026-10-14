@@ -85,6 +85,10 @@ pub struct EvidenceRequest {
     /// source requests, logs, metrics, traces, or native audit.
     pub request_nonce: String,
     pub requirement: String,
+    /// Optional independent pin on the active definition configuration.
+    /// A mismatch refuses before authority resolution or protected effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_configuration_revision: Option<String>,
     pub purpose: String,
     /// Unordered role set encoded as an array. Roles are resolved by name and
     /// canonicalized to requirement declaration order.
@@ -112,6 +116,10 @@ pub struct EvidenceRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceRequestBatch {
     pub requirement: String,
+    /// Optional independent pin on the active definition configuration.
+    /// A mismatch refuses before authority resolution or protected effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_configuration_revision: Option<String>,
     pub purpose: String,
     /// Ordered requests. Each item gets its own request binding nonce and
     /// complete role-bound subject set.
@@ -498,6 +506,7 @@ mod tests {
         let request = EvidenceRequest {
             request_nonce: "protected-request-nonce-canary".to_owned(),
             requirement: "urn:example:protected-requirement-canary".to_owned(),
+            expected_configuration_revision: None,
             purpose: "protected-purpose-canary".to_owned(),
             subjects: vec![RequestedSubject {
                 role: "subject".to_owned(),

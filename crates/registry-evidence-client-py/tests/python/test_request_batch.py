@@ -133,6 +133,7 @@ class RequestBatchTest(unittest.TestCase):
             json.loads(request.body),
             {
                 "requirement": "urn:example:requirement:v1",
+                "expectedConfigurationRevision": "sha256:" + "0" * 64,
                 "purpose": "example-purpose",
                 "items": [
                     {

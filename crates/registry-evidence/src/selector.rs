@@ -424,6 +424,15 @@ pub fn match_entitlement(
         .iter()
         .find(|candidate| candidate.id == request.requirement)
         .ok_or(AuthorizationError::Unauthorized)?;
+    if requirement.grant_ceiling.as_ref().is_some_and(|ceiling| {
+        !ceiling
+            .audiences
+            .iter()
+            .any(|audience| audience == context.evidence_audience())
+            || !ceiling.actor_kinds.contains(&context.actor_kind())
+    }) {
+        return Err(AuthorizationError::Unauthorized);
+    }
     if !requirement
         .purposes
         .iter()
@@ -830,6 +839,7 @@ pub fn resolve_offline_fixture_authorization(
     let request = EvidenceRequest {
         request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE.to_owned(),
         requirement: requirement.id.clone(),
+        expected_configuration_revision: None,
         purpose: purpose.to_owned(),
         subjects,
         holder_keys,
@@ -1499,6 +1509,7 @@ mod tests {
         EvidenceRequest {
             request_nonce: "A".repeat(43),
             requirement: "urn:example:requirement:v1".to_owned(),
+            expected_configuration_revision: None,
             purpose: "purpose".to_owned(),
             subjects: Vec::new(),
             holder_keys,
