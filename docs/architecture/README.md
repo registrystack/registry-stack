@@ -2,13 +2,19 @@
 
 Use these diagrams to understand BReg, Casework and Evidence responsibilities,
 follow requests and events, and inspect the contracts between independently deployed products.
-The model pins source revision `c02e470085f48eae0204ba8400f9f919c5d05500`, reviewed on
+The BReg and Evidence models retain source revision `c02e470085f48eae0204ba8400f9f919c5d05500`, reviewed on
 13 September 2026. It includes unreleased contextual authorization changes and does
 not describe the published v0.30.0 release. The audit models additionally describe the
 unreleased shared-writer change reviewed on 25 September 2026. The product model files link to
 maintained source on `main`; those links are not a claim that the unreleased audit behavior has
 shipped. The other models retain their earlier source links. Audit sequences illustrate the
 default durable file destination; stdout is best-effort.
+
+The Casework model and its shared composition relationships describe the unreleased
+review-only replacement checked on 14 October 2026. They use the maintained source
+links on `main`. Submitted and current-source review share one lifecycle; source
+application remains independently authorized. Other product models retain their
+earlier source baseline and are not evidence for the complete current stack.
 
 ## Open the explorer
 
@@ -35,7 +41,7 @@ These links use the default local port:
 | Who approves agent work, and how does the agent obtain authority? | [Human approval](http://localhost:5184/view/casework_task_approval/), [task exchange](http://localhost:5184/view/task_token_exchange/) |
 | What happens after revocation? | [Revocation and remaining reads](http://localhost:5184/view/task_revocation/), [task writes](http://localhost:5184/view/breg_task_write/) |
 | What gates data access and response release? | [BReg reads](http://localhost:5184/view/breg_read/), [Evidence assertions](http://localhost:5184/view/evidence_assertion/), [Evidence task authorization](http://localhost:5184/view/evidence_task_assertion/) |
-| How are events and uncertain actions handled? | [BReg delivery](http://localhost:5184/view/event_delivery/), [delivery recovery](http://localhost:5184/view/event_recovery/), [Casework event intake](http://localhost:5184/view/casework_source_event/), [action recovery](http://localhost:5184/view/casework_attempt_recovery/) |
+| How do completion and response recovery work? | [BReg delivery](http://localhost:5184/view/event_delivery/), [delivery recovery](http://localhost:5184/view/event_recovery/), [Casework completion](http://localhost:5184/view/casework_source_event/), [review response recovery](http://localhost:5184/view/casework_attempt_recovery/) |
 | What owns wallet delivery? | [Wallet architecture](http://localhost:5184/view/evidence_wallet_architecture/), [wallet delivery](http://localhost:5184/view/evidence_wallet_delivery/) |
 
 Each product folder also contains architecture, runtime, and authoring views.
@@ -55,14 +61,17 @@ when changing styles so replies are not mistaken for asynchronous events.
 
 The products retain separate authentication, authorization, disclosure, audit and
 storage boundaries. A shared issuer or exported description grants no shared access.
-Casework can host decisions without BReg; Evidence can use other fixed sources.
+Casework can review submitted context without BReg; Evidence can use other fixed sources.
 The BReg action-to-Evidence integration remains a trial surface.
 
 Task profiles can authorize BReg reads as well as governed change-request work.
 Fresh Casework status gates new BReg task writes and later approval/application.
 BReg task reads and task-bound Evidence requests check expiry locally. In the maintained
 ThunderID setup, existing-token re-exchange can keep reads available after revocation
-until the original grant deadline, at most 900 seconds after approval. The 300-second
+until the original grant deadline, at most 900 seconds for immediate grants. Explicit deferred BReg and Scheduling
+grants can last up to seven days and retain their original deadline. Deferred execution
+requires fresh status, except Scheduling may explicitly permit unchecked execution only
+in the final fifteen minutes; Evidence grants stay immediate. The 300-second
 access-token setting does not shorten that entire window; other issuers own their
 registration and exchange policy. The credential and revocation views show these limits.
 
@@ -102,7 +111,7 @@ configuration and lockfile. This explorer is separate from the Astro/Starlight s
 If port 5184 is occupied, use `npm run dev -- --port 5185` and adjust the links above.
 
 [breg-tasks]: https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/TASK_GRANTS.md
-[casework-tasks]: https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/casework/TASK_GRANTS.md
+[casework-tasks]: https://github.com/registrystack/registry-stack/blob/main/products/casework/TASK_GRANTS.md
 [events]: https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/EVENTS-AND-WEBHOOKS.md
-[casework-runtime]: https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/casework/RUNTIME-CONFIG.md
+[casework-runtime]: https://github.com/registrystack/registry-stack/blob/main/products/casework/RUNTIME-CONFIG.md
 [evidence]: https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/evidence/OPERATOR-CONTRACT.md
