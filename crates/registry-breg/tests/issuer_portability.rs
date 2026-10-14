@@ -255,8 +255,57 @@ async fn stock_to_keycloak_preserves_native_proposal_issuer_isolation() {
     use registry_breg::contract::parse_project_json;
     use registry_breg_client::{
         BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
-        BRegProposalState, BRegRecordFormat,
+        BRegPreparedProposal, BRegProposal, BRegProposalState, BRegRecordFormat,
     };
+
+    // Reconstructed fixtures have different loopback origins. Send the retained
+    // wire request explicitly so these assertions exercise server issuer scope,
+    // rather than the SDK's earlier refusal to move a capability to another origin.
+    async fn request(
+        base: &str,
+        link: &serde_json::Value,
+        body: Option<&str>,
+        key: Option<&str>,
+    ) -> reqwest::Response {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let url = reqwest::Url::parse(base)
+            .unwrap()
+            .join(link["path"].as_str().unwrap())
+            .unwrap();
+        let mut request = client
+            .request(
+                reqwest::Method::from_bytes(link["method"].as_str().unwrap().as_bytes()).unwrap(),
+                url,
+            )
+            .query(&[("accessProfile", link["accessProfile"].as_str().unwrap())])
+            .header("accept", "application/json");
+        if let Some(etag) = link["ifMatch"].as_str() {
+            request = request.header("if-match", etag);
+        }
+        if let Some(body) = body {
+            request = request
+                .header("content-type", "application/json")
+                .body(body.to_owned());
+        }
+        if let Some(key) = key {
+            request = request.header("idempotency-key", key);
+        }
+        request.send().await.unwrap()
+    }
+
+    async fn replay(base: &str, attempt: &BRegPreparedProposal) -> reqwest::Response {
+        let retained: serde_json::Value = serde_json::from_slice(attempt.as_bytes()).unwrap();
+        request(
+            base,
+            &retained["link"],
+            Some(retained["body"].as_str().unwrap()),
+            Some(retained["key"].as_str().unwrap()),
+        )
+        .await
+    }
     let root = std::env::var_os("BREG_ISSUER_JOURNEY_DIR").expect("runner material directory");
     let root = Path::new(&root);
     let journey: Journey =
@@ -384,37 +433,54 @@ async fn stock_to_keycloak_preserves_native_proposal_issuer_isolation() {
             mutations_for(&journey.stock.issuer),
         )
         .await;
-    let replay = same_issuer
-        .client
-        .execute_proposal(&apply)
-        .await
-        .unwrap()
-        .value;
+    let response = replay(&same_issuer.base_url, &apply).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let recovered = BRegProposal::from_slice(&response.bytes().await.unwrap()).unwrap();
     assert_eq!(
-        serde_json::to_value(replay).unwrap(),
+        serde_json::to_value(recovered).unwrap(),
         serde_json::to_value(&applied).unwrap(),
         "a reconstructed runtime under the same issuer recovers the exact receipt"
+    );
+    let applied_document = serde_json::to_value(&applied).unwrap();
+    assert_eq!(
+        request(
+            &same_issuer.base_url,
+            &applied_document["links"]["self"],
+            None,
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::OK,
+        "the retained self link still reads the rightful issuer's Proposal"
     );
     let new = fixture
         .client_with_mutations(after, mutations_for(&journey.keycloak.issuer))
         .await;
-    assert!(
-        new.client.read_proposal(&applied).await.is_err(),
+    new.client.registry_contract(Some("clerk")).await.unwrap();
+    assert_eq!(
+        request(
+            &new.base_url,
+            &applied_document["links"]["self"],
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND,
         "the same textual principal from another issuer cannot inherit Proposal ownership"
     );
-    assert!(
-        new.client.execute_proposal(&apply).await.is_err(),
+    assert_eq!(
+        replay(&new.base_url, &apply).await.status(),
+        StatusCode::NOT_FOUND,
         "another issuer cannot replay a committed Proposal receipt"
     );
-    let continue_pending = new
-        .client
+    let continue_pending = old
         .prepare_proposal(&pending, "submit", json!({}), &key("issuer-continued"))
         .unwrap();
-    assert!(
-        new.client
-            .execute_proposal(&continue_pending)
-            .await
-            .is_err(),
+    assert_eq!(
+        replay(&new.base_url, &continue_pending).await.status(),
+        StatusCode::NOT_FOUND,
         "another issuer cannot continue an old pending Proposal"
     );
     let human = fixture
@@ -423,13 +489,29 @@ async fn stock_to_keycloak_preserves_native_proposal_issuer_isolation() {
             mutations_for(&journey.keycloak.issuer),
         )
         .await;
-    assert!(
-        human.client.read_proposal(&applied).await.is_err(),
+    human.client.registry_contract(Some("clerk")).await.unwrap();
+    assert_eq!(
+        request(
+            &human.base_url,
+            &applied_document["links"]["self"],
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND,
         "another institutional principal cannot inherit Proposal ownership"
     );
-    assert!(
-        human.client.execute_proposal(&apply).await.is_err(),
+    assert_eq!(
+        replay(&human.base_url, &apply).await.status(),
+        StatusCode::NOT_FOUND,
         "another principal cannot replay the committed receipt"
+    );
+    let unchanged = old.read_proposal(&pending).await.unwrap().value;
+    assert_eq!(
+        serde_json::to_value(unchanged).unwrap(),
+        serde_json::to_value(&pending).unwrap(),
+        "refused issuer changes leave the pending Proposal unchanged"
     );
     let revisions: i64 = fixture
         .database

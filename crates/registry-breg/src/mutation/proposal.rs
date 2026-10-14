@@ -537,7 +537,7 @@ impl MutationCoordinator {
                 && document.header.owner_reference
                     != self.proposal_owner_reference(authority.common.principal()))
         {
-            return Err(MutationError::PreconditionFailed);
+            return Err(MutationError::AuthorizationRefused);
         }
         for (entity_id, id) in &document.input_targets {
             let entity = registry

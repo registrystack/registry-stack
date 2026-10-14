@@ -48,18 +48,23 @@ under `authorityClaims`.
 Each route has one default access profile. A caller selects another with the `accessProfile`
 query option. A profile grants access when the token satisfies its `requiredScopes`,
 `requiredPurposes`, and `principalClaim`, and when the profile grants the operation on that
-entity. Row boundaries on the grant compare a record field with a token claim and hide every
-record outside them, on reads and on writes.
+Record type. Row boundaries on the grant compare a record field with a token claim.
+Reads conceal records outside that boundary; mutations recheck authority over their
+targets and prospective values before committing.
 
-A refusal is concealed as `404 resource.not_found` whenever the verified token does not satisfy
-the profile or names a record outside the caller's boundary. The only exception is a token that
-is missing, or presented and rejected, which returns `401 authentication.refused`. A caller
-therefore cannot distinguish a record that does not exist from one it may not see.
+A missing or invalid token returns `401 authentication.refused`. Unknown or
+ungranted profiles and operations return `404 resource.not_found`, as do Record
+reads outside the caller's boundary. Proposal owner and scope refusals are also
+concealed. An admitted mutation can return `412 precondition.failed` when its
+current target authority, prospective row boundary, or revision precondition
+fails. That response contains no protected values and commits no effects.
 
 {/* Evidence: crates/registry-breg/src/auth.rs;
     crates/registry-breg/src/api/mod.rs, router();
     crates/registry-breg/src/query.rs, access_profile;
-    crates/registry-breg/src/contract.rs, ProjectAccessProfileSource and PermissionsSource. */}
+    crates/registry-breg/src/contract.rs, ProjectAccessProfileSource and PermissionsSource;
+    crates/registry-breg/src/api/proposals.rs, proposal_problem;
+    crates/registry-breg/tests/postgres_mutation.rs, real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic. */}
 
 ## Routes
 

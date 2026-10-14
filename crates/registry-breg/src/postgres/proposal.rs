@@ -883,7 +883,9 @@ impl PostgresRecordMutationService {
                     .await
                 {
                     Ok(()) => {}
-                    Err(MutationError::PreconditionFailed) => {
+                    Err(
+                        MutationError::AuthorizationRefused | MutationError::PreconditionFailed,
+                    ) => {
                         guarded
                             .rollback()
                             .await

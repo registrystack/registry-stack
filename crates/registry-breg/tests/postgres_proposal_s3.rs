@@ -608,10 +608,24 @@ async fn s3_integrity_binding_quarantine_and_authority_refusals_precede_transpor
         raw_download(&wrong_target, &uploaded).await.status(),
         StatusCode::NOT_FOUND
     );
+    let other_owner = fixture
+        .client_for(claims("synthetic-other-author", "zone-a"))
+        .await;
+    assert_eq!(
+        raw_upload(&other_owner, &uploaded, "support", "s3-other-owner")
+            .await
+            .status(),
+        StatusCode::NOT_FOUND,
+        "another owner cannot discover attachment state on a permitted target"
+    );
+    assert_eq!(
+        raw_download(&other_owner, &uploaded).await.status(),
+        StatusCode::NOT_FOUND
+    );
     assert_eq!(
         s3.state.requests.load(Ordering::SeqCst),
         requests,
-        "slot/current target refusal precedes transport"
+        "slot, owner, and current target refusals precede transport"
     );
     let verification = s3.config.activate_attachment_verification().unwrap();
     let policy = verification.binding_digest();
@@ -637,6 +651,7 @@ async fn s3_integrity_binding_quarantine_and_authority_refusals_precede_transpor
         "pending verification precedes GET"
     );
     drop(quarantined);
+    drop(other_owner);
     drop(wrong_target);
     fixture.finish().await;
 }

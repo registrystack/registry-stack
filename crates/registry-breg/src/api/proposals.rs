@@ -10,6 +10,13 @@ use crate::model::{
 };
 use crate::postgres::{ProposalAuthority, ProposalAuthorityOperation, RowBoundaryContext};
 
+pub(super) fn proposal_problem(error: MutationError) -> Response {
+    match error {
+        MutationError::AuthorizationRefused => concealed(),
+        error => mutation_problem(error),
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ExecutorLease {
@@ -559,7 +566,7 @@ pub(super) async fn start(
             "",
             service.field_encryption.as_deref(),
         ),
-        Err(error) => mutation_problem(error),
+        Err(error) => proposal_problem(error),
     }
 }
 
@@ -582,7 +589,7 @@ pub(super) async fn get(
     let action_id = match mutations.proposal_action_id(id).await {
         Ok(Some(id)) => id,
         Ok(None) => return concealed(),
-        Err(error) => return mutation_problem(error),
+        Err(error) => return proposal_problem(error),
     };
     let Some(action) = service
         .registry
@@ -618,7 +625,7 @@ pub(super) async fn get(
     {
         Ok((value, etag)) => json_response(value, Some(&etag)),
         Err(MutationError::PreconditionFailed) => concealed(),
-        Err(error) => mutation_problem(error),
+        Err(error) => proposal_problem(error),
     }
 }
 
@@ -654,7 +661,7 @@ pub(super) async fn transition(
     let action_id = match mutations.proposal_action_id(id).await {
         Ok(Some(id)) => id,
         Ok(None) => return concealed(),
-        Err(error) => return mutation_problem(error),
+        Err(error) => return proposal_problem(error),
     };
     let Some(action) = service
         .registry
@@ -869,7 +876,7 @@ pub(super) async fn transition(
             "",
             service.field_encryption.as_deref(),
         ),
-        Err(error) => mutation_problem(error),
+        Err(error) => proposal_problem(error),
     }
 }
 
@@ -929,7 +936,7 @@ async fn review_read(
     let action_id = match mutations.proposal_action_id(id).await {
         Ok(Some(id)) => id,
         Ok(None) => return concealed(),
-        Err(error) => return mutation_problem(error),
+        Err(error) => return proposal_problem(error),
     };
     let Some(action) = service
         .registry
@@ -1026,7 +1033,7 @@ async fn review_read(
     {
         Ok((value, etag)) => json_response(value, Some(&etag)),
         Err(MutationError::PreconditionFailed) => concealed(),
-        Err(error) => mutation_problem(error),
+        Err(error) => proposal_problem(error),
     }
 }
 
@@ -1108,6 +1115,6 @@ pub(super) async fn list(
         .await
     {
         Ok(value) => json_response(value, None),
-        Err(error) => mutation_problem(error),
+        Err(error) => proposal_problem(error),
     }
 }

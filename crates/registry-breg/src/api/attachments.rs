@@ -146,7 +146,7 @@ async fn mutate(
     {
         Ok(value) => value,
         Err(MutationError::PreconditionFailed) => return concealed(),
-        Err(error) => return mutation_problem(error),
+        Err(error) => return super::proposals::proposal_problem(error),
     };
     let Some(key) =
         single_header(&headers, "idempotency-key").filter(|key| valid_idempotency_key(key))
@@ -285,7 +285,7 @@ async fn mutate(
             service.field_encryption.as_deref(),
         ),
         Err(MutationError::PreconditionFailed) => precondition_failed(),
-        Err(error) => mutation_problem(error),
+        Err(error) => super::proposals::proposal_problem(error),
     }
 }
 
@@ -317,7 +317,7 @@ async fn download(
     {
         Ok(value) => value,
         Err(MutationError::PreconditionFailed) => return concealed(),
-        Err(error) => return mutation_problem(error),
+        Err(error) => return super::proposals::proposal_problem(error),
     };
     match mutations
         .proposal_attachment_download(id, version, &slot, &authority, &correlation)
@@ -336,7 +336,7 @@ async fn download(
             .body(Body::from(bytes))
             .unwrap_or_else(|_| unavailable()),
         Err(MutationError::PreconditionFailed) => concealed(),
-        Err(error) => mutation_problem(error),
+        Err(error) => super::proposals::proposal_problem(error),
     }
 }
 
