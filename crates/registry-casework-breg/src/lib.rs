@@ -81,13 +81,11 @@ impl BregContextProvider {
         {
             return Err(ReviewContextError::BindingMoved);
         }
-        if display
-            && !document.context.contract.as_ref().is_some_and(|contract| {
-                contract.id == self.export.contract.id
-                    && contract.revision == self.export.contract.revision.as_str()
-                    && contract.schema_digest == self.export.contract.schema_digest.as_str()
-            })
-        {
+        if !document.context.contract.as_ref().is_some_and(|contract| {
+            contract.id == self.export.contract.id
+                && contract.revision == self.export.contract.revision.as_str()
+                && contract.schema_digest == self.export.contract.schema_digest.as_str()
+        }) {
             return Err(ReviewContextError::ContractChanged);
         }
         if client

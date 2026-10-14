@@ -67,9 +67,8 @@ async fn mocks(server: &MockServer, profile: &str, bearer: &str, display: bool, 
         "get-review-status"
     };
     Mock::given(method("GET")).and(path("/v1/registry")).and(query_param("accessProfile",profile)).and(header("authorization",format!("Bearer {bearer}"))).respond_with(response(json!({"metadataVersion":"1","id":"registry","version":"1","revision":revision,"recordTypes":[],"operations":[],"proposals":{"method":"GET","path":"/v1/proposals","accessProfiles":[],"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":[]},"actions":[{"actionId":"correct-address","accessProfile":profile,"operations":[operation]}]}}))).mount(server).await;
-    let mut context = json!({"reference":"native-proposal"});
+    let mut context = json!({"reference":"native-proposal", "contract":export().contract});
     if display {
-        context["contract"] = serde_json::to_value(export().contract).unwrap();
         context["fields"] = json!({"reference":"REF-42"});
     }
     Mock::given(method("GET")).and(path(format!("/v1/proposals/{ID}/{suffix}"))).and(header("authorization",format!("Bearer {bearer}"))).respond_with(response(json!({"id":ID,"actionId":"correct-address","actionRevision":DIGEST,"submissionVersion":1,"revision":1,"effectDigest":DIGEST,"subject":{"source":"source","subjectType":"proposal","id":ID,"version":"1","digest":DIGEST},"context":context,"reviewable":true}))).mount(server).await;
@@ -270,5 +269,39 @@ async fn missing_or_changed_producer_contract_refuses_without_releasing_fields()
             .unwrap()
             .iter()
             .all(|request| request.method == "GET"));
+    }
+}
+
+#[tokio::test]
+async fn status_requires_exact_producer_contract_without_display_fields() {
+    for member in [None, Some("id"), Some("revision"), Some("schemaDigest")] {
+        let server = MockServer::start().await;
+        let export = export();
+        let identity = identity(&export);
+        let mut contract = serde_json::to_value(&export.contract).unwrap();
+        let provider = provider(&server, export);
+        mocks(&server, "status", "status-bearer", false, DIGEST).await;
+        if let Some(member) = member {
+            contract[member] = if member == "id" {
+                json!("urn:registry:breg:review-context:source:correct-address:other-context")
+            } else {
+                json!(format!("sha256:{}", "b".repeat(64)))
+            };
+        }
+        let mut context = json!({"reference":"native-proposal"});
+        if member.is_some() {
+            context["contract"] = contract;
+        }
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/proposals/{ID}/review-status")))
+            .respond_with(response(json!({"id":ID,"actionId":"correct-address","actionRevision":DIGEST,
+                "submissionVersion":1,"revision":1,"effectDigest":DIGEST,
+                "subject":{"source":"source","subjectType":"proposal","id":ID,"version":"1","digest":DIGEST},
+                "context":context,"reviewable":true})))
+            .with_priority(1).mount(&server).await;
+        assert_eq!(
+            provider.service_status(&identity).await.unwrap_err(),
+            ReviewContextError::ContractChanged
+        );
     }
 }
