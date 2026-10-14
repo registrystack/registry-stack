@@ -839,6 +839,7 @@ impl ReviewAuthorityRegistry {
                     // on every due row; a failed lookup already recorded its
                     // code on the one row it claimed. A later answered lookup
                     // (pending or 404) or reconciled result clears the code.
+                    // Another worker's live lookup keeps its own schedule.
                     client
                         .execute(
                             "UPDATE registry_internal.registry_proposal_review_submissions s
@@ -847,6 +848,7 @@ impl ReviewAuthorityRegistry {
                                     updated_at=transaction_timestamp()
                               WHERE s.authority=$1 AND s.state='accepted'
                                 AND s.next_result_poll_at <= transaction_timestamp()
+                                AND (s.lease_until IS NULL OR s.lease_until < transaction_timestamp())
                                 AND NOT EXISTS (
                                     SELECT 1 FROM registry_internal.registry_proposal_review_results r
                                      WHERE (r.action_id,r.proposal_id,r.submission_version)
@@ -2222,7 +2224,8 @@ pub async fn poll_one_result(
     // reviews, one a webhook completion already announced goes first, and one
     // the authority last answered as unknown goes last, so reviews an
     // authority lost (a restored or replaced review environment) cannot hold
-    // back live ones. Every due review is still reached in turn.
+    // back live ones. Every due review is still reached in turn. A completed
+    // exchange releases its claim; next_result_poll_at owns the backoff.
     let Some(row) = client
         .query_opt(
             "UPDATE registry_internal.registry_proposal_review_submissions s
@@ -2277,7 +2280,8 @@ pub async fn poll_one_result(
             client
                 .execute(
                     "UPDATE registry_internal.registry_proposal_review_submissions
-                        SET result_poll_attempts=LEAST(result_poll_attempts+1,1000),
+                        SET lease_until=NULL,
+                            result_poll_attempts=LEAST(result_poll_attempts+1,1000),
                             last_error_code='result-lookup-uncertain',
                             next_result_poll_at=transaction_timestamp()+
                               (LEAST(60,5*LEAST(result_poll_attempts+1,1000)) * interval '1 second'),
@@ -2315,7 +2319,8 @@ pub async fn poll_one_result(
             client
                 .execute(
                     "UPDATE registry_internal.registry_proposal_review_submissions
-                        SET result_poll_attempts=LEAST(result_poll_attempts+1,12),
+                        SET lease_until=NULL,
+                            result_poll_attempts=LEAST(result_poll_attempts+1,12),
                             last_error_code=NULL,
                             next_result_poll_at=transaction_timestamp()+
                               (LEAST(60,5*LEAST(result_poll_attempts+1,12)) * interval '1 second'),
@@ -2339,7 +2344,8 @@ pub async fn poll_one_result(
             client
                 .execute(
                     "UPDATE registry_internal.registry_proposal_review_submissions
-                        SET result_poll_attempts=LEAST(result_poll_attempts+1,1000),
+                        SET lease_until=NULL,
+                            result_poll_attempts=LEAST(result_poll_attempts+1,1000),
                             last_error_code='result-unknown-to-authority',
                             next_result_poll_at=transaction_timestamp()+
                               (LEAST(60,5*LEAST(result_poll_attempts+1,1000)) * interval '1 second'),

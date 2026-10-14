@@ -9,7 +9,7 @@ mod client_http;
 mod postgres_harness;
 
 use axum::{
-    extract::State,
+    extract::{Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -86,10 +86,19 @@ impl Gate {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ResultReply {
+    Pending,
+    Unknown,
+    Failed,
+    Approved,
+}
+
 struct AuthorityState {
     gates: [Gate; 2],
     gated: bool,
     first_succeeds: bool,
+    result_replies: [ResultReply; 2],
     requests: AtomicUsize,
     creates: Mutex<Vec<(String, ReviewCreateRequest)>>,
     accepted: Mutex<Option<ReviewRequestAccepted>>,
@@ -108,10 +117,18 @@ impl Drop for Authority {
 }
 impl Authority {
     async fn start(gated: bool, first_succeeds: bool) -> Self {
+        Self::start_with_results(gated, first_succeeds, [ResultReply::Pending; 2]).await
+    }
+    async fn start_with_results(
+        gated: bool,
+        first_succeeds: bool,
+        result_replies: [ResultReply; 2],
+    ) -> Self {
         let state = Arc::new(AuthorityState {
             gates: [Gate::default(), Gate::default()],
             gated,
             first_succeeds,
+            result_replies,
             requests: 0.into(),
             creates: Mutex::new(Vec::new()),
             accepted: Mutex::new(None),
@@ -120,6 +137,7 @@ impl Authority {
         let app = Router::new()
             .route("/v1/review-requests", post(create_review))
             .route("/v1/review-requests/{id}/cancel", post(cancel_review))
+            .route("/v1/review-requests/{id}/result", get(lookup_result))
             .route("/v1/review-results", get(empty_feed))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -234,6 +252,36 @@ async fn cancel_review(
             result: result(&accepted, state.result_id, ReviewResultStatus::Cancelled)
         }),
     )
+}
+async fn lookup_result(
+    State(state): State<Arc<AuthorityState>>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Response {
+    assert_eq!(
+        headers.get("authorization").unwrap(),
+        format!("Bearer {OUTGOING_TOKEN}").as_str()
+    );
+    assert_eq!(headers.get("registry-review-profile").unwrap(), "producer");
+    let accepted = state.accepted.lock().unwrap().clone().unwrap();
+    assert_eq!(id, accepted.request_id);
+    let call = state.requests.fetch_add(1, Ordering::SeqCst);
+    if state.gated {
+        state.gates[call].pause().await;
+    }
+    match state.result_replies[call] {
+        ResultReply::Pending => (StatusCode::ACCEPTED, [("traceparent", TRACE)]).into_response(),
+        ResultReply::Unknown => (StatusCode::NOT_FOUND, [("traceparent", TRACE)]).into_response(),
+        ResultReply::Failed => response(StatusCode::SERVICE_UNAVAILABLE, json!({})),
+        ResultReply::Approved => response(
+            StatusCode::OK,
+            json!(result(
+                &accepted,
+                state.result_id,
+                ReviewResultStatus::Approved
+            )),
+        ),
+    }
 }
 async fn empty_feed() -> Response {
     response(StatusCode::OK, json!({"items":[]}))
@@ -751,6 +799,181 @@ async fn native_cancellation_reclaims_exact_work_and_rolls_back_stale_reconcilia
         assert!(settled["error"].is_null());
         assert_eq!(settled["binding"], replacement["binding"]);
         assert_eq!(result_count(&fixture).await, 1);
+        fixture.finish().await;
+    }
+}
+
+async fn result_poll_job(fixture: &client_http::ClientFixture, id: Uuid) -> Value {
+    fixture.database.admin.query_one("SELECT jsonb_build_object('state',state,'lease',lease_until,'error',last_error_code,'binding',accepted_binding,'pollAttempts',result_poll_attempts,'nextPoll',next_result_poll_at,'updated',updated_at) FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]).await.unwrap().get(0)
+}
+
+async fn accepted_due(fixture: &client_http::ClientFixture, authority: &Authority, id: Uuid) {
+    let accepted = retained_binding(fixture, id).await;
+    accept(fixture, id, &accepted).await;
+    *authority.state.accepted.lock().unwrap() = Some(accepted);
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET next_result_poll_at=transaction_timestamp()-interval '1 second',last_error_code='token-unavailable' WHERE proposal_id=$1", &[&id]).await.unwrap();
+}
+
+async fn completed_lookup_releases_claim(reply: ResultReply, expected_error: Option<&str>) {
+    let authority = Authority::start_with_results(true, true, [reply, ResultReply::Approved]).await;
+    let fixture = fixture(&authority).await;
+    let id = submitted(&fixture, "completed-result").await;
+    accepted_due(&fixture, &authority, id).await;
+    let pool = fixture.pool.clone();
+    let registry = authority.registry.clone();
+    let first =
+        tokio::spawn(async move { run_review_authority_once_for_test(&pool, &registry).await });
+    authority.state.gates[0].reached().await;
+    let original_lease: chrono::DateTime<chrono::Utc> = fixture.database.admin.query_one("SELECT lease_until FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]).await.unwrap().get(0);
+    authority.state.gates[0].release.notify_one();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), first)
+        .await
+        .unwrap()
+        .unwrap();
+    if matches!(reply, ResultReply::Failed) {
+        assert!(matches!(outcome, Err(MutationError::Unavailable)));
+    } else {
+        assert!(outcome.unwrap());
+    }
+    let settled = result_poll_job(&fixture, id).await;
+    assert_eq!(settled["state"], "accepted");
+    assert!(
+        settled["lease"].is_null(),
+        "a completed lookup releases its in-flight claim"
+    );
+    assert_eq!(settled["error"], json!(expected_error));
+    assert_eq!(settled["pollAttempts"], 1);
+    let schedule = fixture.database.admin.query_one("SELECT next_result_poll_at=updated_at+interval '5 seconds',next_result_poll_at>transaction_timestamp(),transaction_timestamp()<$2 FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id, &original_lease]).await.unwrap();
+    assert!(
+        schedule.get::<_, bool>(0),
+        "the ordinary five-second first backoff remains exact"
+    );
+    assert!(
+        schedule.get::<_, bool>(1),
+        "a completed lookup still backs off"
+    );
+    assert!(
+        schedule.get::<_, bool>(2),
+        "the original in-flight lease has not elapsed"
+    );
+    assert_eq!(result_count(&fixture).await, 0);
+    assert!(
+        !run_review_authority_once_for_test(&fixture.pool, &authority.registry)
+            .await
+            .unwrap(),
+        "backoff still excludes an immediate retry"
+    );
+    // Advance only the persisted backoff to due. The original claim must not
+    // delay another authoritative lookup after the exchange has completed.
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET next_result_poll_at=transaction_timestamp()-interval '1 second' WHERE proposal_id=$1", &[&id]).await.unwrap();
+    let pool = fixture.pool.clone();
+    let registry = authority.registry.clone();
+    let second =
+        tokio::spawn(async move { run_review_authority_once_for_test(&pool, &registry).await });
+    authority.state.gates[1].reached().await;
+    assert!(
+        fixture
+            .database
+            .admin
+            .query_one("SELECT transaction_timestamp()<$1", &[&original_lease])
+            .await
+            .unwrap()
+            .get::<_, bool>(0),
+        "a due review is re-polled before its completed claim would have expired"
+    );
+    authority.state.gates[1].release.notify_one();
+    assert!(tokio::time::timeout(Duration::from_secs(5), second)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap());
+    assert_eq!(
+        result_count(&fixture).await,
+        1,
+        "the next lookup retains the authoritative result"
+    );
+    assert_eq!(authority.state.requests.load(Ordering::SeqCst), 2);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn native_completed_pending_lookup_releases_claim_before_repoll_is_due() {
+    completed_lookup_releases_claim(ResultReply::Pending, None).await;
+}
+
+#[tokio::test]
+async fn native_completed_unknown_lookup_releases_claim_before_repoll_is_due() {
+    completed_lookup_releases_claim(ResultReply::Unknown, Some("result-unknown-to-authority"))
+        .await;
+}
+
+#[tokio::test]
+async fn native_failed_lookup_releases_claim_before_repoll_is_due() {
+    completed_lookup_releases_claim(ResultReply::Failed, Some("result-lookup-uncertain")).await;
+}
+
+#[tokio::test]
+async fn native_stale_result_lookup_preserves_replacement_claim_and_schedule() {
+    for reply in [
+        ResultReply::Pending,
+        ResultReply::Unknown,
+        ResultReply::Failed,
+    ] {
+        let authority =
+            Authority::start_with_results(true, true, [reply, ResultReply::Pending]).await;
+        let fixture = fixture(&authority).await;
+        let id = submitted(&fixture, "stale-result").await;
+        accepted_due(&fixture, &authority, id).await;
+        let mut workers = Vec::new();
+        for index in 0..2 {
+            if index == 1 {
+                fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET lease_until=transaction_timestamp()-interval '1 second' WHERE proposal_id=$1", &[&id]).await.unwrap();
+            }
+            let pool = fixture.pool.clone();
+            let registry = authority.registry.clone();
+            workers.push(tokio::spawn(async move {
+                run_review_authority_once_for_test(&pool, &registry).await
+            }));
+            authority.state.gates[index].reached().await;
+        }
+        let replacement = result_poll_job(&fixture, id).await;
+        assert!(!replacement["lease"].is_null());
+        assert_eq!(replacement["pollAttempts"], 0);
+        assert!(
+            !run_review_authority_once_for_test(&fixture.pool, &authority.registry)
+                .await
+                .unwrap(),
+            "the replacement claim excludes a third worker"
+        );
+        authority.state.gates[0].release.notify_one();
+        let old = tokio::time::timeout(Duration::from_secs(5), workers.remove(0))
+            .await
+            .unwrap()
+            .unwrap();
+        if matches!(reply, ResultReply::Failed) {
+            assert!(matches!(old, Err(MutationError::Unavailable)));
+        } else {
+            assert!(old.unwrap());
+        }
+        assert_eq!(result_poll_job(&fixture, id).await, replacement, "a stale completed lookup and its worker fallback preserve the replacement lease and schedule");
+        authority.state.gates[1].release.notify_one();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), workers.remove(0))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+        );
+        let settled = result_poll_job(&fixture, id).await;
+        assert!(settled["lease"].is_null());
+        assert!(settled["error"].is_null());
+        assert_eq!(
+            settled["pollAttempts"], 1,
+            "only the replacement spends a poll attempt"
+        );
+        assert_eq!(settled["binding"], replacement["binding"]);
+        assert_eq!(result_count(&fixture).await, 0);
+        assert_eq!(authority.state.requests.load(Ordering::SeqCst), 2);
         fixture.finish().await;
     }
 }

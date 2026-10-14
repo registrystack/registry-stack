@@ -101,7 +101,7 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-breg-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-breg-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-breg-mcp` | Citizen-facing MCP gateway beside the Base Registry Engine and the `breg-mcp` binary |
-| `crates/registry-breg-review` | Server-rendered citizen review page for BReg change requests and the `breg-review` binary |
+| `crates/registry-breg-review` | Server-rendered citizen review page for BReg Proposal drafts and the `breg-review` binary |
 | `crates/registry-linkml` | LinkML reader and embedded PublicSchema snapshot behind `bregctl init --from publicschema` |
 | `crates/registry-casework-core` | Source-neutral Casework review model, HTTP DTOs, transitions, and read-only context contract |
 | `crates/registry-casework-breg` | Read-only BReg Proposal context provider for exact human disclosure and service status |
