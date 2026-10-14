@@ -24,12 +24,15 @@ EXTRA_PACKAGES = (
 
 def package_roots() -> list[Path]:
     # Authored projects share the canonical filename with compiled bundles.
-    # Their assets receive checksums only after compilation, inside bundle/.
-    project_header = re.compile(r"(?m)^kind:[ \t]*(?:EvidenceProject|\"EvidenceProject\"|'EvidenceProject')[ \t]*(?:#.*)?$")
+    # Only compiled EvidenceBundle roots carry a package checksum envelope.
+    bundle_header = re.compile(
+        r"(?m)^[ \t]*(?:kind|\"kind\"|'kind')[ \t]*:[ \t]*"
+        r"(?:EvidenceBundle|\"EvidenceBundle\"|'EvidenceBundle')[ \t]*(?:#.*)?$"
+    )
     roots = {
         path.parent
         for path in EVIDENCE_ROOT.rglob("evidence.yaml")
-        if not project_header.search(path.read_text())
+        if bundle_header.search(path.read_text())
     }
     roots.update(path for path in EXTRA_PACKAGES if (path / "evidence.yaml").is_file())
     return sorted(roots)
