@@ -1,0 +1,35 @@
+{
+  "department": {
+    "name": "Department contact",
+    "email": "department@example.test",
+    "jurisdiction": "synthetic-district"
+  },
+  "river": {
+    "name": "River contact",
+    "email": "river@example.test",
+    "jurisdiction": "synthetic-district"
+  },
+  "hill": {
+    "name": "Hill contact",
+    "email": "hill@example.test",
+    "jurisdiction": "synthetic-district"
+  },
+  "river-link": {
+    "from": {
+      "recordCapture": "river"
+    },
+    "to": {
+      "recordCapture": "department"
+    },
+    "jurisdiction": "synthetic-district"
+  },
+  "hill-link": {
+    "from": {
+      "recordCapture": "hill"
+    },
+    "to": {
+      "recordCapture": "department"
+    },
+    "jurisdiction": "synthetic-district"
+  }
+}

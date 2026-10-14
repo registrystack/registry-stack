@@ -18,28 +18,28 @@
 mod postgres_harness;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use axum::Router;
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims, router,
 };
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordReadService, PostgresRevisionReadService, PostgresSnapshotReadService,
     ReadFaultPoint, RegistryLockKey, RegistryStateTestIdentity, RevisionReadFaultPoint,
-    RuntimePool, SnapshotReadFaultPoint,
+    RuntimePool, SnapshotReadFaultPoint, initialize_compiled_registry_state_for_test,
+    install_compiled_schema,
 };
 use registry_breg::startup::with_request_timeout_for_test;
-use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
+use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_json};
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 use zeroize::Zeroizing;
 
@@ -433,17 +433,17 @@ fn claims() -> VerifiedRequestClaims {
 }
 
 fn compiled_registry() -> CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "records"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
-        "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
+        "recordTypes":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
             "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
                 {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "accessLog":{"subjectField":"subject"}}],
         "accessProfiles":[
             {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
-                "entities":[
-                    {"entity":"entry","operations":["get","list","snapshot","revisions"],"readableFields":["label"],
+                "records":[
+                    {"recordType":"entry","operations":["get","list","snapshot","revisions"],"readableFields":["label"],
                         "revisionAccess":true,"rowBoundaries":"unrestricted"}
                 ]
             }}

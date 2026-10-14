@@ -1,19 +1,32 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Distinct Proposal resources and exact, caller-controlled transition attempts.
 
-use std::collections::BTreeMap;
-use std::fmt;
+use crate::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::fmt;
 use zeroize::Zeroizing;
-use crate::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum BRegRecoveryHint { Refresh, Retry, CorrectInput, Terminal, ReceiptOnly }
+pub enum BRegRecoveryHint {
+    Refresh,
+    Retry,
+    CorrectInput,
+    Terminal,
+    ReceiptOnly,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum BRegAvailabilityReason { PendingReview, StaleRevision, ContractChanged, DependencyOutage, InvalidInput, AlreadyApplied }
+pub enum BRegAvailabilityReason {
+    PendingReview,
+    StaleRevision,
+    ContractChanged,
+    DependencyOutage,
+    InvalidInput,
+    AlreadyApplied,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegAvailability {
@@ -26,7 +39,12 @@ pub struct BRegAvailability {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum BRegProposalState { Draft, Submitted, Applied, Cancelled }
+pub enum BRegProposalState {
+    Draft,
+    Submitted,
+    Applied,
+    Cancelled,
+}
 
 /// Inert server-issued link. Only a client-bound Proposal promotes its use.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,15 +60,143 @@ pub struct BRegProposalLink {
     availability: Option<BRegAvailability>,
 }
 impl BRegProposalLink {
-    pub fn method(&self) -> &str { &self.method }
-    pub fn operation(&self) -> &str { &self.operation }
-    pub fn availability(&self) -> Option<&BRegAvailability> { self.availability.as_ref() }
-    pub(crate) fn path(&self) -> &str { &self.path }
-    pub(crate) fn access_profile(&self) -> &str { &self.access_profile }
-    pub(crate) fn if_match(&self) -> Option<&str> { self.if_match.as_deref() }
+    pub fn method(&self) -> &str {
+        &self.method
+    }
+    pub fn operation(&self) -> &str {
+        &self.operation
+    }
+    pub fn availability(&self) -> Option<&BRegAvailability> {
+        self.availability.as_ref()
+    }
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+    pub(crate) fn access_profile(&self) -> &str {
+        &self.access_profile
+    }
+    pub(crate) fn if_match(&self) -> Option<&str> {
+        self.if_match.as_deref()
+    }
 }
 impl fmt::Debug for BRegProposalLink {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { formatter.write_str("BRegProposalLink(<inert>)") }
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegProposalLink(<inert>)")
+    }
+}
+
+/// Inert slot metadata disclosed on an authorized Proposal representation.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalAttachment {
+    id: String,
+    required: bool,
+    maximum_bytes: u64,
+    content_types: Vec<String>,
+    classification: String,
+    links: BTreeMap<String, BRegProposalLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<BRegProposalAttachmentValue>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalAttachmentValue {
+    submission_version: u32,
+    sha256: String,
+    content_type: String,
+    byte_size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uploaded_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uploaded_by: Option<String>,
+    verification_status: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalApplication {
+    pub application_id: String,
+    pub submission_version: u32,
+    pub effect_digest: String,
+    pub result_links: Vec<BRegProposalResultReference>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalResultReference {
+    pub record_type: String,
+    pub record_id: String,
+    pub revision: u64,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalReviewDocument {
+    pub id: String,
+    pub action_id: String,
+    pub action_revision: String,
+    pub submission_version: u32,
+    pub revision: u64,
+    pub effect_digest: String,
+    pub subject: BRegProposalReviewSubject,
+    pub context: BRegProposalReviewContext,
+    pub reviewable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<BRegProposalReviewPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<BRegProposalReviewResult>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalReviewSubject {
+    pub source: String,
+    pub subject_type: String,
+    pub id: String,
+    pub version: String,
+    pub digest: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalReviewContext {
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<BTreeMap<String, Value>>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalReviewPolicy {
+    pub id: String,
+    pub version: String,
+    pub digest: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalReviewResult {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_until: Option<String>,
+}
+impl BRegProposalAttachment {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub const fn required(&self) -> bool {
+        self.required
+    }
+    pub const fn maximum_bytes(&self) -> u64 {
+        self.maximum_bytes
+    }
+    pub fn content_types(&self) -> &[String] {
+        &self.content_types
+    }
+    pub fn link(&self, operation: &str) -> Option<&BRegProposalLink> {
+        self.links.get(operation)
+    }
 }
 
 /// A Proposal is independently versioned and never decoded as a Record subtype.
@@ -60,52 +206,255 @@ pub struct BRegProposal {
     id: String,
     action_id: String,
     action_revision: String,
-    version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input: Option<serde_json::Map<String, Value>>,
+    submission_version: u32,
     revision: u64,
     state: BRegProposalState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     blocked_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     effect_digest: Option<String>,
     links: BTreeMap<String, BRegProposalLink>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    attachments: BTreeMap<String, BRegProposalAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    application: Option<BRegProposalApplication>,
     #[serde(skip)]
     source: Option<String>,
 }
 impl BRegProposal {
+    /// Only input fields explicitly disclosed to the selected caller profile.
+    pub fn input(&self) -> Option<&serde_json::Map<String, Value>> {
+        self.input.as_ref()
+    }
     pub fn from_slice(bytes: &[u8]) -> Result<Self, BaseRegistryClientError> {
-        if bytes.len() > DEFAULT_MAX_RESPONSE_BYTES as usize { return Err(refusal()); }
+        if bytes.len() > DEFAULT_MAX_RESPONSE_BYTES as usize {
+            return Err(refusal());
+        }
         let value = crate::strict_json::from_slice(bytes).map_err(|_| refusal())?;
         let proposal: Self = serde_json::from_value(value).map_err(|_| refusal())?;
         proposal.validate()?;
         Ok(proposal)
     }
     fn validate(&self) -> Result<(), BaseRegistryClientError> {
-        if Uuid::parse_str(&self.id).is_err() || self.revision == 0
-            || !identifier(&self.action_id) || !digest(&self.action_revision)
-            || self.effect_digest.as_ref().is_some_and(|value| !digest(value))
-            || self.blocked_reason.as_deref().is_some_and(|reason| reason != "package-changed") { return Err(refusal()); }
+        if Uuid::parse_str(&self.id).is_err()
+            || self.revision == 0
+            || !identifier(&self.action_id)
+            || !digest(&self.action_revision)
+            || self
+                .effect_digest
+                .as_ref()
+                .is_some_and(|value| !digest(value))
+            || self
+                .blocked_reason
+                .as_deref()
+                .is_some_and(|reason| reason != "package-changed")
+        {
+            return Err(refusal());
+        }
+        if self
+            .title
+            .as_ref()
+            .is_some_and(|title| title.chars().count() > 1024)
+        {
+            return Err(refusal());
+        }
+        if self.application.as_ref().is_some_and(|application| {
+            Uuid::parse_str(&application.application_id).is_err()
+                || application.submission_version != self.submission_version
+                || !digest(&application.effect_digest)
+                || self
+                    .effect_digest
+                    .as_ref()
+                    .is_some_and(|digest| digest != &application.effect_digest)
+                || application.result_links.len() > 16
+                || application.result_links.iter().any(|reference| {
+                    !identifier(&reference.record_type)
+                        || Uuid::parse_str(&reference.record_id).is_err()
+                        || reference.revision == 0
+                })
+        }) {
+            return Err(refusal());
+        }
         for (operation, link) in &self.links {
             validate_link(link)?;
-            if !matches!(operation.as_str(), "self" | "submit" | "revise" | "cancel" | "apply" | "reviewContext" | "replay")
-                || link.availability.as_ref().is_some_and(|availability| availability.observed_revision != self.revision
-                    || !availability.available && (availability.reason.is_none() || availability.recovery.is_none())) {
+            let (expected_method, expected_operation) = match operation.as_str() {
+                "self" => ("GET", "get"),
+                "reviewContext" => ("GET", "get-review-context"),
+                "reviewStatus" => ("GET", "get-review-status"),
+                "submit" | "edit" | "revise" | "rebase" | "retry" | "cancel" | "apply" => {
+                    ("POST", operation.as_str())
+                }
+                _ => return Err(refusal()),
+            };
+            let segments = link.path.split('/').skip(1).collect::<Vec<_>>();
+            let valid_locator = match segments.as_slice() {
+                ["v1", "proposals", id] if operation == "self" => *id == self.id,
+                ["v1", "proposals", id, suffix] => {
+                    *id == self.id
+                        && *suffix
+                            == match operation.as_str() {
+                                "reviewContext" => "review-context",
+                                "reviewStatus" => "review-status",
+                                _ => expected_operation,
+                            }
+                }
+                _ => false,
+            };
+            if !valid_locator
+                || link.method != expected_method
+                || link.operation != expected_operation
+                || link.availability.as_ref().is_some_and(|availability| {
+                    availability.observed_revision != self.revision
+                        || !availability.available
+                            && (availability.reason.is_none() || availability.recovery.is_none())
+                })
+            {
+                return Err(refusal());
+            }
+        }
+        if self.attachments.len() > MAX_BREG_ATTACHMENT_SLOTS {
+            return Err(refusal());
+        }
+        for (id, slot) in &self.attachments {
+            if id != &slot.id
+                || !identifier(id)
+                || slot.maximum_bytes == 0
+                || slot.maximum_bytes > MAX_BREG_ATTACHMENT_BYTES
+                || slot.content_types.is_empty()
+                || slot.content_types.len() > MAX_BREG_ATTACHMENT_CONTENT_TYPES
+                || !matches!(
+                    slot.classification.as_str(),
+                    "public" | "internal" | "restricted"
+                )
+                || slot
+                    .content_types
+                    .iter()
+                    .any(|media| !crate::attachment::valid_attachment_content_type(media))
+            {
+                return Err(refusal());
+            }
+            for (operation, link) in &slot.links {
+                let method = match operation.as_str() {
+                    "download" => "GET",
+                    "upload" => "PATCH",
+                    "remove" => "DELETE",
+                    _ => return Err(refusal()),
+                };
+                let expected = format!("/v1/proposals/{}/attachments/{id}", self.id);
+                let path = if operation == "download" {
+                    format!("{expected}?submissionVersion={}", self.submission_version)
+                } else {
+                    expected
+                };
+                if link.method != method
+                    || link.path != path
+                    || &link.operation != operation
+                    || !identifier(&link.access_profile)
+                    || method != "GET" && !valid_condition(link.if_match.as_deref())
+                    || link
+                        .availability
+                        .as_ref()
+                        .is_some_and(|availability| availability.observed_revision != self.revision)
+                {
+                    return Err(refusal());
+                }
+            }
+            if slot.value.as_ref().is_some_and(|value| {
+                value.submission_version != self.submission_version
+                    || value.sha256.len() != 64
+                    || !value
+                        .sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    || value.byte_size == 0
+                    || value.byte_size > MAX_BREG_ATTACHMENT_BYTES
+                    || !crate::attachment::valid_attachment_content_type(&value.content_type)
+                    || !matches!(
+                        value.verification_status.as_str(),
+                        "notRequired" | "pending" | "approved" | "rejected"
+                    )
+                    || value
+                        .uploaded_at
+                        .as_ref()
+                        .is_some_and(|value| value.len() > 64)
+                    || value
+                        .uploaded_by
+                        .as_ref()
+                        .is_some_and(|value| value.len() > 512)
+            }) {
                 return Err(refusal());
             }
         }
         Ok(())
     }
-    pub fn id(&self) -> &str { &self.id }
-    pub fn action_id(&self) -> &str { &self.action_id }
-    pub fn action_revision(&self) -> &str { &self.action_revision }
-    pub const fn revision(&self) -> u64 { self.revision }
-    pub const fn version(&self) -> u32 { self.version }
-    pub const fn state(&self) -> BRegProposalState { self.state }
-    pub fn blocked_reason(&self) -> Option<&str> { self.blocked_reason.as_deref() }
-    pub fn link(&self, operation: &str) -> Option<&BRegProposalLink> { self.links.get(operation) }
-    pub(crate) fn bind(mut self, source: String) -> Self { self.source = Some(source); self }
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn action_id(&self) -> &str {
+        &self.action_id
+    }
+    pub fn action_revision(&self) -> &str {
+        &self.action_revision
+    }
+    pub fn effect_digest(&self) -> Option<&str> {
+        self.effect_digest.as_deref()
+    }
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+    pub fn application(&self) -> Option<&BRegProposalApplication> {
+        self.application.as_ref()
+    }
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub const fn submission_version(&self) -> u32 {
+        self.submission_version
+    }
+    pub const fn state(&self) -> BRegProposalState {
+        self.state
+    }
+    pub fn blocked_reason(&self) -> Option<&str> {
+        self.blocked_reason.as_deref()
+    }
+    pub fn link(&self, operation: &str) -> Option<&BRegProposalLink> {
+        self.links.get(operation)
+    }
+    pub fn attachment(&self, id: &str) -> Option<&BRegProposalAttachment> {
+        self.attachments.get(id)
+    }
+    pub(crate) fn bind(mut self, source: String) -> Self {
+        self.source = Some(source);
+        self
+    }
+    pub(crate) fn bind_profile(
+        self,
+        source: String,
+        profile: &str,
+    ) -> Result<Self, BaseRegistryClientError> {
+        if self
+            .links
+            .values()
+            .chain(
+                self.attachments
+                    .values()
+                    .flat_map(|slot| slot.links.values()),
+            )
+            .any(|link| link.access_profile != profile)
+        {
+            return Err(refusal());
+        }
+        Ok(self.bind(source))
+    }
 }
 impl fmt::Debug for BRegProposal {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { formatter.write_str("BRegProposal(<redacted>)") }
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegProposal(<redacted>)")
+    }
 }
 
 /// One explicitly bounded collection response. The caller chooses each continuation.
@@ -124,20 +473,84 @@ pub struct BRegProposalCollection {
     path: String,
     profile: String,
 }
+
+/// Source-bound UUID lookup authority, promoted only from the metadata Get descriptor.
+#[derive(Clone)]
+pub struct BRegProposalGetBinding {
+    source: String,
+    profile: String,
+    path: String,
+}
+impl BRegProposalGetBinding {
+    pub(crate) fn from_metadata(
+        value: &Value,
+        source: &str,
+        profile: &str,
+    ) -> Result<Self, BaseRegistryClientError> {
+        if !identifier(profile)
+            || value.get("method").and_then(Value::as_str) != Some("GET")
+            || value.get("path").and_then(Value::as_str) != Some("/v1/proposals/{proposal_id}")
+            || !value
+                .get("accessProfiles")
+                .and_then(Value::as_array)
+                .is_some_and(|profiles| {
+                    profiles.iter().any(|value| value.as_str() == Some(profile))
+                })
+        {
+            return Err(refusal());
+        }
+        Ok(Self {
+            source: source.to_owned(),
+            profile: profile.to_owned(),
+            path: "/v1/proposals/{proposal_id}".to_owned(),
+        })
+    }
+}
+impl fmt::Debug for BRegProposalGetBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegProposalGetBinding(<redacted>)")
+    }
+}
 impl fmt::Debug for BRegProposalCollection {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { formatter.write_str("BRegProposalCollection(<bound>)") }
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegProposalCollection(<bound>)")
+    }
 }
 impl BRegProposalCollection {
-    pub(crate) fn from_metadata(value: &Value, source: &str, revision: &str, profile: &str) -> Result<Self, BaseRegistryClientError> {
-        let path = value.get("path").and_then(Value::as_str).ok_or_else(refusal)?;
-        let profiles = value.get("accessProfiles").and_then(Value::as_array).ok_or_else(refusal)?;
+    pub(crate) fn from_metadata(
+        value: &Value,
+        source: &str,
+        revision: &str,
+        profile: &str,
+    ) -> Result<Self, BaseRegistryClientError> {
+        let path = value
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(refusal)?;
+        let profiles = value
+            .get("accessProfiles")
+            .and_then(Value::as_array)
+            .ok_or_else(refusal)?;
         if value.get("method").and_then(Value::as_str) != Some("GET")
-            || !profiles.iter().any(|candidate| candidate.as_str() == Some(profile))
-            || !path.starts_with("/v1/") || path.contains(['?','#','%','\\'])
-            || path.split('/').skip(1).any(|segment| !identifier(segment)) { return Err(refusal()); }
-        Ok(Self { source: source.to_owned(), registry_revision: revision.to_owned(), path: path.to_owned(), profile: profile.to_owned() })
+            || !profiles
+                .iter()
+                .any(|candidate| candidate.as_str() == Some(profile))
+            || !path.starts_with("/v1/")
+            || path.contains(['?', '#', '%', '\\'])
+            || path.split('/').skip(1).any(|segment| !identifier(segment))
+        {
+            return Err(refusal());
+        }
+        Ok(Self {
+            source: source.to_owned(),
+            registry_revision: revision.to_owned(),
+            path: path.to_owned(),
+            profile: profile.to_owned(),
+        })
     }
-    pub fn registry_revision(&self) -> &str { &self.registry_revision }
+    pub fn registry_revision(&self) -> &str {
+        &self.registry_revision
+    }
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -145,7 +558,7 @@ impl BRegProposalCollection {
 pub struct BRegProposalQuery {
     pub action: Option<String>,
     pub owner_is_caller: bool,
-    pub target: Option<Uuid>,
+    pub target: Option<String>,
     pub state: Option<BRegProposalState>,
     pub cursor: Option<String>,
     pub top: Option<u32>,
@@ -159,7 +572,7 @@ struct PreparedEvidence {
     proposal_id: String,
     action_id: String,
     action_revision: String,
-    proposal_version: u32,
+    submission_version: u32,
     link: BRegProposalLink,
     body: String,
     key: String,
@@ -173,128 +586,579 @@ pub struct BRegPreparedProposal {
 }
 impl BRegPreparedProposal {
     pub fn from_slice(bytes: &[u8]) -> Result<Self, BaseRegistryClientError> {
-        if bytes.len() > DEFAULT_MAX_RESPONSE_BYTES as usize { return Err(refusal()); }
+        if bytes.len() > DEFAULT_MAX_RESPONSE_BYTES as usize {
+            return Err(refusal());
+        }
         let value = crate::strict_json::from_slice(bytes).map_err(|_| refusal())?;
         let data: PreparedEvidence = serde_json::from_value(value).map_err(|_| refusal())?;
-        if data.version != 1 || Uuid::parse_str(&data.proposal_id).is_err() || !digest(&data.action_revision) { return Err(refusal()); }
+        if data.version != 1
+            || Uuid::parse_str(&data.proposal_id).is_err()
+            || !digest(&data.action_revision)
+        {
+            return Err(refusal());
+        }
         validate_link(&data.link)?;
         BRegIdempotencyKey::parse(&data.key).map_err(|_| refusal())?;
-        crate::strict_json::from_slice(data.body.as_bytes()).map_err(|_| refusal())?;
-        Ok(Self { bytes: Zeroizing::new(bytes.to_vec()), executable: false })
+        let body = crate::strict_json::from_slice(data.body.as_bytes()).map_err(|_| refusal())?;
+        validate_body(&data.link.operation, &body)?;
+        Ok(Self {
+            bytes: Zeroizing::new(bytes.to_vec()),
+            executable: false,
+        })
     }
-    pub fn as_bytes(&self) -> &[u8] { &self.bytes }
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
     fn decode(&self) -> Result<PreparedEvidence, BaseRegistryClientError> {
         serde_json::from_slice(&self.bytes).map_err(|_| refusal())
     }
 }
 impl fmt::Debug for BRegPreparedProposal {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { formatter.write_str("BRegPreparedProposal(<redacted>)") }
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegPreparedProposal(<redacted>)")
+    }
 }
 impl BaseRegistryClient {
+    /// Resolve a UUID through an advertised Get capability, without requiring List.
+    pub async fn get_proposal(
+        &self,
+        binding: &BRegProposalGetBinding,
+        id: &str,
+    ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
+        if binding.source != self.source_binding()
+            || !Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
+        {
+            return Err(refusal());
+        }
+        let link = BRegProposalLink {
+            method: "GET".to_owned(),
+            path: binding.path.replace("{proposal_id}", id),
+            access_profile: binding.profile.clone(),
+            operation: "get".to_owned(),
+            if_match: None,
+            availability: None,
+        };
+        let response = self.proposal_exchange(&link, None, None).await?;
+        let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
+        if proposal.id != id {
+            return Err(refusal());
+        }
+        Ok(BRegComplete {
+            value: proposal.bind_profile(self.source_binding(), &binding.profile)?,
+            metadata: response.metadata,
+        })
+    }
+    pub async fn read_proposal_review_status(
+        &self,
+        proposal: &BRegProposal,
+    ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
+        self.read_proposal_review(proposal, "reviewStatus").await
+    }
+    pub async fn read_proposal_review_context(
+        &self,
+        proposal: &BRegProposal,
+    ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
+        self.read_proposal_review(proposal, "reviewContext").await
+    }
+    async fn read_proposal_review(
+        &self,
+        proposal: &BRegProposal,
+        operation: &str,
+    ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
+        if proposal.source.as_deref() != Some(self.source_binding().as_str()) {
+            return Err(refusal());
+        }
+        let link = proposal.links.get(operation).ok_or_else(refusal)?;
+        let response = self.proposal_exchange(link, None, None).await?;
+        let value =
+            crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
+        let document: BRegProposalReviewDocument =
+            serde_json::from_value(value).map_err(|_| refusal())?;
+        if document.id != proposal.id
+            || document.action_id != proposal.action_id
+            || document.action_revision != proposal.action_revision
+            || document.submission_version != proposal.submission_version
+            || document.revision < proposal.revision
+            || !digest(&document.effect_digest)
+            || proposal
+                .effect_digest
+                .as_deref()
+                .is_some_and(|digest| digest != document.effect_digest)
+            || document.subject.subject_type != "proposal"
+            || document.subject.id != proposal.id
+            || document.subject.version != proposal.submission_version.to_string()
+            || document.subject.digest != document.effect_digest
+            || document.subject.source.is_empty()
+            || document.subject.source.len() > 512
+            || document.context.reference.is_empty()
+            || document.context.reference.len() > 2048
+            || document.authority.is_some() != document.policy.is_some()
+            || document.policy.as_ref().is_some_and(|policy| {
+                !digest(&policy.digest) || policy.id.is_empty() || policy.version.is_empty()
+            })
+            || document.result.as_ref().is_some_and(|result| {
+                !matches!(
+                    result.state.as_str(),
+                    "pending"
+                        | "approved"
+                        | "rejected"
+                        | "changes-requested"
+                        | "answered"
+                        | "cancelled"
+                        | "superseded"
+                        | "expired"
+                ) || result
+                    .result_id
+                    .as_deref()
+                    .is_some_and(|id| Uuid::parse_str(id).is_err())
+            })
+            || operation == "reviewContext"
+                && (document.context.id.is_none() || document.context.fields.is_none())
+        {
+            return Err(refusal());
+        }
+        Ok(BRegComplete {
+            value: document,
+            metadata: response.metadata,
+        })
+    }
+    fn proposal_slot<'a>(
+        &self,
+        proposal: &'a BRegProposal,
+        slot: &str,
+        operation: &str,
+    ) -> Result<(&'a BRegProposalAttachment, &'a BRegProposalLink), BaseRegistryClientError> {
+        if proposal.source.as_deref() != Some(self.source_binding().as_str()) {
+            return Err(refusal());
+        }
+        let slot = proposal.attachments.get(slot).ok_or_else(refusal)?;
+        let link = slot
+            .links
+            .get(operation)
+            .filter(|link| {
+                link.availability
+                    .as_ref()
+                    .is_none_or(|availability| availability.available)
+            })
+            .ok_or_else(refusal)?;
+        Ok((slot, link))
+    }
+    pub async fn download_proposal_attachment(
+        &self,
+        proposal: &BRegProposal,
+        slot: &str,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        let (slot, link) = self.proposal_slot(proposal, slot, "download")?;
+        self.proposal_attachment_exchange(link, None, None, None, slot.maximum_bytes)
+            .await
+    }
+    pub async fn upload_proposal_attachment(
+        &self,
+        proposal: &BRegProposal,
+        slot: &str,
+        content_type: &str,
+        bytes: &[u8],
+        key: &BRegIdempotencyKey,
+    ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
+        let (slot, link) = self.proposal_slot(proposal, slot, "upload")?;
+        if bytes.is_empty()
+            || bytes.len() as u64 > slot.maximum_bytes
+            || !slot
+                .content_types
+                .iter()
+                .any(|accepted| accepted == content_type)
+        {
+            return Err(refusal());
+        }
+        let response = self
+            .proposal_attachment_exchange(
+                link,
+                Some(bytes.to_vec()),
+                Some(content_type),
+                Some(key),
+                slot.maximum_bytes,
+            )
+            .await?;
+        self.proposal_attachment_response(proposal, link, response)
+    }
+    pub async fn delete_proposal_attachment(
+        &self,
+        proposal: &BRegProposal,
+        slot: &str,
+        key: &BRegIdempotencyKey,
+    ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
+        let (slot, link) = self.proposal_slot(proposal, slot, "remove")?;
+        let response = self
+            .proposal_attachment_exchange(link, None, None, Some(key), slot.maximum_bytes)
+            .await?;
+        self.proposal_attachment_response(proposal, link, response)
+    }
+    fn proposal_attachment_response(
+        &self,
+        prior: &BRegProposal,
+        link: &BRegProposalLink,
+        response: BRegComplete<BRegRawDocument>,
+    ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
+        let current = BRegProposal::from_slice(response.value.as_bytes())?;
+        if current.id != prior.id || current.action_id != prior.action_id {
+            return Err(refusal());
+        }
+        Ok(BRegComplete {
+            value: current.bind_profile(self.source_binding(), &link.access_profile)?,
+            metadata: response.metadata,
+        })
+    }
     /// List one bounded, explicitly authorized page. No automatic continuation.
-    pub async fn list_proposals(&self, collection: &BRegProposalCollection, query: &BRegProposalQuery) -> Result<BRegComplete<BRegProposalPage>, BaseRegistryClientError> {
-        if collection.source != self.source_binding() || query.top.is_some_and(|top| !(1..=100).contains(&top))
-            || query.action.as_ref().is_some_and(|action| !identifier(action))
-            || query.cursor.as_ref().is_some_and(|cursor| cursor.len() > 512 || cursor.is_empty() || cursor.bytes().any(|byte| byte <= 32 || byte >= 127)) { return Err(refusal()); }
+    pub async fn list_proposals(
+        &self,
+        collection: &BRegProposalCollection,
+        query: &BRegProposalQuery,
+    ) -> Result<BRegComplete<BRegProposalPage>, BaseRegistryClientError> {
+        if collection.source != self.source_binding()
+            || query.top.is_some_and(|top| !(1..=100).contains(&top))
+            || query
+                .action
+                .as_ref()
+                .is_some_and(|action| !identifier(action))
+            || query
+                .target
+                .as_ref()
+                .is_some_and(|target| Uuid::parse_str(target).is_err())
+            || query.cursor.as_ref().is_some_and(|cursor| {
+                cursor.len() > 512
+                    || cursor.is_empty()
+                    || cursor.bytes().any(|byte| byte <= 32 || byte >= 127)
+            })
+        {
+            return Err(refusal());
+        }
         let mut pairs = vec![("accessProfile".to_owned(), collection.profile.clone())];
-        if let Some(action) = &query.action { pairs.push(("action".to_owned(), action.clone())); }
-        if query.owner_is_caller { pairs.push(("owner".to_owned(), "caller".to_owned())); }
-        if let Some(target) = query.target { pairs.push(("target".to_owned(), target.to_string())); }
-        if let Some(state) = query.state { pairs.push(("state".to_owned(), serde_json::to_value(state).map_err(|_| refusal())?.as_str().ok_or_else(refusal)?.to_owned())); }
-        if let Some(cursor) = &query.cursor { pairs.push(("cursor".to_owned(), cursor.clone())); }
-        if let Some(top) = query.top { pairs.push(("top".to_owned(), top.to_string())); }
-        let response = self.proposal_list_exchange(&collection.path, &pairs).await?;
-        let value = crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
+        if let Some(action) = &query.action {
+            pairs.push(("action".to_owned(), action.clone()));
+        }
+        if query.owner_is_caller {
+            pairs.push(("owner".to_owned(), "caller".to_owned()));
+        }
+        if let Some(target) = &query.target {
+            pairs.push(("target".to_owned(), target.clone()));
+        }
+        if let Some(state) = query.state {
+            pairs.push((
+                "state".to_owned(),
+                serde_json::to_value(state)
+                    .map_err(|_| refusal())?
+                    .as_str()
+                    .ok_or_else(refusal)?
+                    .to_owned(),
+            ));
+        }
+        if let Some(cursor) = &query.cursor {
+            pairs.push(("cursor".to_owned(), cursor.clone()));
+        }
+        if let Some(top) = query.top {
+            pairs.push(("top".to_owned(), top.to_string()));
+        }
+        let response = self
+            .proposal_list_exchange(&collection.path, &pairs)
+            .await?;
+        let value =
+            crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
         let mut page: BRegProposalPage = serde_json::from_value(value).map_err(|_| refusal())?;
-        if page.items.len() > query.top.unwrap_or(50) as usize || page.next_cursor.as_ref().is_some_and(|cursor| cursor.len()>512) { return Err(refusal()); }
+        if page.items.len() > query.top.unwrap_or(50) as usize
+            || page
+                .next_cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.len() > 512)
+        {
+            return Err(refusal());
+        }
         for item in &mut page.items {
             item.validate()?;
-            if query.action.as_ref().is_some_and(|action| action != &item.action_id) { return Err(refusal()); }
+            if query
+                .action
+                .as_ref()
+                .is_some_and(|action| action != &item.action_id)
+            {
+                return Err(refusal());
+            }
+            if item
+                .links
+                .values()
+                .chain(
+                    item.attachments
+                        .values()
+                        .flat_map(|slot| slot.links.values()),
+                )
+                .any(|link| link.access_profile != collection.profile)
+            {
+                return Err(refusal());
+            }
             item.source = Some(self.source_binding());
         }
-        Ok(BRegComplete { value: page, metadata: response.metadata })
+        Ok(BRegComplete {
+            value: page,
+            metadata: response.metadata,
+        })
     }
     /// Validate and bind a promoted transition without I/O or Evidence acquisition.
     pub fn prepare_proposal(
-        &self, proposal: &BRegProposal, operation: &str, body: Value, key: &BRegIdempotencyKey,
+        &self,
+        proposal: &BRegProposal,
+        operation: &str,
+        body: Value,
+        key: &BRegIdempotencyKey,
     ) -> Result<BRegPreparedProposal, BaseRegistryClientError> {
-        if proposal.source.as_deref() != Some(self.source_binding().as_str()) { return Err(refusal()); }
-        let link = proposal.links.get(operation).filter(|link| link.method == "POST"
-            && link.availability.as_ref().is_none_or(|availability| availability.available)).ok_or_else(refusal)?;
-        if !body.is_object() || !matches!(operation, "submit" | "revise" | "cancel" | "apply") { return Err(refusal()); }
-        let evidence = PreparedEvidence { version: 1, source: self.source_binding(), proposal_id: proposal.id.clone(),
-            action_id: proposal.action_id.clone(), action_revision: proposal.action_revision.clone(),
-            proposal_version: proposal.version, link: link.clone(),
-            body: serde_json::to_string(&body).map_err(|_| refusal())?, key: key.as_str().to_owned() };
-        let mut attempt = BRegPreparedProposal::from_slice(&serde_json::to_vec(&evidence).map_err(|_| refusal())?)?;
+        if proposal.source.as_deref() != Some(self.source_binding().as_str()) {
+            return Err(refusal());
+        }
+        let link = proposal
+            .links
+            .get(operation)
+            .filter(|link| {
+                link.method == "POST"
+                    && link
+                        .availability
+                        .as_ref()
+                        .is_none_or(|availability| availability.available)
+            })
+            .ok_or_else(refusal)?;
+        validate_body(operation, &body)?;
+        if operation == "apply"
+            && (body["submissionVersion"].as_u64() != Some(u64::from(proposal.submission_version))
+                || proposal
+                    .effect_digest
+                    .as_deref()
+                    .is_some_and(|digest| body["effectDigest"].as_str() != Some(digest)))
+        {
+            return Err(refusal());
+        }
+        let evidence = PreparedEvidence {
+            version: 1,
+            source: self.source_binding(),
+            proposal_id: proposal.id.clone(),
+            action_id: proposal.action_id.clone(),
+            action_revision: proposal.action_revision.clone(),
+            submission_version: proposal.submission_version,
+            link: link.clone(),
+            body: serde_json::to_string(&body).map_err(|_| refusal())?,
+            key: key.as_str().to_owned(),
+        };
+        let mut attempt = BRegPreparedProposal::from_slice(
+            &serde_json::to_vec(&evidence).map_err(|_| refusal())?,
+        )?;
         attempt.executable = true;
         Ok(attempt)
     }
     /// Execute the exact prepared transition; its response is another bound Proposal.
-    pub async fn execute_proposal(&self, attempt: &BRegPreparedProposal) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
+    pub async fn execute_proposal(
+        &self,
+        attempt: &BRegPreparedProposal,
+    ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
         let evidence = attempt.decode()?;
-        if !attempt.executable || evidence.source != self.source_binding() { return Err(refusal()); }
+        if !attempt.executable || evidence.source != self.source_binding() {
+            return Err(refusal());
+        }
         let key = BRegIdempotencyKey::parse(&evidence.key).map_err(|_| refusal())?;
-        let response = self.proposal_exchange(&evidence.link, Some(evidence.body.into_bytes()), Some(&key)).await?;
+        let response = self
+            .proposal_exchange(&evidence.link, Some(evidence.body.into_bytes()), Some(&key))
+            .await?;
         let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
-        if proposal.id != evidence.proposal_id || proposal.action_id != evidence.action_id { return Err(refusal()); }
-        Ok(BRegComplete { value: proposal.bind(self.source_binding()), metadata: response.metadata })
+        if proposal.id != evidence.proposal_id || proposal.action_id != evidence.action_id {
+            return Err(refusal());
+        }
+        Ok(BRegComplete {
+            value: proposal.bind_profile(self.source_binding(), &evidence.link.access_profile)?,
+            metadata: response.metadata,
+        })
     }
     /// Explicitly read one server-promoted resource link. No linked resource is followed automatically.
-    pub async fn read_proposal(&self, proposal: &BRegProposal) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
-        if proposal.source.as_deref() != Some(self.source_binding().as_str()) { return Err(refusal()); }
+    pub async fn read_proposal(
+        &self,
+        proposal: &BRegProposal,
+    ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
+        if proposal.source.as_deref() != Some(self.source_binding().as_str()) {
+            return Err(refusal());
+        }
         let link = proposal.links.get("self").ok_or_else(refusal)?;
         let response = self.proposal_exchange(link, None, None).await?;
         let current = BRegProposal::from_slice(response.value.as_bytes())?;
-        if current.id != proposal.id || current.action_id != proposal.action_id { return Err(refusal()); }
-        Ok(BRegComplete { value: current.bind(self.source_binding()), metadata: response.metadata })
+        if current.id != proposal.id || current.action_id != proposal.action_id {
+            return Err(refusal());
+        }
+        Ok(BRegComplete {
+            value: current.bind_profile(self.source_binding(), &link.access_profile)?,
+            metadata: response.metadata,
+        })
     }
     /// Revalidate saved evidence against a current authorized resource, retaining the original bytes.
-    pub fn recover_proposal(&self, current: &BRegProposal, attempt: &BRegPreparedProposal) -> Result<BRegPreparedProposal, BaseRegistryClientError> {
+    pub fn recover_proposal(
+        &self,
+        current: &BRegProposal,
+        attempt: &BRegPreparedProposal,
+    ) -> Result<BRegPreparedProposal, BaseRegistryClientError> {
         let evidence = attempt.decode()?;
-        if current.source.as_deref() != Some(self.source_binding().as_str()) || evidence.source != self.source_binding()
-            || evidence.proposal_id != current.id || evidence.action_id != current.action_id
+        let next_revision = evidence
+            .link
+            .availability
+            .as_ref()
+            .is_some_and(|availability| {
+                availability.observed_revision.checked_add(1) == Some(current.revision)
+            });
+        let same_version = evidence.submission_version == current.submission_version;
+        let advanced_draft = matches!(evidence.link.operation.as_str(), "revise" | "rebase")
+            && current.state == BRegProposalState::Draft
+            && evidence.submission_version.checked_add(1) == Some(current.submission_version)
+            && next_revision;
+        if current.source.as_deref() != Some(self.source_binding().as_str())
+            || evidence.source != self.source_binding()
+            || evidence.proposal_id != current.id
+            || evidence.action_id != current.action_id
             || evidence.action_revision != current.action_revision
-            || !current.links.values().any(|link| link.path == evidence.link.path
-                && link.method == evidence.link.method && link.access_profile == evidence.link.access_profile
-                && link.operation == evidence.link.operation
-                && (link == &evidence.link || link.availability.as_ref().is_some_and(|availability|
-                    availability.recovery == Some(BRegRecoveryHint::ReceiptOnly)))) { return Err(refusal()); }
+            || !(same_version || advanced_draft)
+            || !current.links.values().any(|link| {
+                link.path == evidence.link.path
+                    && link.method == evidence.link.method
+                    && link.access_profile == evidence.link.access_profile
+                    && link.operation == evidence.link.operation
+                    && (link == &evidence.link
+                        || next_revision
+                            && link
+                                .availability
+                                .as_ref()
+                                .is_some_and(|availability| availability.available)
+                        || link.availability.as_ref().is_some_and(|availability| {
+                            availability.recovery == Some(BRegRecoveryHint::ReceiptOnly)
+                        }))
+            })
+        {
+            return Err(refusal());
+        }
         let mut recovered = BRegPreparedProposal::from_slice(attempt.as_bytes())?;
         recovered.executable = true;
         Ok(recovered)
     }
 }
-fn identifier(value: &str) -> bool { !value.is_empty() && value.len() <= 128 && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte,b'-'|b'_'|b'.')) }
-fn digest(value: &str) -> bool { value.strip_prefix("sha256:").is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))) }
+fn identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+fn digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+fn valid_condition(etag: Option<&str>) -> bool {
+    etag.is_some_and(|etag| {
+        etag.len() >= 3
+            && etag.len() <= 256
+            && etag.starts_with('"')
+            && etag.ends_with('"')
+            && !etag[1..etag.len() - 1]
+                .bytes()
+                .any(|byte| byte <= 32 || byte >= 127 || byte == b'"')
+    })
+}
+fn validate_body(operation: &str, body: &Value) -> Result<(), BaseRegistryClientError> {
+    let object = body.as_object().ok_or_else(refusal)?;
+    let valid = match operation {
+        "submit" | "cancel" | "retry" => object.is_empty(),
+        "edit" | "rebase" => object.len() == 1 && object.get("input").is_some_and(Value::is_object),
+        "revise" => {
+            object.is_empty()
+                || object.len() == 1 && object.get("input").is_some_and(Value::is_object)
+        }
+        "apply" => {
+            object.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "submissionVersion" | "effectDigest" | "reason"
+                )
+            }) && object
+                .get("submissionVersion")
+                .and_then(Value::as_u64)
+                .is_some_and(|version| version > 0 && version <= u64::from(u32::MAX))
+                && object
+                    .get("effectDigest")
+                    .and_then(Value::as_str)
+                    .is_some_and(digest)
+                && object.get("reason").is_none_or(|value| {
+                    value.as_str().is_some_and(|reason| {
+                        !reason.contains('\0') && reason.chars().count() <= 4096
+                    })
+                })
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(refusal())
+    }
+}
 fn validate_link(link: &BRegProposalLink) -> Result<(), BaseRegistryClientError> {
-    if !matches!(link.method.as_str(), "GET"|"POST") || !link.path.starts_with("/v1/") || link.path.len() > 2048
-        || link.path.contains(['?','#','%','\\']) || link.path.split('/').skip(1).any(|segment| !identifier(segment))
-        || !identifier(&link.access_profile) || !identifier(&link.operation)
-        || link.method == "POST" && link.if_match.as_ref().is_none_or(|etag| etag.len() < 3 || etag.len()>256 || !etag.starts_with('"') || !etag.ends_with('"') || etag.bytes().any(|byte|byte<=32 || byte>=127)) { return Err(refusal()); }
+    if !matches!(link.method.as_str(), "GET" | "POST")
+        || !link.path.starts_with("/v1/")
+        || link.path.len() > 2048
+        || link.path.contains(['?', '#', '%', '\\'])
+        || link
+            .path
+            .split('/')
+            .skip(1)
+            .any(|segment| !identifier(segment) || matches!(segment, "." | ".."))
+        || !identifier(&link.access_profile)
+        || !identifier(&link.operation)
+        || link.method == "POST" && !valid_condition(link.if_match.as_deref())
+    {
+        return Err(refusal());
+    }
     Ok(())
 }
-fn refusal() -> BaseRegistryClientError { BaseRegistryClientError::invalid_request("the Base Registry Engine Proposal contract or attempt is invalid") }
+fn refusal() -> BaseRegistryClientError {
+    BaseRegistryClientError::invalid_request(
+        "the Base Registry Engine Proposal contract or attempt is invalid",
+    )
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const REVISION: &str =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ID: &str = "00000000-0000-4000-8000-000000000001";
+    #[test]
+    fn application_receipts_refuse_internal_actor_and_reason_projections() {
+        let mut value = document();
+        value["state"] = json!("applied");
+        value["application"] = json!({"applicationId":ID,"submissionVersion":1,"effectDigest":REVISION,"resultLinks":[]});
+        assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_ok());
+        for field in ["appliedBy", "appliedAt", "reason", "reasonPresent"] {
+            let mut widened = value.clone();
+            widened["application"][field] = json!("private-canary");
+            assert!(BRegProposal::from_slice(&serde_json::to_vec(&widened).unwrap()).is_err());
+        }
+    }
     fn client(origin: &str) -> BaseRegistryClient {
         BaseRegistryClient::new(BaseRegistryClientConfig::new(origin.parse().unwrap())).unwrap()
     }
     fn document() -> Value {
         json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,
-            "version":1,"revision":2,"state":"submitted","links":{
-                "self":{"method":"GET","path":format!("/v1/proposals/{ID}"),"accessProfile":"author","operation":"get"},
-                "apply":{"method":"POST","path":format!("/v1/proposals/{ID}/apply"),"accessProfile":"author","operation":"apply","ifMatch":"\"original-condition\"",
-                    "availability":{"available":true,"observedRevision":2}}
-            }})
+        "submissionVersion":1,"revision":2,"state":"submitted","links":{
+            "self":{"method":"GET","path":format!("/v1/proposals/{ID}"),"accessProfile":"author","operation":"get"},
+            "apply":{"method":"POST","path":format!("/v1/proposals/{ID}/apply"),"accessProfile":"author","operation":"apply","ifMatch":"\"original-condition\"",
+                "availability":{"available":true,"observedRevision":2}}
+        }})
     }
     fn proposal(client: &BaseRegistryClient, value: Value) -> BRegProposal {
-        BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap().bind(client.source_binding())
+        BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap())
+            .unwrap()
+            .bind(client.source_binding())
     }
     #[test]
     fn inspection_is_inert_and_transitions_are_bound_to_the_client_origin() {
@@ -302,50 +1166,248 @@ mod tests {
         let bytes = serde_json::to_vec(&document()).unwrap();
         let inert = BRegProposal::from_slice(&bytes).unwrap();
         let key = BRegIdempotencyKey::parse("original-key").unwrap();
-        assert!(client.prepare_proposal(&inert,"apply",json!({}),&key).is_err());
+        assert!(client
+            .prepare_proposal(&inert, "apply", json!({}), &key)
+            .is_err());
         let bound = proposal(&client, document());
-        let attempt = client.prepare_proposal(&bound,"apply",json!({}),&key).unwrap();
+        let attempt = client
+            .prepare_proposal(
+                &bound,
+                "apply",
+                json!({"submissionVersion":1,"effectDigest":REVISION}),
+                &key,
+            )
+            .unwrap();
         assert!(!format!("{attempt:?}").contains("original-key"));
         let other = super::tests::client("https://other.example/");
-        assert!(other.prepare_proposal(&bound,"apply",json!({}),&key).is_err());
+        assert!(other
+            .prepare_proposal(&bound, "apply", json!({}), &key)
+            .is_err());
         let restored = BRegPreparedProposal::from_slice(attempt.as_bytes()).unwrap();
         assert!(!restored.executable);
-        assert!(client.recover_proposal(&bound,&restored).unwrap().executable);
-        assert_eq!(restored.as_bytes(),attempt.as_bytes());
+        assert!(
+            client
+                .recover_proposal(&bound, &restored)
+                .unwrap()
+                .executable
+        );
+        assert_eq!(restored.as_bytes(), attempt.as_bytes());
     }
     #[test]
     fn committed_recovery_retains_original_condition_body_key_and_contract() {
         let client = client("https://registry.example/");
-        let original = proposal(&client,document());
-        let attempt = client.prepare_proposal(&original,"apply",json!({"effectDigest":REVISION}),&BRegIdempotencyKey::parse("original-key").unwrap()).unwrap();
+        let original = proposal(&client, document());
+        let attempt = client
+            .prepare_proposal(
+                &original,
+                "apply",
+                json!({"submissionVersion":1,"effectDigest":REVISION}),
+                &BRegIdempotencyKey::parse("original-key").unwrap(),
+            )
+            .unwrap();
         let mut terminal = document();
-        terminal["state"] = json!("applied"); terminal["revision"] = json!(3);
+        terminal["state"] = json!("applied");
+        terminal["revision"] = json!(3);
         terminal["links"]["apply"]["ifMatch"] = json!("\"current-condition\"");
         terminal["links"]["apply"]["availability"] = json!({"available":false,"observedRevision":3,"reason":"already-applied","recovery":"receipt-only"});
-        let terminal = proposal(&client,terminal);
-        assert!(client.prepare_proposal(&terminal,"apply",json!({}),&BRegIdempotencyKey::parse("new-key").unwrap()).is_err());
-        let recovered = client.recover_proposal(&terminal,&attempt).unwrap();
-        assert_eq!(recovered.as_bytes(),attempt.as_bytes());
-        let mut changed = document(); changed["actionRevision"] = json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        assert!(client.recover_proposal(&proposal(&client,changed),&attempt).is_err());
-        let mut revoked = document(); revoked["links"].as_object_mut().unwrap().remove("apply");
-        assert!(client.recover_proposal(&proposal(&client,revoked),&attempt).is_err());
+        let terminal = proposal(&client, terminal);
+        assert!(client
+            .prepare_proposal(
+                &terminal,
+                "apply",
+                json!({}),
+                &BRegIdempotencyKey::parse("new-key").unwrap()
+            )
+            .is_err());
+        let recovered = client.recover_proposal(&terminal, &attempt).unwrap();
+        assert_eq!(recovered.as_bytes(), attempt.as_bytes());
+        let mut changed = document();
+        changed["actionRevision"] =
+            json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        assert!(client
+            .recover_proposal(&proposal(&client, changed), &attempt)
+            .is_err());
+        let mut revoked = document();
+        revoked["links"].as_object_mut().unwrap().remove("apply");
+        assert!(client
+            .recover_proposal(&proposal(&client, revoked), &attempt)
+            .is_err());
+    }
+    #[test]
+    fn revised_and_rebased_receipts_require_the_exact_next_draft_version() {
+        let client = client("https://registry.example/");
+        for operation in ["revise", "rebase"] {
+            let mut original = document();
+            let mut link = original["links"]["apply"].clone();
+            link["path"] = json!(format!("/v1/proposals/{ID}/{operation}"));
+            link["operation"] = json!(operation);
+            original["links"] = json!({operation:link});
+            let attempt = client
+                .prepare_proposal(
+                    &proposal(&client, original.clone()),
+                    operation,
+                    if operation == "rebase" {
+                        json!({"input":{"address":"Updated"}})
+                    } else {
+                        json!({})
+                    },
+                    &BRegIdempotencyKey::parse("retained-transition").unwrap(),
+                )
+                .unwrap();
+            let mut current = original;
+            current["state"] = json!("draft");
+            current["submissionVersion"] = json!(2);
+            current["revision"] = json!(3);
+            current["links"][operation]["ifMatch"] = json!("\"new-condition\"");
+            current["links"][operation]["availability"] = if operation == "revise" {
+                json!({"available":false,"observedRevision":3,"reason":"stale-revision","recovery":"receipt-only"})
+            } else {
+                json!({"available":true,"observedRevision":3})
+            };
+            assert_eq!(
+                client
+                    .recover_proposal(&proposal(&client, current.clone()), &attempt)
+                    .unwrap()
+                    .as_bytes(),
+                attempt.as_bytes()
+            );
+            for (key, value) in [
+                ("submissionVersion", json!(3)),
+                ("revision", json!(4)),
+                ("state", json!("submitted")),
+                (
+                    "actionRevision",
+                    json!(
+                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    ),
+                ),
+            ] {
+                let mut unrelated = current.clone();
+                unrelated[key] = value;
+                if key == "revision" {
+                    unrelated["links"][operation]["availability"]["observedRevision"] = json!(4);
+                }
+                assert!(
+                    client
+                        .recover_proposal(&proposal(&client, unrelated), &attempt)
+                        .is_err(),
+                    "{operation}:{key}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn proposal_uuid_lookup_refuses_foreign_bindings_and_noncanonical_ids_before_io() {
+        let source = client("https://registry.example/tenant/");
+        let descriptor = json!({"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["reviewer"]});
+        let binding = BRegProposalGetBinding::from_metadata(
+            &descriptor,
+            &source.source_binding(),
+            "reviewer",
+        )
+        .unwrap();
+        assert!(client("https://other.example/")
+            .get_proposal(&binding, ID)
+            .await
+            .is_err());
+        for id in [
+            "../secret",
+            "00000000-0000-4000-8000-00000000000A",
+            "invalid",
+        ] {
+            assert!(source.get_proposal(&binding, id).await.is_err());
+        }
+        let mut disclosed = document();
+        disclosed["input"] = json!({"addressLine":"Allowed"});
+        assert_eq!(proposal(&source, disclosed).input().unwrap().len(), 1);
     }
     #[test]
     fn link_confinement_duplicate_members_and_revision_bound_availability_are_checked() {
-        for path in ["https://other.example/", "/v1/proposals/../secret", "/v1/proposals/%2e%2e", "/v1/proposals/a?accessProfile=admin"] {
-            let mut invalid=document();invalid["links"]["apply"]["path"]=json!(path);
+        for path in [
+            "https://other.example/",
+            "/v1/proposals/../secret",
+            "/v1/proposals/%2e%2e",
+            "/v1/proposals/a?accessProfile=admin",
+        ] {
+            let mut invalid = document();
+            invalid["links"]["apply"]["path"] = json!(path);
             assert!(BRegProposal::from_slice(&serde_json::to_vec(&invalid).unwrap()).is_err());
         }
-        let mut invalid=document();invalid["links"]["apply"]["availability"]["observedRevision"]=json!(1);
+        let mut invalid = document();
+        invalid["links"]["apply"]["availability"]["observedRevision"] = json!(1);
         assert!(BRegProposal::from_slice(&serde_json::to_vec(&invalid).unwrap()).is_err());
         assert!(BRegProposal::from_slice(br#"{"id":"a","id":"b"}"#).is_err());
-        let mut start_only=document();start_only["links"]=json!({});
+        let mut start_only = document();
+        start_only["links"] = json!({});
         assert!(BRegProposal::from_slice(&serde_json::to_vec(&start_only).unwrap()).is_ok());
     }
     #[test]
     fn a_get_grant_does_not_promote_collection_authority() {
-        assert!(BRegProposalCollection::from_metadata(&json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),"https://registry.example/",REVISION,"get-author").is_err());
-        assert!(BRegProposalCollection::from_metadata(&json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),"https://registry.example/",REVISION,"list-author").is_ok());
+        assert!(BRegProposalCollection::from_metadata(
+            &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),
+            "https://registry.example/",
+            REVISION,
+            "get-author"
+        )
+        .is_err());
+        assert!(BRegProposalCollection::from_metadata(
+            &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),
+            "https://registry.example/",
+            REVISION,
+            "list-author"
+        )
+        .is_ok());
+    }
+    #[test]
+    fn promoted_links_bind_method_operation_resource_and_selected_profile() {
+        for (field, value) in [
+            ("method", "GET"),
+            ("operation", "cancel"),
+            (
+                "path",
+                "/v1/proposals/00000000-0000-4000-8000-000000000002/apply",
+            ),
+            ("ifMatch", "\"bad\"quote\""),
+        ] {
+            let mut invalid = document();
+            invalid["links"]["apply"][field] = json!(value);
+            assert!(
+                BRegProposal::from_slice(&serde_json::to_vec(&invalid).unwrap()).is_err(),
+                "{field}"
+            );
+        }
+        let parsed = BRegProposal::from_slice(&serde_json::to_vec(&document()).unwrap()).unwrap();
+        assert!(parsed
+            .clone()
+            .bind_profile("https://registry.example/base/".to_owned(), "other-profile")
+            .is_err());
+        assert!(parsed
+            .bind_profile("https://registry.example/base/".to_owned(), "author")
+            .is_ok());
+    }
+    #[test]
+    fn lifecycle_bodies_are_closed_before_transport() {
+        for (operation, body) in [
+            ("submit", json!({"input":{}})),
+            ("edit", json!({})),
+            (
+                "apply",
+                json!({"proposalVersion":1,"effectDigest":REVISION}),
+            ),
+            (
+                "apply",
+                json!({"submissionVersion":0,"effectDigest":REVISION}),
+            ),
+            ("revise", json!({"rebase":true})),
+        ] {
+            assert!(validate_body(operation, &body).is_err());
+        }
+        assert!(validate_body(
+            "apply",
+            &json!({"submissionVersion":1,"effectDigest":REVISION})
+        )
+        .is_ok());
+        assert!(validate_body("rebase", &json!({"input":{"address":"Example"}})).is_ok());
     }
 }

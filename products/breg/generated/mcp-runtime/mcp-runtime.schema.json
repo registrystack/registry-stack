@@ -13,24 +13,19 @@
     },
     "ApplicationConfig": {
       "additionalProperties": false,
-      "description": "The application entity and the two fields the gateway, never the chat\nhost, writes.",
+      "description": "The proposal-mode Action and its target input, resolved by the gateway.",
       "properties": {
-        "entity": {
+        "action": {
           "$ref": "#/$defs/LocalId"
         },
-        "ownerField": {
+        "targetInput": {
           "$ref": "#/$defs/LocalId",
-          "description": "The field identifier of the field that records the citizen's\nprincipal. It names a different field than `targetField`."
-        },
-        "targetField": {
-          "$ref": "#/$defs/LocalId",
-          "description": "The field identifier of the field that references the citizen's own\nrecord."
+          "description": "The input identifier of the input that references the citizen's own\nrecord."
         }
       },
       "required": [
-        "entity",
-        "targetField",
-        "ownerField"
+        "action",
+        "targetInput"
       ],
       "type": "object"
     },
@@ -125,14 +120,14 @@
     },
     "DetailsConfig": {
       "additionalProperties": false,
-      "description": "The entity holding the citizen's own record, found through the agent\nprofile's linked lookup.",
+      "description": "The Record type holding the citizen's own record, found through the agent\nprofile's linked lookup.",
       "properties": {
-        "entity": {
+        "recordType": {
           "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
-        "entity"
+        "recordType"
       ],
       "type": "object"
     },

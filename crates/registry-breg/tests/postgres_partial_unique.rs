@@ -7,11 +7,11 @@
 mod postgres_harness;
 
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
-    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, RegistryStateTestIdentity,
+    ExpectedManagedCatalog, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema, verify_catalog_identity_for_catalog,
 };
 
 const PACKAGE_ID: &str = "partial-unique-registry";
@@ -20,11 +20,11 @@ const DATABASE_ID: &str = "partial-unique-database";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate() {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"},
@@ -41,8 +41,8 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
             }]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"entry","operations":["get"],"readableFields":["code","status","ended-on"],
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"entry","operations":["get"],"readableFields":["code","status","ended-on"],
               "rowBoundaries": "unrestricted"
             }]}
           }],
@@ -118,20 +118,22 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
         )
         .await
         .expect("first active open row inserts");
-    assert!(database
-        .admin
-        .execute(
-            &insert,
-            &[
-                &"00000000-0000-0000-0000-000000000702",
-                &"active",
-                &"A-1",
-                &"active",
-                &Option::<&str>::None,
-            ],
-        )
-        .await
-        .is_err());
+    assert!(
+        database
+            .admin
+            .execute(
+                &insert,
+                &[
+                    &"00000000-0000-0000-0000-000000000702",
+                    &"active",
+                    &"A-1",
+                    &"active",
+                    &Option::<&str>::None,
+                ],
+            )
+            .await
+            .is_err()
+    );
     for (record_id, lifecycle, status_value, ended_value) in [
         (
             "00000000-0000-0000-0000-000000000703",

@@ -1177,76 +1177,33 @@ bindings:
     }
 
     #[test]
-    fn revise_request_data_body_prints_the_reader_diagnostic_with_its_position() {
+    fn create_request_requires_a_data_object_with_located_diagnostics() {
         let source = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 journeys:
-  - id: stale-flow
+  - id: create-flow
     steps:
-      - id: rebase-primary-request
-        accessProfile: requester
+      - id: create-record
+        recordType: record
+        accessProfile: writer
         request:
-          type: revise-request
-          recordCapture: request
-          etagCapture: request
-          data: {rebase: true}
-        expect: {outcome: success, status: 200}
+          type: create
+        expect: {outcome: success, status: 201}
 "#;
-
-        let (code, human) = written(&journey_refusal(source), crate::OutputFormat::Human);
-
+        let refusal = journey_refusal(source);
+        let (code, human) = written(&refusal, crate::OutputFormat::Human);
         assert_eq!(code, crate::DOMAIN_REFUSAL_EXIT);
-        assert_eq!(
-            human,
-            "bregctl test refused the fixture journeys.
-error[config.missing-key] /project/tests/journeys.yaml:8:9 /journeys/0/steps/0/request
-  the required member `rebase` is missing
-  next: Add `rebase`.
-error[config.unknown-key] /project/tests/journeys.yaml:12:11 /journeys/0/steps/0/request/data
-  `data` is not a member of this mapping
-  next: Remove `data`; the accepted keys are `type`, `recordCapture`, `etagCapture`, `rebase`.
-2 errors, 0 warnings in 1 file
-"
-        );
-    }
-
-    #[test]
-    fn revise_request_missing_rebase_reports_the_reader_shape_in_json() {
-        let source = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
-kind: BRegJourneys
-journeys:
-  - id: stale-flow
-    steps:
-      - id: rebase-primary-request
-        accessProfile: requester
-        request:
-          type: revise-request
-          recordCapture: request
-          etagCapture: request
-        expect: {outcome: success, status: 200}
-"#;
-
-        let (code, json) = written(&journey_refusal(source), crate::OutputFormat::Json);
-        let report: serde_json::Value = serde_json::from_str(&json).expect("JSON report");
-
-        assert_eq!(code, crate::DOMAIN_REFUSAL_EXIT);
-        assert_eq!(report["ok"], false);
-        assert_eq!(report["command"], "test");
-        let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
-        assert_eq!(diagnostics.len(), 1, "{json}");
-        let diagnostic = &diagnostics[0];
-        assert_eq!(diagnostic["severity"], "error");
+        assert!(human.contains("config.missing-key"), "{human}");
+        assert!(human.contains("required member `data`"), "{human}");
+        assert!(human.contains("/journeys/0/steps/0/request"), "{human}");
+        let (_, text) = written(&refusal, crate::OutputFormat::Json);
+        let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let diagnostic = &report["diagnostics"][0];
         assert_eq!(diagnostic["code"], "config.missing-key");
         assert_eq!(diagnostic["artifact"], "BRegJourneys");
         assert_eq!(diagnostic["path"], "/journeys/0/steps/0/request");
-        assert!(
-            diagnostic["message"].as_str().unwrap().contains("rebase"),
-            "{json}"
-        );
-        assert_eq!(
-            diagnostic["source"],
-            serde_json::json!({"file": "/project/tests/journeys.yaml", "line": 8, "column": 9})
-        );
+        assert_eq!(diagnostic["source"]["file"], "/project/tests/journeys.yaml");
+        assert_eq!(diagnostic["source"]["line"], 9);
     }
 
     /// Deterministic ancestor-swap regressions for the receipt and credentials

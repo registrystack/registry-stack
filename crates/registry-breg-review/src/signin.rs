@@ -22,7 +22,7 @@ use crate::session::{random_token, tokens_match, PendingSignIn, Replaced, Sessio
 use crate::{canonical_uuid, cookie, App, Problem};
 
 /// The only path a sign-in may return to is a request page.
-const RETURN_PREFIX: &str = "/requests/";
+const RETURN_PREFIX: &str = "/proposals/";
 
 /// Removes a newly inserted session if the callback is cancelled or terminal
 /// audit fails before the browser receives its cookie, and puts back the
@@ -76,7 +76,7 @@ fn parameter<'a>(pairs: &'a [(String, String)], name: &str) -> Option<&'a str> {
 }
 
 /// The request identifier named by the one `return` parameter, which must be
-/// exactly `/requests/{canonical uuid}` and nothing else.
+/// exactly `/proposals/{canonical uuid}` and nothing else.
 fn return_request(query: Option<&str>) -> Option<String> {
     let pairs = single_valued(query?)?;
     let [(name, value)] = pairs.as_slice() else {
@@ -96,7 +96,7 @@ fn fresh(app: &App) -> Result<String, Response> {
     })
 }
 
-/// `GET /signin?return=/requests/{id}`: start a sign-in and send the browser
+/// `GET /signin?return=/proposals/{id}`: start a sign-in and send the browser
 /// to the provider.
 pub(crate) async fn start(State(app): State<Arc<App>>, RawQuery(query): RawQuery) -> Response {
     match begin(&app, query.as_deref()).await {
@@ -293,13 +293,13 @@ async fn complete(
     let session_cookie = match fresh(app) {
         Ok(value) => value,
         Err(_) => {
-            return Err(finish_problem(app, operation, Outcome::Refused, Problem::Internal).await)
+            return Err(finish_problem(app, operation, Outcome::Refused, Problem::Internal).await);
         }
     };
     let csrf = match fresh(app) {
         Ok(value) => value,
         Err(_) => {
-            return Err(finish_problem(app, operation, Outcome::Refused, Problem::Internal).await)
+            return Err(finish_problem(app, operation, Outcome::Refused, Problem::Internal).await);
         }
     };
     // The session is opened before the sign-in is audited: it is cheap,
@@ -372,17 +372,17 @@ mod tests {
     #[test]
     fn only_one_canonical_request_path_is_a_return_path() {
         assert_eq!(
-            return_request(Some(&format!("return=%2Frequests%2F{ID}"))).as_deref(),
+            return_request(Some(&format!("return=%2Fproposals%2F{ID}"))).as_deref(),
             Some(ID)
         );
         for query in [
             String::new(),
             "return=".to_owned(),
-            format!("return=%2Frequests%2F{ID}&other=1"),
-            format!("return=%2Frequests%2F{ID}&return=%2Frequests%2F{ID}"),
-            format!("next=%2Frequests%2F{ID}"),
-            format!("return=%2Frequests%2F{ID}%2F"),
-            format!("return=https%3A%2F%2Fevil.example%2Frequests%2F{ID}"),
+            format!("return=%2Fproposals%2F{ID}&other=1"),
+            format!("return=%2Fproposals%2F{ID}&return=%2Fproposals%2F{ID}"),
+            format!("next=%2Fproposals%2F{ID}"),
+            format!("return=%2Fproposals%2F{ID}%2F"),
+            format!("return=https%3A%2F%2Fevil.example%2Fproposals%2F{ID}"),
         ] {
             assert_eq!(return_request(Some(&query)), None, "{query}");
         }

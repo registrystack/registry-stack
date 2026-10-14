@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::{compile_project, parse_project_json, CompileProfile};
+use crate::{CompileProfile, compile_project, parse_project_json};
 use serde_json::json;
 
 fn source() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"action-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "entities":[{"id":"item", "primaryDataset":"test-dataset", "route":"items", "mutationMode":"mutable",
+        "datasets":[{"id":"test-dataset"}],"recordTypes":[{"id":"item", "primaryDataset":"test-dataset", "route":"items", "mutationMode":"mutable",
             "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]}],
-        "actions":[{"id":"rename-item", "inputs":[
+        "actions":[{"id":"rename-item", "execution":{"mode":"immediate"}, "inputs":[
             {"id":"item", "apiName":"itemId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
             {"id":"label", "apiName":"newLabel", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}
-        ], "effects":[{"id":"renamed", "target":{"fromField":"item"}, "operation":"patch", "set":{"label":{"fromField":"label"}}}]}],
+        ], "plan":{"type":"fixed","effects":[{"id":"renamed", "target":{"fromInput":"item"}, "operation":"patch", "set":{"label":{"fromInput":"label"}}}]}}],
         "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal", "requiredScopes":["item.rename"],
-            "permissions":{"actions":[{"action":"rename-item", "operations":["invoke"], "targets":[{"entity":"item", "rowBoundaries":"unrestricted"}], "results":["renamed"]}]}}]
+            "permissions":{"actions":[{"action":"rename-item", "operations":["invoke"], "targets":[{"recordType":"item", "rowBoundaries":"unrestricted"}], "results":["renamed"]}]}}]
     })
 }
 
@@ -35,19 +35,19 @@ fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
     let mut source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"policy-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "entities":[{"id":"person", "primaryDataset":"test-dataset", "route":"people", "mutationMode":"mutable",
+        "datasets":[{"id":"test-dataset"}],"recordTypes":[{"id":"person", "primaryDataset":"test-dataset", "route":"people", "mutationMode":"mutable",
             "fields":[
                 {"id":"person-code", "type":"string", "maximumLength":40, "required":true, "classification":"internal"},
                 {"id":"sensitive-note", "type":"string", "maximumLength":120, "classification":"internal"}
             ]}],
         "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal","requiredScopes":"unrestricted",
-            "permissions":{"entities":[{"entity":"person", "operations":["create","get","list"],
+            "permissions":{"records":[{"recordType":"person", "operations":["create","get","list"],
                 "readableFields":["person-code","sensitive-note"],
                 "writableFields":["person-code","sensitive-note"], "rowBoundaries":"unrestricted"}]}}]
     });
     if let Some(operations) = auditor_operations {
         let mut permission = json!({
-            "entity":"person", "operations":operations, "rowBoundaries":"unrestricted"
+            "recordType":"person", "operations":operations, "rowBoundaries":"unrestricted"
         });
         if operations
             .iter()
@@ -63,7 +63,7 @@ fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
             .expect("accessProfiles is an array")
             .push(json!({
                 "id":"auditor", "principalClaim":"principal",
-                "requiredScopes":["registry.audit"], "permissions":{"entities":[permission]}
+                "requiredScopes":["registry.audit"], "permissions":{"records":[permission]}
             }));
     }
     source
@@ -108,10 +108,11 @@ fn assert_complete_person_policy_drops(
     let actual_drops = actual_drop_ids.iter().cloned().collect::<BTreeSet<_>>();
     assert_eq!(actual_drop_ids.len(), actual_drops.len());
     assert_eq!(actual_drops, expected_drops);
-    assert!(plan
-        .statements
-        .iter()
-        .all(|statement| !statement.sql.starts_with("CREATE POLICY ")));
+    assert!(
+        plan.statements
+            .iter()
+            .all(|statement| !statement.sql.starts_with("CREATE POLICY "))
+    );
 }
 
 #[test]
@@ -124,9 +125,11 @@ fn compiler_successor_drops_every_policy_for_removed_read_profile() {
 
     assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileRemoved));
     assert_complete_person_policy_drops(&before, &after, &plan);
-    assert!(drop_policy_sql(&plan)
-        .iter()
-        .any(|statement| statement.contains("registry_rls_select_")));
+    assert!(
+        drop_policy_sql(&plan)
+            .iter()
+            .any(|statement| statement.contains("registry_rls_select_"))
+    );
 }
 
 #[test]
@@ -139,12 +142,16 @@ fn compiler_successor_drops_create_returning_policy_for_removed_create_profile()
 
     assert_complete_person_policy_drops(&before, &after, &plan);
     let drops = drop_policy_sql(&plan);
-    assert!(drops
-        .iter()
-        .any(|statement| statement.contains("registry_rls_insert_")));
-    assert!(drops
-        .iter()
-        .any(|statement| statement.contains("registry_create_returning_rls_")));
+    assert!(
+        drops
+            .iter()
+            .any(|statement| statement.contains("registry_rls_insert_"))
+    );
+    assert!(
+        drops
+            .iter()
+            .any(|statement| statement.contains("registry_create_returning_rls_"))
+    );
 }
 
 #[test]
@@ -158,9 +165,11 @@ fn compiler_successor_replaces_complete_policy_set_when_profile_is_narrowed() {
     assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileChanged));
     assert_complete_person_policy_drops(&before, &after, &plan);
     let drops = drop_policy_sql(&plan);
-    assert!(drops
-        .iter()
-        .any(|statement| statement.contains("registry_rls_select_")));
+    assert!(
+        drops
+            .iter()
+            .any(|statement| statement.contains("registry_rls_select_"))
+    );
     assert_eq!(create_policy_sql(&plan), Vec::<String>::new());
 }
 
@@ -272,7 +281,7 @@ fn reviewed_successor_adds_action_policies_for_existing_entity() {
 fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
     let before = compile(&source_without_actions());
     let mut candidate = source_without_actions();
-    candidate["entities"]
+    candidate["recordTypes"]
         .as_array_mut()
         .expect("entities are an array")
         .push(json!({
@@ -283,16 +292,16 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
             "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]
         }));
     candidate["actions"] = json!([{
-        "id":"create-task",
+        "id":"create-task", "execution":{"mode":"immediate"},
         "inputs":[{"id":"label", "apiName":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}],
-        "effects":[{"id":"task", "target":{"entity":"task"}, "operation":"create", "set":{"label":{"fromField":"label"}}}]
+        "plan":{"type":"fixed","effects":[{"id":"task", "target":{"recordType":"task"}, "operation":"create", "set":{"label":{"fromInput":"label"}}}]}
     }]);
     candidate["accessProfiles"] = json!([{
         "id":"task-operator",
         "default":true,
         "principalClaim":"principal",
         "requiredScopes":"unrestricted",
-        "permissions":{"actions":[{"action":"create-task", "operations":["invoke"], "targets":[{"entity":"task", "rowBoundaries":"unrestricted"}], "results":["task"]}]}
+        "permissions":{"actions":[{"action":"create-task", "operations":["invoke"], "targets":[{"recordType":"task", "rowBoundaries":"unrestricted"}], "results":["task"]}]}
     }]);
     let after = compile(&candidate);
     let plan = reviewed_plan(&before, &after);
@@ -314,7 +323,8 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
 fn reviewed_successor_replaces_action_policies_when_contract_changes() {
     let before = compile(&source());
     let mut changed = source();
-    changed["accessProfiles"][0]["requiredScopes"] = json!(["item.rename.restricted"]);
+    changed["accessProfiles"][0]["permissions"]["actions"][0]["targets"][0]["rowBoundaries"] =
+        json!([{"field":"label","claim":"itemLabel","operator":"equals"}]);
     let after = compile(&changed);
     let plan = reviewed_plan(&before, &after);
 
@@ -325,7 +335,7 @@ fn reviewed_successor_replaces_action_policies_when_contract_changes() {
     assert_eq!(sorted(creates.clone()), sorted(action_policy_sql(&after)));
     for create in creates {
         assert!(
-            create.contains(&after.actions().actions[0].contract_fingerprint),
+            create.contains(&after.actions().actions[0].definition_revision),
             "candidate policy must bind the new action contract fingerprint"
         );
     }
@@ -348,7 +358,7 @@ fn reviewed_successor_drops_removed_action_policies_for_existing_entity() {
 #[test]
 fn reviewed_successor_tracks_link_only_reference_policies() {
     let mut without_action = source_without_actions();
-    without_action["entities"]
+    without_action["recordTypes"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -356,7 +366,7 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
             "fields":[{"id":"label", "type":"string", "maximumLength":40,
                 "required":true, "classification":"internal"}]
         }));
-    without_action["entities"][0]["fields"]
+    without_action["recordTypes"][0]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -372,12 +382,12 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
             "id":"group", "apiName":"groupId", "type":"reference", "target":"group",
             "required":true, "classification":"internal"
         }));
-    with_action["actions"][0]["effects"][0]["set"]["group"] = json!({"fromField":"group"});
+    with_action["actions"][0]["plan"]["effects"][0]["set"]["group"] = json!({"fromInput":"group"});
     with_action["accessProfiles"][0]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "entity":"group", "rowBoundaries":"unrestricted"
+            "recordType":"group", "rowBoundaries":"unrestricted"
         }));
     let before = compile(&without_action);
     let after = compile(&with_action);
@@ -396,24 +406,33 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
     let added = reviewed_plan(&before, &after);
     let removed = reviewed_plan(&after, &before);
     for name in &links {
-        assert!(create_policy_sql(&added)
-            .iter()
-            .any(|sql| sql.contains(name)));
-        assert!(drop_policy_sql(&removed)
-            .iter()
-            .any(|sql| sql.contains(name)));
+        assert!(
+            create_policy_sql(&added)
+                .iter()
+                .any(|sql| sql.contains(name))
+        );
+        assert!(
+            drop_policy_sql(&removed)
+                .iter()
+                .any(|sql| sql.contains(name))
+        );
     }
-    with_action["accessProfiles"][0]["requiredScopes"] = json!(["item.rename.changed"]);
+    with_action["accessProfiles"][0]["permissions"]["actions"][0]["targets"][1]["rowBoundaries"] =
+        json!([{"field":"label","claim":"groupLabel","operator":"equals"}]);
     let changed = compile(&with_action);
     let replaced = reviewed_plan(&after, &changed);
     for name in links {
-        assert!(drop_policy_sql(&replaced)
-            .iter()
-            .any(|sql| sql.contains(&name)));
-        assert!(create_policy_sql(&replaced)
-            .iter()
-            .any(|sql| sql.contains(&name)
-                && sql.contains(&changed.actions().actions[0].contract_fingerprint)));
+        assert!(
+            drop_policy_sql(&replaced)
+                .iter()
+                .any(|sql| sql.contains(&name))
+        );
+        assert!(
+            create_policy_sql(&replaced)
+                .iter()
+                .any(|sql| sql.contains(&name)
+                    && sql.contains(&changed.actions().actions[0].definition_revision))
+        );
     }
 }
 
@@ -421,7 +440,7 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
 fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
     let before = compile(&source());
     let mut removed_entity = source_without_actions();
-    removed_entity["entities"] = json!([{
+    removed_entity["recordTypes"] = json!([{
         "id":"other",
         "primaryDataset":"test-dataset",
         "route":"others",
@@ -432,159 +451,74 @@ fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
     let after = compile(&removed_entity);
     let plan = reviewed_plan(&before, &after);
 
-    assert!(plan
-        .changes
-        .iter()
-        .any(|change| change.code == CompiledRegistryChangeCode::EntityRemoved));
+    assert!(
+        plan.changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::EntityRemoved)
+    );
     assert_eq!(drop_policy_sql(&plan), Vec::<String>::new());
     assert_eq!(create_policy_sql(&plan), Vec::<String>::new());
 }
 
-fn change_request_source(operator_operations: &[&str]) -> Value {
-    json!({
-        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
-        "project":{"id":"change-request-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "entities":[{
-            "id":"asset", "primaryDataset":"test-dataset", "route":"assets", "mutationMode":"mutable",
-            "changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]
-        },{
-            "id":"asset-request", "primaryDataset":"test-dataset", "route":"asset-requests", "mutationMode":"mutable",
-            "fields":[
-                {"id":"asset", "type":"reference", "target":"asset", "required":true, "classification":"internal"},
-                {"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}
-            ],
-            "changeRequest":{
-                "effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-                "review":{"type":"required","authority":"casework-main","policyId":"request-review"},
-                "onApproved":{"mode":"manual"}
-            }
-        }],
-        "accessProfiles":[{
-            "id":"operator", "default":true, "principalClaim":"principal","requiredScopes":"unrestricted",
-            "permissions":{"entities":[{
-                "entity":"asset-request", "operations": operator_operations,
-                "readableFields":["asset","label"], "writableFields":["asset","label"],
-                "applyTargets":[{"entity":"asset", "rowBoundaries":"unrestricted"}],
-                "rowBoundaries":"unrestricted"
-            }]}
-        }]
-    })
+fn proposal_source(operations: &[&str], readable_inputs: &[&str]) -> Value {
+    let mut value = source();
+    value["recordTypes"][0]["mutationPolicy"] = json!({"patch":"proposal-required"});
+    value["actions"][0]["execution"] = json!({"mode":"proposal","proposal":{
+        "review":{"type":"none"}, "application":{"mode":"manual"}, "retention":{"mode":"retain"}
+    }});
+    value["accessProfiles"][0]["permissions"]["actions"][0]["operations"] = json!(["start"]);
+    value["accessProfiles"][0]["permissions"]["proposals"] = json!([{
+        "action":"rename-item", "operations":operations, "readableInputs":readable_inputs,
+        "targets":[{"recordType":"item","rowBoundaries":"unrestricted"}]
+    }]);
+    value
 }
 
-/// A change-request action grant (`submit-request`, `revise-request`,
-/// `cancel-request`, `apply-request`) compiles to a `registry_cr_action_rls_`
-/// policy on the request entity's own table. Removing the grant must drop
-/// that policy in the reviewed successor plan, the same way removing an
-/// immediate-action grant drops its `registry_action_rls_` policy.
 #[test]
-fn reviewed_successor_drops_change_request_action_policy_when_grant_is_removed() {
-    let before = compile(&change_request_source(&[
-        "get",
-        "list",
-        "submit-request",
-        "cancel-request",
-        "apply-request",
-    ]));
-    let after = compile(&change_request_source(&[
-        "get",
-        "list",
-        "submit-request",
-        "apply-request",
-    ]));
+fn reviewed_successor_drops_removed_proposal_preparation_and_application_policies() {
+    let before = compile(&proposal_source(
+        &["get", "edit", "submit", "cancel", "apply"],
+        &["item", "label"],
+    ));
+    let after = compile(&proposal_source(&["get", "cancel"], &["item", "label"]));
+    assert_eq!(
+        before.actions().actions[0].definition_revision,
+        after.actions().actions[0].definition_revision
+    );
     let plan = reviewed_plan(&before, &after);
-
-    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileChanged));
+    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::ActionChanged));
     let drops = drop_policy_sql(&plan);
     assert!(
-        drops
-            .iter()
-            .any(|sql| sql.contains("registry_cr_action_rls_")),
-        "removing the cancel-request grant must drop its registry_cr_action_rls_ policy, got: {drops:?}"
+        !drops.is_empty(),
+        "revoked Proposal target policies must be removed"
     );
+    assert!(drops.iter().all(|sql| !sql.contains("registry_cr_")));
 }
 
-fn change_request_source_with_reviewer_profile(reviewer_operations: &[&str]) -> Value {
-    let mut source = change_request_source(&["get", "list", "submit-request", "apply-request"]);
-    source["accessProfiles"]
-        .as_array_mut()
-        .expect("accessProfiles array")
-        .push(json!({
-            "id":"reviewer-extra", "principalClaim":"principal","requiredScopes":"unrestricted",
-            "permissions":{"entities":[{
-                "entity":"asset-request", "operations": reviewer_operations,
-                "readableFields":["asset","label"], "writableFields":["asset","label"],
-                "rowBoundaries":"unrestricted"
-            }]}
-        }));
-    source
-}
-
-/// The same stale-policy gap applies to the change-request target "prepare"
-/// policies (`registry_cr_rls_`), generated per profile holding submit or
-/// revise authority on the request entity. Removing a second profile's
-/// `submit-request` grant must drop its stale policy in the reviewed
-/// successor plan, while `operator` keeps the type's only apply coverage
-/// unchanged so the plan compiles on both sides.
 #[test]
-fn reviewed_successor_drops_change_request_target_policy_when_submit_grant_is_removed() {
-    let before = compile(&change_request_source_with_reviewer_profile(&[
-        "get",
-        "list",
-        "submit-request",
-    ]));
-    let after = compile(&change_request_source_with_reviewer_profile(&[
-        "get", "list",
-    ]));
-    let plan = reviewed_plan(&before, &after);
-
-    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileChanged));
-    let drops = drop_policy_sql(&plan);
-    assert!(
-        drops.iter().any(|sql| sql.contains("registry_cr_rls_")),
-        "removing the reviewer profile's submit-request grant must drop its registry_cr_rls_ target policy, got: {drops:?}"
+fn proposal_input_disclosure_change_is_reported_without_changing_frozen_execution() {
+    let before = compile(&proposal_source(&["get", "cancel"], &["item", "label"]));
+    let after = compile(&proposal_source(&["get", "cancel"], &["item"]));
+    assert_eq!(
+        before.actions().actions[0].definition_revision,
+        after.actions().actions[0].definition_revision
     );
+    let plan = reviewed_plan(&before, &after);
+    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::ActionChanged));
 }
 
-fn change_request_source_with_presence_profile(include_presence: bool) -> Value {
-    let mut source = change_request_source(&["get", "list", "submit-request", "apply-request"]);
-    let mut viewer_permission = json!({
-        "entity":"asset", "operations":["get"],
-        "readableFields":["label"], "writableFields":[],
-        "rowBoundaries":"unrestricted"
-    });
-    if include_presence {
-        viewer_permission["requestPresence"] =
-            json!([{"requestType":"asset-request","rowBoundaries":"unrestricted"}]);
-    }
-    source["accessProfiles"]
-        .as_array_mut()
-        .expect("accessProfiles array")
-        .push(json!({
-            "id":"asset-viewer", "principalClaim":"principal","requiredScopes":"unrestricted",
-            "permissions":{"entities":[viewer_permission]}
-        }));
-    source
-}
-
-/// Change-request presence policies (`registry_cr_presence_rls_`) come from a
-/// `requestPresence` grant on the target entity's own profile, independent of
-/// the request entity's submit or apply authority. Removing that grant must
-/// drop its stale presence policy in the reviewed successor plan.
 #[test]
-fn reviewed_successor_drops_change_request_presence_policy_when_grant_is_removed() {
-    let before = compile(&change_request_source_with_presence_profile(true));
-    let after = compile(&change_request_source_with_presence_profile(false));
-    let plan = reviewed_plan(&before, &after);
-
-    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileChanged));
-    let drops = drop_policy_sql(&plan);
-    assert!(
-        drops
-            .iter()
-            .any(|sql| sql.contains("registry_cr_presence_rls_")),
-        "removing the requestPresence grant must drop its registry_cr_presence_rls_ policy, got: {drops:?}"
+fn action_only_claim_change_is_a_reviewable_successor() {
+    let before = compile(&source());
+    let mut changed = source();
+    changed["accessProfiles"][0]["requiredScopes"] = json!(["item.rename.restricted"]);
+    let after = compile(&changed);
+    assert_eq!(
+        before.actions().actions[0].definition_revision,
+        after.actions().actions[0].definition_revision
     );
+    let plan = reviewed_plan(&before, &after);
+    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::ActionChanged));
 }
 
 fn reviewed_plan(before: &CompiledRegistry, after: &CompiledRegistry) -> MigrationPlan {
@@ -638,4 +572,38 @@ fn drop_policy_sql(plan: &MigrationPlan) -> Vec<String> {
 fn sorted(mut statements: Vec<String>) -> Vec<String> {
     statements.sort();
     statements
+}
+
+#[test]
+fn reviewed_successor_installs_added_proposal_operation_policies() {
+    let before = compile(&proposal_source(&["get", "cancel"], &[]));
+    let after = compile(&proposal_source(
+        &["get", "cancel", "edit", "submit", "apply"],
+        &[],
+    ));
+    let plan = reviewed_plan(&before, &after);
+    let before_sql = before
+        .ddl()
+        .statements
+        .iter()
+        .filter(|s| s.kind == DdlStatementKind::Policy)
+        .map(|s| s.sql.clone())
+        .collect::<BTreeSet<_>>();
+    let expected = after
+        .ddl()
+        .statements
+        .iter()
+        .filter(|s| {
+            s.kind == DdlStatementKind::Policy
+                && s.sql.contains("registry_proposal_")
+                && !before_sql.contains(&s.sql)
+        })
+        .map(|s| s.sql.clone())
+        .collect::<BTreeSet<_>>();
+    assert!(!expected.is_empty());
+    let actual = create_policy_sql(&plan)
+        .into_iter()
+        .filter(|s| s.contains("registry_proposal_"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual, expected);
 }

@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 
 use consent_fixture::{compile, refusal_codes, self_issued_project, source};
 use registry_breg::contract::FieldTypeSource;
-use registry_breg::evidence_source::{export_evidence_source, EvidenceSourceOptions};
-use serde_json::{json, Value};
+use registry_breg::evidence_source::{EvidenceSourceOptions, export_evidence_source};
+use serde_json::{Value, json};
 
 const PERSON: usize = 0;
 const HOUSEHOLD: usize = 1;
@@ -32,7 +32,7 @@ fn assert_refused(value: &Value, code: &str) {
 }
 
 fn consent_field<'a>(value: &'a mut Value, id: &str) -> &'a mut Value {
-    value["entities"][CONSENT]["fields"]
+    value["recordTypes"][CONSENT]["fields"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -93,14 +93,14 @@ fn consent_fixture_compiles_with_synthesized_vocabularies_and_feed_bound() {
 #[test]
 fn consent_record_must_be_create_only() {
     let mut value = source();
-    value["entities"][CONSENT]["mutationMode"] = json!("mutable");
+    value["recordTypes"][CONSENT]["mutationMode"] = json!("mutable");
     assert_refused(&value, "breg.consent.record-mutation-mode");
 }
 
 #[test]
 fn consent_record_fields_have_the_declared_types() {
     let mut value = source();
-    value["entities"][CONSENT]["consentRecord"]["subject"] = json!("purpose");
+    value["recordTypes"][CONSENT]["consentRecord"]["subject"] = json!("purpose");
     assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
@@ -112,11 +112,11 @@ fn consent_record_fields_have_the_declared_types() {
     assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
-    value["entities"][CONSENT]["consentRecord"]["decision"]["field"] = json!("effective-at");
+    value["recordTypes"][CONSENT]["consentRecord"]["decision"]["field"] = json!("effective-at");
     assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
-    value["entities"][CONSENT]["consentRecord"]["validity"]["from"] = json!("decision");
+    value["recordTypes"][CONSENT]["consentRecord"]["validity"]["from"] = json!("decision");
     assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
@@ -124,32 +124,32 @@ fn consent_record_fields_have_the_declared_types() {
     assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
-    value["entities"][CONSENT]["consentRecord"]["validity"]["until"] = json!("unknown-field");
+    value["recordTypes"][CONSENT]["consentRecord"]["validity"]["until"] = json!("unknown-field");
     assert_refused(&value, "breg.consent.record-fields");
 }
 
 #[test]
 fn consent_record_decision_sets_are_disjoint_and_within_the_vocabulary() {
     let mut value = source();
-    value["entities"][CONSENT]["consentRecord"]["decision"]["gives"] = json!([]);
+    value["recordTypes"][CONSENT]["consentRecord"]["decision"]["gives"] = json!([]);
     assert_refused(&value, "breg.consent.record-values");
 
     let mut value = source();
-    value["entities"][CONSENT]["consentRecord"]["decision"]["revokes"] = json!([]);
-    value["entities"][CONSENT]["consentRecord"]["decision"]["refusals"] = json!([]);
+    value["recordTypes"][CONSENT]["consentRecord"]["decision"]["revokes"] = json!([]);
+    value["recordTypes"][CONSENT]["consentRecord"]["decision"]["refusals"] = json!([]);
     assert_refused(&value, "breg.consent.record-values");
 
     let mut value = source();
-    value["entities"][CONSENT]["consentRecord"]["decision"]["gives"] =
+    value["recordTypes"][CONSENT]["consentRecord"]["decision"]["gives"] =
         json!(["given", "withdrawn"]);
     assert_refused(&value, "breg.consent.record-values");
 
     let mut value = source();
-    value["entities"][CONSENT]["consentRecord"]["decision"]["gives"] = json!(["granted"]);
+    value["recordTypes"][CONSENT]["consentRecord"]["decision"]["gives"] = json!(["granted"]);
     assert_refused(&value, "breg.consent.record-values");
 
     let mut value = source();
-    value["entities"][CONSENT]["consentRecord"]["decision"]["refusals"] = json!(["given"]);
+    value["recordTypes"][CONSENT]["consentRecord"]["decision"]["refusals"] = json!(["given"]);
     assert_refused(&value, "breg.consent.record-values");
 }
 
@@ -158,13 +158,13 @@ fn consent_record_maximum_duration_is_positive_and_bounded() {
     // Ten years of 365.25 days hold 3652 whole days.
     for invalid in [0, 3653, 36_500, u32::MAX] {
         let mut value = source();
-        value["entities"][CONSENT]["consentRecord"]["validity"]["maximumDurationDays"] =
+        value["recordTypes"][CONSENT]["consentRecord"]["validity"]["maximumDurationDays"] =
             json!(invalid);
         assert_refused(&value, "breg.consent.record-max-duration");
     }
     for valid in [1, 30, 365, 3652] {
         let mut value = source();
-        value["entities"][CONSENT]["consentRecord"]["validity"]["maximumDurationDays"] =
+        value["recordTypes"][CONSENT]["consentRecord"]["validity"]["maximumDurationDays"] =
             json!(valid);
         let registry = compile(&value)
             .unwrap_or_else(|failure| panic!("{valid}: {:?}", failure.diagnostics()));
@@ -210,31 +210,31 @@ fn consent_record_key_and_validity_fields_are_plaintext() {
 fn consent_record_is_a_leaf() {
     // Its own profiles cannot require consent.
     let mut value = source();
-    value["accessProfiles"][FEED]["permissions"]["entities"][0]["requireConsent"] =
+    value["accessProfiles"][FEED]["permissions"]["records"][0]["requireConsent"] =
         json!([{"record": "consent-decision", "on": "subject"}]);
     assert_refused(&value, "breg.consent.record-leaf");
 
     // No incoming read paths.
     let mut value = source();
-    value["entities"][PERSON]["readPaths"] = json!([
+    value["recordTypes"][PERSON]["readPaths"] = json!([
         {"id": "decisions", "through": "consent-decision", "to": "household", "route": "decisions"}
     ]);
-    value["entities"][CONSENT]["fields"]
+    value["recordTypes"][CONSENT]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id": "household", "type": "reference", "target": "household", "classification": "internal"}));
-    value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][0]["readPaths"] =
+    value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"][0]["readPaths"] =
         json!([{"path": "decisions", "readableFields": ["label"]}]);
     assert_refused(&value, "breg.consent.record-leaf");
 
     // Not the key target of a consent probe.
     let mut value = source();
-    let mut second = value["entities"][CONSENT].clone();
+    let mut second = value["recordTypes"][CONSENT].clone();
     second["id"] = json!("consent-audit");
     second["route"] = json!("consent-audits");
     second["fields"][0]["target"] = json!("consent-decision");
-    value["entities"].as_array_mut().unwrap().push(second);
-    value["accessProfiles"][FEED]["permissions"]["entities"][0]["requireConsent"] =
+    value["recordTypes"].as_array_mut().unwrap().push(second);
+    value["accessProfiles"][FEED]["permissions"]["records"][0]["requireConsent"] =
         json!([{"record": "consent-audit", "on": "id"}]);
     assert_refused(&value, "breg.consent.record-leaf");
 }
@@ -243,9 +243,9 @@ fn consent_record_is_a_leaf() {
 fn consent_record_is_never_written_directly() {
     for operation in ["create", "batch"] {
         let mut value = source();
-        value["accessProfiles"][STEWARD]["permissions"]["entities"][4]["operations"] =
+        value["accessProfiles"][STEWARD]["permissions"]["records"][4]["operations"] =
             json!(["get", "list", operation]);
-        value["accessProfiles"][STEWARD]["permissions"]["entities"][4]["writableFields"] = json!([
+        value["accessProfiles"][STEWARD]["permissions"]["records"][4]["writableFields"] = json!([
             "subject",
             "recipient",
             "purpose",
@@ -255,7 +255,7 @@ fn consent_record_is_never_written_directly() {
             "expires-at"
         ]);
         if operation == "batch" {
-            value["entities"][CONSENT]["batch"] =
+            value["recordTypes"][CONSENT]["batch"] =
                 json!({"maximumItems": 10, "maximumBytes": 65536});
         }
         assert_refused(&value, "breg.consent.record-direct-write");
@@ -291,7 +291,7 @@ fn a_consent_record_no_profile_requires_names_the_require_consent_step() {
     let mut value = source();
     value["retiredConsentScopes"] = json!([]);
     for profile in value["accessProfiles"].as_array_mut().unwrap() {
-        for permission in profile["permissions"]["entities"].as_array_mut().unwrap() {
+        for permission in profile["permissions"]["records"].as_array_mut().unwrap() {
             permission.as_object_mut().unwrap().remove("requireConsent");
         }
     }
@@ -312,10 +312,12 @@ fn a_consent_record_no_profile_requires_names_the_require_consent_step() {
             diagnostic.message
         );
     }
-    assert!(!failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code.ends_with("vocabulary.unknown")));
+    assert!(
+        !failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code.ends_with("vocabulary.unknown"))
+    );
 }
 
 #[test]
@@ -342,13 +344,14 @@ fn self_issued_consent_binds_the_subject_through_the_principal_link() {
 
     // The subject must come from the input the link requirement checks.
     let mut value = self_issued_project();
-    value["actions"][1]["requires"] = json!([{"input": "link", "field": "active", "equals": true}]);
+    value["actions"][1]["commitGuards"]["targets"] =
+        json!([{"input": "link", "field": "active", "equals": true}]);
     assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // The link must be active.
     let mut value = self_issued_project();
-    value["actions"][1]["requires"] =
-        json!([{"input": "link", "field": "subject", "equalsInput": "subject"}]);
+    value["actions"][1]["commitGuards"]["targets"] =
+        json!([{"input": "link", "field": "subject", "equalsFromInput": "subject"}]);
     assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // The subject must be set from that input.
@@ -356,13 +359,13 @@ fn self_issued_consent_binds_the_subject_through_the_principal_link() {
     value["actions"][1]["inputs"].as_array_mut().unwrap().push(
         json!({"id": "other", "type": "reference", "target": "person", "required": true, "classification": "restricted"}),
     );
-    value["actions"][1]["effects"][0]["set"]["subject"] = json!({"fromField": "other"});
+    value["actions"][1]["plan"]["effects"][0]["set"]["subject"] = json!({"fromInput": "other"});
     assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // A steward issuer on the same action is accepted without the binding.
     let mut value = self_issued_project();
     value["actions"][1]["consentIssuer"] = json!("steward");
-    value["actions"][1]["requires"] = json!([]);
+    value["actions"][1]["commitGuards"]["targets"] = json!([]);
     compile(&value).unwrap_or_else(|failure| panic!("{:?}", failure.diagnostics()));
 }
 
@@ -378,8 +381,8 @@ fn a_self_issued_actions_link_bound_targets_are_not_registry_wide_findings() {
             .collect::<BTreeSet<_>>()
     };
     let steward = [
-        "actions[id=record-consent].permissions[profile=steward].targets[entity=consent-decision].rowBoundaries",
-        "actions[id=record-consent].permissions[profile=steward].targets[entity=person].rowBoundaries",
+        "actions[id=record-consent].permissions[profile=steward].targets[recordType=consent-decision].rowBoundaries",
+        "actions[id=record-consent].permissions[profile=steward].targets[recordType=person].rowBoundaries",
     ];
     // The compiler proved the subject is the caller's linked subject and the
     // created row carries it, so neither target reaches every row.
@@ -396,20 +399,20 @@ fn a_self_issued_actions_link_bound_targets_are_not_registry_wide_findings() {
     let inputs = value["actions"][1]["inputs"].as_array_mut().unwrap();
     inputs.push(json!({"id": "other", "type": "reference", "target": "person", "required": true, "classification": "restricted"}));
     inputs.push(json!({"id": "district", "type": "string", "maximumLength": 80, "required": true, "classification": "internal"}));
-    value["actions"][1]["effects"]
+    value["actions"][1]["plan"]["effects"]
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "id": "touch", "target": {"fromField": "other"}, "operation": "patch",
-            "set": {"district": {"fromField": "district"}}
+            "id": "touch", "target": {"fromInput": "other"}, "operation": "patch",
+            "set": {"district": {"fromInput": "district"}}
         }));
     let reached = unrestricted(&value);
     assert!(
-        reached.contains("actions[id=withdraw-consent].permissions[profile=consent-self].targets[entity=person].rowBoundaries"),
+        reached.contains("actions[id=withdraw-consent].permissions[profile=consent-self].targets[recordType=person].rowBoundaries"),
         "{reached:?}"
     );
     assert!(
-        !reached.contains("actions[id=withdraw-consent].permissions[profile=consent-self].targets[entity=consent-decision].rowBoundaries"),
+        !reached.contains("actions[id=withdraw-consent].permissions[profile=consent-self].targets[recordType=consent-decision].rowBoundaries"),
         "{reached:?}"
     );
 }
@@ -418,14 +421,14 @@ fn a_self_issued_actions_link_bound_targets_are_not_registry_wide_findings() {
 fn gated_permissions_are_read_only() {
     for operation in ["patch", "create", "tombstone"] {
         let mut value = source();
-        let permission = &mut value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][0];
+        let permission = &mut value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"][0];
         permission["operations"]
             .as_array_mut()
             .unwrap()
             .push(json!(operation));
         permission["writableFields"] = json!(["given-name"]);
         if operation == "tombstone" {
-            value["entities"][PERSON]["tombstone"] = json!(true);
+            value["recordTypes"][PERSON]["tombstone"] = json!(true);
         }
         assert_refused(&value, "breg.consent.require-read-only");
     }
@@ -491,23 +494,23 @@ fn gated_profiles_declare_mapped_requester_clients() {
 fn consent_key_references_the_consent_subject_entity() {
     // on: id on an entity the consent subject does not reference.
     let mut value = source();
-    value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][1]["requireConsent"] =
+    value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"][1]["requireConsent"] =
         json!([{"record": "consent-decision", "on": "id"}]);
     assert_refused(&value, "breg.consent.require-key");
 
     // A non-reference field.
     let mut value = source();
-    value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][1]["requireConsent"] =
+    value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"][1]["requireConsent"] =
         json!([{"record": "consent-decision", "on": "programme"}]);
     assert_refused(&value, "breg.consent.require-key");
 
     // A reference to a different entity.
     let mut value = source();
-    value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"]
+    value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "entity": "household-member", "rowBoundaries": "unrestricted", "operations": ["get"],
+            "recordType": "household-member", "rowBoundaries": "unrestricted", "operations": ["get"],
             "readableFields": ["household"],
             "requireConsent": [{"record": "consent-decision", "on": "household"}]
         }));
@@ -515,23 +518,23 @@ fn consent_key_references_the_consent_subject_entity() {
 
     // An unknown consent record, or an entity that is not one.
     let mut value = source();
-    value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][0]["requireConsent"] =
+    value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"][0]["requireConsent"] =
         json!([{"record": "enrolment", "on": "id"}]);
     assert_refused(&value, "breg.consent.require-key");
 
     // An encrypted key field never parses; `consent::tests` proves the rule.
     let mut value = source();
-    value["entities"][ENROLMENT]["fields"][0]["encrypted"] = json!(true);
+    value["recordTypes"][ENROLMENT]["fields"][0]["encrypted"] = json!(true);
     assert_unparseable(&value);
 }
 
 #[test]
 fn gated_permissions_refuse_spatial_queries() {
     let mut value = source();
-    value["entities"][PERSON]["fields"].as_array_mut().unwrap().push(
+    value["recordTypes"][PERSON]["fields"].as_array_mut().unwrap().push(
         json!({"id": "location", "type": "crs84-point", "precision": 4, "classification": "internal"}),
     );
-    let permission = &mut value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][0];
+    let permission = &mut value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"][0];
     permission["readableFields"] = json!(["given-name", "district", "location"]);
     permission["spatialQueries"] =
         json!({"bbox": {"maximumLongitudeSpanDegrees": 1, "maximumLatitudeSpanDegrees": 1}});
@@ -541,7 +544,7 @@ fn gated_permissions_refuse_spatial_queries() {
 #[test]
 fn gated_permissions_refuse_data_export() {
     let mut value = source();
-    value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][0]["allowDataExport"] =
+    value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"][0]["allowDataExport"] =
         json!(true);
     assert_refused(&value, "breg.consent.require-export-unsupported");
 }
@@ -549,44 +552,44 @@ fn gated_permissions_refuse_data_export() {
 #[test]
 fn read_paths_cannot_reach_a_gated_entity() {
     let mut value = source();
-    value["entities"][PERSON]
+    value["recordTypes"][PERSON]
         .as_object_mut()
         .unwrap()
         .remove("readPaths");
-    value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][0]
+    value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"][0]
         .as_object_mut()
         .unwrap()
         .remove("readPaths");
-    value["entities"][HOUSEHOLD]["readPaths"] = json!([
+    value["recordTypes"][HOUSEHOLD]["readPaths"] = json!([
         {"id": "members", "through": "household-member", "to": "person", "route": "members"}
     ]);
-    value["accessProfiles"][STEWARD]["permissions"]["entities"][1]["readPaths"] =
+    value["accessProfiles"][STEWARD]["permissions"]["records"][1]["readPaths"] =
         json!([{"path": "members", "readableFields": ["given-name"]}]);
     assert_refused(&value, "breg.consent.require-read-path-target");
 
     // Nor pass through one.
     let mut value = source();
-    value["entities"][HOUSEHOLD_MEMBER]["fields"][0]["target"] = json!("enrolment");
-    value["entities"][HOUSEHOLD]["readPaths"] = json!([
+    value["recordTypes"][HOUSEHOLD_MEMBER]["fields"][0]["target"] = json!("enrolment");
+    value["recordTypes"][HOUSEHOLD]["readPaths"] = json!([
         {"id": "enrolments", "through": "household-member", "to": "enrolment", "route": "enrolments"}
     ]);
-    value["entities"][PERSON]
+    value["recordTypes"][PERSON]
         .as_object_mut()
         .unwrap()
         .remove("readPaths");
-    value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"][0]
+    value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"][0]
         .as_object_mut()
         .unwrap()
         .remove("readPaths");
-    value["accessProfiles"][FOOD_TARGETING]["permissions"]["entities"]
+    value["accessProfiles"][FOOD_TARGETING]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "entity": "household-member", "rowBoundaries": "unrestricted", "operations": ["get"],
+            "recordType": "household-member", "rowBoundaries": "unrestricted", "operations": ["get"],
             "readableFields": ["household"],
             "requireConsent": [{"record": "consent-decision", "on": "id"}]
         }));
-    value["accessProfiles"][STEWARD]["permissions"]["entities"][1]["readPaths"] =
+    value["accessProfiles"][STEWARD]["permissions"]["records"][1]["readPaths"] =
         json!([{"path": "enrolments", "readableFields": ["programme"]}]);
     assert_refused(&value, "breg.consent.require-read-path-target");
 }
@@ -685,34 +688,34 @@ fn an_organization_belongs_to_at_most_63_groups() {
 fn the_recipient_claim_binds_only_the_consent_feed() {
     // Not on another field.
     let mut value = source();
-    value["accessProfiles"][FEED]["permissions"]["entities"][0]["rowBoundaries"] =
+    value["accessProfiles"][FEED]["permissions"]["records"][0]["rowBoundaries"] =
         json!([{"field": "purpose", "claim": "registry:recipients", "operator": "in"}]);
     assert_refused(&value, "breg.consent.feed-claim");
 
     // Not with equals.
     let mut value = source();
-    value["accessProfiles"][FEED]["permissions"]["entities"][0]["rowBoundaries"] =
+    value["accessProfiles"][FEED]["permissions"]["records"][0]["rowBoundaries"] =
         json!([{"field": "recipient", "claim": "registry:recipients", "operator": "equals"}]);
     assert_refused(&value, "breg.consent.feed-claim");
 
     // Not on a non-consent entity.
     let mut value = source();
-    value["accessProfiles"][FEED]["permissions"]["entities"]
+    value["accessProfiles"][FEED]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "entity": "household", "operations": ["get"], "readableFields": ["label"],
+            "recordType": "household", "operations": ["get"], "readableFields": ["label"],
             "rowBoundaries": [{"field": "label", "claim": "registry:recipients", "operator": "in"}]
         }));
     assert_refused(&value, "breg.consent.feed-claim");
 
     // Not beyond get and list.
     let mut value = source();
-    value["accessProfiles"][FEED]["permissions"]["entities"][0]["operations"] =
+    value["accessProfiles"][FEED]["permissions"]["records"][0]["operations"] =
         json!(["get", "list", "lookup"]);
-    value["entities"][CONSENT]["selectorProfiles"] =
+    value["recordTypes"][CONSENT]["selectorProfiles"] =
         json!([{"id": "subject", "fields": ["subject"]}]);
-    value["accessProfiles"][FEED]["permissions"]["entities"][0]["lookups"] =
+    value["accessProfiles"][FEED]["permissions"]["records"][0]["lookups"] =
         json!([{"selector": "subject", "valueOrigin": "request"}]);
     assert_refused(&value, "breg.consent.feed-claim");
 
@@ -724,7 +727,7 @@ fn the_recipient_claim_binds_only_the_consent_feed() {
 
     // The synthesized decision claim is never authored.
     let mut value = source();
-    value["accessProfiles"][FEED]["permissions"]["entities"][0]["rowBoundaries"] = json!([
+    value["accessProfiles"][FEED]["permissions"]["records"][0]["rowBoundaries"] = json!([
         {"field": "recipient", "claim": "registry:recipients", "operator": "in"},
         {"field": "decision", "claim": "registry:consent-decisions:consent-decision", "operator": "in"}
     ]);
@@ -737,7 +740,7 @@ fn the_recipient_claim_binds_only_the_consent_feed() {
 
     // Nor wherever else a project names a verified claim.
     reserved_claims_never_select_lookup_values();
-    reserved_claims_never_bound_change_request_grants();
+    reserved_claims_never_bound_action_grants();
 }
 
 /// Every diagnostic a variant raises, as `(code, path)` pairs, so a test can
@@ -764,12 +767,12 @@ fn assert_only_reserved_claim_refusal(value: &Value, path: &str) {
 /// from a verified claim.
 fn consent_claim_lookup(field: &str, claim: &str) -> Value {
     let mut value = source();
-    value["entities"][CONSENT]["selectorProfiles"] = json!([{"id": field, "fields": [field]}]);
+    value["recordTypes"][CONSENT]["selectorProfiles"] = json!([{"id": field, "fields": [field]}]);
     value["accessProfiles"].as_array_mut().unwrap().push(json!({
         "id": "claim-lookup", "principalClaim": "principal", "actorKind": "service",
         "requesterClients": ["wfp-scope"], "requiredScopes": ["consent:read"],
-        "permissions": {"entities": [{
-            "entity": "consent-decision", "operations": ["lookup"],
+        "permissions": {"records": [{
+            "recordType": "consent-decision", "operations": ["lookup"],
             "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": "unrestricted",
             "lookups": [{"selector": field, "valueOrigin": "verified-claim", "claimMapping": {field: claim}}]
         }]}
@@ -786,17 +789,17 @@ fn reserved_claims_never_select_lookup_values() {
     // without the feed's decision bound that hides refusals.
     assert_only_reserved_claim_refusal(
         &consent_claim_lookup("recipient", "registry:recipients"),
-        "entities[id=consent-decision].accessProfiles[id=claim-lookup].lookups[selector=recipient].claimMapping",
+        "recordTypes[id=consent-decision].accessProfiles[id=claim-lookup].lookups[selector=recipient].claimMapping",
     );
     assert_only_reserved_claim_refusal(
         &consent_claim_lookup("decision", "registry:consent-decisions:consent-decision"),
-        "entities[id=consent-decision].accessProfiles[id=claim-lookup].lookups[selector=decision].claimMapping",
+        "recordTypes[id=consent-decision].accessProfiles[id=claim-lookup].lookups[selector=decision].claimMapping",
     );
 
     // Nor on an entity that is not a consent record.
     let person_lookup = |claim: &str| {
         let mut value = source();
-        let grant = &mut value["accessProfiles"][STEWARD]["permissions"]["entities"][0];
+        let grant = &mut value["accessProfiles"][STEWARD]["permissions"]["records"][0];
         grant["operations"] = json!(["create", "get", "patch", "lookup"]);
         grant["lookups"] = json!([{
             "selector": "given-name", "valueOrigin": "verified-claim",
@@ -808,69 +811,28 @@ fn reserved_claims_never_select_lookup_values() {
         .unwrap_or_else(|failure| panic!("{:?}", failure.diagnostics()));
     assert_only_reserved_claim_refusal(
         &person_lookup("registry:consent-decisions:consent-decision"),
-        "entities[id=person].accessProfiles[id=steward].lookups[selector=given-name].claimMapping",
+        "recordTypes[id=person].accessProfiles[id=steward].lookups[selector=given-name].claimMapping",
     );
 }
 
-/// A change request whose apply and presence grants bound rows by `claim`.
-fn change_request_project(apply_claim: &str, presence_claim: &str) -> Value {
-    json!({
-        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
-        "kind": "BRegProject",
-        "project": {"id": "reserved-claims", "version": "1", "defaultLanguage": "en",
-                     "canonicalBaseIri": "https://authoring.example.test"},
-        "entities": [{
-            "id": "asset", "primaryDataset": "test-dataset", "route": "assets",
-            "mutationMode": "mutable", "changeControl": {"requiredFor": ["patch"]},
-            "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}]
-        }, {
-            "id": "asset-request", "primaryDataset": "test-dataset", "route": "asset-requests",
-            "mutationMode": "mutable",
-            "fields": [
-                {"id": "asset", "type": "reference", "target": "asset", "required": true, "classification": "internal"},
-                {"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}
-            ],
-            "changeRequest": {
-                "effects": [{"id": "apply-label", "target": {"fromField": "asset"}, "operation": "patch",
-                             "set": {"label": {"fromField": "label"}}}],
-                "review": {"type": "required", "authority": "casework-main", "policyId": "request-review"},
-                "onApproved": {"mode": "manual"}
-            }
-        }],
-        "accessProfiles": [{
-            "id": "asset-reader", "principalClaim": "principal", "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "asset", "operations": ["get"], "readableFields": ["label"],
-                "rowBoundaries": "unrestricted",
-                "requestPresence": [{"requestType": "asset-request", "rowBoundaries": [
-                    {"field": "label", "claim": presence_claim, "operator": "in"}
-                ]}]
-            }]}
-        }, {
-            "id": "reviewer", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "asset-request", "operations": ["get", "submit-request", "apply-request"],
-                "readableFields": ["asset", "label"], "writableFields": ["asset", "label"],
-                "rowBoundaries": "unrestricted",
-                "applyTargets": [{"entity": "asset", "rowBoundaries": [
-                    {"field": "label", "claim": apply_claim, "operator": "in"}
-                ]}]
-            }]}
-        }]
-    })
-}
-
-fn reserved_claims_never_bound_change_request_grants() {
-    compile(&change_request_project("labels", "labels"))
-        .unwrap_or_else(|failure| panic!("{:?}", failure.diagnostics()));
-    assert_only_reserved_claim_refusal(
-        &change_request_project("registry:recipients", "labels"),
-        "entities[id=asset-request].accessProfiles[id=reviewer].applyTargets[entity=asset].rowBoundaries",
-    );
-    assert_only_reserved_claim_refusal(
-        &change_request_project("labels", "registry:consent-decisions:asset-request"),
-        "entities[id=asset].accessProfiles[id=asset-reader].requestPresence[requestType=asset-request].rowBoundaries",
-    );
+/// Action target grants cannot use synthesized consent claims as authority.
+fn reserved_claims_never_bound_action_grants() {
+    let target = |claim: &str| {
+        let mut value = source();
+        value["accessProfiles"][STEWARD]["permissions"]["actions"][0]["targets"][0]["rowBoundaries"] =
+            json!([{"field":"district", "claim":claim, "operator":"in"}]);
+        value
+    };
+    compile(&target("districts")).unwrap();
+    for claim in [
+        "registry:recipients",
+        "registry:consent-decisions:consent-decision",
+    ] {
+        assert_only_reserved_claim_refusal(
+            &target(claim),
+            "project.accessProfiles[].permissions.actions[record-consent].targets[].rowBoundaries",
+        );
+    }
 }
 
 #[cfg(feature = "runtime")]
@@ -882,7 +844,7 @@ mod startup {
     };
     use registry_platform_httputil::FetchUrlPolicy;
     use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-    use registry_platform_testing::{oidc_verifier_config, MockIdp};
+    use registry_platform_testing::{MockIdp, oidc_verifier_config};
     use serde_json::json;
 
     use super::consent_fixture::{compile, source};
@@ -983,10 +945,10 @@ fn a_consent_record_needs_declared_recipients() {
 
 #[cfg(feature = "runtime")]
 #[test]
-fn adding_a_recipient_migrates_the_issuing_action_without_review() {
+fn adding_a_recipient_requires_review_of_the_frozen_issuing_action() {
     use registry_breg::package::{
-        change_set_to_applicable_migration_plan, compiled_registry_change_set,
         CompiledRegistryChangeClass, CompiledRegistryChangeCode,
+        change_set_to_applicable_migration_plan, compiled_registry_change_set,
     };
     let before = compile(&source()).unwrap();
     let mut added = source();
@@ -1008,29 +970,30 @@ fn adding_a_recipient_migrates_the_issuing_action_without_review() {
         .collect::<Vec<_>>();
     assert!(
         codes.contains(&(
-            CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
-            CompiledRegistryChangeClass::CompatibleAdditive
+            CompiledRegistryChangeCode::ActionChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange
         )),
         "{codes:?}"
     );
     assert!(
-        !codes
-            .iter()
-            .any(|(code, _)| *code == CompiledRegistryChangeCode::ActionChanged),
+        codes.iter().any(|(code, class)| *code
+            == CompiledRegistryChangeCode::FieldVocabularyCodesAdded
+            && *class == CompiledRegistryChangeClass::CompatibleAdditive),
         "{codes:?}"
     );
-    assert!(change_set_to_applicable_migration_plan(&changes).is_ok());
+    assert!(change_set_to_applicable_migration_plan(&changes).is_err());
 
-    // Any other contract difference beside the added code stays a reviewed
-    // action change.
+    // Changing the authored API name also changes the frozen Action.
     let mut renamed = added.clone();
     renamed["actions"][0]["inputs"][6]["apiName"] = json!("expiry");
     let renamed = compile(&renamed).unwrap();
     let changes = compiled_registry_change_set(&before, &renamed, "prior-package");
-    assert!(changes
-        .changes
-        .iter()
-        .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged));
+    assert!(
+        changes
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged)
+    );
     assert!(change_set_to_applicable_migration_plan(&changes).is_err());
 }
 
@@ -1063,8 +1026,8 @@ fn change_codes(
 #[test]
 fn a_recipient_client_change_is_a_metadata_only_access_change() {
     use registry_breg::package::{
-        change_set_to_applicable_migration_plan, CompiledRegistryChangeClass,
-        CompiledRegistryChangeCode, CompiledRegistryChangeTargetKind,
+        CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryChangeTargetKind,
+        change_set_to_applicable_migration_plan,
     };
     let mut added = source();
     added["recipients"]["organizations"][2]["clients"] = json!(["ngo-beta-portal"]);
@@ -1090,8 +1053,8 @@ fn a_recipient_client_change_is_a_metadata_only_access_change() {
 #[test]
 fn a_group_membership_change_is_a_metadata_only_access_change() {
     use registry_breg::package::{
-        change_set_to_applicable_migration_plan, CompiledRegistryChangeClass,
-        CompiledRegistryChangeCode,
+        CompiledRegistryChangeClass, CompiledRegistryChangeCode,
+        change_set_to_applicable_migration_plan,
     };
     let mut widened = source();
     widened["recipients"]["groups"][0]["members"] = json!(["wfp", "ngo-alpha", "ngo-beta"]);
@@ -1104,10 +1067,12 @@ fn a_group_membership_change_is_a_metadata_only_access_change() {
             Some("referral-network".to_owned()),
         )]
     );
-    assert!(change_set_to_applicable_migration_plan(&changes)
-        .unwrap()
-        .statements
-        .is_empty());
+    assert!(
+        change_set_to_applicable_migration_plan(&changes)
+            .unwrap()
+            .statements
+            .is_empty()
+    );
 }
 
 #[cfg(feature = "runtime")]
@@ -1152,7 +1117,7 @@ fn added_and_removed_recipients_carry_their_own_codes() {
 fn a_changed_maximum_duration_is_a_consent_record_change() {
     use registry_breg::package::{CompiledRegistryChangeClass, CompiledRegistryChangeCode};
     let mut raised = source();
-    raised["entities"][CONSENT]["consentRecord"]["validity"]["maximumDurationDays"] = json!(730);
+    raised["recordTypes"][CONSENT]["consentRecord"]["validity"]["maximumDurationDays"] = json!(730);
     let (_, codes) = change_codes(&source(), &raised);
     assert_eq!(
         codes,
@@ -1234,8 +1199,8 @@ fn package_request(
 #[test]
 fn a_predecessor_package_carries_its_recipients_into_a_metadata_only_successor() {
     use registry_breg::package::{
-        load_predecessor_package, prepare_package, CompiledRegistryChangeCode,
-        CompiledRegistryMigrationBaseline, PackageLoadContext, PackageMigrationPlanInput,
+        CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline, PackageLoadContext,
+        PackageMigrationPlanInput, load_predecessor_package, prepare_package,
     };
     let prepared = prepare_package(package_request(
         &source(),
@@ -1292,9 +1257,9 @@ fn package_sealed_with_an_earlier_duration(
     iso: &str,
     components: [u32; 7],
 ) {
-    use registry_breg::package::{prepare_package, PackageMigrationPlanInput};
+    use registry_breg::package::{PackageMigrationPlanInput, prepare_package};
     use registry_platform_canonical_json::canonicalize_json;
-    use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
+    use registry_platform_config::package::{PackageLimits, SUM_FILE, write_sum_file};
     use sha2::{Digest, Sha256};
     use std::fs;
 
@@ -1310,7 +1275,7 @@ fn package_sealed_with_an_earlier_duration(
     let model_path = "effective-model.json";
     let mut model: Value =
         serde_json::from_slice(&fs::read(root.join(model_path)).unwrap()).unwrap();
-    let record = model["entities"]["consent-decision"]["consentRecord"]
+    let record = model["recordTypes"]["consent-decision"]["consentRecord"]
         .as_object_mut()
         .unwrap();
     assert_eq!(record.remove("maximumDurationDays"), Some(json!(365)));
@@ -1326,7 +1291,7 @@ fn package_sealed_with_an_earlier_duration(
     let source_path = "source/registry.yaml";
     let mut project: Value =
         serde_json::from_slice(&fs::read(root.join(source_path)).unwrap()).unwrap();
-    let validity = project["entities"]
+    let validity = project["recordTypes"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -1377,7 +1342,7 @@ fn package_sealed_with_an_earlier_duration(
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 #[test]
 fn a_package_sealed_with_a_max_duration_member_is_refused() {
-    use registry_breg::package::{load_package, load_predecessor_package, PackageLoadContext};
+    use registry_breg::package::{PackageLoadContext, load_package, load_predecessor_package};
     let directory = tempfile::tempdir().unwrap();
     // The package writer refuses symlinked ancestors such as macOS /var.
     let root = directory.path().canonicalize().unwrap().join("package");
@@ -1513,8 +1478,8 @@ fn a_client_reading_a_gated_entity_through_an_ungated_profile_is_a_finding() {
             .map(|(path, _)| path.as_str())
             .collect::<Vec<_>>(),
         [
-            "entities[id=enrolment].accessProfiles[id=steward].requesterClients",
-            "entities[id=person].accessProfiles[id=steward].requesterClients",
+            "recordTypes[id=enrolment].accessProfiles[id=steward].requesterClients",
+            "recordTypes[id=person].accessProfiles[id=steward].requesterClients",
         ]
     );
     assert!(unrestricted[0].1.contains("any client"), "{unrestricted:?}");
@@ -1551,11 +1516,11 @@ fn a_profile_that_only_writes_or_invokes_on_a_gated_entity_is_not_an_ungated_cli
     // A create response echoes only the row the caller just wrote, so a
     // create-only permission reads no existing row without consent.
     let mut create_only = source();
-    for permission in create_only["accessProfiles"][STEWARD]["permissions"]["entities"]
+    for permission in create_only["accessProfiles"][STEWARD]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
     {
-        if permission["entity"] == "person" || permission["entity"] == "enrolment" {
+        if permission["recordType"] == "person" || permission["recordType"] == "enrolment" {
             permission["operations"] = json!(["create"]);
         }
     }
@@ -1563,27 +1528,27 @@ fn a_profile_that_only_writes_or_invokes_on_a_gated_entity_is_not_an_ungated_cli
 
     // A patch answers with an existing row, so it still reads without consent.
     let mut patching = create_only.clone();
-    for permission in patching["accessProfiles"][STEWARD]["permissions"]["entities"]
+    for permission in patching["accessProfiles"][STEWARD]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
     {
-        if permission["entity"] == "person" {
+        if permission["recordType"] == "person" {
             permission["operations"] = json!(["create", "patch"]);
         }
     }
     assert_eq!(
         findings(&patching),
-        ["entities[id=person].accessProfiles[id=steward].requesterClients"]
+        ["recordTypes[id=person].accessProfiles[id=steward].requesterClients"]
     );
 
     // An action target with empty row boundaries on the gated entity only
     // lets the action reference a row; it reads nothing through the profile.
     let mut self_issued = self_issued_project();
-    for permission in self_issued["accessProfiles"][STEWARD]["permissions"]["entities"]
+    for permission in self_issued["accessProfiles"][STEWARD]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
     {
-        if permission["entity"] == "person" || permission["entity"] == "enrolment" {
+        if permission["recordType"] == "person" || permission["recordType"] == "enrolment" {
             permission["operations"] = json!(["create"]);
         }
     }

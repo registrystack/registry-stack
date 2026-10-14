@@ -131,6 +131,7 @@ async fn the_tool_listing_never_offers_the_target_or_owner() {
             "describe_service",
             "get_application_status",
             "get_my_details",
+            "list_applications",
             "prepare_review",
             "start_application",
             "update_application",
@@ -254,8 +255,8 @@ async fn a_smuggled_target_is_never_written() {
         );
         if seen.method == reqwest::Method::POST {
             creates += 1;
-            assert_eq!(body["data"]["address"], ADDRESS_B);
-            assert_eq!(body["data"]["owner"], CITIZEN_B);
+            assert_eq!(body["input"]["address"], ADDRESS_B);
+            assert!(body["input"].get("owner").is_none());
         }
     }
     assert_eq!(creates, 1);

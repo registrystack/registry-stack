@@ -7,16 +7,16 @@ mod postgres_harness;
 
 use postgres_harness::TestDatabase;
 use registry_breg::{
+    CompiledRegistry,
     action_evidence_maintenance::ActionEvidenceRetentionOperatorService,
-    compiler::{compile_project_with_assets, CompileProfile},
-    contract::{parse_project_yaml, ModuleAssetSource},
+    compiler::{CompileProfile, compile_project_with_assets},
+    contract::{ModuleAssetSource, parse_project_yaml},
     mutation::MutationError,
     postgres::{
-        initialize_compiled_registry_state_for_test, install_compiled_schema, ConnectionConfig,
-        ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
-        RegistryStateTestIdentity,
+        ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
+        RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+        install_compiled_schema,
     },
-    CompiledRegistry,
 };
 use std::{sync::Arc, time::Duration};
 
@@ -299,7 +299,10 @@ async fn retention_refuses_misbound_database_with_identical_roles_and_catalog_dr
     );
     sentinel(&other).await;
     let wrong = service(&original, &registry, &expected, other_connection.clone());
-    assert!(wrong.erase_expired(cutoff()).await.is_err(), "a verified runtime identity cannot authorize deletion in another database sharing its role names");
+    assert!(
+        wrong.erase_expired(cutoff()).await.is_err(),
+        "a verified runtime identity cannot authorize deletion in another database sharing its role names"
+    );
     assert_eq!(count(&other).await, 1);
     assert_retention_audited(&original, &[("failed", None)]);
     let correct = service(&original, &registry, &other_expected, other_connection);
@@ -454,17 +457,28 @@ async fn retention_serializes_activation_and_holds_identity_lock_through_deletio
         registry_breg::postgres::test_activation_id("retention-1")
     );
     for change in [
-        format!("UPDATE registry_internal.registry_state SET active_activation_id='{successor_activation}' WHERE singleton"),
-        format!("UPDATE registry_internal.registry_state SET maintenance_status='failed', maintenance_target_package_digest='{successor_digest}' WHERE singleton"),
+        format!(
+            "UPDATE registry_internal.registry_state SET active_activation_id='{successor_activation}' WHERE singleton"
+        ),
+        format!(
+            "UPDATE registry_internal.registry_state SET maintenance_status='failed', maintenance_target_package_digest='{successor_digest}' WHERE singleton"
+        ),
     ] {
         database.admin.batch_execute("BEGIN").await.unwrap();
-        database.admin.execute("SELECT pg_advisory_xact_lock($1)", &[&key]).await.unwrap();
+        database
+            .admin
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&key])
+            .await
+            .unwrap();
         let task_operator = operator.clone();
         let erase = tokio::spawn(async move { task_operator.erase_expired(cutoff()).await });
         wait_for_lock(&database).await;
         database.admin.batch_execute(&change).await.unwrap();
         database.admin.batch_execute("COMMIT").await.unwrap();
-        assert!(erase.await.unwrap().is_err(), "authority must be checked after the activation lock wait");
+        assert!(
+            erase.await.unwrap().is_err(),
+            "authority must be checked after the activation lock wait"
+        );
         assert_eq!(count(&database).await, 1);
         database.admin.batch_execute(&restore).await.unwrap();
     }

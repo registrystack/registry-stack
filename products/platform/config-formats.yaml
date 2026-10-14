@@ -97,11 +97,11 @@ formats:
     conformance:
       requiredText: /project/id
       optionalText: /manifestProjection/catalog/description
-      integer: /entities/0/batch/maximumItems
+      integer: /recordTypes/0/batch/maximumItems
       boolean: /accessProfiles/0/default
-      idList: /entities
+      idList: /recordTypes
       set: /accessProfiles/0/requiredPurposes
-      reference: /accessProfiles/0/permissions/entities/0/entity
+      reference: /accessProfiles/0/permissions/records/0/recordType
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
         whenOmitted: refused
@@ -109,9 +109,9 @@ formats:
         whenOmitted: open
       - pointer: /accessProfiles/*/requesterClients
         whenOmitted: open
-      - pointer: /entities/*/accessRequirements/requiredScopes
+      - pointer: /recordTypes/*/accessRequirements/requiredScopes
         whenOmitted: open
-    restrictingMembers: [/accessProfiles/*/requiredScopes, /accessProfiles/*/requiredPurposes, /accessProfiles/*/requesterClients, /entities/*/accessRequirements/requiredScopes]
+    restrictingMembers: [/accessProfiles/*/requiredScopes, /accessProfiles/*/requiredPurposes, /accessProfiles/*/requesterClients, /recordTypes/*/accessRequirements/requiredScopes]
   - id: breg/module
     product: breg
     title: Registry module
@@ -316,7 +316,7 @@ formats:
       function: parse_package_envelope
       type: PackageEnvelope
     check: bregctl check --package {package}
-    example: crates/registry-breg/tests/fixtures/person-registration-rhai-package/package.json
+    example: crates/registry-breg/tests/fixtures/native-minimal-package/package.json
     conformance:
       requiredText: /manifest/packageId
       optionalText: none
@@ -943,36 +943,6 @@ formats:
       symbol: ACTIONS_EXPLANATION
     check: none
     example: products/breg/examples/formats/explain/actions-explanation.json
-    conformance: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: breg/change-requests-explanation
-    product: breg
-    title: bregctl explain output (ChangeRequestsExplanation)
-    files: []
-    syntax: json
-    audience: generated
-    stability: promised
-    current:
-      apiVersion: id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4
-      kind: BRegChangeRequestsExplanation
-      checkedBy:
-        file: crates/registry-bregctl/src/lib.rs
-        symbol: CHANGE_REQUESTS_EXPLANATION
-    target:
-      apiVersion: id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4
-      kind: BRegChangeRequestsExplanation
-    schema:
-      path: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha4.schema.json
-      origin: hand-written
-      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
-    reader: none
-    emittedBy:
-      file: crates/registry-bregctl/src/lib.rs
-      symbol: CHANGE_REQUESTS_EXPLANATION
-    check: none
-    example: products/breg/examples/formats/explain/change-requests-explanation.json
     conformance: none
     securityMembers: []
     restrictingMembers: []

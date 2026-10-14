@@ -13,26 +13,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, Response, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
-use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_json, ModuleAssetSource};
+use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
+use registry_breg::contract::{ModuleAssetSource, parse_project_json};
 use registry_breg::cursor::CursorCodec;
-use registry_breg::history_schema::{serialize_descriptor, HistorySchemaDescriptor};
+use registry_breg::history_schema::{HistorySchemaDescriptor, serialize_descriptor};
 use registry_breg::postgres::{
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, PostgresRecordReadService, PostgresSnapshotReadService,
-    RegistryLockKey, RegistryStateTestIdentity,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordReadService,
+    PostgresSnapshotReadService, RegistryLockKey, RegistryStateTestIdentity,
+    initialize_registry_state_for_catalog_test, install_compiled_schema,
 };
 use registry_breg_client::{BRegRecordOptions, BRegSnapshotListRequest};
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_postgres::{Client, Transaction};
 use tower::Service as _;
 use uuid::Uuid;
@@ -291,10 +291,12 @@ async fn snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional
     )
     .await;
     assert_eq!(before_start.status(), StatusCode::OK);
-    assert!(body_json(before_start).await["items"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        body_json(before_start).await["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     let before_end = send(
         &app,
@@ -319,10 +321,12 @@ async fn snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional
     )
     .await;
     assert_eq!(end_exclusive.status(), StatusCode::OK);
-    assert!(body_json(end_exclusive).await["items"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        body_json(end_exclusive).await["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     let no_valid_at = send(
         &app,
@@ -996,11 +1000,11 @@ fn compiled_timestamp_registry() -> registry_breg::CompiledRegistry {
 }
 
 fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::CompiledRegistry {
-    let project = r#"{
+    let project = r#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"history-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
         "fields":[
           {"id":"household-code","type":"string","minimumLength":2,"maximumLength":32,"required":true,"classification":"internal"},
@@ -1018,16 +1022,16 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
       "accessProfiles":[{
         "id":"historian","default":true,"principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-        "permissions":{"entities":[{
-          "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note","member-count"],
+        "permissions":{"records":[{
+          "recordType":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note","member-count"],
           "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
         }]}
       },{
         "id":"archivist","principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-        "permissions":{"entities":[{
-          "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note"],
+        "permissions":{"records":[{
+          "recordType":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note"],
           "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries": "unrestricted"
         }]}

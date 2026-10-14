@@ -26,14 +26,14 @@
 use std::time::Duration;
 
 use registry_platform_audit::{AuditEntry, AuditProfile, AuditRequest};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::audit::RegistryAudit;
 use crate::history_maintenance::profile_is_keyed;
 
 use crate::migration::{
-    compiler_statement_checksums, package_ledger_entry, target_package_identity,
-    verify_successor_package_binding, ApplyRoles, MigrationError,
+    ApplyRoles, MigrationError, compiler_statement_checksums, package_ledger_entry,
+    target_package_identity, verify_successor_package_binding,
 };
 use crate::package::VerifiedPackage;
 use crate::postgres::{
@@ -97,6 +97,8 @@ pub struct ReconcileRequest<'a> {
     /// that transition is recorded through.
     pub audit: ReconcileAudit<'a>,
     pub operator_reference: &'a str,
+    pub proposal_activation_compatibility_inventory:
+        Option<&'a crate::proposal_retention::ProposalActivationCompatibilityInventory>,
 }
 
 /// What a reconciliation holds of the audit journal, which also decides
@@ -206,7 +208,7 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::FieldPatternSyntax { .. }
             | PostgresKernelError::FieldPatternExistingRows { .. }
             | PostgresKernelError::FieldEncryptionBlindCollision { .. }
-            | PostgresKernelError::FieldEncryptionRetainedRequestSnapshots { .. } => {
+            | PostgresKernelError::FieldEncryptionRetainedProposalSnapshots { .. } => {
                 Self::InvalidInput
             }
             PostgresKernelError::Connection
@@ -235,8 +237,8 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::FieldPatternSyntax { .. }
             | MigrationError::FieldPatternExistingRows { .. }
             | MigrationError::FieldEncryptionLookupCollision { .. }
-            | MigrationError::FieldEncryptionRetainedRequestSnapshots { .. }
-            | MigrationError::ActiveRequestProposals
+            | MigrationError::FieldEncryptionRetainedProposalSnapshots { .. }
+            | MigrationError::ActiveProposalRecoveryUnavailable
             | MigrationError::BackupEvidence
             | MigrationError::BackupBindingDocument(_)
             | MigrationError::ActivationAuditIncomplete
@@ -406,6 +408,8 @@ async fn reconcile_under_lock(
             let mut attempt = begin_request(audit, request, target, ledger, "completed").await?;
             let transition = connection
                 .activate_verified_package(
+                    request.target_package.registry(),
+                    request.proposal_activation_compatibility_inventory,
                     Some(request.current),
                     target,
                     MaintenanceTransition {
@@ -858,16 +862,20 @@ mod tests {
     fn timeouts_stay_inside_their_bounds() {
         assert!(ReconcileTimeouts::new(Duration::ZERO, Duration::from_secs(1)).is_err());
         assert!(ReconcileTimeouts::new(Duration::from_secs(1), Duration::ZERO).is_err());
-        assert!(ReconcileTimeouts::new(
-            MAX_LOCK_TIMEOUT + Duration::from_secs(1),
-            MAX_STATEMENT_TIMEOUT
-        )
-        .is_err());
-        assert!(ReconcileTimeouts::new(
-            MAX_LOCK_TIMEOUT,
-            MAX_STATEMENT_TIMEOUT + Duration::from_secs(1)
-        )
-        .is_err());
+        assert!(
+            ReconcileTimeouts::new(
+                MAX_LOCK_TIMEOUT + Duration::from_secs(1),
+                MAX_STATEMENT_TIMEOUT
+            )
+            .is_err()
+        );
+        assert!(
+            ReconcileTimeouts::new(
+                MAX_LOCK_TIMEOUT,
+                MAX_STATEMENT_TIMEOUT + Duration::from_secs(1)
+            )
+            .is_err()
+        );
         assert!(ReconcileTimeouts::new(MAX_LOCK_TIMEOUT, MAX_STATEMENT_TIMEOUT).is_ok());
     }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `init --template <ID>`: one of the shipped starter registry projects.
 //!
-//! Each starter under `products/breg/starters/<id>/core` is an ordinary
+//! Each starter under `products/breg/examples/refactor/` is an ordinary
 //! authored BReg project checked in to the repository. This module embeds
 //! those files verbatim at compile time, so `init --template` writes an
 //! unmodified copy of the checked-in project without reading the source tree
@@ -27,303 +27,23 @@ struct Starter {
 
 const STARTERS: &[Starter] = &[
     Starter {
-        id: "professional-licences",
-        files: &[
-            (
-                "ATTRIBUTION.md",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/ATTRIBUTION.md"
-                ),
-            ),
-            (
-                "dev-clients.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/dev-clients.yaml"
-                ),
-            ),
-            (
-                "examples/inputs/first-record.json",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/examples/inputs/first-record.json"
-                ),
-            ),
-            (
-                "examples/inputs/reviewed-change.json",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/examples/inputs/reviewed-change.json"
-                ),
-            ),
-            (
-                "examples/inputs/starter-data.json",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/examples/inputs/starter-data.json"
-                ),
-            ),
-            (
-                "examples/scenarios.json",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/examples/scenarios.json"
-                ),
-            ),
-            (
-                "MODEL.md",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/MODEL.md"
-                ),
-            ),
-            (
-                "PUBLICSCHEMA-LICENSE.txt",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/PUBLICSCHEMA-LICENSE.txt"
-                ),
-            ),
-            (
-                "registry.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/registry.yaml"
-                ),
-            ),
-            (
-                "starter-template.json",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/starter-template.json"
-                ),
-            ),
-            (
-                "tests/journeys.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/tests/journeys.yaml"
-                ),
-            ),
-            (
-                "tests/security-journeys.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/professional-licences/core/tests/security-journeys.yaml"
-                ),
-            ),
-        ],
+        id: "minimal-directory",
+        files: &[(
+            "registry.yaml",
+            include_bytes!("../../../products/breg/examples/refactor/minimal/registry.yaml"),
+        )],
     },
     Starter {
-        id: "agricultural-holdings",
+        id: "facility-registry",
         files: &[
             (
-                "ATTRIBUTION.md",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/ATTRIBUTION.md"
-                ),
-            ),
-            (
-                "dev-clients.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/dev-clients.yaml"
-                ),
-            ),
-            (
-                "examples/inputs/first-record.json",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/examples/inputs/first-record.json"
-                ),
-            ),
-            (
-                "examples/inputs/reviewed-change.json",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/examples/inputs/reviewed-change.json"
-                ),
-            ),
-            (
-                "examples/inputs/starter-data.json",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/examples/inputs/starter-data.json"
-                ),
-            ),
-            (
-                "examples/scenarios.json",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/examples/scenarios.json"
-                ),
-            ),
-            (
-                "MODEL.md",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/MODEL.md"
-                ),
-            ),
-            (
-                "PUBLICSCHEMA-LICENSE.txt",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/PUBLICSCHEMA-LICENSE.txt"
-                ),
-            ),
-            (
                 "registry.yaml",
+                include_bytes!("../../../products/breg/examples/refactor/facility/registry.yaml"),
+            ),
+            (
+                "plans/correct-address.rhai",
                 include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/registry.yaml"
-                ),
-            ),
-            (
-                "starter-template.json",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/starter-template.json"
-                ),
-            ),
-            (
-                "tests/journeys.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/tests/journeys.yaml"
-                ),
-            ),
-            (
-                "tests/security-journeys.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/agricultural-holdings/core/tests/security-journeys.yaml"
-                ),
-            ),
-        ],
-    },
-    Starter {
-        id: "public-organizations",
-        files: &[
-            (
-                "ATTRIBUTION.md",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/ATTRIBUTION.md"
-                ),
-            ),
-            (
-                "dev-clients.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/dev-clients.yaml"
-                ),
-            ),
-            (
-                "examples/inputs/first-record.json",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/examples/inputs/first-record.json"
-                ),
-            ),
-            (
-                "examples/inputs/reviewed-change.json",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/examples/inputs/reviewed-change.json"
-                ),
-            ),
-            (
-                "examples/inputs/starter-data.json",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/examples/inputs/starter-data.json"
-                ),
-            ),
-            (
-                "examples/scenarios.json",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/examples/scenarios.json"
-                ),
-            ),
-            (
-                "MODEL.md",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/MODEL.md"
-                ),
-            ),
-            (
-                "PUBLICSCHEMA-LICENSE.txt",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/PUBLICSCHEMA-LICENSE.txt"
-                ),
-            ),
-            (
-                "registry.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/registry.yaml"
-                ),
-            ),
-            (
-                "starter-template.json",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/starter-template.json"
-                ),
-            ),
-            (
-                "tests/journeys.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/tests/journeys.yaml"
-                ),
-            ),
-            (
-                "tests/security-journeys.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/public-organizations/core/tests/security-journeys.yaml"
-                ),
-            ),
-        ],
-    },
-    Starter {
-        id: "seed-lots",
-        files: &[
-            (
-                "ATTRIBUTION.md",
-                include_bytes!("../../../products/breg/starters/seed-lots/core/ATTRIBUTION.md"),
-            ),
-            (
-                "dev-clients.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/seed-lots/core/dev-clients.yaml"
-                ),
-            ),
-            (
-                "examples/inputs/first-record.json",
-                include_bytes!(
-                    "../../../products/breg/starters/seed-lots/core/examples/inputs/first-record.json"
-                ),
-            ),
-            (
-                "examples/inputs/reviewed-change.json",
-                include_bytes!(
-                    "../../../products/breg/starters/seed-lots/core/examples/inputs/reviewed-change.json"
-                ),
-            ),
-            (
-                "examples/inputs/starter-data.json",
-                include_bytes!(
-                    "../../../products/breg/starters/seed-lots/core/examples/inputs/starter-data.json"
-                ),
-            ),
-            (
-                "examples/scenarios.json",
-                include_bytes!(
-                    "../../../products/breg/starters/seed-lots/core/examples/scenarios.json"
-                ),
-            ),
-            (
-                "MODEL.md",
-                include_bytes!("../../../products/breg/starters/seed-lots/core/MODEL.md"),
-            ),
-            (
-                "PUBLICSCHEMA-LICENSE.txt",
-                include_bytes!(
-                    "../../../products/breg/starters/seed-lots/core/PUBLICSCHEMA-LICENSE.txt"
-                ),
-            ),
-            (
-                "registry.yaml",
-                include_bytes!("../../../products/breg/starters/seed-lots/core/registry.yaml"),
-            ),
-            (
-                "starter-template.json",
-                include_bytes!(
-                    "../../../products/breg/starters/seed-lots/core/starter-template.json"
-                ),
-            ),
-            (
-                "tests/journeys.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/seed-lots/core/tests/journeys.yaml"
-                ),
-            ),
-            (
-                "tests/security-journeys.yaml",
-                include_bytes!(
-                    "../../../products/breg/starters/seed-lots/core/tests/security-journeys.yaml"
+                    "../../../products/breg/examples/refactor/facility/plans/correct-address.rhai"
                 ),
             ),
         ],
@@ -407,18 +127,12 @@ pub(crate) fn run(destination: &Path, id: &str) -> Result<SuccessReport, Failure
 fn next_steps(destination: &Path, id: &str) -> Vec<String> {
     vec![
         format!(
-            "wrote the `{id}` starter; read {}, then run 'bregctl check {}'",
-            destination.join("MODEL.md").display(),
+            "wrote the `{id}` template; run 'bregctl check {}'",
             destination.display()
         ),
         format!(
-            "run 'bregctl dev {}' to start the registry locally and replay {}",
-            destination.display(),
-            destination.join(crate::FIXTURE_JOURNEYS_PATH).display()
-        ),
-        format!(
-            "replace canonicalBaseIri in {} before you build a production package; the starter value is a reserved example.org name standing in for your registry's real identity",
-            destination.join("registry.yaml").display()
+            "inspect its Actions with 'bregctl explain actions {}'",
+            destination.display()
         ),
     ]
 }
@@ -507,14 +221,26 @@ mod tests {
         }
     }
 
-    /// The files checked in under a starter's `core/` directory, read from
-    /// the source tree at test time, keyed by path relative to `core/`.
+    /// Read the canonical authored inputs independently of their embedded bytes.
     fn read_core_directory(id: &str) -> BTreeMap<String, Vec<u8>> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/starters")
-            .join(id)
-            .join("core");
-        walk_files(&root)
+            .join("../../products/breg/examples/refactor")
+            .join(match id {
+                "minimal-directory" => "minimal",
+                "facility-registry" => "facility",
+                _ => panic!("unregistered template"),
+            });
+        lookup(id)
+            .unwrap()
+            .files
+            .iter()
+            .map(|(path, _)| {
+                (
+                    (*path).to_owned(),
+                    fs::read(root.join(path)).expect("canonical authored input"),
+                )
+            })
+            .collect()
     }
 
     /// The files `run` wrote into `destination`, keyed by path relative to
@@ -548,15 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_ids_are_the_four_published_starters() {
-        assert_eq!(
-            ids(),
-            vec![
-                "professional-licences",
-                "agricultural-holdings",
-                "public-organizations",
-                "seed-lots",
-            ]
-        );
+    fn the_shipped_ids_are_the_canonical_projects() {
+        assert_eq!(ids(), vec!["minimal-directory", "facility-registry",]);
     }
 }

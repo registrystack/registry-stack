@@ -42,18 +42,6 @@ apiVersion: id.registrystack.org/formats/platform/config-conventions-exceptions/
 kind: PlatformConfigConventionsExceptions
 exceptions:
 - rule: CFG-NAME-2
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/$defs/route/properties/method/const/POST
-  class: protocol-constant
-  reason: POST is written as HTTP methods (RFC 9110) defines it
-  resolution: Permanent.
-- rule: CFG-NAME-2
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/actions/items/properties/method/const/POST
-  class: protocol-constant
-  reason: POST is written as HTTP methods (RFC 9110) defines it
-  resolution: Permanent.
-- rule: CFG-NAME-2
   format: breg/mcp-runtime
   location: products/breg/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256
   class: protocol-constant

@@ -11,11 +11,11 @@ use std::time::Duration;
 
 use registry_platform_hooks::delivery::{HookHandler, HookHandlerBinding};
 use registry_platform_hooks::{ErrorCategory, HookHandlerKind, HookMessage, MAX_OUTPUT_BYTES};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::{encode_rhai_answer, run_program, verified_digest, HookHandlerRegistry, HookProgram};
-use crate::compiler::{compile_project_with_assets, CompileProfile, WEBHOOK_ATTEMPT_TIMEOUT_MS};
-use crate::contract::{parse_project_json, ModuleAssetSource};
+use super::{HookHandlerRegistry, HookProgram, encode_rhai_answer, run_program, verified_digest};
+use crate::compiler::{CompileProfile, WEBHOOK_ATTEMPT_TIMEOUT_MS, compile_project_with_assets};
+use crate::contract::{ModuleAssetSource, parse_project_json};
 use crate::model::{CompiledHookHandler, CompiledHookHandlerKind, CompiledRegistry};
 
 const PACKAGE_REVISION: &str = "hook-handler-tests";
@@ -33,7 +33,7 @@ fn project_with_local_hook(kind: &str, path: &str) -> Value {
         "kind": "BRegProject",
         "project": {"id": "hook-handler", "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://hook-handler.example.test"},
-        "entities": [{
+        "datasets":[{"id":"test-dataset"}],"recordTypes":[{
             "id": "case",
             "primaryDataset": "test-dataset",
             "route": "cases",
@@ -309,42 +309,48 @@ fn a_local_delivery_binds_to_its_reviewed_program() {
 fn a_delivery_from_another_package_revision_binds_to_nothing() {
     let (compiled, id, digest) = rhai_registry();
     let registry = HookHandlerRegistry::new(&compiled, PACKAGE_REVISION);
-    assert!(registry
-        .handler(HookHandlerBinding {
-            kind: HookHandlerKind::Rhai,
-            compiled_delivery_id: &id,
-            package_revision: "some-other-revision",
-            handler_digest: &digest,
-        })
-        .is_none());
+    assert!(
+        registry
+            .handler(HookHandlerBinding {
+                kind: HookHandlerKind::Rhai,
+                compiled_delivery_id: &id,
+                package_revision: "some-other-revision",
+                handler_digest: &digest,
+            })
+            .is_none()
+    );
 }
 
 #[test]
 fn a_delivery_naming_another_program_digest_binds_to_nothing() {
     let (compiled, id, _) = rhai_registry();
     let registry = HookHandlerRegistry::new(&compiled, PACKAGE_REVISION);
-    assert!(registry
-        .handler(HookHandlerBinding {
-            kind: HookHandlerKind::Rhai,
-            compiled_delivery_id: &id,
-            package_revision: PACKAGE_REVISION,
-            handler_digest: &format!("sha256:{}", "0".repeat(64)),
-        })
-        .is_none());
+    assert!(
+        registry
+            .handler(HookHandlerBinding {
+                kind: HookHandlerKind::Rhai,
+                compiled_delivery_id: &id,
+                package_revision: PACKAGE_REVISION,
+                handler_digest: &format!("sha256:{}", "0".repeat(64)),
+            })
+            .is_none()
+    );
 }
 
 #[test]
 fn a_delivery_naming_another_handler_kind_binds_to_nothing() {
     let (compiled, id, digest) = rhai_registry();
     let registry = HookHandlerRegistry::new(&compiled, PACKAGE_REVISION);
-    assert!(registry
-        .handler(HookHandlerBinding {
-            kind: HookHandlerKind::Wasm,
-            compiled_delivery_id: &id,
-            package_revision: PACKAGE_REVISION,
-            handler_digest: &digest,
-        })
-        .is_none());
+    assert!(
+        registry
+            .handler(HookHandlerBinding {
+                kind: HookHandlerKind::Wasm,
+                compiled_delivery_id: &id,
+                package_revision: PACKAGE_REVISION,
+                handler_digest: &digest,
+            })
+            .is_none()
+    );
 }
 
 #[test]
@@ -387,9 +393,9 @@ fn a_program_speaking_another_handler_abi_is_never_admitted() {
 
 #[cfg(feature = "wasm")]
 mod wasm {
-    use super::{envelope, run_program, HookProgram};
+    use super::{HookProgram, envelope, run_program};
     use crate::model::CompiledHookHandlerKind;
-    use crate::wasm_runtime::{install, shutdown, WasmExecutionBudgets};
+    use crate::wasm_runtime::{WasmExecutionBudgets, install, shutdown};
     use registry_platform_hooks::{ErrorCategory, MAX_OUTPUT_BYTES};
     use registry_platform_script::wasm::Backend;
     use std::time::Duration;

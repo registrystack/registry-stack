@@ -7,14 +7,14 @@
 //! `HookDeclaration`, and the phases and handler kinds the engine cannot run
 //! are refused rather than compiled into something that never fires.
 
-use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project, compile_project_with_assets};
 use registry_breg::contract::{
-    parse_module_json, parse_project_json, HookSource, ModuleAssetSource,
+    HookSource, ModuleAssetSource, parse_module_json, parse_project_json,
 };
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::model::CompiledHookHandlerKind;
 use registry_platform_hooks::{HookDeclaration, HookHandlerKind, HookHandlerSource, HookPhase};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 #[cfg(feature = "wasm")]
 use sha2::{Digest, Sha256};
 
@@ -30,12 +30,12 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 fn project_with_hooks(hooks: Value) -> Value {
-    json!({
+    json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "hook-contract", "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://hook-contract.example.test"},
-        "entities": [{
+        "recordTypes": [{
             "id": "case",
             "primaryDataset": "test-dataset",
             "route": "cases",
@@ -135,15 +135,15 @@ fn a_hook_reads_as_a_shared_hook_declaration() {
 #[test]
 fn an_events_member_is_refused_as_an_unknown_field_in_a_project() {
     let mut project = project_with_hooks(json!([]));
-    let entity = project["entities"][0]
+    let entity = project["recordTypes"][0]
         .as_object_mut()
         .expect("entity object");
     entity.remove("hooks");
     entity.insert("events".to_owned(), json!([url_hook()]));
     assert_diagnostic(
         &parse_failure(&project),
-        "breg.source.shape-invalid",
-        "unknown field `events`",
+        "config.unknown-key",
+        "`events` is not a member",
     );
 }
 
@@ -153,15 +153,11 @@ fn an_events_member_is_refused_as_an_unknown_field_in_a_module() {
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
         "id": "case-events",
         "version": "1",
-        "extendEntities": [{"id": "case", "events": [url_hook()]}]
+        "extendRecordTypes": [{"id": "case", "events": [url_hook()]}]
     });
     let failure = parse_module_json(&serde_json::to_vec(&module).expect("module serializes"))
         .expect_err("the unknown key is refused");
-    assert_diagnostic(
-        &failure,
-        "breg.source.shape-invalid",
-        "unknown field `events`",
-    );
+    assert_diagnostic(&failure, "config.unknown-key", "`events` is not a member");
 }
 
 #[test]
@@ -362,7 +358,7 @@ fn a_wasm_hook_is_refused_by_a_build_without_wasm_support() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.hook.handler-wasm-build-unsupported")
         .expect("the build refusal is reported");
-    assert_eq!("entities[].hooks[].handler.type", refusal.path);
+    assert_eq!("recordTypes[].hooks[].handler.type", refusal.path);
     assert!(
         !failure
             .diagnostics()

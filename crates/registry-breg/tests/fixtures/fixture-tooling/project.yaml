@@ -26,11 +26,12 @@ manifestProjection:
       endpointUrl: https://fixture.invalid
       servesDatasets: [fixture-registry]
   distributions: []
+datasets: [{id: fixture-registry}]
 modules:
   - id: fixture-core
     version: 1.0.0
     digest: MODULE_DIGEST
-entities:
+recordTypes:
   - id: widget
     primaryDataset: fixture-registry
     route: widgets
@@ -53,8 +54,8 @@ accessProfiles:
     requiredScopes: unrestricted
     requiredPurposes: [case-management]
     permissions:
-      entities:
-        - entity: widget
+      records:
+        - recordType: widget
           operations: [create, get, list, patch, batch]
           readableFields: [jurisdiction, label, note, quantity]
           writableFields: [jurisdiction, label, note, quantity]

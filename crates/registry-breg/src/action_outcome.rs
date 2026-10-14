@@ -26,7 +26,7 @@ use crate::action_handler::{
     ActionHandlerDiagnostic, ActionHandlerError, ActionHandlerOutcome, ActionHandlerRefusal,
 };
 use crate::contract::{FieldTypeSource, Operation};
-use crate::data::{validate_field_value, FieldValue};
+use crate::data::{FieldValue, validate_field_value};
 use crate::model::{
     CompiledAction, CompiledPlanEffect, CompiledPlanFunction, CompiledPlanMutation,
     CompiledPlanValue, CompiledPlanWrite,
@@ -279,7 +279,7 @@ pub(crate) fn decode_document(
             return Err(ActionHandlerDiagnostic::new(
                 ActionHandlerError::Result,
                 "Return a map containing either effects or refusal.",
-            ))
+            ));
         }
     };
     if member(&members, "effects").is_some() && member(&members, "refusal").is_some() {
@@ -301,7 +301,7 @@ pub(crate) fn decode_document(
                 return Err(ActionHandlerDiagnostic::new(
                     ActionHandlerError::Result,
                     "Return refusal as a map with code and an optional field.",
-                ))
+                ));
             }
         };
         if !exact_members(refusal_members, &["code"], &["field"]) {
@@ -321,7 +321,7 @@ pub(crate) fn decode_document(
                 return Err(ActionHandlerDiagnostic::new(
                     ActionHandlerError::Result,
                     "Use a string code from the handler's declared refusal catalogue.",
-                ))
+                ));
             }
         };
         let field = member(refusal_members, "field").cloned();
@@ -339,7 +339,7 @@ pub(crate) fn decode_document(
             return Err(ActionHandlerDiagnostic::new(
                 ActionHandlerError::Result,
                 "Return effects as a non-empty list of declared write slots.",
-            ))
+            ));
         }
     };
     Ok(ProposedActionOutcome::Effects { effects })
@@ -352,6 +352,67 @@ pub(crate) fn decode_document(
 /// per-slot mutation ceilings and reference envelopes, the field-mutation
 /// ceiling, the fromEffect wiring, dependency ordering, the final effect
 /// mapping and the serialized snapshot size.
+/// Revalidate an already typed plan at the concrete-binding boundary. Keeping
+/// the decoder round trip here prevents a second write-ceiling implementation.
+#[cfg(feature = "runtime")]
+pub(crate) fn validate_compiled_plan(
+    action: &CompiledAction,
+    effects: &[CompiledPlanEffect],
+) -> Result<(), ActionHandlerDiagnostic> {
+    let Some(function) = &action.handler else {
+        return if effects == action.effects {
+            Ok(())
+        } else {
+            Err(ActionHandlerError::Ceiling.into())
+        };
+    };
+    let proposed = effects
+        .iter()
+        .map(|effect| {
+            let mut set = Vec::new();
+            let mut clear = Vec::new();
+            for mutation in &effect.mutations {
+                match mutation {
+                    CompiledPlanMutation::Clear { field } => {
+                        clear.push(ProposedValue::Str(field.clone()))
+                    }
+                    CompiledPlanMutation::Set { field, value } => {
+                        let value = match value {
+                            CompiledPlanValue::Literal { value } => json_document(value.clone()),
+                            CompiledPlanValue::FromInput { input } => {
+                                ProposedValue::Object(vec![(
+                                    "fromInput".to_owned(),
+                                    ProposedValue::Str(input.clone()),
+                                )])
+                            }
+                            CompiledPlanValue::FromEffect { effect, .. } => ProposedValue::Object(
+                                vec![("fromEffect".to_owned(), ProposedValue::Str(effect.clone()))],
+                            ),
+                        };
+                        set.push((field.clone(), value));
+                    }
+                }
+            }
+            let mut members = vec![("id".to_owned(), ProposedValue::Str(effect.id.clone()))];
+            if !set.is_empty() {
+                members.push(("set".to_owned(), ProposedValue::Object(set)));
+            }
+            if !clear.is_empty() {
+                members.push(("clear".to_owned(), ProposedValue::Array(clear)));
+            }
+            ProposedValue::Object(members)
+        })
+        .collect();
+    match validate_proposed_outcome(
+        action,
+        function,
+        ProposedActionOutcome::Effects { effects: proposed },
+    )? {
+        ActionHandlerOutcome::Effects(checked) if checked == effects => Ok(()),
+        _ => Err(ActionHandlerError::Ceiling.into()),
+    }
+}
+
 pub(crate) fn validate_proposed_outcome(
     action: &CompiledAction,
     handler: &CompiledPlanFunction,
@@ -421,7 +482,7 @@ fn validate_proposed_effects(
                 return Err(ActionHandlerDiagnostic::new(
                     ActionHandlerError::Result,
                     "Return each effect as a map with id and set or clear.",
-                ))
+                ));
             }
         };
         let id = match member(effect, "id") {
@@ -429,7 +490,7 @@ fn validate_proposed_effects(
                 return Err(ActionHandlerDiagnostic::new(
                     ActionHandlerError::Result,
                     "Give each effect an id from the handler's declared write slots.",
-                ))
+                ));
             }
             Some(value) => member_string(value).map_err(|_| {
                 ActionHandlerDiagnostic::new(
@@ -473,12 +534,16 @@ fn validate_proposed_effects(
                 message: diagnostic.message,
             }
         })?;
-        let declared = action.effects.iter().find(|effect| effect.id == id)
+        let declared = action
+            .effects
+            .iter()
+            .find(|effect| effect.id == id)
             .ok_or(ActionHandlerError::Ceiling)?;
         let mut depends_on = declared.depends_on.clone();
         depends_on.extend(mutations.iter().filter_map(|mutation| match mutation {
             CompiledPlanMutation::Set {
-                value: CompiledPlanValue::FromEffect { effect, .. }, ..
+                value: CompiledPlanValue::FromEffect { effect, .. },
+                ..
             } => Some(effect.clone()),
             _ => None,
         }));
@@ -606,7 +671,7 @@ pub(crate) fn decode_slot_mutations(
                 return Err(WriteMutationDiagnostic::new(
                     PlanError::Result,
                     "Return set as a map of declared fields to values.",
-                ))
+                ));
             }
         };
         for (field, value) in set_members {
@@ -644,7 +709,7 @@ pub(crate) fn decode_slot_mutations(
                 return Err(WriteMutationDiagnostic::new(
                     PlanError::Result,
                     "Return clear as a list of optional patch field names.",
-                ))
+                ));
             }
         };
         for item in clear_items {
@@ -697,10 +762,7 @@ fn decode_slot_value(
     field: &str,
     value: &ProposedValue,
 ) -> Result<CompiledPlanValue, PlanError> {
-    let field_type = write
-        .field_types
-        .get(field)
-        .ok_or(PlanError::Ceiling)?;
+    let field_type = write.field_types.get(field).ok_or(PlanError::Ceiling)?;
     if let FieldTypeSource::Reference { .. } = field_type {
         let sources = write
             .reference_sources
@@ -751,10 +813,7 @@ fn decode_slot_value(
     }
 }
 
-fn proposed_to_json(
-    value: &ProposedValue,
-    depth: usize,
-) -> Result<Value, PlanError> {
+fn proposed_to_json(value: &ProposedValue, depth: usize) -> Result<Value, PlanError> {
     if depth > rhai_planner::MAXIMUM_VALUE_DEPTH {
         return Err(PlanError::Resource);
     }

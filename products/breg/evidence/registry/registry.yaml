@@ -31,7 +31,8 @@ manifestProjection:
     servesDatasets:
     - registry
   distributions: []
-entities:
+datasets: [{id: registry}]
+recordTypes:
 - id: record
   primaryDataset: registry
   route: records
@@ -83,8 +84,8 @@ accessProfiles:
   requiredPurposes:
   - registry-operations
   permissions:
-    entities:
-    - entity: record
+    records:
+    - recordType: record
       operations:
       - create
       - get
@@ -107,8 +108,8 @@ accessProfiles:
   requiredPurposes:
   - evidence-source-read
   permissions:
-    entities:
-    - entity: record
+    records:
+    - recordType: record
       operations:
       - lookup
       readableFields:

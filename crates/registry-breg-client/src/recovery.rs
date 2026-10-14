@@ -145,5 +145,4 @@ impl BaseRegistryClient {
         request.bind_recovery(binding, &key, evidence.format);
         Ok((request, key, evidence.format))
     }
-
 }

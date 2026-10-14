@@ -5,7 +5,11 @@
   "description": "Wire shape of `explanation` for `bregctl explain routes`. `routes` mixes two record shapes with no shared field beyond the injected `type` discriminator: an entity-route half, which is a passthrough of the compiled route table (CompiledRoute) with `type` injected after serialization, and an action-route half, which bregctl reconstructs field by field. Only the injected `type` and the action half are pinned in full; the entity half's other fields are outside this contract version.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "routes"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "routes"
+  ],
   "$defs": {
     "DerivedId": {
       "description": "An identifier the compiler derives from local identifiers: two or more local identifiers joined by `.`. It is never authored.",
@@ -29,9 +33,17 @@
             "description": "Entity route. Passthrough of the compiled route table plus the injected `type`; fields beyond `type` follow CompiledRoute and are outside this contract version.",
             "x-registry-passthrough": "bregctl writes each entity route as the engine holds it plus the injected type; only type is pinned, and its other members follow CompiledRoute and are outside this contract version.",
             "additionalProperties": true,
-            "required": ["type"],
+            "required": [
+              "type",
+              "id"
+            ],
             "properties": {
-              "type": { "const": "entity" }
+              "type": {
+                "const": "entity"
+              },
+              "id": {
+                "$ref": "#/$defs/DerivedId"
+              }
             }
           },
           {
@@ -51,22 +63,63 @@
               "requiresIdempotencyKey"
             ],
             "properties": {
-              "type": { "const": "action" },
-              "id": { "$ref": "#/$defs/DerivedId" },
-              "actionId": { "type": "string" },
-              "actionRouteKind": { "enum": ["invoke", "target-conditions"] },
-              "method": { "enum": ["DELETE", "GET", "PATCH", "POST"] },
-              "path": { "type": "string" },
-              "operation": {
+              "type": {
+                "const": "action"
+              },
+              "id": {
+                "$ref": "#/$defs/DerivedId"
+              },
+              "actionId": {
+                "type": "string"
+              },
+              "actionRouteKind": {
                 "enum": [
-                  "create", "get", "lookup", "list", "patch", "tombstone", "batch",
-                  "revisions", "snapshot", "submit-request", "revise-request",
-                  "cancel-request", "apply-request", "invoke"
+                  "invoke",
+                  "target-conditions",
+                  "start"
                 ]
               },
-              "accessProfiles": { "type": "array", "items": { "type": "string" } },
-              "defaultAccessProfile": { "type": ["string", "null"] },
-              "requiresIdempotencyKey": { "type": "boolean" }
+              "method": {
+                "enum": [
+                  "DELETE",
+                  "GET",
+                  "PATCH",
+                  "POST"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "operation": {
+                "enum": [
+                  "create",
+                  "get",
+                  "lookup",
+                  "list",
+                  "patch",
+                  "tombstone",
+                  "batch",
+                  "revisions",
+                  "snapshot",
+                  "invoke",
+                  "start"
+                ]
+              },
+              "accessProfiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "defaultAccessProfile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "requiresIdempotencyKey": {
+                "type": "boolean"
+              }
             }
           }
         ]

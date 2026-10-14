@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::contract::{FieldTypeSource, ValidTimeRole};
-use crate::data::{validate_field_value, FieldValue};
+use crate::data::{FieldValue, validate_field_value};
 use crate::model::{CompiledEntity, CompiledRegistry};
 
 pub const HISTORY_SCHEMA_ENCODING_VERSION: &str = "breg-history-schema-v1";
@@ -759,7 +759,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use registry_platform_canonical_json::canonicalize_json;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::contract::{Classification, MutationMode};
@@ -801,6 +801,8 @@ mod tests {
                 (
                     field.logical.id.clone(),
                     crate::model::CompiledField {
+                        display: Default::default(),
+                        relationship: None,
                         pattern: None,
                         id: field.logical.id.clone(),
                         field_type: field.logical.field_type.clone(),
@@ -814,7 +816,11 @@ mod tests {
             })
             .collect();
         CompiledEntity {
-            attachments: Default::default(),
+            api_name: "Membership".to_owned(),
+            display: Default::default(),
+            definition_revision:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            relationships: Default::default(),
             primary_dataset: None,
             id: "membership".to_owned(),
             source_module: None,
@@ -823,7 +829,6 @@ mod tests {
             tombstone: true,
             batch: None,
             change_control: None,
-            change_request: None,
             classification: Classification::Restricted,
             access_requirements: None,
             access_log: None,
@@ -901,6 +906,8 @@ mod tests {
         entity.fields.insert(
             "note".to_owned(),
             crate::model::CompiledField {
+                display: Default::default(),
+                relationship: None,
                 pattern: None,
                 id: "note".to_owned(),
                 field_type: note.logical.field_type.clone(),
@@ -997,6 +1004,8 @@ mod tests {
         active.fields.insert(
             "note".to_owned(),
             crate::model::CompiledField {
+                display: Default::default(),
+                relationship: None,
                 pattern: None,
                 id: "note".to_owned(),
                 field_type: extra.logical.field_type.clone(),
@@ -1116,6 +1125,8 @@ mod tests {
         entity.fields.insert(
             "status".to_owned(),
             crate::model::CompiledField {
+                display: Default::default(),
+                relationship: None,
                 pattern: None,
                 id: "status".to_owned(),
                 field_type: status.logical.field_type.clone(),
@@ -1136,6 +1147,8 @@ mod tests {
         entity.fields.insert(
             "note".to_owned(),
             crate::model::CompiledField {
+                display: Default::default(),
+                relationship: None,
                 pattern: None,
                 id: "note".to_owned(),
                 field_type: note.logical.field_type.clone(),

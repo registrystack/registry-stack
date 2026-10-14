@@ -6,7 +6,7 @@ use std::{env, fs, str::FromStr, time::Duration};
 
 use registry_breg::postgres::{ConnectionConfig, PoolBounds};
 use tokio::{net::TcpStream, time::timeout};
-use tokio_postgres::{config::Host, Config};
+use tokio_postgres::{Config, config::Host};
 
 fn required_env(name: &str) -> String {
     env::var(name)

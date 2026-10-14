@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A standing agent profile (`actorKind: agent` without a `taskGrant`) may
-//! read and author change-request drafts. It carries no human approval, so it
+//! read and author caller-owned Proposal drafts. It carries no human approval, so it
 //! can neither move a request through its lifecycle, write target records
 //! directly, import records, invoke an immediate action, nor publish or
-//! withdraw a statistical release: a human submits.
+//! withdraw a statistical release: lifecycle decisions require explicit delegated or human authority.
 
 use std::collections::BTreeSet;
 
-use registry_breg::contract::{parse_module_json, Operation};
-use registry_breg::{compile_project, parse_project_json, CompileFailure, CompileProfile};
-use serde_json::{json, Value};
+use registry_breg::contract::{Operation, parse_module_json};
+use registry_breg::{CompileFailure, CompileProfile, compile_project, parse_project_json};
+use serde_json::{Value, json};
 
-const OPERATION_FORBIDDEN: &str = "breg.access-profile.standing-agent-operation-forbidden";
+const OPERATION_FORBIDDEN: &str = "breg.proposal.standing-agent-operation-forbidden";
 const DIRECT_MUTATION_FORBIDDEN: &str =
     "breg.access-profile.standing-agent-direct-mutation-forbidden";
 const ACTION_FORBIDDEN: &str = "breg.access-profile.standing-agent-action-forbidden";
@@ -22,95 +22,45 @@ const MODULE_TASK_GRANT_FORBIDDEN: &str = "breg.access-profile.task-grant-module
 
 fn project() -> Value {
     json!({
-        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
-        "kind": "BRegProject",
-        "project": {"id": "standing-agent-ceiling", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://standing-agent.example.test"},
-        "entities": [
-            {
-                "id": "case", "primaryDataset": "test-dataset", "route": "cases",
-                "mutationMode": "mutable", "classification": "internal",
-                "batch": {"maximumItems": 3, "maximumBytes": 8192},
-                "changeControl": {"requiredFor": ["patch"]},
-                "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}]
-            },
-            {
-                "id": "note", "primaryDataset": "test-dataset", "route": "notes",
-                "mutationMode": "mutable", "tombstone": true, "classification": "internal",
-                "batch": {"maximumItems": 3, "maximumBytes": 8192},
-                "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}]
-            },
-            {
-                "id": "correction", "primaryDataset": "test-dataset", "route": "corrections",
-                "mutationMode": "mutable", "classification": "internal",
-                "fields": [
-                    {"id": "case", "type": "reference", "target": "case", "required": true, "classification": "internal"},
-                    {"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}
-                ],
-                "changeRequest": {
-                    "effects": [{"id": "relabel", "target": {"fromField": "case"}, "operation": "patch", "set": {"label": {"fromField": "label"}}}],
-                    "review": {"type": "required", "authority": "casework-main", "policyId": "correction-review"},
-                    "onApproved": {"mode": "manual"}
-                }
-            }
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+        "project":{"id":"standing-agent-ceiling","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://standing-agent.example.test"},
+        "datasets":[{"id":"test-dataset"}],
+        "recordTypes":[
+            {"id":"case","route":"cases","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
+                "batch":{"maximumItems":3,"maximumBytes":8192},"mutationPolicy":{"patch":"proposal-required"},
+                "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]},
+            {"id":"note","route":"notes","primaryDataset":"test-dataset","mutationMode":"mutable","tombstone":true,"classification":"internal",
+                "batch":{"maximumItems":3,"maximumBytes":8192},"fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]},
+            {"id":"memo","route":"memos","primaryDataset":"test-dataset","mutationMode":"mutable","classification":"internal",
+                "batch":{"maximumItems":3,"maximumBytes":8192},"fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]}
         ],
-        "actions": [
-            {
-                "id": "relabel-note",
-                "inputs": [
-                    {"id": "note-ref", "apiName": "noteId", "type": "reference", "target": "note", "required": true, "classification": "internal"},
-                    {"id": "new-label", "apiName": "newLabel", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}
-                ],
-                "effects": [
-                    {"id": "relabelled", "target": {"fromField": "note-ref"}, "operation": "patch", "set": {"label": {"fromField": "new-label"}}}
-                ]
-            }
+        "actions":[
+            {"id":"relabel-note","execution":{"mode":"immediate"},"inputs":[
+                {"id":"note-ref","apiName":"noteId","type":"reference","target":"note","required":true,"classification":"internal"},
+                {"id":"new-label","apiName":"newLabel","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
+                "plan":{"type":"fixed","effects":[{"id":"relabelled","target":{"fromInput":"note-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}},
+            {"id":"correct-case","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},"inputs":[
+                {"id":"case-ref","type":"reference","target":"case","required":true,"classification":"internal"},
+                {"id":"new-label","type":"string","maximumLength":32,"required":true,"classification":"internal"}],
+                "plan":{"type":"fixed","effects":[{"id":"corrected","target":{"fromInput":"case-ref"},"operation":"patch","set":{"label":{"fromInput":"new-label"}}}]}}
         ],
-        "accessProfiles": [
-            {
-                "id": "clerk", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
-                "actorKind": "human", "requesterClients": ["clerk-portal"],
-                "permissions": {
-                    "entities": [
-                        {
-                            "entity": "case",
-                            "operations": ["create", "get", "list", "import"],
-                            "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"
-                        },
-                        {
-                            "entity": "correction",
-                            "operations": ["create", "get", "list", "patch", "submit-request", "revise-request", "cancel-request", "apply-request"],
-                            "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": "unrestricted",
-                            "applyTargets": [{"entity": "case", "rowBoundaries": "unrestricted"}]
-                        },
-                        {
-                            "entity": "note",
-                            "operations": ["create", "get", "list", "patch", "tombstone", "batch"],
-                            "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"
-                        }
-                    ],
-                    "actions": [
-                        {
-                            "action": "relabel-note", "operations": ["invoke"],
-                            "targets": [{"entity": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
-                        }
-                    ]
-                }
-            },
-            {
-                "id": "assistant", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
-                "actorKind": "agent", "requesterClients": ["assistant-client"],
-                "permissions": {
-                    "entities": [
-                        {"entity": "case", "operations": ["get", "list"], "readableFields": ["label"], "rowBoundaries": "unrestricted"},
-                        {
-                            "entity": "correction",
-                            "operations": ["create", "get", "list", "patch"],
-                            "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": "unrestricted"
-                        },
-                        {"entity": "note", "operations": ["get", "list"], "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"}
-                    ]
-                }
-            }
+        "accessProfiles":[
+            {"id":"clerk","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","actorKind":"human","requesterClients":["clerk-portal"],
+                "permissions":{"records":[
+                    {"recordType":"case","operations":["create","get","list","import"],"readableFields":["label"],"writableFields":["label"],"rowBoundaries":"unrestricted"},
+                    {"recordType":"memo","operations":["create","get","list","patch"],"readableFields":["label"],"writableFields":["label"],"rowBoundaries":"unrestricted"},
+                    {"recordType":"note","operations":["create","get","list","patch","tombstone","batch"],"readableFields":["label"],"writableFields":["label"],"rowBoundaries":"unrestricted"}],
+                    "actions":[
+                        {"action":"relabel-note","operations":["invoke"],"targets":[{"recordType":"note","rowBoundaries":"unrestricted"}],"results":["relabelled"]},
+                        {"action":"correct-case","operations":["start"],"targets":[{"recordType":"case","rowBoundaries":"unrestricted"}]}],
+                    "proposals":[{"action":"correct-case","operations":["get","list","edit","submit","revise","cancel","apply","rebase","retry","get-review-status"],"ownership":"caller","targets":[{"recordType":"case","rowBoundaries":"unrestricted"}]}]}},
+            {"id":"assistant","principalClaim":"registry_principal","requiredScopes":"unrestricted","actorKind":"agent","requesterClients":["assistant-client"],
+                "permissions":{"records":[
+                    {"recordType":"case","operations":["get","list"],"readableFields":["label"],"rowBoundaries":"unrestricted"},
+                    {"recordType":"memo","operations":["get","list"],"readableFields":["label"],"writableFields":["label"],"rowBoundaries":"unrestricted"},
+                    {"recordType":"note","operations":["get","list"],"readableFields":["label"],"writableFields":["label"],"rowBoundaries":"unrestricted"}],
+                    "actions":[{"action":"correct-case","operations":["start"],"targets":[{"recordType":"case","rowBoundaries":"unrestricted"}]}],
+                    "proposals":[{"action":"correct-case","operations":["edit"],"ownership":"caller","targets":[{"recordType":"case","rowBoundaries":"unrestricted"}]}]}}
         ]
     })
 }
@@ -142,11 +92,11 @@ fn refused(
 }
 
 /// Profile index 1 is the standing agent. Its permission 0 is the
-/// change-controlled target, 1 the change-request entity, and 2 an entity
+/// proposal-required target, 1 another native Record, and 2 a Record
 /// without change control.
 fn with_assistant_operation(permission: usize, operation: &str) -> Value {
     let mut value = project();
-    value["accessProfiles"][1]["permissions"]["entities"][permission]["operations"]
+    value["accessProfiles"][1]["permissions"]["records"][permission]["operations"]
         .as_array_mut()
         .expect("operations array")
         .push(json!(operation));
@@ -154,18 +104,27 @@ fn with_assistant_operation(permission: usize, operation: &str) -> Value {
 }
 
 #[test]
-fn standing_agent_may_read_and_author_change_request_drafts() {
-    let registry = compile(&project()).expect("reads and draft authoring compile");
-    let draft = &registry.entities()["correction"].access_profiles["assistant"];
-    assert_eq!(
-        *draft.operations,
-        BTreeSet::from([
-            Operation::Create,
-            Operation::Get,
-            Operation::List,
-            Operation::Patch
-        ])
-    );
+fn standing_agent_may_read_and_author_caller_owned_proposal_drafts() {
+    use registry_breg::model::{CompiledActionExecution, ProposalOperation};
+    let registry = compile(&project()).expect("reads and caller-owned draft authoring compile");
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "correct-case")
+        .unwrap();
+    assert!(action.permissions.iter().any(
+        |grant| grant.profile_id == "assistant" && grant.operations.contains(&Operation::Start)
+    ));
+    let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+        panic!("Proposal")
+    };
+    let draft = proposal
+        .permissions
+        .iter()
+        .find(|grant| grant.profile_id == "assistant")
+        .unwrap();
+    assert_eq!(draft.operations, BTreeSet::from([ProposalOperation::Edit]));
 }
 
 #[test]
@@ -176,27 +135,41 @@ fn human_profile_may_import_records() {
 }
 
 #[test]
-fn standing_agent_cannot_hold_a_request_lifecycle_operation() {
+fn standing_agent_cannot_hold_a_proposal_lifecycle_decision() {
     for operation in [
-        "submit-request",
-        "revise-request",
-        "cancel-request",
-        "apply-request",
+        "get",
+        "list",
+        "submit",
+        "revise",
+        "cancel",
+        "apply",
+        "rebase",
+        "retry",
+        "get-review-status",
+        "get-review-context",
     ] {
+        let mut value = project();
+        value["accessProfiles"][1]["permissions"]["proposals"][0]["operations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(operation));
         let failure = refused(
-            compile(&with_assistant_operation(1, operation)),
-            "a standing agent cannot move a request through its lifecycle",
-        );
-        let codes = codes(&failure);
-        assert!(
-            codes.contains(&OPERATION_FORBIDDEN),
-            "{operation} was not refused: {codes:?}"
+            compile(&value),
+            "a standing agent cannot decide a Proposal lifecycle operation",
         );
         assert!(
-            !codes.contains(&DIRECT_MUTATION_FORBIDDEN),
-            "{operation} is not a direct mutation: {codes:?}"
+            codes(&failure).contains(&OPERATION_FORBIDDEN),
+            "{operation}: {:?}",
+            codes(&failure)
         );
+        assert!(!codes(&failure).contains(&DIRECT_MUTATION_FORBIDDEN));
     }
+    let mut value = project();
+    value["accessProfiles"][1]["permissions"]["proposals"][0]["ownership"] = json!("any");
+    assert!(
+        parse_project_json(&serde_json::to_vec(&value).unwrap()).is_err(),
+        "ownership has no any-caller escape"
+    );
 }
 
 #[test]
@@ -226,13 +199,16 @@ fn standing_agent_cannot_hold_a_direct_target_mutation() {
 }
 
 #[test]
-fn standing_agent_cannot_batch_change_request_drafts() {
+fn standing_agent_cannot_batch_record_writes() {
     let mut value = with_assistant_operation(1, "batch");
-    value["entities"][2]["batch"] = json!({"maximumItems": 3, "maximumBytes": 8192});
-    let failure = refused(compile(&value), "only draft create and patch are allowed");
+    value["recordTypes"][2]["batch"] = json!({"maximumItems": 3, "maximumBytes": 8192});
+    let failure = refused(
+        compile(&value),
+        "batch does not create Proposal draft authority",
+    );
     assert!(
         codes(&failure).contains(&DIRECT_MUTATION_FORBIDDEN),
-        "batch on a draft was not refused: {:?}",
+        "native batch was not refused: {:?}",
         codes(&failure)
     );
 }
@@ -242,7 +218,7 @@ fn standing_agent_cannot_batch_change_request_drafts() {
 fn with_assistant_action(value: &mut Value) {
     value["accessProfiles"][1]["permissions"]["actions"] = json!([{
         "action": "relabel-note", "operations": ["invoke"],
-        "targets": [{"entity": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
+        "targets": [{"recordType": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
     }]);
 }
 
@@ -293,7 +269,7 @@ fn human_profiles_keep_immediate_actions() {
 /// confirm.
 fn with_dataset(clerk: &[&str], assistant: &[&str]) -> Value {
     let mut value = project();
-    value["entities"][1]["fields"]
+    value["recordTypes"][1]["fields"]
         .as_array_mut()
         .expect("fields array")
         .extend([
@@ -308,7 +284,7 @@ fn with_dataset(clerk: &[&str], assistant: &[&str]) -> Value {
     }]);
     for (profile, operations) in [(0, clerk), (1, assistant)] {
         let permissions = &mut value["accessProfiles"][profile]["permissions"];
-        let note = &mut permissions["entities"][2];
+        let note = &mut permissions["records"][2];
         note["readableFields"] = json!(["label", "open", "filed"]);
         note["filterableFields"] = json!(["open", "filed"]);
         note["allowCount"] = json!(true);
@@ -351,8 +327,8 @@ fn compile_with_module_unit_profile(
         &serde_json::to_vec(&json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "assistant-extension", "version": "1",
-            "extendEntities": [{
-                "entity": "note",
+            "extendRecordTypes": [{
+                "recordType": "note",
                 "accessProfiles": [{
                     "id": "statistician", "principalClaim": "registry_principal",
                     "actorKind": actor_kind, "requesterClients": ["assistant-client"],
@@ -415,7 +391,7 @@ fn standing_agent_cannot_publish_a_statistical_release() {
         .unwrap_or_else(|| panic!("module publisher was not refused: {:?}", codes(&failure)));
     assert_eq!(
         refusal.path,
-        "entities[id=note].accessProfiles[id=statistician]"
+        "recordTypes[id=note].accessProfiles[id=statistician]"
     );
 
     let registry =
@@ -496,7 +472,7 @@ fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
     let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
         .expect("project parses");
     for (entity, operation, code) in [
-        ("correction", "submit-request", OPERATION_FORBIDDEN),
+        ("memo", "create", DIRECT_MUTATION_FORBIDDEN),
         ("note", "patch", DIRECT_MUTATION_FORBIDDEN),
         ("case", "import", DIRECT_MUTATION_FORBIDDEN),
     ] {
@@ -504,8 +480,8 @@ fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
             &serde_json::to_vec(&json!({
                 "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
                 "id": "assistant-extension", "version": "1",
-                "extendEntities": [{
-                    "entity": entity,
+                "extendRecordTypes": [{
+                    "recordType": entity,
                     "accessProfiles": [{
                         "id": "module-assistant", "principalClaim": "registry_principal",
                         "actorKind": "agent", "requesterClients": ["assistant-client"],
@@ -536,72 +512,48 @@ fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
 
 #[test]
 fn task_grant_and_human_profiles_keep_their_ceilings() {
-    // The human profile in the base project holds every lifecycle and direct
-    // write operation.
-    compile(&project()).expect("a human profile keeps lifecycle and direct writes");
-
+    compile(&project()).expect("a human keeps lifecycle and direct writes");
     let mut delegated = project();
     delegated["accessProfiles"][1]["requiredPurposes"] = json!(["correction-review"]);
     delegated["accessProfiles"][1]["taskGrant"] =
-        json!({"sourceIssuer": "https://casework.example"});
-    delegated["accessProfiles"][1]["permissions"]["entities"][1]["operations"] = json!([
-        "create",
+        json!({"sourceIssuer":"https://casework.example"});
+    delegated["accessProfiles"][1]["permissions"]["proposals"][0]["operations"] = json!([
         "get",
         "list",
-        "patch",
-        "submit-request",
-        "revise-request",
-        "cancel-request"
+        "edit",
+        "submit",
+        "revise",
+        "cancel",
+        "apply",
+        "rebase",
+        "retry",
+        "get-review-status"
     ]);
-    compile(&delegated).expect("a task grant keeps submit, revise and cancel");
-
-    let mut delegated_apply = delegated.clone();
-    delegated_apply["accessProfiles"][1]["permissions"]["entities"][1]["operations"]
-        .as_array_mut()
-        .expect("operations array")
-        .push(json!("apply-request"));
-    let failure = refused(compile(&delegated_apply), "a task grant still cannot apply");
-    let apply_codes = codes(&failure);
-    assert!(apply_codes.contains(&"breg.access-profile.task-grant-operation-forbidden"));
-    assert!(!apply_codes.contains(&OPERATION_FORBIDDEN));
-
-    let mut delegated_direct = delegated;
-    delegated_direct["accessProfiles"][1]["permissions"]["entities"][2]["operations"] =
-        json!(["get", "list", "patch"]);
-    let failure = refused(
-        compile(&delegated_direct),
-        "a task grant still cannot write directly",
-    );
-    let direct_codes = codes(&failure);
-    assert!(direct_codes.contains(&"breg.access-profile.task-grant-direct-mutation-forbidden"));
-    assert!(!direct_codes.contains(&DIRECT_MUTATION_FORBIDDEN));
-
-    let mut delegated_action = project();
-    delegated_action["accessProfiles"][1]["requiredPurposes"] = json!(["correction-review"]);
-    delegated_action["accessProfiles"][1]["taskGrant"] =
-        json!({"sourceIssuer": "https://casework.example"});
+    compile(&delegated).expect("explicit task grants retain bounded Proposal lifecycle operations");
+    let mut delegated_action = delegated.clone();
     with_assistant_action(&mut delegated_action);
-    let failure = refused(
-        compile(&delegated_action),
-        "a task grant still cannot invoke an immediate action",
-    );
-    let action_codes = codes(&failure);
-    assert!(action_codes.contains(&"breg.access-profile.task-grant-direct-mutation-forbidden"));
-    assert!(!action_codes.contains(&ACTION_FORBIDDEN));
-
-    let mut delegated_import = project();
-    delegated_import["accessProfiles"][1]["requiredPurposes"] = json!(["correction-review"]);
-    delegated_import["accessProfiles"][1]["taskGrant"] =
-        json!({"sourceIssuer": "https://casework.example"});
-    delegated_import["accessProfiles"][1]["permissions"]["entities"][0]["operations"] =
-        json!(["get", "list", "import"]);
-    let failure = refused(
-        compile(&delegated_import),
-        "a task grant still cannot import records",
-    );
-    let import_codes = codes(&failure);
-    assert!(import_codes.contains(&"breg.access-profile.task-grant-direct-mutation-forbidden"));
-    assert!(!import_codes.contains(&DIRECT_MUTATION_FORBIDDEN));
+    compile(&delegated_action).expect("an explicit task-grant profile can invoke a named Action");
+    for (index, operation) in [
+        (2, "patch"),
+        (0, "import"),
+        (2, "create"),
+        (2, "batch"),
+        (2, "tombstone"),
+    ] {
+        let mut direct = delegated.clone();
+        direct["accessProfiles"][1]["permissions"]["records"][index]["operations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(operation));
+        let failure = refused(
+            compile(&direct),
+            "task grants cannot authorize native Record mutations",
+        );
+        assert!(
+            codes(&failure).contains(&"breg.access-profile.task-grant-direct-mutation-forbidden")
+        );
+        assert!(!codes(&failure).contains(&DIRECT_MUTATION_FORBIDDEN));
+    }
 }
 
 #[test]
@@ -625,13 +577,13 @@ fn module_contributed_profiles_cannot_declare_a_task_grant() {
         json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "assistant-extension", "version": "1",
-            "extendEntities": [{"entity": "note", "accessProfiles": [delegated_profile.clone()]}]
+            "extendRecordTypes": [{"recordType": "note", "accessProfiles": [delegated_profile.clone()]}]
         }),
         json!({
             "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
             "id": "assistant-extension", "version": "1",
-            "entities": [{
-                "id": "memo", "primaryDataset": "test-dataset", "route": "memos",
+            "recordTypes": [{
+                "id": "archive", "primaryDataset": "test-dataset", "route": "archives",
                 "mutationMode": "mutable", "classification": "internal",
                 "fields": [{"id": "label", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"}],
                 "accessProfiles": [delegated_profile.clone()]

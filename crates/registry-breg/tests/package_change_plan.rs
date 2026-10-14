@@ -8,12 +8,13 @@
 #[cfg(feature = "tooling")]
 use std::fs;
 
+use registry_breg::CompiledRegistry;
 use registry_breg::compiler::{
-    compile_project, compile_project_with_assets, module_digest, module_digest_with_assets,
-    CompileProfile,
+    CompileProfile, compile_project, compile_project_with_assets, module_digest,
+    module_digest_with_assets,
 };
 use registry_breg::contract::{
-    parse_module_yaml, parse_project_json, parse_project_yaml, ModuleAssetSource,
+    ModuleAssetSource, parse_module_yaml, parse_project_json, parse_project_yaml,
 };
 #[cfg(feature = "tooling")]
 use registry_breg::migration_plan::{
@@ -24,23 +25,17 @@ use registry_breg::migration_plan::{
     ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
-    change_set_to_applicable_migration_plan, compiled_registry_change_set,
     CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBuildRequest,
     PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+    change_set_to_applicable_migration_plan, compiled_registry_change_set,
 };
 #[cfg(feature = "tooling")]
 use registry_breg::package::{
-    compiled_registry_change_set_from_baseline, inspect_package_integrity,
-    load_predecessor_package, prepare_package, prepare_package_with_project_assets,
-    PackageEnvelope, PackageError, PackageFileRole, PackageLoadContext, PreparedPackage,
-    MAX_RHAI_PLANNER_SOURCE_BYTES,
+    PackageError, PackageFileRole, PackageLoadContext, PreparedPackage, inspect_package_integrity,
+    load_predecessor_package, prepare_package,
 };
-use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
-#[cfg(feature = "tooling")]
-use registry_platform_config::{
-    write_sum_file, PackageLimits as SharedPackageLimits, REVISION_FILE, SUM_FILE,
-};
+
 #[cfg(feature = "tooling")]
 use serde::Serialize;
 #[cfg(feature = "tooling")]
@@ -75,470 +70,6 @@ const FINAL_FINGERPRINT: &str =
 const SUMMARY_CANARY: &str = "summary-canary";
 #[cfg(feature = "tooling")]
 const SQL_CANARY: &str = "summary-sql-canary";
-#[cfg(feature = "tooling")]
-const RHAI_PLANNER_CANARY: &str = "rhai-package-source-canary";
-
-#[cfg(feature = "tooling")]
-#[test]
-fn project_rhai_planner_package_is_deterministic_and_rederives_exact_source() {
-    let request = project_planner_build_request();
-    let asset = PackageSourceFile {
-        path: "planners/request.rhai".to_owned(),
-        bytes: project_planner_script().to_vec(),
-    };
-    let first = prepare_package_with_project_assets(request.clone(), vec![asset.clone()])
-        .expect("declared project planner packages");
-    let second = prepare_package_with_project_assets(request.clone(), vec![asset.clone()])
-        .expect("the same planner package rederives deterministically");
-    assert_eq!(
-        first.package_digest().unwrap(),
-        second.package_digest().unwrap()
-    );
-    assert_eq!(canonical(&first.envelope()), canonical(&second.envelope()));
-    assert_eq!(
-        first.manifest().sources.project_assets,
-        ["source/project/planners/request.rhai"]
-    );
-    let planner_entry = first
-        .manifest()
-        .files
-        .iter()
-        .find(|entry| entry.path == "source/project/planners/request.rhai")
-        .expect("planner source is in the signed closure");
-    assert_eq!(
-        planner_entry.role,
-        PackageFileRole::SourceProjectPlannerScript
-    );
-    assert!(!String::from_utf8_lossy(&canonical(&first.envelope())).contains(RHAI_PLANNER_CANARY));
-
-    let compiled_planner = first.registry().entities()["request"]
-        .change_request
-        .as_ref()
-        .and_then(|request| request.planner.as_ref())
-        .expect("compiled planner exists");
-    assert_eq!(compiled_planner.source_module, None);
-    assert_eq!(compiled_planner.script_path, "planners/request.rhai");
-    assert_eq!(
-        compiled_planner.rhai_version,
-        registry_breg::change_request::CHANGE_REQUEST_PLANNER_RHAI_VERSION
-    );
-    assert_eq!(compiled_planner.script_bytes, project_planner_script());
-    let expected_digest = digest(project_planner_script());
-    assert_eq!(compiled_planner.script_sha256, expected_digest);
-    let rendered_model = first
-        .registry()
-        .artifacts()
-        .get("compiled/effective-model.json")
-        .expect("compiled model artifact exists")
-        .bytes
-        .as_slice();
-    let rendered_model = String::from_utf8_lossy(rendered_model);
-    assert!(!rendered_model.contains(RHAI_PLANNER_CANARY));
-    assert!(!rendered_model.contains("planners/request.rhai"));
-    assert!(rendered_model.contains(&format!(
-        "\"rhaiVersion\":\"{}\"",
-        registry_breg::change_request::CHANGE_REQUEST_PLANNER_RHAI_VERSION
-    )));
-
-    let mut revised_asset = asset.clone();
-    revised_asset.bytes = project_planner_script()
-        .iter()
-        .copied()
-        .chain(b"// reviewed revision\n".iter().copied())
-        .collect();
-    let revised = prepare_package_with_project_assets(request.clone(), vec![revised_asset])
-        .expect("a revised valid planner packages");
-    let changes =
-        compiled_registry_change_set(first.registry(), revised.registry(), PRIOR_REVISION);
-    assert_change(
-        &changes,
-        CompiledRegistryChangeClass::AccessOrDisclosureChange,
-        CompiledRegistryChangeCode::ChangeRequestContractChanged,
-    );
-    assert_eq!(changes.changes.len(), 1);
-    let policy_plan = change_set_to_applicable_migration_plan(&changes)
-        .expect("a request-contract-only change has a compiler-owned policy migration");
-    assert!(!policy_plan.statements.is_empty());
-    assert!(policy_plan
-        .statements
-        .iter()
-        .all(|statement| statement.sql.starts_with("DROP POLICY IF EXISTS ")));
-    assert!(policy_plan
-        .statements
-        .iter()
-        .any(|statement| statement.sql.starts_with("DROP POLICY ")));
-
-    let inspected = inspect_prepared(&first);
-    let rederived = inspected.registry().entities()["request"]
-        .change_request
-        .as_ref()
-        .and_then(|request| request.planner.as_ref())
-        .expect("package inspection rederives the planner");
-    assert_eq!(rederived.script_sha256, compiled_planner.script_sha256);
-    assert_eq!(rederived.script_bytes, project_planner_script());
-
-    let tamper_root = tempfile::Builder::new()
-        .prefix("registry-planner-package-tamper-")
-        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
-        .unwrap();
-    let tampered_package = tamper_root.path().join("package");
-    first.publish_to_directory(&tampered_package).unwrap();
-    fs::write(
-        tampered_package.join("source/project/planners/request.rhai"),
-        b"fn plan(ctx) { #{ disposition: \"apply\", effects: [] } }\n",
-    )
-    .unwrap();
-    refresh_shared_package_envelope(&tampered_package);
-    assert_eq!(
-        inspect_package_integrity(&tampered_package)
-            .err()
-            .expect("tampered package is refused"),
-        PackageError::Integrity
-    );
-
-    let role_root = tempfile::Builder::new()
-        .prefix("registry-planner-package-role-")
-        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
-        .unwrap();
-    let role_swapped_package = role_root.path().join("package");
-    first.publish_to_directory(&role_swapped_package).unwrap();
-    let manifest_path = role_swapped_package.join("package.json");
-    let mut envelope: PackageEnvelope =
-        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    envelope
-        .manifest
-        .files
-        .iter_mut()
-        .find(|entry| entry.path == "source/project/planners/request.rhai")
-        .unwrap()
-        .role = PackageFileRole::SourceModulePlannerScript;
-    fs::write(&manifest_path, canonical(&envelope)).unwrap();
-    refresh_shared_package_envelope(&role_swapped_package);
-    assert_eq!(
-        inspect_package_integrity(&role_swapped_package)
-            .err()
-            .expect("role-swapped package is refused"),
-        PackageError::Derivation
-    );
-
-    assert_eq!(
-        prepare_package_with_project_assets(request.clone(), Vec::new()).unwrap_err(),
-        PackageError::Derivation
-    );
-    let mut extra = asset.clone();
-    extra.path = "planners/extra.rhai".to_owned();
-    assert_eq!(
-        prepare_package_with_project_assets(request.clone(), vec![asset.clone(), extra])
-            .unwrap_err(),
-        PackageError::Derivation
-    );
-    for unsafe_path in ["../request.rhai", "/request.rhai"] {
-        let mut unsafe_asset = asset.clone();
-        unsafe_asset.path = unsafe_path.to_owned();
-        assert!(prepare_package_with_project_assets(request.clone(), vec![unsafe_asset]).is_err());
-    }
-    let oversized = PackageSourceFile {
-        path: asset.path,
-        bytes: vec![b'x'; MAX_RHAI_PLANNER_SOURCE_BYTES as usize + 1],
-    };
-    assert_eq!(
-        prepare_package_with_project_assets(request, vec![oversized]).unwrap_err(),
-        PackageError::Derivation
-    );
-}
-
-#[cfg(feature = "tooling")]
-#[test]
-fn module_rhai_planner_uses_module_origin_role_and_refuses_origin_swaps() {
-    let request = module_planner_build_request();
-    let prepared = prepare_package(request.clone()).expect("module planner packages");
-    let entry = prepared
-        .manifest()
-        .files
-        .iter()
-        .find(|entry| entry.path == "source/modules/core/planners/request.rhai")
-        .expect("module planner is in the signed closure");
-    assert_eq!(entry.role, PackageFileRole::SourceModulePlannerScript);
-    assert!(prepared.manifest().sources.project_assets.is_empty());
-    assert_eq!(
-        prepared.manifest().sources.modules[0].assets,
-        ["planners/request.rhai"]
-    );
-    let compiled = prepared.registry().entities()["request"]
-        .change_request
-        .as_ref()
-        .and_then(|request| request.planner.as_ref())
-        .expect("compiled module planner exists");
-    assert_eq!(compiled.source_module.as_deref(), Some("core"));
-    assert_eq!(compiled.script_bytes, project_planner_script());
-    let inspected = inspect_prepared(&prepared);
-    assert_eq!(
-        inspected.registry().entities()["request"]
-            .change_request
-            .as_ref()
-            .and_then(|request| request.planner.as_ref())
-            .unwrap()
-            .script_sha256,
-        compiled.script_sha256
-    );
-
-    let script = request.modules[0].assets[0].clone();
-    let mut swapped = request;
-    swapped.modules[0].assets.clear();
-    assert_eq!(
-        prepare_package_with_project_assets(swapped, vec![script]).unwrap_err(),
-        PackageError::Derivation
-    );
-}
-
-#[cfg(feature = "tooling")]
-#[test]
-fn rhai_planner_package_is_a_readable_predecessor() {
-    let project = prepare_package_with_project_assets(
-        project_planner_build_request(),
-        vec![PackageSourceFile {
-            path: "planners/request.rhai".to_owned(),
-            bytes: project_planner_script().to_vec(),
-        }],
-    )
-    .expect("declared project planner packages");
-    let module = prepare_package(module_planner_build_request()).expect("module planner packages");
-
-    for (prepared, source_module) in [(project, None), (module, Some("core"))] {
-        let root = tempfile::Builder::new()
-            .prefix("registry-planner-package-predecessor-")
-            .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
-            .unwrap();
-        let package = root.path().join("package");
-        prepared.publish_to_directory(&package).unwrap();
-        let compiled = prepared.registry().entities()["request"]
-            .change_request
-            .as_ref()
-            .expect("compiled change request exists");
-        let compiled_planner = compiled.planner.as_ref().expect("compiled planner exists");
-
-        let predecessor = load_predecessor_package(
-            &package,
-            &PackageLoadContext {
-                database_initialization_environment: "local",
-            },
-        )
-        .expect("a package with a change-request planner is accepted as a predecessor");
-        let baseline = predecessor.migration_baseline().entities["request"]
-            .change_request
-            .as_ref()
-            .expect("the predecessor baseline carries the change request");
-        assert_eq!(baseline.contract_fingerprint, compiled.contract_fingerprint);
-        let baseline_planner = baseline
-            .planner
-            .as_ref()
-            .expect("the predecessor baseline carries the planner");
-        assert_eq!(baseline_planner.source_module.as_deref(), source_module);
-        assert_eq!(
-            baseline_planner.script_sha256,
-            compiled_planner.script_sha256
-        );
-        assert_eq!(baseline_planner.writes, compiled_planner.writes);
-    }
-}
-
-#[cfg(feature = "tooling")]
-#[test]
-fn a_package_whose_module_source_has_no_header_is_read_only_as_a_predecessor() {
-    // CFG-CHANGE-2: the current reader refuses a packaged module source
-    // without the header a module opens with, so such a package cannot start.
-    // The predecessor read parses the packaged governed model and never the
-    // packaged source, so the model that package sealed is still a verified
-    // predecessor and a successor can be planned over it.
-    let prepared =
-        prepare_package(module_planner_build_request()).expect("module planner packages");
-    let context = PackageLoadContext {
-        database_initialization_environment: "local",
-    };
-    let root = tempfile::Builder::new()
-        .prefix("registry-headless-module-package-")
-        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
-        .unwrap();
-    let package = root.path().join("package");
-    prepared.publish_to_directory(&package).unwrap();
-    registry_breg::package::load_package(&package, &context)
-        .expect("the package the current compiler sealed loads");
-
-    let module_source = "source/modules/core/module.yaml";
-    let module_path = package.join(module_source);
-    let mut module: serde_json::Value =
-        serde_json::from_slice(&fs::read(&module_path).unwrap()).unwrap();
-    let members = module
-        .as_object_mut()
-        .expect("the packaged module source is a mapping");
-    assert_eq!(
-        members.remove("apiVersion"),
-        Some(json!(registry_breg::contract::MODULE_API_VERSION))
-    );
-    assert_eq!(
-        members.remove("kind"),
-        Some(json!(registry_breg::contract::MODULE_KIND))
-    );
-    let bytes = canonicalize_json(&module).unwrap();
-    fs::write(&module_path, &bytes).unwrap();
-
-    let manifest_path = package.join("package.json");
-    let mut envelope: PackageEnvelope =
-        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    let entry = envelope
-        .manifest
-        .files
-        .iter_mut()
-        .find(|entry| entry.path == module_source)
-        .expect("the manifest lists the module source");
-    entry.size = bytes.len() as u64;
-    entry.sha256 = digest(&bytes);
-    fs::write(&manifest_path, canonical(&envelope)).unwrap();
-    refresh_shared_package_envelope(&package);
-
-    assert!(matches!(
-        registry_breg::package::load_package(&package, &context),
-        Err(PackageError::Derivation)
-    ));
-    assert!(matches!(
-        inspect_package_integrity(&package),
-        Err(PackageError::Derivation)
-    ));
-    load_predecessor_package(&package, &context)
-        .expect("a package sealed with a headless module source is a verified predecessor");
-}
-
-#[cfg(feature = "tooling")]
-#[test]
-fn rhai_planner_predecessor_without_a_declared_origin_is_refused() {
-    let prepared =
-        prepare_package(module_planner_build_request()).expect("module planner packages");
-    let context = PackageLoadContext {
-        database_initialization_environment: "local",
-    };
-    let effective_model = "effective-model.json";
-
-    // The republished envelope and manifest are themselves accepted, so the
-    // refusal below belongs to the missing origin alone.
-    for (remove_origin, expected) in [(false, None), (true, Some(PackageError::Derivation))] {
-        let root = tempfile::Builder::new()
-            .prefix("registry-planner-package-origin-")
-            .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
-            .unwrap();
-        let package = root.path().join("package");
-        prepared.publish_to_directory(&package).unwrap();
-
-        let model_path = package.join(effective_model);
-        let mut model: serde_json::Value =
-            serde_json::from_slice(&fs::read(&model_path).unwrap()).unwrap();
-        let planner = model["entities"]["request"]["changeRequest"]["planner"]
-            .as_object_mut()
-            .expect("the packaged effective model carries the planner");
-        assert_eq!(
-            planner["declaringOrigin"],
-            json!({"kind": "module", "id": "core"})
-        );
-        if remove_origin {
-            planner.remove("declaringOrigin");
-        }
-        let bytes = canonicalize_json(&model).unwrap();
-        fs::write(&model_path, &bytes).unwrap();
-
-        let manifest_path = package.join("package.json");
-        let mut envelope: PackageEnvelope =
-            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-        let entry = envelope
-            .manifest
-            .files
-            .iter_mut()
-            .find(|entry| entry.path == effective_model)
-            .unwrap();
-        entry.size = bytes.len() as u64;
-        entry.sha256 = digest(&bytes);
-        fs::write(&manifest_path, canonical(&envelope)).unwrap();
-        refresh_shared_package_envelope(&package);
-
-        assert_eq!(
-            load_predecessor_package(&package, &context).err(),
-            expected,
-            "declaringOrigin removed: {remove_origin}"
-        );
-    }
-}
-
-#[cfg(feature = "tooling")]
-#[test]
-fn rhai_planner_predecessor_plans_an_additive_successor() {
-    let planner_asset = || PackageSourceFile {
-        path: "planners/request.rhai".to_owned(),
-        bytes: project_planner_script().to_vec(),
-    };
-    let first =
-        prepare_package_with_project_assets(project_planner_build_request(), vec![planner_asset()])
-            .expect("declared project planner packages");
-    let root = tempfile::Builder::new()
-        .prefix("registry-planner-package-successor-")
-        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
-        .unwrap();
-    let package = root.path().join("package");
-    first.publish_to_directory(&package).unwrap();
-    let context = PackageLoadContext {
-        database_initialization_environment: "local",
-    };
-    let predecessor = load_predecessor_package(&package, &context)
-        .expect("a package with a change-request planner is accepted as a predecessor");
-
-    let mut request = project_planner_build_request();
-    let entities = r#""entities":["#;
-    let project = String::from_utf8(request.project.bytes).unwrap();
-    assert!(project.contains(entities));
-    request.project.bytes = project
-        .replacen(
-            entities,
-            r#""entities":[{"id":"note","primaryDataset":"planner-package","route":"notes","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}]},"#,
-            1,
-        )
-        .into_bytes();
-    request.from_package_digest = Some(predecessor.package_digest().to_owned());
-    request.migration_plan = PackageMigrationPlanInput::SuccessorFromBaseline {
-        prior_baseline: Box::new(predecessor.migration_baseline().clone()),
-    };
-    let successor = prepare_package_with_project_assets(request, vec![planner_asset()])
-        .expect("an additive successor of a planner package prepares");
-
-    let changes = compiled_registry_change_set_from_baseline(
-        predecessor.migration_baseline(),
-        successor.registry(),
-        predecessor.package_digest(),
-    );
-    assert_eq!(
-        changes
-            .changes
-            .iter()
-            .map(|change| (
-                change.code,
-                change.target.entity_id.as_deref(),
-                change.target.member_id.as_deref()
-            ))
-            .collect::<Vec<_>>(),
-        vec![(CompiledRegistryChangeCode::EntityAdded, Some("note"), None)],
-        "the unchanged planner contributes no change to the successor"
-    );
-    assert_eq!(
-        successor
-            .manifest()
-            .migration_plan
-            .from_package_digest
-            .as_deref(),
-        Some(predecessor.package_digest())
-    );
-
-    let successor_package = root.path().join("successor");
-    successor.publish_to_directory(&successor_package).unwrap();
-    load_predecessor_package(&successor_package, &context)
-        .expect("the successor is itself a readable predecessor");
-}
-
 #[test]
 fn geojson_binding_changes_are_classified_as_disclosure_even_for_get_only_profiles() {
     for (previous_binding, candidate_binding) in [
@@ -612,7 +143,7 @@ fn spatial_span_numbers_survive_canonical_package_reload_and_successor_rederive(
     let source_with_span = |span: serde_json::Value, add_field| {
         let source = spatial_source("location", true);
         let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
-        let entity = &mut module["entities"][0];
+        let entity = &mut module["recordTypes"][0];
         let bbox = &mut entity["accessProfiles"][0]["spatialQueries"]["bbox"];
         bbox["maximumLongitudeSpanDegrees"] = span.clone();
         bbox["maximumLatitudeSpanDegrees"] = span;
@@ -673,25 +204,35 @@ fn reviewed_bbox_enablement_compiles_storage_without_author_written_sql() {
     assert_eq!(statements.len(), 5);
     assert!(statements[0].sql.starts_with("DROP POLICY "));
     assert!(statements[0].sql.contains("registry_rls_select_"));
-    assert!(statements[1]
-        .sql
-        .contains("CREATE OR REPLACE FUNCTION registry_context.spatial_bbox_geometry"));
+    assert!(
+        statements[1]
+            .sql
+            .contains("CREATE OR REPLACE FUNCTION registry_context.spatial_bbox_geometry")
+    );
     assert!(statements[2].sql.contains("ADD COLUMN"));
     assert!(statements[2].sql.contains("GENERATED ALWAYS AS"));
-    assert!(statements[2]
-        .sql
-        .contains("registry_spatial_ext.geometry(Point,4326)"));
+    assert!(
+        statements[2]
+            .sql
+            .contains("registry_spatial_ext.geometry(Point,4326)")
+    );
     assert!(statements[3].sql.contains("USING gist"));
     assert_eq!(statements[4].id, "entity.asset.spatial-candidates-view");
-    assert!(statements[4]
-        .sql
-        .starts_with("CREATE VIEW registry_context."));
-    assert!(statements[4]
-        .sql
-        .contains("security_invoker=false, security_barrier=true"));
-    assert!(!statements
-        .iter()
-        .any(|statement| statement.sql.contains("CREATE EXTENSION")));
+    assert!(
+        statements[4]
+            .sql
+            .starts_with("CREATE VIEW registry_context.")
+    );
+    assert!(
+        statements[4]
+            .sql
+            .contains("security_invoker=false, security_barrier=true")
+    );
+    assert!(
+        !statements
+            .iter()
+            .any(|statement| statement.sql.contains("CREATE EXTENSION"))
+    );
 }
 
 #[cfg(feature = "tooling")]
@@ -714,19 +255,25 @@ fn reviewed_bbox_removal_drops_candidates_and_policy_before_internal_projection(
         statements[2].id,
         "entity.asset.spatial-candidates-view.drop"
     );
-    assert!(statements[2]
-        .sql
-        .starts_with("DROP VIEW IF EXISTS registry_context."));
+    assert!(
+        statements[2]
+            .sql
+            .starts_with("DROP VIEW IF EXISTS registry_context.")
+    );
     assert!(statements[3].sql.starts_with("DROP INDEX"));
     assert!(statements[4].sql.contains("DROP COLUMN"));
     assert!(statements[5].sql.starts_with("DROP FUNCTION"));
-    assert!(!statements
-        .iter()
-        .any(|statement| statement.sql.contains(&logical_point_column)));
-    assert!(!statements
-        .iter()
-        .any(|statement| statement.sql.contains("DROP EXTENSION")
-            || statement.sql.contains("CASCADE")));
+    assert!(
+        !statements
+            .iter()
+            .any(|statement| statement.sql.contains(&logical_point_column))
+    );
+    assert!(
+        !statements
+            .iter()
+            .any(|statement| statement.sql.contains("DROP EXTENSION")
+                || statement.sql.contains("CASCADE"))
+    );
 }
 
 #[cfg(feature = "tooling")]
@@ -749,9 +296,11 @@ fn changing_primary_bbox_point_replaces_projection_without_replacing_source_fiel
     assert!(statements[4].sql.contains("ADD COLUMN"));
     assert!(statements[5].sql.contains("CREATE INDEX"));
     assert_eq!(statements[6].id, "entity.asset.spatial-candidates-view");
-    assert!(!statements
-        .iter()
-        .any(|statement| statement.sql.contains("DROP FUNCTION")));
+    assert!(
+        !statements
+            .iter()
+            .any(|statement| statement.sql.contains("DROP FUNCTION"))
+    );
     for field in ["location", "alternate"] {
         assert!(candidate.entities()["asset"].fields.contains_key(field));
     }
@@ -763,8 +312,8 @@ fn changing_bbox_grant_replaces_candidate_view_without_rewriting_point_storage()
     let previous = compile_source(&spatial_source("location", true));
     let source = spatial_source("location", true);
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
-    module["entities"][0]["accessProfiles"][0]["spatialQueries"]["bbox"]
-        ["maximumLongitudeSpanDegrees"] = json!(0.25);
+    module["recordTypes"][0]["accessProfiles"][0]["spatialQueries"]["bbox"]["maximumLongitudeSpanDegrees"] =
+        json!(0.25);
     let module_bytes = serde_json::to_vec(&module).unwrap();
     let parsed_module = parse_module_yaml(&module_bytes).unwrap();
     let source = SourceFixture {
@@ -797,14 +346,14 @@ fn reviewed_source_view_refresh_preserves_candidate_drop_and_recreation() {
     let previous = compile_source(&spatial_source("location", true));
     let source = spatial_source("location", true);
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
-    module["entities"][0]["fields"]
+    module["recordTypes"][0]["fields"]
         .as_array_mut()
         .unwrap()
         .push(json!({
             "id": "color", "type": "string", "maximumLength": 16,
             "classification": "internal"
         }));
-    module["entities"][0]["accessProfiles"][0]["allowCount"] = json!(true);
+    module["recordTypes"][0]["accessProfiles"][0]["allowCount"] = json!(true);
     let module_bytes = serde_json::to_vec(&module).unwrap();
     let parsed_module = parse_module_yaml(&module_bytes).unwrap();
     let source = SourceFixture {
@@ -826,9 +375,11 @@ fn reviewed_source_view_refresh_preserves_candidate_drop_and_recreation() {
     );
     assert_eq!(statements[1].id, "entity.asset.field.color.column");
     assert_eq!(statements.iter().filter(|s| s.id == view_id).count(), 1);
-    assert!(statements
-        .iter()
-        .any(|s| s.id == "entity.asset.source-view"));
+    assert!(
+        statements
+            .iter()
+            .any(|s| s.id == "entity.asset.source-view")
+    );
     assert!(!statements.iter().any(|s| s.sql.contains("DROP COLUMN")
         || s.sql.contains("geometry(Point,4326)")
         || s.sql.contains("USING gist")));
@@ -878,16 +429,20 @@ fn new_optional_scalar_field_emits_only_closed_add_column() {
     assert_eq!(plan.changes, change_set.changes);
     assert_eq!(plan.statements.len(), 2);
     assert_eq!(plan.statements[0].id, "entity.asset.field.color.column");
-    assert!(plan.statements[0]
-        .sql
-        .starts_with("ALTER TABLE registry_data."));
+    assert!(
+        plan.statements[0]
+            .sql
+            .starts_with("ALTER TABLE registry_data.")
+    );
     assert!(plan.statements[0].sql.contains(" ADD COLUMN "));
     assert!(plan.statements[0].sql.contains("varchar(16)"));
     assert!(!plan.statements[0].sql.contains("CREATE TABLE"));
     assert_eq!(plan.statements[1].id, "entity.asset.source-view");
-    assert!(plan.statements[1]
-        .sql
-        .starts_with("CREATE OR REPLACE VIEW "));
+    assert!(
+        plan.statements[1]
+            .sql
+            .starts_with("CREATE OR REPLACE VIEW ")
+    );
 
     let rendered_changes = serde_json::to_string(&change_set.changes).expect("changes serialize");
     for forbidden in [
@@ -924,18 +479,21 @@ fn new_entity_plan_uses_complete_candidate_ddl_in_dependency_order() {
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(plan.statements, expected);
-    assert!(plan
-        .statements
-        .first()
-        .is_some_and(|statement| statement.id == "entity.placement.table"));
-    assert!(plan
-        .statements
-        .iter()
-        .any(|statement| statement.id == "entity.placement.field.asset.reference"));
-    assert!(plan
-        .statements
-        .iter()
-        .any(|statement| statement.id == "entity.placement.rls.force"));
+    assert!(
+        plan.statements
+            .first()
+            .is_some_and(|statement| statement.id == "entity.placement.table")
+    );
+    assert!(
+        plan.statements
+            .iter()
+            .any(|statement| statement.id == "entity.placement.field.asset.reference")
+    );
+    assert!(
+        plan.statements
+            .iter()
+            .any(|statement| statement.id == "entity.placement.rls.force")
+    );
 }
 
 #[test]
@@ -1297,12 +855,12 @@ fn metadata_only_access_or_disclosure_changes_create_empty_applicable_plans() {
 
 #[test]
 fn complete_extension_surface_modules_are_order_independent() {
-    let field_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"field-extension","version":"1","extendEntities":[{"entity":"asset","fields":[{"id":"status","type":"string","maximumLength":16,"classification":"internal"}],"constraints":[{"type":"unique","id":"status-unique","fields":["status"]}],"indexes":[{"id":"status-idx","fields":["status"]}]}]}"#)
+    let field_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"field-extension","version":"1","extendRecordTypes":[{"recordType":"asset","fields":[{"id":"status","type":"string","maximumLength":16,"classification":"internal"}],"constraints":[{"type":"unique","id":"status-unique","fields":["status"]}],"indexes":[{"id":"status-idx","fields":["status"]}]}]}"#)
         .expect("field extension parses");
-    let event_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"event-extension","version":"1","extendEntities":[{"entity":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}],"hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","status"],"handler":{"type":"url","destinationId":"package-change-events"}}]}],"entities":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#)
+    let event_module = parse_module_yaml(br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"event-extension","version":"1","extendRecordTypes":[{"recordType":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}],"hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","status"],"handler":{"type":"url","destinationId":"package-change-events"}}]}],"recordTypes":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#)
         .expect("event extension parses");
     let project_bytes = format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"entities":[{{"rowBoundaries": "unrestricted", "entity":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
+        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"recordTypes":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{"records":[{{"rowBoundaries": "unrestricted", "recordType":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
         module_digest(&field_module),
         module_digest(&event_module)
     );
@@ -1441,9 +999,11 @@ fn derived_sql_asset_bytes_change_revisions_and_emit_generated_view_replacement(
         previous_package.package_digest().unwrap(),
         successor.package_digest().unwrap()
     );
-    assert!(successor
-        .file_bytes()
-        .contains_key("source/modules/core/sql/summary.sql"));
+    assert!(
+        successor
+            .file_bytes()
+            .contains_key("source/modules/core/sql/summary.sql")
+    );
     assert!(successor.manifest().files.iter().any(|entry| {
         entry.path == "source/modules/core/sql/summary.sql"
             && entry.role == registry_breg::package::PackageFileRole::SourceModuleAsset
@@ -1621,8 +1181,8 @@ fn unchanged_rebuild_over_a_baseline_without_the_generated_ddl_digest_refreshes_
 }
 
 #[test]
-fn unchanged_rebuild_over_a_baseline_with_another_generated_ddl_digest_refreshes_compiler_owned_ddl(
-) {
+fn unchanged_rebuild_over_a_baseline_with_another_generated_ddl_digest_refreshes_compiler_owned_ddl()
+ {
     let previous = compile_variant(Variant::ReferenceConstraintIndex);
     let mut absent = registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
         PRIOR_REVISION,
@@ -1660,7 +1220,7 @@ fn model_change_over_a_baseline_without_the_generated_ddl_digest_carries_the_ref
     // One optional field more on `site`; `asset` and its indexes are untouched.
     let mut module: serde_json::Value =
         serde_json::from_slice(&previous_source.module_bytes).expect("fixture module is JSON");
-    let site = module["entities"]
+    let site = module["recordTypes"]
         .as_array_mut()
         .expect("module lists entities")
         .iter_mut()
@@ -1740,7 +1300,7 @@ fn reviewed_change_over_a_baseline_without_the_generated_ddl_digest_carries_the_
     // A route change needs review and owes the database no statement.
     let mut module: serde_json::Value =
         serde_json::from_slice(&previous_source.module_bytes).expect("fixture module is JSON");
-    let asset = module["entities"]
+    let asset = module["recordTypes"]
         .as_array_mut()
         .expect("module lists entities")
         .iter_mut()
@@ -1805,10 +1365,12 @@ fn reviewed_change_over_a_baseline_without_the_generated_ddl_digest_carries_the_
         .chain(candidate_views)
         .collect::<Vec<_>>()
     );
-    assert!(earlier
-        .iter()
-        .any(|statement| statement.id == "entity.asset.source-view"
-            && statement.sql.starts_with("CREATE VIEW registry_source.")));
+    assert!(
+        earlier
+            .iter()
+            .any(|statement| statement.id == "entity.asset.source-view"
+                && statement.sql.starts_with("CREATE VIEW registry_source."))
+    );
 }
 
 #[test]
@@ -1948,11 +1510,13 @@ fn unchanged_rebuild_is_empty_over_a_same_compiler_predecessor_and_not_over_an_e
         "same-compiler",
         predecessor.migration_baseline().clone(),
     );
-    assert!(same_compiler
-        .manifest()
-        .migration_plan
-        .statements
-        .is_empty());
+    assert!(
+        same_compiler
+            .manifest()
+            .migration_plan
+            .statements
+            .is_empty()
+    );
     assert!(registry_breg::migration::successor_plan_is_empty(
         &same_compiler
     ));
@@ -2036,7 +1600,7 @@ fn unrelated_reviewed_change_rebuilds_every_view_around_a_retained_derived_relat
     let previous = compile_derived_source(&previous_source);
     let mut module: serde_json::Value =
         serde_json::from_slice(&previous_source.module_bytes).expect("derived module parses");
-    module["entities"][0]["route"] = json!("equipment");
+    module["recordTypes"][0]["route"] = json!("equipment");
     let module_bytes = serde_json::to_vec(&module).expect("derived module serializes");
     let parsed_module = parse_module_yaml(&module_bytes).expect("derived module reparses");
     let candidate_source = DerivedSourceFixture {
@@ -2081,9 +1645,11 @@ fn unrelated_reviewed_change_rebuilds_every_view_around_a_retained_derived_relat
         .map(|statement| (statement.id.as_str(), statement.sql.as_str()))
         .collect::<Vec<_>>();
     assert_eq!(planned_views, candidate_views);
-    assert!(planned_views
-        .iter()
-        .any(|(_, sql)| sql.starts_with("CREATE VIEW registry_source.")));
+    assert!(
+        planned_views
+            .iter()
+            .any(|(_, sql)| sql.starts_with("CREATE VIEW registry_source."))
+    );
     assert_eq!(
         planned_views
             .iter()
@@ -2387,7 +1953,7 @@ fn tampered_package_never_returns_a_migration_summary_or_canary() {
 /// project's `status` vocabulary holds `values`; its `state` vocabulary always
 /// holds open, closed, and archived.
 fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
-    let project = serde_json::json!({
+    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -2400,7 +1966,7 @@ fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
             {"id": "status", "values": values},
             {"id": "state", "values": ["open", "closed", "archived"]}
         ],
-        "entities": [{
+        "recordTypes": [{
             "id": "entry",
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -2420,8 +1986,8 @@ fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "entry",
+            "permissions": {"records": [{
+                "recordType": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["status"],
                 "writableFields": ["status"],
@@ -2469,7 +2035,7 @@ fn string_length_registry(
 }
 
 fn field_registry(field: serde_json::Value) -> CompiledRegistry {
-    let project = serde_json::json!({
+    let project = serde_json::json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
@@ -2478,7 +2044,7 @@ fn field_registry(field: serde_json::Value) -> CompiledRegistry {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://authoring.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "entry",
             "primaryDataset": "test-dataset",
             "route": "entries",
@@ -2490,8 +2056,8 @@ fn field_registry(field: serde_json::Value) -> CompiledRegistry {
             "default": true,
             "principalClaim": "registry_principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": "entry",
+            "permissions": {"records": [{
+                "recordType": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["note"],
                 "writableFields": ["note"],
@@ -2588,7 +2154,7 @@ fn compile_source(source: &SourceFixture) -> CompiledRegistry {
 fn geojson_source(binding: Option<&str>) -> SourceFixture {
     let mut module: serde_json::Value =
         serde_json::from_slice(&module_bytes(Variant::Base)).unwrap();
-    let entity = &mut module["entities"][0];
+    let entity = &mut module["recordTypes"][0];
     let fields = entity["fields"].as_array_mut().unwrap();
     for id in ["location", "alternate"] {
         fields.push(serde_json::json!({
@@ -2614,7 +2180,7 @@ fn geojson_source(binding: Option<&str>) -> SourceFixture {
 fn spatial_source(binding: &str, bbox: bool) -> SourceFixture {
     let source = geojson_source(Some(binding));
     let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
-    let profile = &mut module["entities"][0]["accessProfiles"][0];
+    let profile = &mut module["recordTypes"][0]["accessProfiles"][0];
     profile["operations"] = json!(["get", "list"]);
     if bbox {
         profile["spatialQueries"] = json!({"bbox": {
@@ -2632,13 +2198,13 @@ fn spatial_source(binding: &str, bbox: bool) -> SourceFixture {
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
 
 fn derived_source_for_sql(sql: &[u8]) -> DerivedSourceFixture {
-    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maximumLength":16,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec();
+    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maximumLength":16,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec();
     let module = parse_module_yaml(&module_bytes).expect("derived module parses");
     let digest = module_digest_with_assets(
         &module,
@@ -2897,7 +2463,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         String::new()
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{asset},{site}{location}{placement}]}}"#,
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{asset},{site}{location}{placement}]}}"#,
         site = site_entity()
     )
     .into_bytes()
@@ -2979,138 +2545,6 @@ fn build_request(
         },
         migration_plan,
     }
-}
-
-#[cfg(feature = "tooling")]
-fn project_planner_build_request() -> PackageBuildRequest {
-    let project = format!(
-        r#"{{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{{"id":"planner-package","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},
-          "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
-          "entities":[{{
-            "id":"target","primaryDataset":"planner-package","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
-            "fields":[{{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}}]
-          }},{{
-            "id":"request","primaryDataset":"planner-package","route":"requests","mutationMode":"mutable",
-            "fields":[
-              {{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"}},
-              {{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}}
-            ],
-            "changeRequest":{{
-              "planner":{{"kind":"rhai","script":"planners/request.rhai","abi":"registry.change-request-plan/v1","requestFields":["target","label"],"writes":[{{"target":{{"fromField":"target"}},"operation":"patch","fields":["label"]}}]}},
-              "review":{{"type":"required","authority":"casework-main","policyId":"request-review"}},
-              "onApproved":{{"mode":"manual"}}
-            }}
-          }}],
-          "accessProfiles":[{{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{{
-              "entities":[
-                {{"rowBoundaries": "unrestricted", "entity":"target","operations":["get","list"],"readableFields":["label"]}},
-                {{"rowBoundaries": "unrestricted", "entity":"request","operations":["create","patch","get","list","submit-request","revise-request","cancel-request","apply-request"],"readableFields":["target","label"],"writableFields":["target","label"],
-                  "applyTargets":[{{"rowBoundaries": "unrestricted", "entity":"target"}}]
-                }}
-              ]
-            }}
-          }}]
-        }}"#
-    )
-    .into_bytes();
-    PackageBuildRequest {
-        from_package_digest: None,
-        compiler_source_revision: SOURCE_REVISION.to_owned(),
-        schema_fingerprint:
-            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
-        project: PackageSourceFile {
-            path: "source/registry.yaml".to_owned(),
-            bytes: project,
-        },
-        modules: Vec::new(),
-        fixture_journeys: PackageSourceFile {
-            path: "tests/journeys.yaml".to_owned(),
-            bytes: b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: []\n"
-                .to_vec(),
-        },
-        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-    }
-}
-
-#[cfg(feature = "tooling")]
-fn module_planner_build_request() -> PackageBuildRequest {
-    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{
-        "id":"target","primaryDataset":"planner-package","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-        "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}],
-        "accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["label"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]
-      },{
-        "id":"request","primaryDataset":"planner-package","route":"requests","mutationMode":"mutable",
-        "fields":[
-          {"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
-          {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}
-        ],
-        "changeRequest":{
-          "planner":{"kind":"rhai","script":"planners/request.rhai","abi":"registry.change-request-plan/v1","requestFields":["target","label"],"writes":[{"target":{"fromField":"target"},"operation":"patch","fields":["label"]}]},
-          "review":{"type":"required","authority":"casework-main","policyId":"request-review"},
-          "onApproved":{"mode":"manual"}
-        },
-        "accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","patch","get","list","submit-request","revise-request","cancel-request","apply-request"],"readableFields":["target","label"],"writableFields":["target","label"],
-          "applyTargets":[{"entity":"target", "rowBoundaries":"unrestricted"}],
-          "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"
-        }]
-      }]
-    }"#
-    .to_vec();
-    let module = parse_module_yaml(&module_bytes).expect("planner module parses");
-    let module_asset = ModuleAssetSource {
-        module: Some("core".to_owned()),
-        path: "planners/request.rhai".to_owned(),
-        bytes: project_planner_script().to_vec(),
-    };
-    let module_digest = module_digest_with_assets(&module, &[module_asset]);
-    let project = format!(
-        r#"{{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{{"id":"planner-package","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},
-          "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
-          "modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]
-        }}"#
-    )
-    .into_bytes();
-    PackageBuildRequest {
-        from_package_digest: None,
-        compiler_source_revision: SOURCE_REVISION.to_owned(),
-        schema_fingerprint:
-            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
-        project: PackageSourceFile {
-            path: "source/registry.yaml".to_owned(),
-            bytes: project,
-        },
-        modules: vec![PackageModuleSource {
-            id: "core".to_owned(),
-            path: "source/modules/core/module.yaml".to_owned(),
-            bytes: module_bytes,
-            assets: vec![PackageSourceFile {
-                path: "planners/request.rhai".to_owned(),
-                bytes: project_planner_script().to_vec(),
-            }],
-        }],
-        fixture_journeys: PackageSourceFile {
-            path: "tests/journeys.yaml".to_owned(),
-            bytes: b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: []\n"
-                .to_vec(),
-        },
-        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-    }
-}
-
-#[cfg(feature = "tooling")]
-fn project_planner_script() -> &'static [u8] {
-    br#"// rhai-package-source-canary
-fn plan(ctx) {
-    #{ disposition: "apply", effects: [] }
-}
-"#
 }
 
 #[cfg(feature = "tooling")]
@@ -3504,32 +2938,6 @@ fn inspect_prepared(
     inspect_package_integrity(&package).expect("package inspects")
 }
 
-/// Republish the shared package envelope over a test-authored change, so the
-/// refusal under test comes from the registry package check rather than from
-/// the checksum file.
-#[cfg(feature = "tooling")]
-fn refresh_shared_package_envelope(root: &std::path::Path) {
-    let revision_path = root.join(REVISION_FILE);
-    let revision = revision_path.exists().then(|| {
-        fs::read_to_string(&revision_path)
-            .expect("shared package revision reads")
-            .strip_suffix('\n')
-            .expect("shared package revision has one trailing newline")
-            .to_owned()
-    });
-    fs::remove_file(root.join(SUM_FILE)).expect("old shared package checksum file removes");
-    if revision.is_some() {
-        fs::remove_file(revision_path).expect("old shared package revision file removes");
-    }
-    write_sum_file(
-        root,
-        revision.as_deref(),
-        &SharedPackageLimits::default(),
-        "bregctl package",
-    )
-    .expect("test-authored shared package envelope republishes");
-}
-
 #[cfg(feature = "tooling")]
 fn canonical(value: &impl Serialize) -> Vec<u8> {
     canonicalize_json(&serde_json::to_value(value).expect("value serializes"))
@@ -3601,7 +3009,7 @@ fn a_changed_registry_version_is_named_and_explained_in_the_change_set() {
 fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
     let fixture = include_bytes!("../../../products/breg/evidence/registry/registry.yaml");
     let mut source: serde_json::Value = serde_norway::from_slice(fixture).unwrap();
-    source["entities"][0]
+    source["recordTypes"][0]
         .as_object_mut()
         .unwrap()
         .remove("selectorProfiles");
@@ -3611,23 +3019,25 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
         compile_project(&project, &[], CompileProfile::Production).unwrap()
     };
     let previous = compile(&source);
-    source["entities"][0]["selectorProfiles"] =
+    source["recordTypes"][0]["selectorProfiles"] =
         serde_json::json!([{"id":"by-code","fields":["code"]}]);
     source["accessProfiles"].as_array_mut().unwrap().push(serde_json::json!({
         "id":"source","principalClaim":"registry_principal","requiredScopes":["registry:source:lookup"],
-        "permissions":{"entities":[{"entity":"record","operations":["lookup"],"readableFields":["code","status"],
+        "permissions":{"records":[{"recordType":"record","operations":["lookup"],"readableFields":["code","status"],
             "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":"unrestricted"}]}}));
     let candidate = compile(&source);
     let changes = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
     let plan = change_set_to_applicable_migration_plan(&changes)
         .expect("lookup-only authority is a policy successor");
     assert!(plan.statements.is_empty());
-    assert!(changes
-        .changes
-        .iter()
-        .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
+    assert!(
+        changes
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged)
+    );
     // Changing an existing query projection does not become a grant addition.
-    source["accessProfiles"][1]["permissions"]["entities"][0]["readableFields"] =
+    source["accessProfiles"][1]["permissions"]["records"][0]["readableFields"] =
         serde_json::json!(["code", "status", "label"]);
     let widened = compile(&source);
     let changes = compiled_registry_change_set(&candidate, &widened, PRIOR_REVISION);
@@ -3639,11 +3049,11 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
     let fixture = include_bytes!("../../../products/breg/evidence/registry/registry.yaml");
     let mut source: serde_json::Value = serde_norway::from_slice(fixture).unwrap();
     source["accessProfiles"].as_array_mut().unwrap().truncate(1);
-    source["entities"][0]["readPaths"] = serde_json::json!([
+    source["recordTypes"][0]["readPaths"] = serde_json::json!([
         {"id":"children","through":"link","to":"child","route":"children"}
     ]);
-    let dataset = source["entities"][0]["primaryDataset"].clone();
-    source["entities"].as_array_mut().unwrap().extend([
+    let dataset = source["recordTypes"][0]["primaryDataset"].clone();
+    source["recordTypes"].as_array_mut().unwrap().extend([
         serde_json::json!({"id":"child","primaryDataset":dataset,"route":"children","mutationMode":"mutable",
             "fields":[{"id":"code","type":"string","maximumLength":64,"classification":"internal"},
                       {"id":"label","type":"string","maximumLength":100,"classification":"internal"}]}),
@@ -3651,16 +3061,16 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
             "fields":[{"id":"record","type":"reference","target":"record","classification":"internal"},
                       {"id":"child","type":"reference","target":"child","classification":"internal"}]})
     ]);
-    source["accessProfiles"][0]["permissions"]["entities"].as_array_mut().unwrap().extend([
-        serde_json::json!({"entity":"child","operations":["get"],"readableFields":["code","label"],"rowBoundaries":"unrestricted"}),
-        serde_json::json!({"entity":"link","operations":["get"],"readableFields":["record","child"],"rowBoundaries":"unrestricted"})
+    source["accessProfiles"][0]["permissions"]["records"].as_array_mut().unwrap().extend([
+        serde_json::json!({"recordType":"child","operations":["get"],"readableFields":["code","label"],"rowBoundaries":"unrestricted"}),
+        serde_json::json!({"recordType":"link","operations":["get"],"readableFields":["record","child"],"rowBoundaries":"unrestricted"})
     ]);
     let compile = |source: &serde_json::Value| {
         let project = parse_project_yaml(&serde_json::to_vec(source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Production).unwrap()
     };
     let previous = compile(&source);
-    source["accessProfiles"][0]["permissions"]["entities"][0]["readPaths"] =
+    source["accessProfiles"][0]["permissions"]["records"][0]["readPaths"] =
         serde_json::json!([{"path":"children","readableFields":["code"]}]);
     let granted = compile(&source);
     let query = granted
@@ -3677,19 +3087,23 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         .unwrap();
     assert_eq!(query.entity_id, "child");
     assert_eq!(route.entity_id, "record");
-    assert!(!granted.entities()["record"].access_profiles["operator"]
-        .operations
-        .contains(&registry_breg::contract::Operation::List));
+    assert!(
+        !granted.entities()["record"].access_profiles["operator"]
+            .operations
+            .contains(&registry_breg::contract::Operation::List)
+    );
     let changes = compiled_registry_change_set(&previous, &granted, PRIOR_REVISION);
     let plan = change_set_to_applicable_migration_plan(&changes)
         .expect("adding a source read-path grant is a policy successor");
     assert!(plan.statements.is_empty());
-    assert!(changes
-        .changes
-        .iter()
-        .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
+    assert!(
+        changes
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged)
+    );
 
-    source["accessProfiles"][0]["permissions"]["entities"][0]["readPaths"][0]["readableFields"] =
+    source["accessProfiles"][0]["permissions"]["records"][0]["readPaths"][0]["readableFields"] =
         serde_json::json!(["code", "label"]);
     let widened = compile(&source);
     let changes = compiled_registry_change_set(&granted, &widened, PRIOR_REVISION);
@@ -3698,7 +3112,7 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         "an existing query projection change still requires review"
     );
 
-    source["accessProfiles"][0]["permissions"]["entities"][0]["readPaths"] = serde_json::json!([]);
+    source["accessProfiles"][0]["permissions"]["records"][0]["readPaths"] = serde_json::json!([]);
     let removed = compile(&source);
     let changes = compiled_registry_change_set(&granted, &removed, PRIOR_REVISION);
     let plan = change_set_to_applicable_migration_plan(&changes)
@@ -3708,8 +3122,10 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         statement.sql.starts_with("DROP POLICY ")
             && statement.sql.contains("registry_path_rls_select_")
     }));
-    assert!(changes
-        .changes
-        .iter()
-        .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
+    assert!(
+        changes
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged)
+    );
 }

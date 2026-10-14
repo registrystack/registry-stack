@@ -7,34 +7,32 @@ use registry_platform_hooks::HOOK_HANDLER_ABI_V1;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
+use time::{Date, Month, OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 use crate::artifacts::{event_data_schema_binding, generate_artifacts};
 use crate::contract::{
-    parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource, ActionSource,
-    Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource,
-    EntityExtensionSource, EntitySource, EventConditionSource, EventTrigger, FieldSource,
-    FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
-    ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
-    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
-    SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
-    WebhookDeadLetterMode, MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
+    AccessProfileSource, ActionSource, Classification, ConstraintSource, DerivedExecutionSource,
+    DerivedFieldSource, EntityExtensionSource, EntitySource, EventConditionSource, EventTrigger,
+    FieldSource, FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
+    MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES, MAX_ACCESS_LOG_EXEMPTIONS,
     MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
     MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
     MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
-    MAX_STRUCTURED_VALUE_BYTES,
+    MAX_STRUCTURED_VALUE_BYTES, ManifestProjectionTextSource, ModuleAssetSource, MutationMode,
+    Operation, ReadPathPermissionSource, RegistryModule, RegistryProject,
+    SpatialBboxPermissionSource, SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole,
+    WebhookAuthenticationProfile, WebhookDeadLetterMode, parsed_bbox, valid_decimal_bounds,
+    valid_structured_schema,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
 use crate::generated_ddl::generate_ddl_with_actions;
-use crate::immediate_actions::{compile_immediate_actions, hex_lower, CollectedActionSource};
+use crate::immediate_actions::{
+    CollectedActionSource, CollectedFunctionSource, compile_immediate_actions, hex_lower,
+};
 use crate::logical_names::{
     canonical_sql_name, default_api_name, reserved_logical_name, valid_api_name,
-};
-use crate::model::{
-    leading_field_indexed, leading_field_indexed_for_list_finding, request_query_field_id_for_api,
-    request_state_query_filter_fields, request_state_query_sort_fields, REFERENCE_INDEX_PREFIX,
 };
 use crate::model::{
     CompiledAccessEntry, CompiledAccessInventory, CompiledBboxQueryCapability, CompiledBlindIndex,
@@ -53,14 +51,18 @@ use crate::model::{
     CompiledStoredField, CompiledTemporal, CompiledWebhookDeliveryMode,
     CompiledWebhookRetryProfile, HttpMethod, MAX_REVISION_HISTORY_RECORDS,
 };
+use crate::model::{
+    REFERENCE_INDEX_PREFIX, leading_field_indexed, leading_field_indexed_for_list_finding,
+};
 use crate::physical_names::{
-    hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
+    EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory, hex_prefix,
 };
 
-mod attachments;
+pub(crate) mod attachments;
+pub mod review_context;
 mod statistics;
 
-pub const AUTHORING_API_VERSION: &str = "id.registrystack.org/formats/breg/project/v2alpha1";
+pub const AUTHORING_API_VERSION: &str = "id.registrystack.org/formats/breg/project/v1alpha1";
 pub const AUTHORING_KIND: &str = "BRegProject";
 pub const MAX_BATCH_ITEMS: u16 = 100;
 pub const MAX_BATCH_BYTES: u32 = 2_097_152;
@@ -258,6 +260,39 @@ pub fn compile_project_with_assets(
         &mut findings,
     );
     let (module_order, module_map) = order_modules(project, modules, &mut diagnostics);
+    let mut functions = BTreeMap::new();
+    for (module, function) in project
+        .functions
+        .iter()
+        .map(|function| (None, function))
+        .chain(
+            module_order
+                .iter()
+                .filter_map(|id| module_map.get(id))
+                .flat_map(|module| {
+                    module
+                        .functions
+                        .iter()
+                        .map(move |function| (Some(module.id.clone()), function))
+                }),
+        )
+    {
+        validate_id(&function.id, "functions[].id", &mut diagnostics);
+        if !(1..=100000).contains(&function.limits.maximum_operations)
+            || !(1..=1048576).contains(&function.limits.maximum_output_bytes)
+            || functions
+                .insert(
+                    function.id.clone(),
+                    CollectedFunctionSource {
+                        source: function.clone(),
+                        source_module: module,
+                    },
+                )
+                .is_some()
+        {
+            diagnostics.push(Diagnostic::error("breg.function.contract-invalid", "functions[]", "functions require unique IDs across the module closure and bounded positive execution/output limits"));
+        }
+    }
     let (mut sources, mut origins, mut action_sources) =
         collect_entities(project, &module_order, &module_map, &mut diagnostics);
     apply_temporal_roles(&mut sources, &mut diagnostics);
@@ -272,8 +307,7 @@ pub fn compile_project_with_assets(
     validate_module_access_profile_task_grants(&sources, &mut diagnostics);
     let module_profiles = crate::access::module_profile_keys(&sources);
     expand_project_access(project, &mut sources, &mut diagnostics);
-    let vocabularies =
-        resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
+    resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
     validate_entities(&project.project.id, &sources, profile, &mut diagnostics);
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     crate::membership::validate(&sources, &mut diagnostics);
@@ -292,6 +326,7 @@ pub fn compile_project_with_assets(
     }
 
     let (mut entities, physical_names) = compile_entities(&sources, &origins, assets)?;
+    compile_relationships(&mut entities).map_err(CompileFailure::from_errors)?;
     let statistical_datasets =
         statistics::compile(project, &entities).map_err(CompileFailure::from_errors)?;
     crate::membership::compile(&mut entities);
@@ -301,13 +336,14 @@ pub fn compile_project_with_assets(
         &entities,
         &project.access_profiles,
         assets,
-        &vocabularies,
-        &project.functions,
+        &functions,
         &project.review_authorities,
+        project,
     )
     .map_err(CompileFailure::from_errors)?;
     crate::action_evidence_contracts::compile_evidence(project, assets, &mut action_inventory)
         .map_err(CompileFailure::from_errors)?;
+    crate::immediate_actions::finalize_action_revisions(&mut action_inventory, &entities);
     findings.extend(crate::access::compiled_access_findings(
         &entities,
         &action_inventory,
@@ -632,7 +668,7 @@ fn validate_manifest_projection(
 
     let mut members = BTreeMap::<&str, BTreeSet<&str>>::new();
     for entity in entities.values() {
-        let path = format!("project.entities[{}].primaryDataset", entity.id);
+        let path = format!("project.recordTypes[{}].primaryDataset", entity.id);
         let Some(dataset_id) = entity.primary_dataset.as_deref() else {
             errors.push(Diagnostic::error(
                 "breg.manifest-projection.entity-primary-dataset-required",
@@ -1308,7 +1344,6 @@ pub fn module_digest_with_assets(module: &RegistryModule, assets: &[ModuleAssetS
 }
 
 type DerivedOriginMap = BTreeMap<(String, String), Option<String>>;
-type ChangeRequestOriginMap = BTreeMap<String, Option<String>>;
 /// Which module contributed each hook, by `(entity id, hook id)`. A local
 /// handler names a script or module path inside its contributing module, so
 /// the delivery inventory resolves its bytes against the same asset namespace
@@ -1327,7 +1362,7 @@ type EntityOriginMap = BTreeMap<String, Option<String>>;
 /// `compile_entities` reads every field to attribute the module that
 /// contributed each part of a compiled entity, while
 /// `validate_derived_assets`, `validate_hook_assets`, `hook_handler_scripts`,
-/// `compile_change_requests`, and `compile_event_delivery_inventory` read
+/// `compile_event_delivery_inventory` reads
 /// only the one field their own asset or delivery resolution needs.
 #[derive(Default)]
 struct CollectedOrigins {
@@ -1340,7 +1375,6 @@ struct CollectedOrigins {
     selector_profiles: EntityMemberOriginMap,
     read_paths: EntityMemberOriginMap,
     hooks: HookOriginMap,
-    change_requests: ChangeRequestOriginMap,
 }
 
 fn collect_entities(
@@ -1358,7 +1392,7 @@ fn collect_entities(
             &mut origins,
             entity,
             None,
-            "project.entities[].id",
+            "project.recordTypes[].id",
             errors,
         );
     }
@@ -1373,7 +1407,7 @@ fn collect_entities(
                     &mut origins,
                     entity,
                     Some(module.id.clone()),
-                    "modules[].entities[].id",
+                    "modules[].recordTypes[].id",
                     errors,
                 );
             }
@@ -1448,9 +1482,6 @@ fn insert_entity(
         origins
             .hooks
             .insert((entity.id.clone(), hook.id.clone()), module.clone());
-    }
-    if entity.change_request.is_some() {
-        origins.change_requests.insert(entity.id.clone(), module);
     }
 }
 
@@ -1532,7 +1563,7 @@ fn apply_extensions(
             let Some(entity) = entities.get_mut(&extension.entity) else {
                 errors.push(Diagnostic::error(
                     "breg.extension.entity-unknown",
-                    "modules[].extendEntities[].entity",
+                    "modules[].extendRecordTypes[].recordType",
                     "an extension targets an unknown entity",
                 ));
                 continue;
@@ -1579,7 +1610,7 @@ fn merge_extension(
         &extension.fields,
         |value| value.id.as_str(),
         "breg.extension.field-duplicate",
-        "modules[].extendEntities[].fields[].id",
+        "modules[].extendRecordTypes[].fields[].id",
         "a field identifier is contributed more than once",
         errors,
     );
@@ -1594,7 +1625,7 @@ fn merge_extension(
         &extension.derived,
         |value| value.id.as_str(),
         "breg.extension.derived-duplicate",
-        "modules[].extendEntities[].derived[].id",
+        "modules[].extendRecordTypes[].derived[].id",
         "a derived relation identifier is contributed more than once",
         errors,
     );
@@ -1609,7 +1640,7 @@ fn merge_extension(
         &extension.indexes,
         |value| value.id.as_str(),
         "breg.extension.index-duplicate",
-        "modules[].extendEntities[].indexes[].id",
+        "modules[].extendRecordTypes[].indexes[].id",
         "an index identifier is contributed more than once",
         errors,
     );
@@ -1624,7 +1655,7 @@ fn merge_extension(
         &extension.access_profiles,
         |value| value.id.as_str(),
         "breg.extension.access-profile-duplicate",
-        "modules[].extendEntities[].accessProfiles[].id",
+        "modules[].extendRecordTypes[].accessProfiles[].id",
         "an access profile identifier is contributed more than once",
         errors,
     );
@@ -1639,7 +1670,7 @@ fn merge_extension(
         &extension.hooks,
         |value| value.id.as_str(),
         "breg.extension.event-duplicate",
-        "modules[].extendEntities[].hooks[].id",
+        "modules[].extendRecordTypes[].hooks[].id",
         "an event identifier is contributed more than once",
         errors,
     );
@@ -1654,7 +1685,7 @@ fn merge_extension(
         &extension.selector_profiles,
         |value| value.id.as_str(),
         "breg.extension.selector-profile-duplicate",
-        "modules[].extendEntities[].selectorProfiles[].id",
+        "modules[].extendRecordTypes[].selectorProfiles[].id",
         "a selector profile identifier is contributed more than once",
         errors,
     );
@@ -1673,7 +1704,7 @@ fn merge_extension(
         &extension.read_paths,
         |value| value.id.as_str(),
         "breg.extension.read-path-duplicate",
-        "modules[].extendEntities[].readPaths[].id",
+        "modules[].extendRecordTypes[].readPaths[].id",
         "a read path identifier is contributed more than once",
         errors,
     );
@@ -1683,28 +1714,13 @@ fn merge_extension(
             .insert((entity.id.clone(), read_path.id.clone()), module.clone());
     }
     merge_optional_capability(
-        &mut entity.change_control,
-        &extension.change_control,
-        "breg.extension.change-control-duplicate",
-        "modules[].extendEntities[].changeControl",
-        "a change-control capability is contributed more than once",
+        &mut entity.mutation_policy,
+        &extension.mutation_policy,
+        "breg.extension.mutation-policy-duplicate",
+        "modules[].extendRecordTypes[].mutationPolicy",
+        "a mutation policy is contributed more than once",
         errors,
     );
-    let had_change_request = entity.change_request.is_some();
-    merge_optional_capability(
-        &mut entity.change_request,
-        &extension.change_request,
-        "breg.extension.change-request-duplicate",
-        "modules[].extendEntities[].changeRequest",
-        "a change-request capability is contributed more than once",
-        errors,
-    );
-    if !had_change_request && entity.change_request.is_some() {
-        origins
-            .change_requests
-            .insert(entity.id.clone(), module.clone());
-    }
-
     let mut known: BTreeSet<String> = entity
         .constraints
         .iter()
@@ -1720,7 +1736,7 @@ fn merge_extension(
         } else {
             errors.push(Diagnostic::error(
                 "breg.extension.constraint-duplicate",
-                "modules[].extendEntities[].constraints[]",
+                "modules[].extendRecordTypes[].constraints[]",
                 "a constraint identifier is contributed more than once",
             ));
         }
@@ -1776,7 +1792,7 @@ fn validate_project_entity_access_profiles(
     {
         errors.push(Diagnostic::error(
             "breg.access-profile.project-entity-local-forbidden",
-            "project.entities[].accessProfiles",
+            "project.recordTypes[].accessProfiles",
             "root project entities must declare access through top-level accessProfiles",
         ));
     }
@@ -1816,6 +1832,7 @@ pub(crate) fn expand_project_access(
     let mut profile_ids = BTreeSet::new();
     for profile in &project.access_profiles {
         validate_id(&profile.id, "project.accessProfiles[].id", errors);
+        reject_system_profile_id(&profile.id, "accessProfiles[].id", errors);
         if !profile_ids.insert(profile.id.as_str()) {
             errors.push(Diagnostic::error(
                 "breg.access-profile.id-duplicate",
@@ -1867,7 +1884,12 @@ pub(crate) fn expand_project_access(
         if profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
             && profile.task_grant.is_none()
         {
-            let path = if !profile.permissions.actions.is_empty() {
+            let path = if profile
+                .permissions
+                .actions
+                .iter()
+                .any(|permission| permission.operations.contains(&Operation::Invoke))
+            {
                 Some("project.accessProfiles[].permissions.actions[]")
             } else if profile
                 .permissions
@@ -1875,7 +1897,7 @@ pub(crate) fn expand_project_access(
                 .iter()
                 .any(|permission| permission.operations.contains(&Operation::Invoke))
             {
-                Some("project.accessProfiles[].permissions.entities[]")
+                Some("project.accessProfiles[].permissions.records[]")
             } else {
                 None
             };
@@ -1897,50 +1919,16 @@ pub(crate) fn expand_project_access(
                     "taskGrant must declare an absolute sourceIssuer URI",
                 ));
             }
-            // Every list of operations the profile writes, with the path it
-            // is written at and whether it is on an entity whose changes go
-            // through governed requests.
-            let listed_operations = || {
-                let on_entities = profile.permissions.entities.iter().map(|permission| {
-                    let governed_request_draft = entities
-                        .get(&permission.entity)
-                        .is_some_and(|entity| entity.change_request.is_some());
-                    (
-                        "project.accessProfiles[].permissions.entities[].operations",
-                        &permission.operations,
-                        governed_request_draft,
-                    )
-                });
-                let on_actions = profile.permissions.actions.iter().map(|permission| {
-                    (
-                        "project.accessProfiles[].permissions.actions[].operations",
-                        &permission.operations,
-                        false,
-                    )
-                });
-                on_entities.chain(on_actions)
-            };
-            if let Some((path, _, _)) =
-                listed_operations().find(|(_, operations, governed_request_draft)| {
-                    operations.iter().any(|operation| {
-                        *operation == Operation::Invoke
-                            || is_direct_target_mutation(*operation, *governed_request_draft)
-                    })
-                })
-            {
+            if profile.permissions.entities.iter().any(|permission| {
+                permission
+                    .operations
+                    .iter()
+                    .any(|operation| is_direct_target_mutation(*operation))
+            }) {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.task-grant-direct-mutation-forbidden",
-                    path,
-                    "a task-grant profile can author only governed request drafts; direct target mutations, imports, batch operations, tombstones, and immediate actions are forbidden",
-                ));
-            }
-            if let Some((path, _, _)) = listed_operations()
-                .find(|(_, operations, _)| operations.contains(&Operation::ApplyRequest))
-            {
-                errors.push(Diagnostic::error(
-                    "breg.access-profile.task-grant-operation-forbidden",
-                    path,
-                    "a task-grant profile cannot apply a reviewed request; review-decision operations require a non-delegated authority",
+                    "accessProfiles[].permissions.records[].operations",
+                    "a task-grant profile must use a named Action or Proposal; direct Record mutations, imports, batches, and tombstones are forbidden",
                 ));
             }
         }
@@ -1968,7 +1956,7 @@ pub(crate) fn expand_project_access(
             if !granted_entities.insert(grant.entity.as_str()) {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.permission-duplicate",
-                    "project.accessProfiles[].permissions.entities[].entity",
+                    "project.accessProfiles[].permissions.records[].recordType",
                     "an access profile contains duplicate entity permissions",
                 ));
                 continue;
@@ -1976,7 +1964,7 @@ pub(crate) fn expand_project_access(
             let Some(entity) = entities.get_mut(&grant.entity) else {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.permission-entity-unknown",
-                    "project.accessProfiles[].permissions.entities[].entity",
+                    "project.accessProfiles[].permissions.records[].recordType",
                     "an access permission refers to an unknown entity",
                 ));
                 continue;
@@ -2004,7 +1992,6 @@ pub(crate) fn expand_project_access(
                 required_purposes: profile.required_purposes.clone(),
                 operations: grant.operations.clone(),
                 readable_fields: grant.readable_fields.clone(),
-                readable_request_fields: grant.readable_request_fields.clone(),
                 writable_fields: grant.writable_fields.clone(),
                 filterable_fields: grant.filterable_fields.clone(),
                 sortable_fields: grant.sortable_fields.clone(),
@@ -2012,12 +1999,8 @@ pub(crate) fn expand_project_access(
                 row_boundaries: grant.row_boundaries.clone(),
                 membership_boundaries: grant.membership_boundaries.clone(),
                 require_consent: grant.require_consent.clone(),
-                request_visibility: grant.request_visibility,
                 lookups: grant.lookups.clone(),
                 read_paths: grant.read_paths.clone(),
-                apply_targets: grant.apply_targets.clone(),
-                submitter_targets: grant.submitter_targets.clone(),
-                request_presence: grant.request_presence.clone(),
                 allow_count: grant.allow_count,
                 revision_access: grant.revision_access,
                 provenance_fields: grant.provenance_fields.clone(),
@@ -2192,7 +2175,6 @@ fn validate_entities(
         }
         validate_entity_fields(entity, entities, errors);
         validate_access_log(entity, entities, errors);
-        attachments::validate(entity, errors);
         validate_geojson(entity, errors);
         validate_derived(entity, errors);
         validate_logical_names(entity, errors);
@@ -2732,13 +2714,6 @@ fn validate_logical_names(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 "a field API name must be a non-reserved lower camelCase identifier",
             ));
         }
-        if entity.change_request.is_some() && request_query_field_id_for_api(&api_name).is_some() {
-            errors.push(Diagnostic::error(
-                "breg.change-request.field-api-name-reserved",
-                "recordTypes[].fields[].apiName",
-                "request entities cannot reuse server-owned request state API names",
-            ));
-        }
         if !api_names.insert(api_name) {
             errors.push(Diagnostic::error(
                 "breg.field.api-name-duplicate",
@@ -3206,7 +3181,7 @@ fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         if index.fields.len() > MAX_AUTHORED_INDEX_FIELDS {
             errors.push(Diagnostic::error(
                 "breg.index.fields-too-many",
-                "entities[].indexes[].fields",
+                "recordTypes[].indexes[].fields",
                 &format!(
                     "an index may declare at most {MAX_AUTHORED_INDEX_FIELDS} fields; the record identifier takes the last of the 32 key columns PostgreSQL allows in an index"
                 ),
@@ -3497,6 +3472,7 @@ fn validate_profiles(
     let mut ids = BTreeSet::new();
     for access in &entity.access_profiles {
         validate_id(&access.id, "recordTypes[].accessProfiles[].id", errors);
+        reject_system_profile_id(&access.id, "recordTypes[].accessProfiles[].id", errors);
         if !ids.insert(access.id.as_str()) {
             errors.push(Diagnostic::error(
                 "breg.access-profile.id-duplicate",
@@ -3534,8 +3510,6 @@ fn validate_profiles(
             if (entity.mutation_mode == MutationMode::CreateOnly
                 && matches!(operation, Operation::Patch | Operation::Tombstone))
                 || (*operation == Operation::Tombstone && !entity.tombstone)
-                || (is_request_operation(*operation) && entity.change_request.is_none())
-                || (*operation == Operation::Import && entity.change_request.is_some())
                 || *operation == Operation::Invoke
             {
                 errors.push(Diagnostic::error(
@@ -3565,27 +3539,16 @@ fn validate_profiles(
         // drafts. Checked here so module-contributed profiles meet it too.
         if access.actor_kind == Some(crate::contract::ActorKindSource::Agent)
             && access.task_grant.is_none()
-        {
-            if access
+            && access
                 .operations
                 .iter()
-                .any(|operation| is_request_operation(*operation))
-            {
-                errors.push(Diagnostic::error(
-                    "breg.access-profile.standing-agent-operation-forbidden",
-                    "recordTypes[].accessProfiles[].operations",
-                    "a standing agent profile without a taskGrant cannot submit, revise, cancel, or apply a request; a human submits the drafts it authors",
-                ));
-            }
-            if access.operations.iter().any(|operation| {
-                is_direct_target_mutation(*operation, entity.change_request.is_some())
-            }) {
-                errors.push(Diagnostic::error(
+                .any(|operation| is_direct_target_mutation(*operation))
+        {
+            errors.push(Diagnostic::error(
                     "breg.access-profile.standing-agent-direct-mutation-forbidden",
                     "recordTypes[].accessProfiles[].operations",
-                    "a standing agent profile without a taskGrant can author only change-request drafts; direct target mutations, imports, batch operations, and tombstones are forbidden",
+                    "a standing agent profile without a taskGrant can author only Proposal drafts; direct target mutations, imports, batch operations, and tombstones are forbidden",
                 ));
-            }
         }
         if !access.provenance_fields.is_empty()
             && (!access.revision_access || has_duplicates(&access.provenance_fields))
@@ -3605,29 +3568,6 @@ fn validate_profiles(
                 "bulk data export requires an authenticated list profile with a readable projection",
             ));
         }
-        if entity.change_request.is_none()
-            && !crate::contract::is_default_readable_request_fields(&access.readable_request_fields)
-        {
-            errors.push(Diagnostic::error(
-                "breg.access-profile.request-fields-invalid",
-                "recordTypes[].accessProfiles[].readableRequestFields",
-                "request metadata field permissions require a change-request entity",
-            ));
-        }
-        if access.request_visibility.is_some()
-            && (entity.change_request.is_none()
-                || !access
-                    .operations
-                    .iter()
-                    .any(|operation| matches!(operation, Operation::Get | Operation::List)))
-        {
-            errors.push(Diagnostic::error(
-                "breg.access-profile.request-visibility-invalid",
-                "recordTypes[].accessProfiles[].requestVisibility",
-                "owner-scoped request visibility requires an authenticated change-request profile with get or list access",
-            ));
-        }
-        attachments::validate_profile(entity, access, errors);
         validate_spatial_queries(access, entity, errors);
         let mut read_processed = access.readable_fields.clone();
         read_processed.extend(access.filterable_fields.iter().cloned());
@@ -3649,10 +3589,7 @@ fn validate_profiles(
             ("sortableFields", &access.sortable_fields),
         ] {
             for field in referenced {
-                if !fields.contains_key(field.as_str())
-                    && !derived.contains_key(field.as_str())
-                    && !entity.attachments.iter().any(|slot| &slot.id == field)
-                {
+                if !fields.contains_key(field.as_str()) && !derived.contains_key(field.as_str()) {
                     errors.push(Diagnostic::error(
                         "breg.access-profile.field-unknown",
                         format!("{profile_path}.{member}[field={field}]"),
@@ -3672,10 +3609,7 @@ fn validate_profiles(
                     .map(|boundary| ("rowBoundaries", &boundary.field)),
             )
         {
-            if field != "id"
-                && !fields.contains_key(field.as_str())
-                && !entity.attachments.iter().any(|slot| &slot.id == field)
-            {
+            if field != "id" && !fields.contains_key(field.as_str()) {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.field-unknown",
                     format!("{profile_path}.{member}[field={field}]"),
@@ -3771,9 +3705,6 @@ fn validate_profiles(
         }
     }
     for operation in all_operations() {
-        if is_request_operation(operation) {
-            continue;
-        }
         let profiles: Vec<&AccessProfileSource> = entity
             .access_profiles
             .iter()
@@ -4206,13 +4137,6 @@ fn validate_hooks(
                 "a tombstone event requires tombstone behavior",
             ));
         }
-        if hook.trigger == EventTrigger::RequestLifecycle && entity.change_request.is_none() {
-            errors.push(Diagnostic::error(
-                "breg.event.trigger-request-lifecycle-requires-change-request",
-                "recordTypes[].hooks[].trigger",
-                "a request lifecycle event can be declared only on a change-request entity",
-            ));
-        }
         validate_event_condition(hook, &fields, errors);
         let destination_id = match hook.handler.as_ref() {
             // A remote call inside the triggering transaction would hold row
@@ -4343,32 +4267,6 @@ fn validate_hook_assets(
     }
 }
 
-/// The Rhai scripts local hook handlers declare, paired with the module that
-/// owns each one.
-///
-/// A hook handler names its own reviewed asset the way an action handler does,
-/// so the change-request asset pass counts those declarations as well and does
-/// not read a hook's script as an unowned one.
-fn hook_handler_scripts(
-    sources: &BTreeMap<String, EntitySource>,
-    hook_origins: &HookOriginMap,
-) -> BTreeSet<(Option<String>, String)> {
-    let mut scripts = BTreeSet::new();
-    for entity in sources.values() {
-        for hook in &entity.hooks {
-            let Some(HookHandlerSource::Rhai { script, .. }) = hook.handler.as_ref() else {
-                continue;
-            };
-            let module = hook_origins
-                .get(&(entity.id.clone(), hook.id.clone()))
-                .cloned()
-                .unwrap_or_default();
-            scripts.insert((module, script.clone()));
-        }
-    }
-    scripts
-}
-
 fn validate_hook_module_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
     if bytes.is_empty() || bytes.len() > crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES {
         errors.push(Diagnostic::error(
@@ -4492,7 +4390,6 @@ fn validate_event_condition(
                 EventTrigger::Tombstoned => {
                     changed.is_empty() && after_equals.is_empty() && after_is_null.is_empty()
                 }
-                EventTrigger::RequestLifecycle => false,
             };
             if !compatible {
                 errors.push(Diagnostic::error(
@@ -4573,49 +4470,6 @@ fn validate_event_condition(
                 }
             }
         }
-        Some(EventConditionSource::RequestLifecycle {
-            transitions,
-            to_states,
-        }) => {
-            if transitions.is_empty() && to_states.is_empty() {
-                errors.push(Diagnostic::error(
-                    "breg.event.when-empty",
-                    "recordTypes[].hooks[].when",
-                    "a request lifecycle event condition requires at least one predicate",
-                ));
-            }
-            if event.trigger != EventTrigger::RequestLifecycle {
-                errors.push(Diagnostic::error(
-                    "breg.event.when-trigger-incompatible",
-                    "recordTypes[].hooks[].when",
-                    "request lifecycle predicates are available only for request lifecycle events",
-                ));
-            }
-            for transition in transitions {
-                if !valid_request_lifecycle_transition(transition) {
-                    errors.push(Diagnostic::error(
-                        "breg.event.when-request-lifecycle-transition-unknown",
-                        "recordTypes[].hooks[].when.transitions",
-                        &format!(
-                            "a request lifecycle event condition refers to an unknown transition `{transition}`; the change request workflow performs {}",
-                            quoted_list(&REQUEST_LIFECYCLE_TRANSITIONS)
-                        ),
-                    ));
-                }
-            }
-            for state in to_states {
-                if !valid_request_lifecycle_state(state) {
-                    errors.push(Diagnostic::error(
-                        "breg.event.when-request-lifecycle-state-unknown",
-                        "recordTypes[].hooks[].when.toStates",
-                        &format!(
-                            "a request lifecycle event condition refers to an unknown request state `{state}`; a change request rests in {}",
-                            quoted_list(&REQUEST_LIFECYCLE_STATES)
-                        ),
-                    ));
-                }
-            }
-        }
         None => {}
     }
 }
@@ -4623,25 +4477,6 @@ fn validate_event_condition(
 /// The `project.package` members a production compilation requires. Authoring
 /// documentation reads this list rather than restating it.
 pub const PACKAGE_IDENTITY_KEYS: [&str; 1] = ["package.sourceRevision"];
-
-/// Every change request transition a request lifecycle event may select, in
-/// workflow order. Authoring documentation reads this list rather than
-/// restating it.
-pub const REQUEST_LIFECYCLE_TRANSITIONS: [&str; 5] =
-    ["submit", "revise", "rebase", "cancel", "apply"];
-
-/// Every change request state a request lifecycle event may select, in
-/// workflow order. Authoring documentation reads this list rather than
-/// restating it.
-pub const REQUEST_LIFECYCLE_STATES: [&str; 4] = ["draft", "submitted", "cancelled", "applied"];
-
-fn valid_request_lifecycle_transition(value: &str) -> bool {
-    REQUEST_LIFECYCLE_TRANSITIONS.contains(&value)
-}
-
-fn valid_request_lifecycle_state(value: &str) -> bool {
-    REQUEST_LIFECYCLE_STATES.contains(&value)
-}
 
 /// Every member that appears more than once, in first-seen order.
 fn duplicate_members(values: &[String]) -> Vec<&str> {
@@ -4688,85 +4523,26 @@ fn maximum_event_payload_bytes<'a>(
     event: &crate::contract::HookSource,
     field: impl Fn(&str) -> Option<(&'a FieldTypeSource, bool)>,
 ) -> Option<u64> {
-    let trigger = event.trigger;
     let values = maximum_event_values_bytes(&event.projection, field)?;
-    let fixed_keys: &[&str] = if trigger == EventTrigger::RequestLifecycle {
-        &[
-            "entity",
-            "recordId",
-            "revision",
-            "trigger",
-            "packageRevision",
-            "request",
-            "values",
-        ]
-    } else {
-        &[
-            "entity",
-            "recordId",
-            "revision",
-            "trigger",
-            "packageRevision",
-            "values",
-        ]
-    };
+    let fixed_keys = [
+        "entity",
+        "recordId",
+        "revision",
+        "trigger",
+        "packageRevision",
+        "values",
+    ];
     // Canonical body object braces, one comma between members, and fixed key
     // encodings (two quotes plus a colon per key).
     let mut total = 2_u64.checked_add(fixed_keys.len().saturating_sub(1) as u64)?;
     for key in fixed_keys {
         total = total.checked_add(key.len() as u64 + 3)?;
     }
-    if trigger == EventTrigger::RequestLifecycle {
-        // The request lifecycle envelope contains bounded ASCII state and
-        // digest fields plus integer proposal/workflow revisions and a stable
-        // deduplication key. The exact runtime payload is still checked against
-        // the compiled delivery maximum before insert.
-        let request_keys = [
-            "proposalVersion",
-            "workflowRevision",
-            "transition",
-            "fromState",
-            "toState",
-            "effectDigest",
-            "deduplicationKey",
-            "reasonPresent",
-        ];
-        total = total
-            .checked_add(2)?
-            .checked_add(request_keys.len() as u64 - 1)?;
-        for key in request_keys {
-            total = total.checked_add(key.len() as u64 + 3)?;
-        }
-        total = total
-            .checked_add(10)?
-            .checked_add(20)?
-            .checked_add(34)?
-            .checked_add(16)?
-            .checked_add(16)?
-            .checked_add(73)?
-            .checked_add(512)?
-            .checked_add(5)?;
-        if request_event_may_include_reason(event) {
-            // Include the comma, key, and worst-case escaped Unicode text only
-            // when the event can carry an application reason.
-            total = total
-                .checked_add(1 + "reason".len() as u64 + 3)?
-                .checked_add(
-                    (crate::proposal_workflow::MAX_APPLICATION_REASON_CHARS as u64)
-                        .checked_mul(6)?,
-                )?
-                .checked_add(2)?;
-        }
-    }
     // Entity ids and triggers use the compiler's closed ASCII grammars.
     total = total.checked_add(entity_id.len() as u64 + 2)?;
     // A UUID string, the largest positive i64 revision, and the longest
     // trigger string, including JSON quotes where applicable.
-    let maximum_trigger_bytes = if trigger == EventTrigger::RequestLifecycle {
-        21
-    } else {
-        12
-    };
+    let maximum_trigger_bytes = 12;
     total = total
         .checked_add(38)?
         .checked_add(19)?
@@ -4965,26 +4741,6 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
     Some(bytes)
 }
 
-/// A lifecycle event can disclose application reason text only on apply.
-/// Empty condition sets are unrestricted, as in runtime condition evaluation.
-fn request_event_may_include_reason(event: &crate::contract::HookSource) -> bool {
-    if event.trigger != EventTrigger::RequestLifecycle {
-        return false;
-    }
-    match event.when.as_ref() {
-        None => true,
-        Some(EventConditionSource::RequestLifecycle {
-            transitions,
-            to_states,
-            ..
-        }) => {
-            (transitions.is_empty() || transitions.contains("apply"))
-                && (to_states.is_empty() || to_states.contains("applied"))
-        }
-        Some(EventConditionSource::Fields { .. }) => false,
-    }
-}
-
 /// Derive outbound classification from every value the event can disclose.
 /// Mutation planning uses this same rule when checking the compiled inventory.
 pub(crate) fn event_classification_ceiling(
@@ -4997,8 +4753,6 @@ pub(crate) fn event_classification_ceiling(
         .chain(event_condition_fields(event))
         .filter_map(|field| entity.fields.get(field))
         .map(|field| field.classification)
-        .chain((event.trigger == EventTrigger::RequestLifecycle).then_some(entity.classification))
-        .chain(request_event_may_include_reason(event).then_some(Classification::Internal))
         .max()
 }
 
@@ -5128,7 +4882,7 @@ fn event_condition_fields(
                 .chain(before_is_null.iter())
                 .chain(after_is_null.iter()),
         ),
-        Some(EventConditionSource::RequestLifecycle { .. }) | None => Box::new(std::iter::empty()),
+        None => Box::new(std::iter::empty()),
     }
 }
 
@@ -5610,7 +5364,7 @@ fn compile_entities(
                     .clone()
                     .unwrap_or_else(|| type_api_name(&source.id)),
                 display: source.display.clone(),
-                definition_revision: record_definition_revision(source),
+                definition_revision: record_definition_revision(source, &constraints),
                 id: source.id.clone(),
                 source_module,
                 primary_dataset: Some(source.primary_dataset.clone()),
@@ -5636,14 +5390,13 @@ fn compile_entities(
                 source_relation,
                 selector_profiles,
                 read_paths,
-                change_control: source.change_control.clone().map(|change_control| {
+                change_control: source.mutation_policy.clone().map(|change_control| {
                     CompiledChangeControl {
-                        required_for: change_control.required_for.into_set(),
+                        required_for: change_control.proposal_required_operations(),
                     }
                 }),
-                change_request: None,
+                relationships: BTreeMap::new(),
                 fields,
-                attachments: attachments::compile(source),
                 constraints,
                 indexes,
                 access_profiles: profiles,
@@ -6151,12 +5904,7 @@ fn unindexed_field_findings<'a>(
             .fields
             .get(field)
             .is_some_and(|compiled| compiled.encryption.is_none())
-            && !leading_field_indexed_for_list_finding(
-                field,
-                &entity.indexes,
-                &entity.constraints,
-                entity.change_request.is_some(),
-            )
+            && !leading_field_indexed_for_list_finding(field, &entity.indexes, &entity.constraints)
             && !consent_scope_indexed(field)
     };
     // A temporal exclusion constraint is backed by a GiST index that answers
@@ -6175,7 +5923,7 @@ fn unindexed_field_findings<'a>(
             findings.push(Diagnostic::finding(
                 "breg.entity.list-unindexed-filter",
                 format!("{path}.filterableFields[field={field}]"),
-                "no index leads with this filterable field, so a filtered list scans every row the caller may read. If this entity will hold more than a few thousand rows, declare an index that leads with the field under entities[].indexes",
+                "no index leads with this filterable field, so a filtered list scans every row the caller may read. If this Record type will hold more than a few thousand rows, declare an index that leads with the field under recordTypes[].indexes",
             ));
         }
     }
@@ -6184,7 +5932,7 @@ fn unindexed_field_findings<'a>(
             findings.push(Diagnostic::finding(
                 "breg.entity.list-unindexed-sort",
                 format!("{path}.sortableFields[field={field}]"),
-                "no index leads with this sortable field, so a sorted list orders every row the caller may read before returning a page. If this entity will hold more than a few thousand rows, declare an index that leads with the field under entities[].indexes",
+                "no index leads with this sortable field, so a sorted list orders every row the caller may read before returning a page. If this Record type will hold more than a few thousand rows, declare an index that leads with the field under recordTypes[].indexes",
             ));
         }
     }
@@ -6289,7 +6037,6 @@ fn query_operation(
     let mut projection_fields = profile
         .readable_fields
         .iter()
-        .filter(|field| !entity.attachments.contains_key(field.as_str()))
         .filter(|field| !stored_only || entity.fields.contains_key(field.as_str()))
         .cloned()
         .collect::<Vec<String>>();
@@ -6303,7 +6050,6 @@ fn query_operation(
             query_filter_field(field_type, field, errors)
         })
         .collect::<Vec<_>>();
-    let mut filter_fields = filter_fields;
     let sort_fields = profile
         .sortable_fields
         .iter()
@@ -6313,17 +6059,6 @@ fn query_operation(
             query_sort_field(field_type, field, errors)
         })
         .collect::<Vec<_>>();
-    let mut sort_fields = sort_fields;
-    if entity.change_request.is_some() && kind == CompiledQueryKind::List {
-        filter_fields.extend(request_state_query_filter_fields());
-        if profile
-            .readable_request_fields
-            .contains(&crate::contract::RequestMetadataFieldSource::ReviewState)
-        {
-            filter_fields.push(crate::model::request_review_query_filter_field());
-        }
-        sort_fields.extend(request_state_query_sort_fields());
-    }
     let mut processing_fields = projection_fields.iter().cloned().collect::<BTreeSet<_>>();
     processing_fields.extend(
         profile
@@ -6580,13 +6315,8 @@ fn route_shape(entity: &CompiledEntity, operation: Operation) -> (HttpMethod, St
         // The ingestion-run surface is the only place an import grant is
         // exercised; the HTTP router never mounts this route directly.
         Operation::Import => (HttpMethod::Post, format!("{base}/ingestion-runs")),
-        Operation::SubmitRequest
-        | Operation::ReviseRequest
-        | Operation::CancelRequest
-        | Operation::ApplyRequest
-        | Operation::Invoke
-        | Operation::Start => {
-            unreachable!("request and immediate actions use compiled action metadata")
+        Operation::Invoke | Operation::Start => {
+            unreachable!("Actions use compiled action metadata")
         }
     }
 }
@@ -6606,7 +6336,7 @@ fn routed_operations() -> [Operation; 10] {
     ]
 }
 
-fn all_operations() -> [Operation; 15] {
+fn all_operations() -> [Operation; 11] {
     [
         Operation::Create,
         Operation::Get,
@@ -6617,33 +6347,20 @@ fn all_operations() -> [Operation; 15] {
         Operation::Batch,
         Operation::Revisions,
         Operation::Snapshot,
-        Operation::SubmitRequest,
-        Operation::ReviseRequest,
-        Operation::CancelRequest,
-        Operation::ApplyRequest,
         Operation::Invoke,
         Operation::Import,
     ]
 }
 
-/// Create and patch on a change-request entity author a draft; anywhere else
-/// they write the record itself. Tombstone, batch, and import always write
-/// directly.
-fn is_direct_target_mutation(operation: Operation, change_request_entity: bool) -> bool {
-    match operation {
-        Operation::Create | Operation::Patch => !change_request_entity,
-        Operation::Tombstone | Operation::Batch | Operation::Import => true,
-        _ => false,
-    }
-}
-
-fn is_request_operation(operation: Operation) -> bool {
+/// Native Record writes are independent of Action and Proposal authority.
+fn is_direct_target_mutation(operation: Operation) -> bool {
     matches!(
         operation,
-        Operation::SubmitRequest
-            | Operation::ReviseRequest
-            | Operation::CancelRequest
-            | Operation::ApplyRequest
+        Operation::Create
+            | Operation::Patch
+            | Operation::Tombstone
+            | Operation::Batch
+            | Operation::Import
     )
 }
 
@@ -6658,10 +6375,6 @@ pub(crate) fn operation_id(operation: Operation) -> &'static str {
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
         Operation::Snapshot => "snapshot",
-        Operation::SubmitRequest => "submit-request",
-        Operation::ReviseRequest => "revise-request",
-        Operation::CancelRequest => "cancel-request",
-        Operation::ApplyRequest => "apply-request",
         Operation::Invoke => "invoke",
         Operation::Start => "start",
         Operation::Import => "import",
@@ -7084,6 +6797,16 @@ fn valid_code(value: &str) -> bool {
         && value.chars().all(|character| !character.is_control())
 }
 
+fn reject_system_profile_id(id: &str, path: &str, errors: &mut Vec<Diagnostic>) {
+    if id == "system-proposal-apply" {
+        errors.push(Diagnostic::error(
+            "breg.access-profile.system-id-reserved",
+            path,
+            "this profile identifier is reserved for the built-in Proposal executor",
+        ));
+    }
+}
+
 fn type_api_name(id: &str) -> String {
     let mut name = crate::logical_names::default_api_name(id);
     if let Some(first) = name.get_mut(..1) {
@@ -7091,14 +6814,104 @@ fn type_api_name(id: &str) -> String {
     }
     name
 }
-fn record_definition_revision(source: &EntitySource) -> String {
+fn record_definition_revision(
+    source: &EntitySource,
+    constraints: &BTreeMap<String, ConstraintSource>,
+) -> String {
     let fields=source.fields.iter().map(|field|(&field.id,serde_json::json!({"apiName":field.api_name,"type":field.field_type,"required":field.required,"pattern":field.pattern,"classification":field.classification,"encrypted":field.encrypted,"relationship":field.relationship}))).collect::<BTreeMap<_,_>>();
-    let payload = serde_json::json!({"id":source.id,"apiName":source.api_name.clone().unwrap_or_else(||type_api_name(&source.id)),"fields":fields,"mutationMode":source.mutation_mode,"changeControl":source.change_control,"constraints":source.constraints});
+    let payload = serde_json::json!({"id":source.id,"apiName":source.api_name.clone().unwrap_or_else(||type_api_name(&source.id)),"fields":fields,"mutationMode":source.mutation_mode,"mutationPolicy":source.mutation_policy,"constraints":constraints});
     let digest = Sha256::digest(
         registry_platform_canonical_json::canonicalize_json(&payload)
             .expect("Record definition canonicalizes"),
     );
     format!("sha256:{}", hex_prefix(&digest, digest.len()))
+}
+
+fn compile_relationships(
+    entities: &mut BTreeMap<String, CompiledEntity>,
+) -> Result<(), Vec<Diagnostic>> {
+    use crate::model::{CompiledRelationship, RelationshipCardinality};
+    let mut relationships = Vec::new();
+    let mut errors = Vec::new();
+    for entity in entities.values() {
+        for stored in &entity.stored_fields {
+            let field = &entity.fields[&stored.logical.id];
+            let FieldTypeSource::Reference { target, .. } = &field.field_type else {
+                continue;
+            };
+            let inverse_name = field
+                .relationship
+                .as_ref()
+                .and_then(|relationship| relationship.inverse_name.clone());
+            relationships.push((
+                entity.id.clone(),
+                CompiledRelationship {
+                    name: stored.logical.api_name.clone(),
+                    source_entity_id: entity.id.clone(),
+                    target_entity_id: target.clone(),
+                    field_id: field.id.clone(),
+                    cardinality: if field.required {
+                        RelationshipCardinality::One
+                    } else {
+                        RelationshipCardinality::OptionalOne
+                    },
+                    inverse: false,
+                    inverse_name: inverse_name.clone(),
+                    read_path: None,
+                },
+            ));
+            if let Some(name) = inverse_name {
+                let unique = entity.constraints.values().any(|constraint| matches!(constraint, ConstraintSource::Unique { fields, when, .. }
+                    if fields.as_slice() == [field.id.as_str()] && when.as_ref().is_none_or(|predicates| predicates.as_slice() == [crate::contract::UniqueWhenPredicate::ActiveLifecycle {}])));
+                relationships.push((
+                    target.clone(),
+                    CompiledRelationship {
+                        name,
+                        source_entity_id: target.clone(),
+                        target_entity_id: entity.id.clone(),
+                        field_id: field.id.clone(),
+                        cardinality: if unique {
+                            RelationshipCardinality::OptionalOne
+                        } else {
+                            RelationshipCardinality::Many
+                        },
+                        inverse: true,
+                        inverse_name: Some(stored.logical.api_name.clone()),
+                        read_path: None,
+                    },
+                ));
+            }
+        }
+    }
+    for (owner, relationship) in relationships {
+        let Some(entity) = entities.get_mut(&owner) else {
+            continue;
+        };
+        let collision = !crate::logical_names::valid_api_name(&relationship.name)
+            || crate::logical_names::reserved_logical_name(&relationship.name)
+            || entity.relationships.contains_key(&relationship.name)
+            || (relationship.inverse
+                && (entity.stored_fields.iter().any(|field| {
+                    field.logical.id == relationship.name
+                        || field.logical.api_name == relationship.name
+                }) || entity.derived_fields.values().any(|field| {
+                    field.logical.id == relationship.name
+                        || field.logical.api_name == relationship.name
+                })))
+            || entity.read_paths.contains_key(&relationship.name);
+        if collision {
+            errors.push(Diagnostic::error("breg.relationship.name-collision", format!("recordTypes[id={owner}].relationships"), "forward and inverse relationship names must be unique nonreserved API names without field or read-path collisions"));
+        } else {
+            entity
+                .relationships
+                .insert(relationship.name.clone(), relationship);
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 fn validate_native_definitions(project: &RegistryProject, errors: &mut Vec<Diagnostic>) {
     let mut datasets = BTreeSet::new();

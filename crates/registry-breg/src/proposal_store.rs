@@ -16,26 +16,22 @@ use crate::mutation::MutationError;
 use crate::postgres::SqlIdentifier;
 use crate::proposal_prepare::ProposalTargetSnapshot;
 use crate::proposal_workflow::{
-    ApplicationId, ApplicationReceipt, ApplicationResultLink, EntityId, ProposalDigest,
-    ProposalSnapshot, ProposalVersion, RecordId, RecordRevision, ProposalKey, ProposalState,
-    ProposalWorkflow, StateRevision, TrustedActorRef, TrustedTimestamp, MAX_PROPOSAL_SNAPSHOT_BYTES,
-    MAX_PROPOSAL_TARGETS,
+    ApplicationId, ApplicationReceipt, ApplicationResultLink, EntityId,
+    MAX_PROPOSAL_SNAPSHOT_BYTES, MAX_PROPOSAL_TARGETS, ProposalDigest, ProposalKey,
+    ProposalSnapshot, ProposalState, ProposalWorkflow, RecordId, RecordRevision, StateRevision,
+    SubmissionVersion, TrustedActorRef, TrustedTimestamp,
 };
 
-pub(crate) const REQUEST_TABLES: &[(&str, &[&str])] = &[
+pub(crate) const PROPOSAL_TABLES: &[(&str, &[&str])] = &[
+    ("registry_proposal_activation_compatibility", &["SELECT"]),
     ("registry_proposal_state", &["INSERT", "SELECT", "UPDATE"]),
-    (
-        "registry_proposal_intake_presence",
-        &["DELETE", "INSERT", "SELECT"],
-    ),
-    ("registry_proposal_proposals", &["INSERT", "SELECT"]),
+    ("registry_proposal_submissions", &["INSERT", "SELECT"]),
     ("registry_proposal_task_authority", &["INSERT", "SELECT"]),
     ("registry_proposal_targets", &["INSERT", "SELECT"]),
     ("registry_proposal_applications", &["INSERT", "SELECT"]),
     ("registry_proposal_evidence_uses", &["INSERT"]),
     ("registry_proposal_results", &["INSERT", "SELECT"]),
     ("registry_proposal_idempotency_links", &["INSERT", "SELECT"]),
-    ("registry_proposal_revision_links", &["INSERT", "SELECT"]),
 ];
 
 pub(crate) async fn install(
@@ -49,7 +45,7 @@ pub(crate) async fn install(
              owner_reference text NOT NULL CHECK (owner_reference <> ''),
             state text NOT NULL CHECK (state IN
                  ('draft','submitted','cancelled','applied')),
-             proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
+             submission_version bigint NOT NULL CHECK (submission_version BETWEEN 1 AND 4294967295),
              workflow_revision bigint NOT NULL CHECK (workflow_revision > 0),
              action_revision text NOT NULL DEFAULT '',
              action_title text,
@@ -64,46 +60,58 @@ pub(crate) async fn install(
                  detail_erased_at IS NULL OR state IN ('cancelled','applied')
              )
          );
-         CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_intake_presence (
-             action_id text NOT NULL CHECK (action_id <> ''),
-             proposal_id uuid NOT NULL,
-             field_id text NOT NULL CHECK (field_id <> ''),
-             PRIMARY KEY (action_id, proposal_id, field_id),
-             FOREIGN KEY (action_id, proposal_id)
-                 REFERENCES registry_internal.registry_proposal_state
-                 ON DELETE CASCADE
-         );
-         CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_proposals (
+         CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_submissions (
              action_id text NOT NULL,
              proposal_id uuid NOT NULL,
-             proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
+             submission_version bigint NOT NULL CHECK (submission_version BETWEEN 1 AND 4294967295),
              input_revision bigint NOT NULL CHECK (input_revision > 0),
              contract_fingerprint text NOT NULL CHECK (contract_fingerprint ~ '^sha256:[0-9a-f]{64}$'),
              effect_digest text NOT NULL CHECK (effect_digest ~ '^sha256:[0-9a-f]{64}$'),
              snapshot jsonb,
              erased_at timestamptz,
              created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-             PRIMARY KEY (action_id, proposal_id, proposal_version),
+             PRIMARY KEY (action_id, proposal_id, submission_version),
              FOREIGN KEY (action_id, proposal_id)
                  REFERENCES registry_internal.registry_proposal_state,
              CHECK ((snapshot IS NULL) = (erased_at IS NOT NULL)),
              CHECK (snapshot IS NULL OR jsonb_typeof(snapshot) = 'object')
          );
+         CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_activation_compatibility (
+             action_id text NOT NULL,
+             proposal_id uuid NOT NULL,
+             submission_version bigint NOT NULL,
+             effect_digest text NOT NULL CHECK (effect_digest ~ '^sha256:[0-9a-f]{64}$'),
+             frozen_action_revision text NOT NULL CHECK (frozen_action_revision ~ '^sha256:[0-9a-f]{64}$'),
+             frozen_system_grant_revision text,
+             current_action_revision text NOT NULL CHECK (current_action_revision ~ '^sha256:[0-9a-f]{64}$'),
+             current_system_grant_revision text,
+             expected_policy jsonb NOT NULL CHECK (jsonb_typeof(expected_policy) = 'object'),
+             accepted_binding jsonb NOT NULL CHECK (jsonb_typeof(accepted_binding) = 'object'),
+             closure_digest text NOT NULL CHECK (closure_digest ~ '^sha256:[0-9a-f]{64}$'),
+             from_package_digest text NOT NULL,
+             candidate_package_digest text NOT NULL,
+             activation_id uuid NOT NULL,
+             proof_observed_at timestamptz NOT NULL,
+             proof_valid_until timestamptz NOT NULL CHECK (proof_valid_until > proof_observed_at),
+             PRIMARY KEY (action_id, proposal_id, submission_version, candidate_package_digest, activation_id),
+             FOREIGN KEY (action_id, proposal_id, submission_version)
+                 REFERENCES registry_internal.registry_proposal_submissions
+         );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_task_authority (
              action_id text NOT NULL,
              proposal_id uuid NOT NULL,
-             proposal_version bigint NOT NULL,
+             submission_version bigint NOT NULL,
              binding jsonb NOT NULL CHECK (
                  jsonb_typeof(binding) = 'object' AND octet_length(binding::text) <= 65536
              ),
-             PRIMARY KEY (action_id, proposal_id, proposal_version),
-             FOREIGN KEY (action_id, proposal_id, proposal_version)
-                 REFERENCES registry_internal.registry_proposal_proposals
+             PRIMARY KEY (action_id, proposal_id, submission_version),
+             FOREIGN KEY (action_id, proposal_id, submission_version)
+                 REFERENCES registry_internal.registry_proposal_submissions
          );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_targets (
              action_id text NOT NULL,
              proposal_id uuid NOT NULL,
-             proposal_version bigint NOT NULL,
+             submission_version bigint NOT NULL,
              target_entity_id text NOT NULL CHECK (target_entity_id <> ''),
              target_record_id uuid NOT NULL,
              operation text NOT NULL CHECK (operation IN ('create','patch')),
@@ -111,10 +119,10 @@ pub(crate) async fn install(
              base_snapshot jsonb,
              after_snapshot jsonb,
              erased_at timestamptz,
-             PRIMARY KEY (action_id, proposal_id, proposal_version,
+             PRIMARY KEY (action_id, proposal_id, submission_version,
                           target_entity_id, target_record_id),
-             FOREIGN KEY (action_id, proposal_id, proposal_version)
-                 REFERENCES registry_internal.registry_proposal_proposals,
+             FOREIGN KEY (action_id, proposal_id, submission_version)
+                 REFERENCES registry_internal.registry_proposal_submissions,
              CHECK ((operation = 'create' AND expected_revision IS NULL)
                     OR (operation = 'patch' AND expected_revision IS NOT NULL)),
              CHECK (base_snapshot IS NULL OR jsonb_typeof(base_snapshot) = 'object'),
@@ -128,7 +136,7 @@ pub(crate) async fn install(
          CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_applications (
              action_id text NOT NULL,
              proposal_id uuid NOT NULL,
-             proposal_version bigint NOT NULL,
+             submission_version bigint NOT NULL,
              application_id uuid NOT NULL UNIQUE,
              effect_digest text NOT NULL CHECK (effect_digest ~ '^sha256:[0-9a-f]{64}$'),
              applied_by text NOT NULL CHECK (applied_by <> ''),
@@ -138,9 +146,9 @@ pub(crate) async fn install(
              CONSTRAINT registry_proposal_application_reason_bound CHECK (
                  reason IS NULL OR (char_length(reason) <= 4096 AND reason_present)
              ),
-             PRIMARY KEY (action_id, proposal_id, proposal_version),
-             FOREIGN KEY (action_id, proposal_id, proposal_version)
-                 REFERENCES registry_internal.registry_proposal_proposals
+             PRIMARY KEY (action_id, proposal_id, submission_version),
+             FOREIGN KEY (action_id, proposal_id, submission_version)
+                 REFERENCES registry_internal.registry_proposal_submissions
          );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_evidence_uses (
              application_id uuid NOT NULL REFERENCES
@@ -156,13 +164,13 @@ pub(crate) async fn install(
          CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_results (
              action_id text NOT NULL,
              proposal_id uuid NOT NULL,
-             proposal_version bigint NOT NULL,
+             submission_version bigint NOT NULL,
              target_entity_id text NOT NULL,
              target_record_id uuid NOT NULL,
              target_revision bigint NOT NULL CHECK (target_revision > 0),
-             PRIMARY KEY (action_id, proposal_id, proposal_version,
+             PRIMARY KEY (action_id, proposal_id, submission_version,
                           target_entity_id, target_record_id),
-             FOREIGN KEY (action_id, proposal_id, proposal_version)
+             FOREIGN KEY (action_id, proposal_id, submission_version)
                  REFERENCES registry_internal.registry_proposal_applications,
              FOREIGN KEY (target_entity_id, target_record_id, target_revision)
                  REFERENCES registry_internal.registry_revisions
@@ -170,11 +178,12 @@ pub(crate) async fn install(
          );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_idempotency_links (
              key_reference text NOT NULL,
+             action_revision text NOT NULL CHECK (action_revision ~ '^sha256:[0-9a-f]{64}$'),
              action_id text NOT NULL CHECK (action_id <> ''),
              proposal_id uuid NOT NULL,
-             proposal_version bigint NOT NULL CHECK (proposal_version > 0),
+             submission_version bigint NOT NULL CHECK (submission_version > 0),
              created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-             PRIMARY KEY (key_reference, action_id, proposal_id, proposal_version),
+             PRIMARY KEY (key_reference, action_id, proposal_id, submission_version),
              FOREIGN KEY (key_reference)
                  REFERENCES registry_internal.registry_idempotency (key_reference),
              FOREIGN KEY (action_id, proposal_id)
@@ -182,25 +191,8 @@ pub(crate) async fn install(
          );
          CREATE INDEX IF NOT EXISTS registry_proposal_idempotency_by_request
              ON registry_internal.registry_proposal_idempotency_links
-                 (action_id, proposal_id, proposal_version);
-         CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_revision_links (
-             entity_id text NOT NULL CHECK (entity_id <> ''),
-             record_id uuid NOT NULL,
-             record_revision bigint NOT NULL CHECK (record_revision > 0),
-             action_id text NOT NULL CHECK (action_id <> ''),
-             proposal_id uuid NOT NULL,
-             proposal_version bigint NOT NULL CHECK (proposal_version > 0),
-             link_kind text NOT NULL CHECK (link_kind IN
-                 ('request_create','request_patch','request-lifecycle','request_batch')),
-             created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-             PRIMARY KEY (entity_id, record_id, record_revision,
-                          action_id, proposal_id, proposal_version),
-             FOREIGN KEY (entity_id, record_id, record_revision)
-                 REFERENCES registry_internal.registry_revisions
-                     (entity_id, record_id, record_revision),
-             FOREIGN KEY (action_id, proposal_id)
-                 REFERENCES registry_internal.registry_proposal_state
-         );"
+                 (action_id, proposal_id, submission_version);
+"
     ).await.map_err(|_| MutationError::Unavailable)?;
     crate::attachment_store::install(client, runtime_role).await?;
     crate::review_store::install(client, runtime_role).await?;
@@ -208,7 +200,7 @@ pub(crate) async fn install(
         .await
         .map_err(|_| MutationError::Unavailable)?
         .with_public();
-    for (table, privileges) in REQUEST_TABLES {
+    for (table, privileges) in PROPOSAL_TABLES {
         let role = runtime_role.as_str();
         client
             .batch_execute(&format!(
@@ -223,12 +215,52 @@ pub(crate) async fn install(
 }
 
 /// Retain verified submitter authority separately from all later reviewers.
+pub(crate) async fn retain_evidence(
+    transaction: &Transaction<'_>,
+    application_id: Uuid,
+    acquisitions: &[crate::action_evidence_client::VerifiedAcquisition],
+) -> Result<(), MutationError> {
+    if acquisitions.len() > 2 {
+        return Err(MutationError::Unavailable);
+    }
+    let mut bytes = 0usize;
+    for (ordinal, acquisition) in acquisitions.iter().enumerate() {
+        let retained = acquisition
+            .retained_serialization_for("registry.breg.proposal-commit-evidence-use/v1")
+            .map_err(MutationError::from)?;
+        bytes = bytes
+            .checked_add(
+                crate::action_evidence_client::retained_jsonb_bytes(&retained)
+                    .map_err(MutationError::from)?,
+            )
+            .ok_or(MutationError::Unavailable)?;
+        if bytes > crate::action_evidence::MAXIMUM_RETAINED_EVIDENCE_BYTES {
+            return Err(MutationError::Unavailable);
+        }
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_proposal_evidence_uses
+            (application_id,ordinal,retained,expires_at) VALUES ($1,$2,$3,$4)",
+                &[
+                    &application_id,
+                    &(ordinal as i16),
+                    &retained,
+                    &acquisition.retention_expires_at(),
+                ],
+            )
+            .await
+            .map_err(map_store_error)?;
+    }
+    Ok(())
+}
+
+/// Retain verified submitter authority separately from all later reviewers.
 /// The proposal foreign key binds these claims to its immutable effect digest.
 pub(crate) async fn save_task_authority(
     transaction: &Transaction<'_>,
     entity_id: &str,
     record_id: Uuid,
-    proposal_version: i64,
+    submission_version: i64,
     binding: &crate::task_grant::TaskGrantBinding,
 ) -> Result<(), MutationError> {
     binding
@@ -238,13 +270,13 @@ pub(crate) async fn save_task_authority(
     transaction
         .execute(
             "INSERT INTO registry_internal.registry_proposal_task_authority
-             (action_id, proposal_id, proposal_version, binding)
+             (action_id, proposal_id, submission_version, binding)
          VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
-            &[&entity_id, &record_id, &proposal_version, &value],
+            &[&entity_id, &record_id, &submission_version, &value],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
-    let stored = load_task_authority(transaction, entity_id, record_id, proposal_version).await?;
+    let stored = load_task_authority(transaction, entity_id, record_id, submission_version).await?;
     if stored.as_ref() != Some(binding) {
         return Err(MutationError::IdempotencyConflict);
     }
@@ -256,13 +288,13 @@ pub(crate) async fn load_task_authority(
     transaction: &Transaction<'_>,
     entity_id: &str,
     record_id: Uuid,
-    proposal_version: i64,
+    submission_version: i64,
 ) -> Result<Option<crate::task_grant::TaskGrantBinding>, MutationError> {
     let row = transaction
         .query_opt(
             "SELECT binding FROM registry_internal.registry_proposal_task_authority
-         WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = $3",
-            &[&entity_id, &record_id, &proposal_version],
+         WHERE action_id = $1 AND proposal_id = $2 AND submission_version = $3",
+            &[&entity_id, &record_id, &submission_version],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -281,7 +313,7 @@ pub(crate) async fn load_task_authority(
 pub(crate) struct ProposalWorkflowHeader {
     pub owner_reference: String,
     pub state: String,
-    pub proposal_version: i64,
+    pub submission_version: i64,
     pub workflow_revision: i64,
     pub current_proposal_erased: bool,
     pub applier_reference: Option<String>,
@@ -294,7 +326,7 @@ impl std::fmt::Debug for ProposalWorkflowHeader {
             .debug_struct("ProposalWorkflowHeader")
             .field("has_owner_reference", &!self.owner_reference.is_empty())
             .field("state", &self.state)
-            .field("proposal_version", &self.proposal_version)
+            .field("submission_version", &self.submission_version)
             .field("workflow_revision", &self.workflow_revision)
             .field("current_proposal_erased", &self.current_proposal_erased)
             .field("has_applier_reference", &self.applier_reference.is_some())
@@ -325,7 +357,7 @@ pub(crate) async fn initialize_draft(
         .execute(
             "INSERT INTO registry_internal.registry_proposal_state
              (action_id, proposal_id, owner_reference, state,
-              proposal_version, workflow_revision)
+              submission_version, workflow_revision)
          VALUES ($1, $2, $3, 'draft', 1, 1)",
             &[&entity_id, &record_id, &owner_reference],
         )
@@ -346,19 +378,53 @@ pub(crate) async fn save_draft_input(
 ) -> Result<(), MutationError> {
     if action_revision.is_empty()
         || canonical_object_size(input)? > MAX_PROPOSAL_SNAPSHOT_BYTES
-        || action_title.is_some_and(|title| title.len() > 1024 || title.chars().any(char::is_control))
+        || action_title
+            .is_some_and(|title| title.len() > 1024 || title.chars().any(char::is_control))
     {
         return Err(MutationError::InvalidRequest);
     }
-    let changed = transaction.execute(
-        "UPDATE registry_internal.registry_proposal_state
+    let changed = transaction
+        .execute(
+            "UPDATE registry_internal.registry_proposal_state
             SET action_revision=$3, action_title=$4, input=$5,
                 updated_at=transaction_timestamp()
           WHERE action_id=$1 AND proposal_id=$2 AND state='draft'
             AND detail_erased_at IS NULL AND blocked_reason IS NULL",
-        &[&action_id, &proposal_id, &action_revision, &action_title, &Value::Object(input.clone())],
-    ).await.map_err(map_store_error)?;
-    if changed != 1 { return Err(MutationError::PreconditionFailed); }
+            &[
+                &action_id,
+                &proposal_id,
+                &action_revision,
+                &action_title,
+                &Value::Object(input.clone()),
+            ],
+        )
+        .await
+        .map_err(map_store_error)?;
+    if changed != 1 {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(())
+}
+
+/// Only an authorized Rebase may clear an activation block. The caller holds
+/// the Proposal state lock and admitted the active Action's Start grant.
+pub(crate) async fn clear_rebase_block(
+    transaction: &Transaction<'_>,
+    action_id: &str,
+    proposal_id: Uuid,
+) -> Result<(), MutationError> {
+    let changed = transaction
+        .execute(
+            "UPDATE registry_internal.registry_proposal_state
+        SET blocked_reason=NULL WHERE action_id=$1 AND proposal_id=$2 AND state='draft'
+        AND detail_erased_at IS NULL",
+            &[&action_id, &proposal_id],
+        )
+        .await
+        .map_err(map_store_error)?;
+    if changed != 1 {
+        return Err(MutationError::PreconditionFailed);
+    }
     Ok(())
 }
 
@@ -384,121 +450,56 @@ pub(crate) async fn load_document(
            FROM registry_internal.registry_proposal_state WHERE proposal_id=$1{}",
         if lock { " FOR UPDATE" } else { "" },
     );
-    let row = transaction.query_opt(&sql, &[&proposal_id]).await
-        .map_err(map_store_error)?.ok_or(MutationError::PreconditionFailed)?;
+    let row = transaction
+        .query_opt(&sql, &[&proposal_id])
+        .await
+        .map_err(map_store_error)?
+        .ok_or(MutationError::PreconditionFailed)?;
     let action_id: String = row.get(0);
-    let input = row.get::<_, Option<Value>>(3).map(|value| {
-        value.as_object().cloned().ok_or(MutationError::Unavailable)
-    }).transpose()?;
+    let input = row
+        .get::<_, Option<Value>>(3)
+        .map(|value| value.as_object().cloned().ok_or(MutationError::Unavailable))
+        .transpose()?;
     let header = load_header(transaction, &action_id, proposal_id, false).await?;
     Ok(ProposalDocument {
-        action_id, proposal_id, action_revision: row.get(1), action_title: row.get(2),
-        input, blocked_reason: row.get(4), header,
-        input_targets: serde_json::from_value(row.get(5)).map_err(|_|MutationError::Unavailable)?,
+        action_id,
+        proposal_id,
+        action_revision: row.get(1),
+        action_title: row.get(2),
+        input,
+        blocked_reason: row.get(4),
+        header,
+        input_targets: serde_json::from_value(row.get(5))
+            .map_err(|_| MutationError::Unavailable)?,
     })
 }
 
 pub(crate) async fn save_input_targets(
-    transaction: &Transaction<'_>, action_id: &str, proposal_id: Uuid,
-    targets: &[(String,Uuid)],
-) -> Result<(),MutationError> {
-    if targets.len() > MAX_PROPOSAL_TARGETS { return Err(MutationError::InvalidRequest); }
-    let value = serde_json::to_value(targets).map_err(|_|MutationError::InvalidRequest)?;
-    let changed = transaction.execute(
-        "UPDATE registry_internal.registry_proposal_state SET input_targets=$3
-          WHERE action_id=$1 AND proposal_id=$2 AND state='draft'", &[&action_id,&proposal_id,&value]
-    ).await.map_err(map_store_error)?;
-    if changed != 1 { return Err(MutationError::PreconditionFailed); }
-    Ok(())
-}
-
-/// Retains only authored field identifiers, never their values. Create and
-/// draft-patch callers invoke this in the same transaction as the typed row
-/// mutation so planner input can preserve JSON missing separately from null.
-pub(crate) async fn record_authored_intake_fields<'a>(
     transaction: &Transaction<'_>,
-    entity_id: &str,
-    record_id: Uuid,
-    field_ids: impl IntoIterator<Item = &'a str>,
+    action_id: &str,
+    proposal_id: Uuid,
+    targets: &[(String, Uuid)],
 ) -> Result<(), MutationError> {
-    if entity_id.is_empty() {
+    if targets.len() > MAX_PROPOSAL_TARGETS {
         return Err(MutationError::InvalidRequest);
     }
-    let mut unique = BTreeSet::new();
-    for field_id in field_ids {
-        if field_id.is_empty() || field_id.len() > 512 || field_id.chars().any(char::is_control) {
-            return Err(MutationError::InvalidRequest);
-        }
-        unique.insert(field_id);
-    }
-    if unique.len() > 1024 {
-        return Err(MutationError::InvalidRequest);
-    }
-    for field_id in unique {
-        transaction
-            .execute(
-                "INSERT INTO registry_internal.registry_proposal_intake_presence
-                     (action_id, proposal_id, field_id)
-                 VALUES ($1, $2, $3)
-                 ON CONFLICT DO NOTHING",
-                &[&entity_id, &record_id, &field_id],
-            )
-            .await
-            .map_err(map_store_error)?;
+    let value = serde_json::to_value(targets).map_err(|_| MutationError::InvalidRequest)?;
+    let changed = transaction
+        .execute(
+            "UPDATE registry_internal.registry_proposal_state SET input_targets=$3
+          WHERE action_id=$1 AND proposal_id=$2 AND state='draft'",
+            &[&action_id, &proposal_id, &value],
+        )
+        .await
+        .map_err(map_store_error)?;
+    if changed != 1 {
+        return Err(MutationError::PreconditionFailed);
     }
     Ok(())
 }
 
-pub(crate) async fn load_authored_intake(
-    transaction: &Transaction<'_>,
-    entity_id: &str,
-    record_id: Uuid,
-    materialized: &Map<String, Value>,
-) -> Result<Map<String, Value>, MutationError> {
-    let rows = transaction
-        .query(
-            "SELECT field_id
-               FROM registry_internal.registry_proposal_intake_presence
-              WHERE action_id = $1 AND proposal_id = $2
-              ORDER BY field_id
-              LIMIT 1025",
-            &[&entity_id, &record_id],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    if rows.len() > 1024 {
-        return Err(MutationError::Unavailable);
-    }
-    let mut authored = Map::new();
-    for row in rows {
-        let field_id = row.get::<_, String>(0);
-        let value = materialized
-            .get(&field_id)
-            .ok_or(MutationError::Unavailable)?;
-        authored.insert(field_id, value.clone());
-    }
-    Ok(authored)
-}
-
-pub(crate) async fn erase_authored_intake_fields(
-    transaction: &impl GenericClient,
-    entity_id: &str,
-    record_id: Uuid,
-) -> Result<u64, MutationError> {
-    transaction
-        .execute(
-            "DELETE FROM registry_internal.registry_proposal_intake_presence
-              WHERE action_id = $1
-                AND proposal_id = $2",
-            &[&entity_id, &record_id],
-        )
-        .await
-        .map_err(map_store_error)
-}
-
-/// The request row is locked before calling this guard. Sharing the guard with
-/// single-record and batch mutations keeps drafts from acquiring a bypass path.
-pub(crate) async fn require_owned_draft(
+#[cfg(all(test, feature = "postgres-test"))]
+async fn require_owned_draft(
     transaction: &Transaction<'_>,
     entity_id: &str,
     record_id: Uuid,
@@ -526,7 +527,7 @@ pub(crate) async fn load(
     lock: bool,
 ) -> Result<ProposalWorkflow, MutationError> {
     let sql = format!(
-        "SELECT owner_reference, state, proposal_version, workflow_revision
+        "SELECT owner_reference, state, submission_version, workflow_revision
          FROM registry_internal.registry_proposal_state
          WHERE action_id = $1 AND proposal_id = $2{}",
         if lock { " FOR UPDATE" } else { "" }
@@ -542,14 +543,14 @@ pub(crate) async fn load(
     );
     let owner = TrustedActorRef::from_verified_context(row.get::<_, String>(0))
         .map_err(|_| MutationError::Unavailable)?;
-    let current_version = proposal_version(row.get::<_, i64>(2))?;
+    let current_version = submission_version(row.get::<_, i64>(2))?;
     let revision = u64::try_from(row.get::<_, i64>(3)).map_err(|_| MutationError::Unavailable)?;
     let state = ProposalState::from_storage(&row.get::<_, String>(1))
         .map_err(|_| MutationError::Unavailable)?;
     let proposals = transaction
         .query(
-            "SELECT proposal_version, snapshot FROM registry_internal.registry_proposal_proposals
-         WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = $3",
+            "SELECT submission_version, snapshot FROM registry_internal.registry_proposal_submissions
+         WHERE action_id = $1 AND proposal_id = $2 AND submission_version = $3",
             &[&entity_id, &record_id, &i64::from(current_version.get())],
         )
         .await
@@ -559,14 +560,14 @@ pub(crate) async fn load(
         let snapshot = proposal
             .get::<_, Option<Value>>(1)
             .ok_or(MutationError::PreconditionFailed)?;
-        let version = proposal_version(proposal.get::<_, i64>(0))?;
+        let version = submission_version(proposal.get::<_, i64>(0))?;
         let snapshot: ProposalSnapshot =
             serde_json::from_value(snapshot).map_err(|_| MutationError::Unavailable)?;
         proposal_map.insert(version, snapshot);
     }
     let application = if let Some(application) = transaction
         .query_opt(
-            "SELECT proposal_version, application_id, effect_digest, applied_by,
+            "SELECT submission_version, application_id, effect_digest, applied_by,
                 to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                 reason, reason_present
          FROM registry_internal.registry_proposal_applications
@@ -576,12 +577,12 @@ pub(crate) async fn load(
         .await
         .map_err(|_| MutationError::Unavailable)?
     {
-        let version = proposal_version(application.get::<_, i64>(0))?;
+        let version = submission_version(application.get::<_, i64>(0))?;
         let results = transaction
             .query(
                 "SELECT target_entity_id, target_record_id, target_revision
              FROM registry_internal.registry_proposal_results
-             WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = $3
+             WHERE action_id = $1 AND proposal_id = $2 AND submission_version = $3
              ORDER BY target_entity_id, target_record_id",
                 &[&entity_id, &record_id, &i64::from(version.get())],
             )
@@ -640,19 +641,19 @@ pub(crate) async fn load_header(
     lock: bool,
 ) -> Result<ProposalWorkflowHeader, MutationError> {
     let sql = format!(
-        "SELECT s.owner_reference, s.state, s.proposal_version, s.workflow_revision,
+        "SELECT s.owner_reference, s.state, s.submission_version, s.workflow_revision,
                 COALESCE(s.detail_erased_at IS NOT NULL, false)
                     OR COALESCE(p.erased_at IS NOT NULL, false), a.applied_by,
                 a.reason_present
            FROM registry_internal.registry_proposal_state s
-           LEFT JOIN registry_internal.registry_proposal_proposals p
+           LEFT JOIN registry_internal.registry_proposal_submissions p
              ON p.action_id = s.action_id
             AND p.proposal_id = s.proposal_id
-            AND p.proposal_version = s.proposal_version
+            AND p.submission_version = s.submission_version
           LEFT JOIN registry_internal.registry_proposal_applications a
             ON a.action_id = s.action_id
            AND a.proposal_id = s.proposal_id
-           AND a.proposal_version = s.proposal_version
+           AND a.submission_version = s.submission_version
           WHERE s.action_id = $1 AND s.proposal_id = $2{}",
         if lock { " FOR UPDATE OF s" } else { "" }
     );
@@ -663,15 +664,15 @@ pub(crate) async fn load_header(
         .ok_or(MutationError::PreconditionFailed)?;
     let state: String = row.get(1);
     ProposalState::from_storage(&state).map_err(|_| MutationError::Unavailable)?;
-    let proposal_version: i64 = row.get(2);
+    let submission_version: i64 = row.get(2);
     let workflow_revision: i64 = row.get(3);
-    if proposal_version <= 0 || workflow_revision <= 0 {
+    if submission_version <= 0 || workflow_revision <= 0 {
         return Err(MutationError::Unavailable);
     }
     Ok(ProposalWorkflowHeader {
         owner_reference: row.get(0),
         state,
-        proposal_version,
+        submission_version,
         workflow_revision,
         current_proposal_erased: row.get(4),
         applier_reference: row.get(5),
@@ -686,66 +687,24 @@ pub(crate) async fn link_idempotency_result(
     key_reference: &str,
     action_id: &str,
     proposal_id: Uuid,
-    proposal_version: i64,
+    submission_version: i64,
+    action_revision: &str,
 ) -> Result<(), MutationError> {
-    if key_reference.is_empty() || action_id.is_empty() || proposal_version <= 0 {
+    if key_reference.is_empty() || action_id.is_empty() || submission_version <= 0 {
         return Err(MutationError::InvalidRequest);
     }
     transaction
         .execute(
             "INSERT INTO registry_internal.registry_proposal_idempotency_links
-                 (key_reference, action_id, proposal_id, proposal_version)
-             VALUES ($1, $2, $3, $4)
+                 (key_reference, action_id, proposal_id, submission_version,action_revision)
+             VALUES ($1, $2, $3, $4,$5)
              ON CONFLICT DO NOTHING",
             &[
                 &key_reference,
                 &action_id,
                 &proposal_id,
-                &proposal_version,
-            ],
-        )
-        .await
-        .map_err(map_store_error)?;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn link_request_revision(
-    transaction: &Transaction<'_>,
-    entity_id: &str,
-    record_id: Uuid,
-    record_revision: i64,
-    action_id: &str,
-    proposal_id: Uuid,
-    proposal_version: i64,
-    link_kind: &str,
-) -> Result<(), MutationError> {
-    if entity_id.is_empty()
-        || record_revision <= 0
-        || action_id.is_empty()
-        || proposal_version <= 0
-        || !matches!(
-            link_kind,
-            "request_create" | "request_patch" | "request-lifecycle" | "request_batch"
-        )
-    {
-        return Err(MutationError::InvalidRequest);
-    }
-    transaction
-        .execute(
-            "INSERT INTO registry_internal.registry_proposal_revision_links
-                 (entity_id, record_id, record_revision, action_id, proposal_id,
-                  proposal_version, link_kind)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT DO NOTHING",
-            &[
-                &entity_id,
-                &record_id,
-                &record_revision,
-                &action_id,
-                &proposal_id,
-                &proposal_version,
-                &link_kind,
+                &submission_version,
+                &action_revision,
             ],
         )
         .await
@@ -757,10 +716,10 @@ pub(crate) async fn save_targets(
     transaction: &Transaction<'_>,
     action_id: &str,
     proposal_id: Uuid,
-    proposal_version: i64,
+    submission_version: i64,
     targets: &[ProposalTargetSnapshot],
 ) -> Result<(), MutationError> {
-    if proposal_version < 1 || targets.len() > MAX_PROPOSAL_TARGETS {
+    if submission_version < 1 || targets.len() > MAX_PROPOSAL_TARGETS {
         return Err(MutationError::InvalidRequest);
     }
     let mut keys = BTreeSet::new();
@@ -780,15 +739,15 @@ pub(crate) async fn save_targets(
         let inserted = transaction
             .execute(
                 "INSERT INTO registry_internal.registry_proposal_targets
-                 (action_id, proposal_id, proposal_version, target_entity_id,
+                 (action_id, proposal_id, submission_version, target_entity_id,
                   target_record_id, operation, expected_revision, base_snapshot, after_snapshot)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-             ON CONFLICT (action_id, proposal_id, proposal_version,
+             ON CONFLICT (action_id, proposal_id, submission_version,
                           target_entity_id, target_record_id) DO NOTHING",
                 &[
                     &action_id,
                     &proposal_id,
-                    &proposal_version,
+                    &submission_version,
                     &snapshot.entity_id,
                     &snapshot.record_id,
                     &operation,
@@ -804,7 +763,7 @@ pub(crate) async fn save_targets(
                 transaction,
                 action_id,
                 proposal_id,
-                proposal_version,
+                submission_version,
                 snapshot,
             )
             .await?;
@@ -817,9 +776,9 @@ pub(crate) async fn load_targets(
     transaction: &Transaction<'_>,
     action_id: &str,
     proposal_id: Uuid,
-    proposal_version: i64,
+    submission_version: i64,
 ) -> Result<Vec<ProposalTargetSnapshot>, MutationError> {
-    if proposal_version < 1 {
+    if submission_version < 1 {
         return Err(MutationError::InvalidRequest);
     }
     let rows = transaction
@@ -827,10 +786,10 @@ pub(crate) async fn load_targets(
             "SELECT target_entity_id, target_record_id, operation, expected_revision,
                     base_snapshot, after_snapshot
              FROM registry_internal.registry_proposal_targets
-             WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = $3
+             WHERE action_id = $1 AND proposal_id = $2 AND submission_version = $3
              ORDER BY target_entity_id, target_record_id
              LIMIT 17",
-            &[&action_id, &proposal_id, &proposal_version],
+            &[&action_id, &proposal_id, &submission_version],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -893,8 +852,8 @@ pub(crate) async fn save(
         let snapshot = serde_json::to_value(proposal).map_err(|_| MutationError::Unavailable)?;
         let inserted = transaction
             .execute(
-                "INSERT INTO registry_internal.registry_proposal_proposals
-                 (action_id, proposal_id, proposal_version, input_revision,
+                "INSERT INTO registry_internal.registry_proposal_submissions
+                 (action_id, proposal_id, submission_version, input_revision,
                   contract_fingerprint, effect_digest, snapshot)
              VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
                 &[
@@ -930,10 +889,10 @@ pub(crate) async fn save(
         let inserted = transaction
             .execute(
                 "INSERT INTO registry_internal.registry_proposal_applications
-                 (action_id, proposal_id, proposal_version, application_id,
+                 (action_id, proposal_id, submission_version, application_id,
                   effect_digest, applied_by, applied_at, reason, reason_present)
              VALUES ($1, $2, $3, $4, $5, $6, $7::text::timestamptz, $8, $9)
-             ON CONFLICT (action_id, proposal_id, proposal_version) DO NOTHING",
+             ON CONFLICT (action_id, proposal_id, submission_version) DO NOTHING",
                 &[
                     &entity_id,
                     &record_id,
@@ -958,9 +917,9 @@ pub(crate) async fn save(
             let inserted = transaction
                 .execute(
                     "INSERT INTO registry_internal.registry_proposal_results
-                     (action_id, proposal_id, proposal_version, target_entity_id,
+                     (action_id, proposal_id, submission_version, target_entity_id,
                       target_record_id, target_revision) VALUES ($1, $2, $3, $4, $5, $6)
-                      ON CONFLICT (action_id, proposal_id, proposal_version,
+                      ON CONFLICT (action_id, proposal_id, submission_version,
                                    target_entity_id, target_record_id) DO NOTHING",
                     &[
                         &entity_id,
@@ -988,7 +947,7 @@ pub(crate) async fn save(
     let changed = transaction
         .execute(
             "UPDATE registry_internal.registry_proposal_state
-         SET state = $3, proposal_version = $4, workflow_revision = $5,
+         SET state = $3, submission_version = $4, workflow_revision = $5,
              updated_at = transaction_timestamp()
          WHERE action_id = $1 AND proposal_id = $2 AND workflow_revision = $6",
             &[
@@ -1022,8 +981,8 @@ async fn verify_existing_proposal(
     let row = transaction
         .query_opt(
             "SELECT input_revision, contract_fingerprint, effect_digest, snapshot
-             FROM registry_internal.registry_proposal_proposals
-             WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = $3",
+             FROM registry_internal.registry_proposal_submissions
+             WHERE action_id = $1 AND proposal_id = $2 AND submission_version = $3",
             &[&entity_id, &record_id, &version],
         )
         .await
@@ -1060,7 +1019,7 @@ async fn verify_existing_application(
             "SELECT application_id, effect_digest, applied_by,
                     applied_at = $4::text::timestamptz AS same_time, reason, reason_present
              FROM registry_internal.registry_proposal_applications
-             WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = $3",
+             WHERE action_id = $1 AND proposal_id = $2 AND submission_version = $3",
             &[&entity_id, &record_id, &version, &applied_at],
         )
         .await
@@ -1094,7 +1053,7 @@ async fn verify_existing_result(
         .query_opt(
             "SELECT target_revision
              FROM registry_internal.registry_proposal_results
-             WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = $3
+             WHERE action_id = $1 AND proposal_id = $2 AND submission_version = $3
                AND target_entity_id = $4 AND target_record_id = $5",
             &[
                 &entity_id,
@@ -1118,19 +1077,19 @@ async fn verify_existing_target(
     transaction: &Transaction<'_>,
     action_id: &str,
     proposal_id: Uuid,
-    proposal_version: i64,
+    submission_version: i64,
     snapshot: &ProposalTargetSnapshot,
 ) -> Result<(), MutationError> {
     let row = transaction
         .query_opt(
             "SELECT operation, expected_revision, base_snapshot, after_snapshot
              FROM registry_internal.registry_proposal_targets
-             WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = $3
+             WHERE action_id = $1 AND proposal_id = $2 AND submission_version = $3
                AND target_entity_id = $4 AND target_record_id = $5",
             &[
                 &action_id,
                 &proposal_id,
-                &proposal_version,
+                &submission_version,
                 &snapshot.entity_id,
                 &snapshot.record_id,
             ],
@@ -1220,10 +1179,10 @@ fn map_store_error(error: tokio_postgres::Error) -> MutationError {
     }
 }
 
-fn proposal_version(value: i64) -> Result<ProposalVersion, MutationError> {
+fn submission_version(value: i64) -> Result<SubmissionVersion, MutationError> {
     u32::try_from(value)
         .ok()
-        .and_then(|value| ProposalVersion::new(value).ok())
+        .and_then(|value| SubmissionVersion::new(value).ok())
         .ok_or(MutationError::Unavailable)
 }
 
@@ -1233,17 +1192,17 @@ mod tests {
     use std::env;
 
     use registry_platform_canonical_json::canonicalize_json;
-    use serde_json::{json, Map};
+    use serde_json::{Map, json};
     use tokio_postgres::Client;
     use uuid::Uuid;
 
     use super::*;
-    use crate::model::CompiledChangeRequestReview;
+    use crate::model::CompiledProposalReview;
     use crate::mutation::install_mutation_schema;
     use crate::proposal_workflow::{
         ContractFingerprint, EffectId, FieldId, FieldValue, FrozenPlannerKind,
         FrozenPlanningBinding, PackageFingerprint, PreparedEffect, PreparedFieldChange,
-        PreparedProposal, PreparedTarget, RecordRevision, ProposalState, TrustedTimestamp,
+        PreparedProposal, PreparedTarget, ProposalState, RecordRevision, TrustedTimestamp,
         TrustedTransitionContext, WorkflowError,
     };
 
@@ -1343,7 +1302,7 @@ mod tests {
         let header = ProposalWorkflowHeader {
             owner_reference: "private-owner-reference-canary".to_owned(),
             state: "applied".to_owned(),
-            proposal_version: 2,
+            submission_version: 2,
             workflow_revision: 9,
             current_proposal_erased: false,
             applier_reference: Some("private-applier-reference-canary".to_owned()),
@@ -1365,22 +1324,26 @@ mod tests {
     }
 
     fn proposal(target_id: Uuid, before_site: &str, after_site: &str) -> PreparedProposal {
-        let effects = vec![PreparedEffect::new(
-            EffectId::new("patch-placement").expect("effect id"),
-            Operation::Patch,
-            PreparedTarget::existing(
-                entity(TARGET_ENTITY),
-                record(target_id.to_string()),
-                record_revision(3),
-            ),
-            vec![PreparedFieldChange::set(
-                FieldId::new("site").expect("field id"),
-                FieldValue::present(json!(before_site)),
-                json!(after_site),
+        let effects = vec![
+            PreparedEffect::new(
+                EffectId::new("patch-placement").expect("effect id"),
+                Operation::Patch,
+                PreparedTarget::existing(
+                    entity(TARGET_ENTITY),
+                    record(target_id.to_string()),
+                    record_revision(3),
+                ),
+                vec![
+                    PreparedFieldChange::set(
+                        FieldId::new("site").expect("field id"),
+                        FieldValue::present(json!(before_site)),
+                        json!(after_site),
+                    )
+                    .expect("field change"),
+                ],
             )
-            .expect("field change")],
-        )
-        .expect("prepared effect")];
+            .expect("prepared effect"),
+        ];
         let bytes = canonicalize_json(&serde_json::to_value(&effects).expect("effects serialize"))
             .expect("effects canonicalize")
             .len();
@@ -1394,10 +1357,10 @@ mod tests {
                 "sha256:2222222222222222222222222222222222222222222222222222222222222222",
             )
             .expect("package fingerprint"),
-            CompiledChangeRequestReview::None,
+            CompiledProposalReview::None,
             FrozenPlanningBinding::new(
                 FrozenPlannerKind::Declarative,
-                "registry.change-request-plan/v1",
+                "registry.action-plan/v1",
                 None,
             )
             .expect("planning binding"),
@@ -1432,12 +1395,12 @@ mod tests {
             "secret".to_owned(),
             json!({
                 crate::history_schema::ENVELOPE_MEMBER_TAG:
-                    "A".repeat(crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize)
+                    "A".repeat(crate::plan::MAX_PLAN_SNAPSHOT_BYTES as usize)
             }),
         )]);
         assert!(
             canonical_object_size(&expanded).expect("expanded snapshot canonicalizes")
-                > crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize
+                > crate::plan::MAX_PLAN_SNAPSHOT_BYTES as usize
         );
         assert!(
             canonical_object_size(&expanded).expect("expanded snapshot canonicalizes")
@@ -1476,7 +1439,7 @@ mod tests {
     #[tokio::test]
     async fn request_schema_installs_repeatably_and_grants_declared_table_privileges() {
         let (database, migration, migration_task) = install_schema().await;
-        for (table, privileges) in REQUEST_TABLES {
+        for (table, privileges) in PROPOSAL_TABLES {
             let qualified = format!("registry_internal.{table}");
             let exists = migration
                 .query_one("SELECT to_regclass($1)::text IS NOT NULL", &[&qualified])
@@ -1581,61 +1544,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authored_intake_presence_preserves_missing_separately_from_null_and_erases() {
+    async fn proposal_inputs_preserve_missing_separately_from_null_and_erase() {
         let (database, mut migration, migration_task) = install_schema().await;
-        let proposal_id = Uuid::new_v4();
-        let transaction = migration.transaction().await.expect("draft transaction");
-        initialize_draft(&transaction, REQUEST_ENTITY, proposal_id, "submitter")
+        let id = Uuid::new_v4();
+        let tx = migration.transaction().await.unwrap();
+        initialize_draft(&tx, REQUEST_ENTITY, id, "submitter")
             .await
-            .expect("draft initializes");
-        record_authored_intake_fields(
-            &transaction,
-            REQUEST_ENTITY,
-            proposal_id,
-            ["explicit-null", "value"],
-        )
-        .await
-        .expect("authored presence saves");
-        let materialized = Map::from_iter([
+            .unwrap();
+        let input = Map::from_iter([
             ("explicit-null".to_owned(), Value::Null),
-            ("missing-default-null".to_owned(), Value::Null),
             ("value".to_owned(), json!("present")),
         ]);
-        let authored =
-            load_authored_intake(&transaction, REQUEST_ENTITY, proposal_id, &materialized)
-                .await
-                .expect("authored intake loads");
-        assert_eq!(
-            authored,
-            Map::from_iter([
-                ("explicit-null".to_owned(), Value::Null),
-                ("value".to_owned(), json!("present")),
-            ])
-        );
-        transaction.commit().await.expect("presence commits");
-
+        save_draft_input(
+            &tx,
+            REQUEST_ENTITY,
+            id,
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            None,
+            &input,
+        )
+        .await
+        .unwrap();
+        let document = load_document(&tx, id, false).await.unwrap();
+        assert_eq!(document.input, Some(input));
+        assert!(!document.input.unwrap().contains_key("absent"));
+        tx.commit().await.unwrap();
         migration
             .execute(
-                "UPDATE registry_internal.registry_proposal_state
-                    SET state = 'cancelled', detail_erased_at = transaction_timestamp()
-                  WHERE action_id = $1 AND proposal_id = $2",
-                &[&REQUEST_ENTITY, &proposal_id],
+                "UPDATE registry_internal.registry_proposal_state SET state='cancelled',input=NULL,
+            detail_erased_at=transaction_timestamp() WHERE proposal_id=$1",
+                &[&id],
             )
             .await
-            .expect("detail erases");
-        erase_authored_intake_fields(&migration, REQUEST_ENTITY, proposal_id)
-            .await
-            .expect("authored intake presence erases with request detail");
-        let retained = migration
-            .query_one(
-                "SELECT count(*) FROM registry_internal.registry_proposal_intake_presence
-                  WHERE action_id = $1 AND proposal_id = $2",
-                &[&REQUEST_ENTITY, &proposal_id],
-            )
-            .await
-            .expect("presence count")
-            .get::<_, i64>(0);
-        assert_eq!(retained, 0);
+            .unwrap();
+        let tx = migration.transaction().await.unwrap();
+        assert!(load_document(&tx, id, false).await.unwrap().input.is_none());
+        tx.commit().await.unwrap();
         migration_task.abort();
         database.cleanup().await;
     }
@@ -1652,19 +1596,6 @@ mod tests {
             .expect("draft initializes");
         transaction
             .execute(
-                "INSERT INTO registry_internal.registry_revisions
-                     (entity_id, record_id, record_reference, record_revision,
-                      predecessor_revision, record_lifecycle, package_revision, operation_id,
-                      mutation_kind, principal_reference, request_reference, snapshot)
-                 VALUES ($1, $2, 'request-ref', 1, NULL, 'active', 'package-1',
-                         'records.create', 'create', 'principal-ref', 'binding-ref',
-                         convert_to('{}', 'UTF8'))",
-                &[&REQUEST_ENTITY, &proposal_id],
-            )
-            .await
-            .expect("request create revision inserts");
-        transaction
-            .execute(
                 "INSERT INTO registry_internal.registry_idempotency
                      (key_reference, binding_reference, result_kind, record_reference,
                       record_revision, response_status, response_body, response_headers,
@@ -1676,24 +1607,13 @@ mod tests {
             )
             .await
             .expect("request create idempotency result inserts");
-        link_request_revision(
-            &transaction,
-            REQUEST_ENTITY,
-            proposal_id,
-            1,
-            REQUEST_ENTITY,
-            proposal_id,
-            1,
-            "request_create",
-        )
-        .await
-        .expect("request create revision link inserts");
         link_idempotency_result(
             &transaction,
             "request-create-key",
             REQUEST_ENTITY,
             proposal_id,
             1,
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         )
         .await
         .expect("request create idempotency link inserts");
@@ -1722,7 +1642,7 @@ mod tests {
             .expect("draft header loads without materializing a workflow");
         assert_eq!(header.owner_reference, "submitter");
         assert_eq!(header.state, "draft");
-        assert_eq!(header.proposal_version, 1);
+        assert_eq!(header.submission_version, 1);
         assert_eq!(header.workflow_revision, 1);
         assert!(!header.current_proposal_erased);
         assert!(!header.is_terminal());
@@ -1815,7 +1735,7 @@ mod tests {
 
         let historical_proposals = migration
             .query_one(
-                "SELECT count(*) FROM registry_internal.registry_proposal_proposals
+                "SELECT count(*) FROM registry_internal.registry_proposal_submissions
                  WHERE action_id = $1 AND proposal_id = $2",
                 &[&REQUEST_ENTITY, &proposal_id],
             )
@@ -1825,24 +1745,14 @@ mod tests {
         let linked_receipts = migration
             .query_one(
                 "SELECT count(*) FROM registry_internal.registry_proposal_idempotency_links
-                 WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = 1",
+                 WHERE action_id = $1 AND proposal_id = $2 AND submission_version = 1",
                 &[&REQUEST_ENTITY, &proposal_id],
             )
             .await
             .expect("idempotency link count succeeds")
             .get::<_, i64>(0);
-        let linked_revisions = migration
-            .query_one(
-                "SELECT count(*) FROM registry_internal.registry_proposal_revision_links
-                 WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = 1",
-                &[&REQUEST_ENTITY, &proposal_id],
-            )
-            .await
-            .expect("revision link count succeeds")
-            .get::<_, i64>(0);
         assert_eq!(historical_proposals, 1);
         assert_eq!(linked_receipts, 1);
-        assert_eq!(linked_revisions, 1);
 
         migration_task.abort();
         database.cleanup().await;
@@ -1881,9 +1791,9 @@ mod tests {
 
         migration
             .execute(
-                "UPDATE registry_internal.registry_proposal_proposals
+                "UPDATE registry_internal.registry_proposal_submissions
                  SET effect_digest = 'sha256:0000000000000000000000000000000000000000000000000000000000000000'
-                 WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = 1",
+                 WHERE action_id = $1 AND proposal_id = $2 AND submission_version = 1",
                 &[&REQUEST_ENTITY, &proposal_id],
             )
             .await
@@ -1899,9 +1809,9 @@ mod tests {
 
         migration
             .execute(
-                "UPDATE registry_internal.registry_proposal_proposals
+                "UPDATE registry_internal.registry_proposal_submissions
                  SET effect_digest = $3
-                 WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = 1",
+                 WHERE action_id = $1 AND proposal_id = $2 AND submission_version = 1",
                 &[
                     &REQUEST_ENTITY,
                     &proposal_id,
@@ -1944,7 +1854,7 @@ mod tests {
                  SET base_snapshot = NULL,
                      after_snapshot = NULL,
                      erased_at = transaction_timestamp()
-                 WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = 1",
+                 WHERE action_id = $1 AND proposal_id = $2 AND submission_version = 1",
                 &[&REQUEST_ENTITY, &proposal_id],
             )
             .await

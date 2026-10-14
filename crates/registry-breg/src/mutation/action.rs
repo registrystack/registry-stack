@@ -7,7 +7,9 @@ use registry_platform_hooks::{
 };
 
 use crate::action_evidence::FrozenEvidenceEvaluation;
-use crate::action_handler::{evaluate_admitted_action_detailed, ActionHandlerOutcome};
+use crate::action_evidence_client::EvidenceSubjects;
+use crate::action_evidence_contracts::CompiledEvidenceCapability;
+use crate::action_handler::{ActionHandlerOutcome, evaluate_admitted_action_detailed};
 use crate::action_outcome::{
     bound_document, decode_document, json_document, validate_proposed_outcome,
 };
@@ -187,7 +189,7 @@ impl MutationCoordinator {
                 method: HttpMethod::Post,
                 route: &action.route,
                 package_revision: &self.expected.activation_id,
-                action_contract_fingerprint: &action.contract_fingerprint,
+                action_contract_fingerprint: &action.definition_revision,
                 target_authority,
                 result_effects: claims.result_effects(),
                 answer_digest: None,
@@ -216,6 +218,7 @@ impl MutationCoordinator {
                     fault,
                     deadline,
                     &mut candidate,
+                    None,
                     None,
                     None,
                 )
@@ -686,7 +689,7 @@ impl MutationCoordinator {
                 method: HttpMethod::Post,
                 route: &action.route,
                 package_revision: &self.expected.activation_id,
-                action_contract_fingerprint: &action.contract_fingerprint,
+                action_contract_fingerprint: &action.definition_revision,
                 target_authority: &target_authority,
                 result_effects: claims.result_effects(),
                 answer_digest: Some(application.answer_digest),
@@ -745,6 +748,7 @@ impl MutationCoordinator {
                     fault,
                     deadline,
                     &mut candidate,
+                    None,
                     None,
                     Some(&causation),
                 )
@@ -941,6 +945,7 @@ impl MutationCoordinator {
         deadline: tokio::time::Instant,
         candidate: &mut Option<Vec<CompiledPlanEffect>>,
         frozen: Option<&FrozenEvidenceEvaluation>,
+        commit_requests: Option<&[(CompiledEvidenceCapability, EvidenceSubjects)]>,
         causation: Option<&Causation>,
     ) -> Result<MutationOutcome, MutationError> {
         if tokio::time::Instant::now() >= deadline {
@@ -973,6 +978,7 @@ impl MutationCoordinator {
             )
             .await?
         {
+            check_current_action_grant(claims)?;
             transaction
                 .commit()
                 .await
@@ -981,6 +987,7 @@ impl MutationCoordinator {
                 .append(entry)
                 .await
                 .map_err(|_| MutationError::CommitUnresolved)?;
+            check_current_action_grant(claims)?;
             return Ok(outcome);
         }
         if let Some(frozen) = frozen {
@@ -1070,8 +1077,28 @@ impl MutationCoordinator {
             target_authority,
             input_values,
             application_id,
+            preconditions,
         )
         .await?;
+
+        if !action.commit_evidence.is_empty() {
+            let frozen = frozen.ok_or(MutationError::PreconditionFailed)?;
+            let expected = commit_requests.ok_or(MutationError::PreconditionFailed)?;
+            let current = self
+                .action_commit_evidence_requests(
+                    transaction.transaction(),
+                    registry,
+                    action,
+                    claims,
+                    target_authority,
+                    input_values,
+                )
+                .await?;
+            if current != expected {
+                return Err(MutationError::PreconditionFailed);
+            }
+            verify_action_commit_evidence(action, input_values, frozen)?;
+        }
 
         self.verify_action_link_references(
             transaction.transaction(),
@@ -1301,8 +1328,10 @@ impl MutationCoordinator {
         }
         if let Some(frozen) = frozen {
             validate_frozen_evidence(frozen)?;
+            verify_action_commit_evidence(action, input_values, frozen)?;
         }
 
+        check_current_action_grant(claims)?;
         transaction
             .commit()
             .await
@@ -1311,6 +1340,7 @@ impl MutationCoordinator {
             .append(entry)
             .await
             .map_err(|_| MutationError::CommitUnresolved)?;
+        check_current_action_grant(claims)?;
         fault.fail_at(MutationFaultPoint::AfterCommitBeforeResponseRelease)?;
         Ok(MutationOutcome {
             response: held,
@@ -1414,7 +1444,6 @@ impl MutationCoordinator {
             .change_control
             .as_ref()
             .is_some_and(|control| control.required_for.contains(&effect.operation))
-            || entity.change_request.is_some()
         {
             return Err(MutationError::InvalidRequest);
         }
@@ -1515,6 +1544,7 @@ impl MutationCoordinator {
         target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
         input_values: &ActionInputs,
         application_id: Uuid,
+        preconditions: &BTreeMap<String, String>,
     ) -> Result<(), MutationError> {
         enum Role<'a> {
             Patch(&'a CompiledPlanEffect),
@@ -1535,9 +1565,8 @@ impl MutationCoordinator {
             }
         }
         for target in &action.target_uses {
-            if target.operation != Operation::Invoke
-                || !target.fields.is_empty()
-                || target.condition_required
+            if !(target.operation == Operation::Get
+                || (target.operation == Operation::Invoke && target.fields.is_empty()))
             {
                 continue;
             }
@@ -1599,9 +1628,18 @@ impl MutationCoordinator {
                 )
                 .await
                 .map_err(map_database_error)?;
-            load_action_row(transaction, entity, &record_id.to_string(), true).await?;
-            verify_action_requirements(transaction, entity, action, input_values, record_id)
-                .await?;
+            let current =
+                load_action_row(transaction, entity, &record_id.to_string(), true).await?;
+            verify_action_requirements(
+                entity,
+                action,
+                input_values,
+                record_id,
+                &current,
+                self.audit.profile(),
+                registry.registry_id(),
+                preconditions,
+            )?;
         }
         transaction
             .execute(
@@ -1740,45 +1778,75 @@ impl MutationCoordinator {
                 .iter()
                 .find(|effect| {
                     matches!(&effect.target.binding, CompiledPlanTargetBinding::Existing { input } if input == input_id)
-                })
-                .ok_or(MutationError::InvalidRequest)?;
-            let entity = registry
-                .entities()
-                .get(&effect.target.entity_id)
-                .ok_or(MutationError::InvalidRequest)?;
-            let record_uuid =
-                Uuid::parse_str(record_id).map_err(|_| MutationError::InvalidRequest)?;
-            let target_context = action_target_context(
-                registry,
-                action,
-                effect,
-                claims,
-                target_authority,
-                record_uuid,
-                None,
-                false,
-                None,
-                &self.expected.activation_id,
-            )?;
-            transaction
-                .install_immediate_action_target_context(&target_context)
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            let current =
-                load_action_row(transaction.transaction(), entity, record_id, false).await?;
-            target_context
-                .authorize_rows(
-                    entity,
-                    Some(&current.data),
-                    &current.data,
-                    current.record_uuid,
-                )
-                .map_err(|_| MutationError::PreconditionFailed)?;
+                });
             let input = action
                 .inputs
                 .iter()
                 .find(|input| input.id == *input_id)
                 .ok_or(MutationError::InvalidRequest)?;
+            let entity_id = if let Some(effect) = effect {
+                &effect.target.entity_id
+            } else if let FieldTypeSource::Reference { target, .. } = &input.field_type {
+                target
+            } else {
+                return Err(MutationError::InvalidRequest);
+            };
+            let entity = registry
+                .entities()
+                .get(entity_id)
+                .ok_or(MutationError::InvalidRequest)?;
+            let record_uuid =
+                Uuid::parse_str(record_id).map_err(|_| MutationError::InvalidRequest)?;
+            let current = if let Some(effect) = effect {
+                let target_context = action_target_context(
+                    registry,
+                    action,
+                    effect,
+                    claims,
+                    target_authority,
+                    record_uuid,
+                    None,
+                    false,
+                    None,
+                    &self.expected.activation_id,
+                )?;
+                transaction
+                    .install_immediate_action_target_context(&target_context)
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                let current =
+                    load_action_row(transaction.transaction(), entity, record_id, false).await?;
+                target_context
+                    .authorize_rows(
+                        entity,
+                        Some(&current.data),
+                        &current.data,
+                        current.record_uuid,
+                    )
+                    .map_err(|_| MutationError::PreconditionFailed)?;
+                current
+            } else {
+                let link_context = action_link_context(
+                    registry,
+                    action,
+                    input_id,
+                    entity_id,
+                    claims,
+                    target_authority,
+                    record_uuid,
+                    &self.expected.activation_id,
+                )?;
+                transaction
+                    .install_immediate_action_link_context(&link_context)
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                let current =
+                    load_action_row(transaction.transaction(), entity, record_id, false).await?;
+                link_context
+                    .authorize_row(entity, &current.data, current.record_uuid)
+                    .map_err(|_| MutationError::PreconditionFailed)?;
+                current
+            };
             conditions.insert(
                 input.api_name.clone(),
                 json!({
@@ -1787,7 +1855,7 @@ impl MutationCoordinator {
                         registry.registry_id(),
                         &action.id,
                         input_id,
-                        &effect.target.entity_id,
+                        entity_id,
                         &current.record_id,
                         current.record_revision,
                     )?,
@@ -1816,6 +1884,7 @@ impl MutationCoordinator {
                 correlation: correlation.clone(),
             },
         )?;
+        check_current_action_grant(claims)?;
         transaction
             .commit()
             .await
@@ -1824,6 +1893,7 @@ impl MutationCoordinator {
             .append(entry)
             .await
             .map_err(|_| MutationError::CommitUnresolved)?;
+        check_current_action_grant(claims)?;
         Ok(held)
     }
 
@@ -1980,7 +2050,10 @@ fn action_for_route<'a>(
         .iter()
         .find(|action| {
             action.id == action_id
-                && matches!(action.execution, crate::model::CompiledActionExecution::Immediate)
+                && matches!(
+                    action.execution,
+                    crate::model::CompiledActionExecution::Immediate
+                )
                 && match kind {
                     ActionRouteKind::Invoke => action.route == route.path,
                     ActionRouteKind::TargetConditions => {
@@ -2034,11 +2107,22 @@ fn append_proposal_idempotency_component(output: &mut Vec<u8>, value: &[u8]) {
     output.extend_from_slice(value);
 }
 
+fn check_current_action_grant(claims: &ActionClaimContext) -> Result<(), MutationError> {
+    if claims
+        .task_grant()
+        .is_some_and(|binding| !binding.is_current())
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(())
+}
+
 fn validate_action_claims(
     action: &CompiledAction,
     claims: &ActionClaimContext,
     operation: Operation,
 ) -> Result<(), MutationError> {
+    check_current_action_grant(claims)?;
     if claims.action_id() != action.id {
         return Err(MutationError::InvalidRequest);
     }
@@ -2138,13 +2222,9 @@ fn validate_precondition_set(
 }
 
 fn existing_target_inputs(action: &CompiledAction) -> BTreeSet<String> {
-    action
-        .effects
-        .iter()
-        .filter_map(|effect| match &effect.target.binding {
-            CompiledPlanTargetBinding::Existing { input } => Some(input.clone()),
-            CompiledPlanTargetBinding::Create => None,
-        })
+    crate::plan::condition_inputs(action)
+        .into_iter()
+        .map(str::to_owned)
         .collect()
 }
 
@@ -2169,7 +2249,7 @@ fn link_input_record_id(
         .iter()
         .find(|input| input.id == input_id)
         .ok_or(MutationError::InvalidRequest)?;
-    if !input_values.contains_key(input_id) {
+    if input_values.get(input_id).is_none_or(Value::is_null) {
         return if input.required {
             Err(MutationError::InvalidRequest)
         } else {
@@ -2199,7 +2279,7 @@ fn action_link_context(
             .ok_or(MutationError::InvalidRequest)?,
         ImmediateActionLinkBinding {
             action_id: action.id.clone(),
-            contract_fingerprint: action.contract_fingerprint.clone(),
+            contract_fingerprint: action.definition_revision.clone(),
             active_package_revision: package_revision.to_owned(),
             input_id: input_id.to_owned(),
             target_entity_id: target_entity_id.to_owned(),
@@ -2307,7 +2387,7 @@ fn action_target_group_context(
             .ok_or(MutationError::InvalidRequest)?,
         ImmediateActionTargetBinding {
             action_id: action.id.clone(),
-            contract_fingerprint: action.contract_fingerprint.clone(),
+            contract_fingerprint: action.definition_revision.clone(),
             active_package_revision: package_revision.to_owned(),
             effect_ids,
             target_entity_id: effect.target.entity_id.clone(),
@@ -2337,26 +2417,8 @@ fn reserve_action_create_ids(
 fn ordered_action_effects(
     effects: &[CompiledPlanEffect],
 ) -> Result<Vec<&CompiledPlanEffect>, MutationError> {
-    let mut remaining = effects.iter().collect::<Vec<_>>();
-    let mut resolved = BTreeSet::new();
-    let mut ordered = Vec::with_capacity(remaining.len());
-    while !remaining.is_empty() {
-        let before = remaining.len();
-        let mut index = 0;
-        while index < remaining.len() {
-            if remaining[index].depends_on.is_subset(&resolved) {
-                let effect = remaining.remove(index);
-                resolved.insert(effect.id.clone());
-                ordered.push(effect);
-            } else {
-                index += 1;
-            }
-        }
-        if remaining.len() == before {
-            return Err(MutationError::InvalidRequest);
-        }
-    }
-    Ok(ordered)
+    crate::plan::order_plan_effects(effects.to_vec()).map_err(|_| MutationError::InvalidRequest)?;
+    Ok(effects.iter().collect())
 }
 
 fn ordered_action_effect_groups<'a>(
@@ -2375,36 +2437,12 @@ fn ordered_action_effect_groups<'a>(
             groups.push(vec![*effect]);
         }
     }
-    order_action_effect_groups(groups)
-}
-
-fn order_action_effect_groups(
-    mut remaining: Vec<Vec<&CompiledPlanEffect>>,
-) -> Result<Vec<Vec<&CompiledPlanEffect>>, MutationError> {
-    // Aliased patch slots write one physical row. Folding a later patch into
-    // an earlier group can introduce dependencies that the first slot lacked.
-    // Order the groups by their complete dependency sets before executing any.
-    let mut resolved = BTreeSet::new();
-    let mut ordered = Vec::with_capacity(remaining.len());
-    while !remaining.is_empty() {
-        let position = remaining
-            .iter()
-            .position(|group| {
-                let members = group
-                    .iter()
-                    .map(|effect| &effect.id)
-                    .collect::<BTreeSet<_>>();
-                group
-                    .iter()
-                    .flat_map(|effect| &effect.depends_on)
-                    .all(|dependency| resolved.contains(dependency) || members.contains(dependency))
-            })
-            .ok_or(MutationError::InvalidRequest)?;
-        let group = remaining.remove(position);
-        resolved.extend(group.iter().map(|effect| effect.id.clone()));
-        ordered.push(group);
-    }
-    Ok(ordered)
+    crate::plan::order_effect_groups(
+        groups,
+        |effect| effect.id.as_str(),
+        |effect| &effect.depends_on,
+    )
+    .map_err(|_| MutationError::InvalidRequest)
 }
 
 fn action_effect_target_key(
@@ -2509,7 +2547,7 @@ fn action_held_response(
             (
                 result.effect_id.clone(),
                 json!({
-                    "entity": result.entity_id,
+                    "recordType": result.entity_id,
                     "recordId": result.record_id,
                     "revision": result.record_revision,
                 }),
@@ -2531,12 +2569,16 @@ fn action_held_response(
     .map_err(MutationError::from)
 }
 
-async fn verify_action_requirements(
-    transaction: &Transaction<'_>,
+#[allow(clippy::too_many_arguments)]
+fn verify_action_requirements(
     entity: &CompiledEntity,
     action: &CompiledAction,
     inputs: &ActionInputs,
     record_id: Uuid,
+    current: &CurrentRow,
+    audit: &AuditProfile,
+    registry_id: &str,
+    preconditions: &BTreeMap<String, String>,
 ) -> Result<(), MutationError> {
     for requirement in action
         .requires
@@ -2548,45 +2590,39 @@ async fn verify_action_requirements(
         if required_id != record_id {
             continue;
         }
-        let field = entity
-            .fields
-            .get(&requirement.field)
-            .ok_or(MutationError::InvalidRequest)?;
-        let expected = sql_value(
-            requirement_expected_value(requirement, inputs)?,
-            &field.field_type,
-        )?;
-        // The exact row is already authorized and locked until commit. Use its
-        // PostgreSQL type's equality, including decimal and timestamp semantics.
-        let sql = format!(
-            "SELECT {} IS NOT DISTINCT FROM {} FROM registry_data.{} WHERE record_id = $1::text::uuid AND record_lifecycle = 'active'",
-            quote_identifier(&field.physical_name),
-            typed_parameter(2, &field.field_type),
-            quote_identifier(&entity.physical_table),
-        );
-        let row = transaction
-            .query_opt(&sql, &[&record_id.to_string(), &expected])
-            .await
-            .map_err(map_database_error)?;
-        if !row.is_some_and(|row| row.get::<_, bool>(0)) {
-            return Err(MutationError::PreconditionFailed);
+        if requirement.revision_unchanged {
+            let expected = action_condition_token(
+                audit,
+                registry_id,
+                &action.id,
+                &requirement.input,
+                &entity.id,
+                &current.record_id,
+                current.record_revision,
+            )?;
+            let provided = preconditions
+                .get(&requirement.input)
+                .ok_or(MutationError::InvalidRequest)?;
+            if provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() != 1 {
+                return Err(MutationError::PreconditionFailed);
+            }
+        } else {
+            let field = entity
+                .fields
+                .get(&requirement.field)
+                .ok_or(MutationError::InvalidRequest)?;
+            if !crate::commit_guard::guard_matches(
+                requirement,
+                inputs,
+                &current.data,
+                &time::OffsetDateTime::now_utc().date().to_string(),
+                matches!(field.field_type, FieldTypeSource::Timestamp),
+            ) {
+                return Err(MutationError::PreconditionFailed);
+            }
         }
     }
     Ok(())
-}
-
-/// The value a requirement compares its stored field against. The compiler
-/// admits `equalsInput` only for a required input; should the named input
-/// still be absent, the request is refused rather than the check skipped.
-fn requirement_expected_value<'a>(
-    requirement: &'a crate::model::CompiledCommitGuard,
-    inputs: &'a ActionInputs,
-) -> Result<&'a Value, MutationError> {
-    match (&requirement.equals, &requirement.equals_input) {
-        (Some(value), None) => Ok(value),
-        (None, Some(input)) => inputs.get(input).ok_or(MutationError::InvalidRequest),
-        _ => Err(MutationError::InvalidRequest),
-    }
 }
 
 async fn load_action_row(
@@ -2624,7 +2660,7 @@ fn action_condition_token(
         "registry": registry_id,
         "action": action_id,
         "input": input_id,
-        "entity": entity_id,
+        "recordType": entity_id,
         "record": record_id,
         "revision": record_revision,
     }))
@@ -2697,7 +2733,7 @@ async fn insert_action_application(
                 &binding.binding_reference,
                 &application_id,
                 &action.id,
-                &action.contract_fingerprint,
+                &action.definition_revision,
                 &package_revision,
                 &principal_reference,
                 &(i16::try_from(result_count).map_err(|_| MutationError::InvalidRequest)?),
@@ -2765,6 +2801,7 @@ fn canonical_action_request_digest(
 pub(crate) struct PreparedEvidenceAction {
     pub(crate) action: CompiledAction,
     pub(crate) inputs: ActionInputs,
+    pub(crate) commit_requests: Vec<(CompiledEvidenceCapability, EvidenceSubjects)>,
     preconditions: BTreeMap<String, String>,
     binding: crate::idempotency::ResolvedIdempotencyBinding,
     reserved_creates: BTreeMap<String, Uuid>,
@@ -2779,6 +2816,77 @@ impl MutationCoordinator {
     /// Admit an Evidence action, recording its refusal when admission fails
     /// before the deadline. A successful admission carries the held attempt
     /// to [`Self::finalize_evidence_action`]; a recovered receipt answers it.
+    #[allow(clippy::too_many_arguments)]
+    async fn action_commit_evidence_requests(
+        &self,
+        transaction: &Transaction<'_>,
+        registry: &CompiledRegistry,
+        action: &CompiledAction,
+        claims: &ActionClaimContext,
+        target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
+        inputs: &ActionInputs,
+    ) -> Result<Vec<(CompiledEvidenceCapability, EvidenceSubjects)>, MutationError> {
+        let mut records = BTreeMap::new();
+        for (input_id, fields) in crate::commit_evidence::target_fields(&action.commit_evidence) {
+            let input = action
+                .inputs
+                .iter()
+                .find(|input| input.id == input_id)
+                .ok_or(MutationError::InvalidRequest)?;
+            let FieldTypeSource::Reference { target, .. } = &input.field_type else {
+                return Err(MutationError::InvalidRequest);
+            };
+            let record_id = input_record_id(inputs, &input_id)?;
+            let uuid = Uuid::parse_str(&record_id).map_err(|_| MutationError::InvalidRequest)?;
+            let entity = registry
+                .entities()
+                .get(target)
+                .ok_or(MutationError::InvalidRequest)?;
+            let context = action_link_context(
+                registry,
+                action,
+                &input_id,
+                target,
+                claims,
+                target_authority,
+                uuid,
+                &self.expected.activation_id,
+            )?;
+            transaction
+                .execute(
+                    "SELECT set_config('registry.immediate_action_target_context', '', true),
+                        set_config('registry.immediate_action_link_context', $1, true)",
+                    &[&context.canonical_context()],
+                )
+                .await
+                .map_err(map_database_error)?;
+            let current = load_action_row(transaction, entity, &record_id, false).await?;
+            context
+                .authorize_row(entity, &current.data, uuid)
+                .map_err(|_| MutationError::PreconditionFailed)?;
+            let values = fields
+                .into_iter()
+                .map(|field| {
+                    current
+                        .data
+                        .get(&field)
+                        .cloned()
+                        .map(|value| (field, value))
+                        .ok_or(MutationError::PreconditionFailed)
+                })
+                .collect::<Result<Map<_, _>, _>>()?;
+            records.insert(input_id, values);
+        }
+        transaction
+            .execute(
+                "SELECT set_config('registry.immediate_action_link_context', '', true)",
+                &[],
+            )
+            .await
+            .map_err(map_database_error)?;
+        crate::commit_evidence::requests(&action.commit_evidence, inputs, &records)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn preflight_evidence_action(
         &self,
@@ -2863,7 +2971,7 @@ impl MutationCoordinator {
                 method: HttpMethod::Post,
                 route: &action.route,
                 package_revision: &self.expected.activation_id,
-                action_contract_fingerprint: &action.contract_fingerprint,
+                action_contract_fingerprint: &action.definition_revision,
                 target_authority,
                 result_effects: claims.result_effects(),
                 answer_digest: None,
@@ -2901,6 +3009,7 @@ impl MutationCoordinator {
             )
             .await?
         {
+            check_current_action_grant(claims)?;
             transaction
                 .commit()
                 .await
@@ -2909,6 +3018,7 @@ impl MutationCoordinator {
                 .append(entry)
                 .await
                 .map_err(|_| MutationError::CommitUnresolved)?;
+            check_current_action_grant(claims)?;
             return Ok(Err(outcome));
         }
         // This transaction proves current admission only. Its locks and entire
@@ -2921,6 +3031,7 @@ impl MutationCoordinator {
             target_authority,
             &normalized,
             application_id,
+            &input.preconditions,
         )
         .await?;
         self.verify_action_link_references(
@@ -2943,6 +3054,17 @@ impl MutationCoordinator {
             application_id,
         )
         .await?;
+        let commit_requests = self
+            .action_commit_evidence_requests(
+                transaction.transaction(),
+                registry,
+                action,
+                claims,
+                target_authority,
+                &normalized,
+            )
+            .await?;
+        check_current_action_grant(claims)?;
         transaction
             .commit()
             .await
@@ -2950,6 +3072,7 @@ impl MutationCoordinator {
         Ok(Ok(PreparedEvidenceAction {
             action: action.clone(),
             inputs: normalized,
+            commit_requests,
             preconditions: input.preconditions,
             binding,
             reserved_creates: reserve_action_create_ids(action)?,
@@ -2994,6 +3117,7 @@ impl MutationCoordinator {
                     deadline,
                     &mut candidate,
                     Some(frozen),
+                    Some(&prepared.commit_requests),
                     None,
                 )
                 .await;
@@ -3025,6 +3149,27 @@ impl MutationCoordinator {
             other => other,
         })
     }
+}
+
+fn verify_action_commit_evidence(
+    action: &CompiledAction,
+    inputs: &ActionInputs,
+    frozen: &FrozenEvidenceEvaluation,
+) -> Result<(), MutationError> {
+    let count = action.commit_evidence.len();
+    if count > frozen.acquisitions.len() {
+        return Err(MutationError::PreconditionFailed);
+    }
+    crate::commit_evidence::verify(
+        &action.commit_evidence,
+        inputs,
+        |id| {
+            action.inputs.iter().any(|input| {
+                input.id == id && matches!(input.field_type, FieldTypeSource::Timestamp)
+            })
+        },
+        &frozen.acquisitions[frozen.acquisitions.len() - count..],
+    )
 }
 
 fn validate_frozen_evidence(frozen: &FrozenEvidenceEvaluation) -> Result<(), MutationError> {
@@ -3079,7 +3224,7 @@ async fn insert_action_evidence(
 }
 
 /// Erase only expired protected Evidence material with the migration role.
-/// This covers both immediate-action and reviewed-request application uses.
+/// This covers both immediate Action and durable Proposal application uses.
 /// Runtime roles have INSERT only; history erasure has a separate scope.
 /// A future cutoff cannot erase material whose retention has not expired.
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -3095,16 +3240,16 @@ pub(crate) async fn erase_expired_action_evidence(
         )
         .await
         .map_err(map_database_error)?;
-    let request_uses = client
+    let proposal_uses = client
         .execute(
-            "DELETE FROM registry_internal.registry_request_evidence_uses
+            "DELETE FROM registry_internal.registry_proposal_evidence_uses
         WHERE expires_at <= LEAST($1, CURRENT_TIMESTAMP)",
             &[&before],
         )
         .await
         .map_err(map_database_error)?;
     action_uses
-        .checked_add(request_uses)
+        .checked_add(proposal_uses)
         .ok_or(MutationError::Unavailable)
 }
 
@@ -3369,71 +3514,38 @@ mod tests {
         );
     }
 
-    /// The compiler refuses an `equalsInput` that names an optional input.
-    /// Should one still arrive without that input, the requirement refuses the
-    /// request instead of skipping the check the way an absent effect input
-    /// skips its field.
     #[test]
-    fn an_absent_equality_input_refuses_instead_of_skipping_the_requirement() {
-        let requirement = crate::model::CompiledCommitGuard {
-            input: "parent".to_owned(),
-            entity_id: "parent".to_owned(),
-            field: "status".to_owned(),
-            equals: None,
-            equals_input: Some("expected-status".to_owned()),
-        };
-        let supplied = Map::from_iter([("expected-status".to_owned(), json!("active"))]);
-        assert_eq!(
-            requirement_expected_value(&requirement, &supplied).unwrap(),
-            &json!("active")
-        );
-        assert!(matches!(
-            requirement_expected_value(&requirement, &Map::new()),
-            Err(MutationError::InvalidRequest)
-        ));
-    }
-
-    #[test]
-    fn internal_action_admission_keeps_null_specific_to_handlers() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance/person-registration-rhai");
-        let project = crate::contract::parse_project_yaml(
-            &std::fs::read(root.join("registry.yaml")).unwrap(),
-        )
+    fn internal_action_admission_keeps_null_specific_to_functions() {
+        let mut project = crate::contract::parse_project_yaml(include_bytes!(
+            "../../../../products/breg/examples/refactor/facility/registry.yaml"
+        ))
         .unwrap();
-        let assets = project
+        project
             .actions
-            .iter()
-            .filter_map(|action| {
-                action
-                    .handler
-                    .as_ref()
-                    .and_then(|handler| handler.script().map(str::to_owned))
-            })
-            .map(|script| crate::contract::ModuleAssetSource {
-                module: None,
-                bytes: std::fs::read(root.join(&script)).unwrap(),
-                path: script,
-            })
-            .collect::<Vec<_>>();
-        let registry = crate::compiler::compile_project_with_assets(
-            &project,
-            &[],
-            &assets,
-            crate::compiler::CompileProfile::Authoring,
-        )
-        .unwrap();
+            .iter_mut()
+            .find(|action| action.id == "correct-address")
+            .unwrap()
+            .inputs
+            .iter_mut()
+            .find(|input| input.id == "city")
+            .unwrap()
+            .required = false;
+        let registry = crate::compiler::compile_project_with_assets(&project, &[],
+            &[crate::contract::ModuleAssetSource {module:None,path:"plans/correct-address.rhai".into(),
+                bytes:include_bytes!("../../../../products/breg/examples/refactor/facility/plans/correct-address.rhai").to_vec()}],
+            crate::compiler::CompileProfile::Authoring).unwrap();
         let mut action = registry
             .actions()
             .actions
             .iter()
-            .find(|action| action.id == "register-person")
+            .find(|action| action.id == "correct-address")
             .unwrap()
             .clone();
-        let input = Map::from_iter([
-            ("identifier".to_owned(), json!("0123456789012")),
-            ("family-name".to_owned(), Value::Null),
-        ]);
+        let input = json!({"facility":"00000000-0000-4000-8000-000000000001",
+            "address-line":"1 Main Road","postal-code":"10200","city":null})
+        .as_object()
+        .unwrap()
+        .clone();
         assert!(validate_action_input(&action, input.clone()).is_ok());
         action.handler = None;
         assert!(matches!(
@@ -3446,7 +3558,7 @@ mod tests {
     fn aliased_patch_group_waits_for_every_selected_create_dependency() {
         let effect = |id: &str, operation, dependencies: &[&str]| CompiledPlanEffect {
             id: id.to_owned(),
-            target: crate::model::CompiledActionTarget {
+            target: crate::model::CompiledPlanTarget {
                 entity_id: "synthetic".to_owned(),
                 binding: if operation == Operation::Create {
                     CompiledPlanTargetBinding::Create
@@ -3463,9 +3575,12 @@ mod tests {
         let first_patch = effect("first-patch", Operation::Patch, &[]);
         let create = effect("create", Operation::Create, &[]);
         let dependent_patch = effect("dependent-patch", Operation::Patch, &["create"]);
-        let groups =
-            order_action_effect_groups(vec![vec![&first_patch, &dependent_patch], vec![&create]])
-                .unwrap();
+        let groups = crate::plan::order_effect_groups(
+            vec![vec![&first_patch, &dependent_patch], vec![&create]],
+            |effect| effect.id.as_str(),
+            |effect| &effect.depends_on,
+        )
+        .unwrap();
         assert_eq!(groups[0][0].id, "create");
         assert_eq!(
             groups[1]

@@ -6,8 +6,8 @@
 //! require of every root.
 //!
 //! The projects here are the shapes those two commands write, held against the server an adopter
-//! runs: `bregctl init` writes the registry project this file reads from the Base Registry Engine
-//! acceptance material, and `evidencectl new --transport sqlite-extract` writes a referenced-form
+//! runs: BReg's canonical minimal registry represents the native standalone source contract,
+//! and `evidencectl new --transport sqlite-extract` writes a referenced-form
 //! project with no description. What the source declares as its transport is not read by the index
 //! at all; the referenced form is what decides whether a description is a prerequisite, so the
 //! fixture below writes the same question shape a SQLite or a fixed-HTTP project writes.
@@ -29,7 +29,7 @@ fn acceptance_project(relative: &str) -> PathBuf {
 
 #[tokio::test]
 async fn a_breg_project_root_is_claimed_by_its_own_family() {
-    let root = acceptance_project("breg/acceptance/business");
+    let root = acceptance_project("breg/examples/refactor/minimal");
     let registry = root.join("registry.yaml");
     let document = fs::read_to_string(&registry).expect("registry.yaml reads");
     let mut session = LspSession::start();

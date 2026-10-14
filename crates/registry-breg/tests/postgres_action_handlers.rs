@@ -11,27 +11,27 @@ mod postgres_harness;
 mod client_http;
 
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use postgres_harness::TestDatabase;
 use registry_breg::{
     api::{
-        router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
-        VerifiedClaimValue, VerifiedRequestClaims,
+        HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+        VerifiedRequestClaims, router,
     },
-    compiler::{compile_project_with_assets, CompileProfile},
-    contract::{parse_project_yaml, ModuleAssetSource},
+    compiler::{CompileProfile, compile_project_with_assets},
+    contract::{ModuleAssetSource, parse_project_yaml},
     cursor::CursorCodec,
     mutation::MutationFaultPoint,
     postgres::{
-        initialize_compiled_registry_state_for_test, install_compiled_schema,
         ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-        RegistryLockKey, RegistryStateTestIdentity,
+        RegistryLockKey, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+        install_compiled_schema,
     },
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -61,7 +61,7 @@ async fn sdk_declared_handler_refusal_and_committed_replay_match_real_server() {
         .unwrap();
     let action = metadata
         .value
-        .select_immediate_action("register-person", "person-registrar")
+        .select_action("register-person", "person-registrar")
         .unwrap();
     let mut blank = input("0123456789012")["input"].as_object().unwrap().clone();
     blank.insert("givenName".into(), json!("   "));
@@ -145,20 +145,22 @@ async fn setup_with_handler_source(
         .insert(registry_breg::contract::Operation::Batch);
     // The regression variant adds a field ceiling wider than the selected
     // mutation and a row boundary on the declared, optionally omitted target.
-    project
+    let multi_action = project
         .actions
         .iter_mut()
         .find(|action| action.id == "register-person-with-registration")
-        .unwrap()
-        .handler
-        .as_mut()
-        .unwrap()
-        .writes
-        .iter_mut()
-        .find(|slot| slot.id == "register")
-        .unwrap()
-        .fields
-        .push("active".to_owned());
+        .unwrap();
+    if let registry_breg::contract::ActionPlanSource::Function { inputs, writes, .. } =
+        &mut multi_action.plan
+    {
+        writes
+            .iter_mut()
+            .find(|slot| slot.id == "register")
+            .unwrap()
+            .fields
+            .push("active".to_owned());
+        inputs.push("clear-register-contact".to_owned());
+    }
     project
         .actions
         .iter_mut()
@@ -947,7 +949,13 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
     );
     assert_eq!(test_action_handler_invocation_count("register-person"), 1);
     assert_eq!(before_evaluator_timeout, counts(&database, &registry).await);
-    assert_eq!(call(simple, "evaluator-deadline", input("7123456789012")).await.0, StatusCode::OK, "active evaluator deadline rolls back the receipt lock and permits a healthy subsequent invocation");
+    assert_eq!(
+        call(simple, "evaluator-deadline", input("7123456789012"))
+            .await
+            .0,
+        StatusCode::OK,
+        "active evaluator deadline rolls back the receipt lock and permits a healthy subsequent invocation"
+    );
     let clear_conditions = call(
         &format!("{coordinated}/target-conditions"),
         "clear-conditions",
@@ -1024,7 +1032,7 @@ async fn action_handler_faults_log_only_compiled_locations_and_static_causes() {
     let _test_guard = HANDLER_TEST_LOCK.lock().await;
     let logs = captured_handler_logs();
     let (database, registry, identity) = setup_with_handler_source(Some(
-        r#"fn handle(ctx) {
+        r#"fn plan(ctx) {
             if ctx.inputs.identifier == "0123456789012" {
                 return #{effects: [#{id: "person", set: #{
                     identifier: ctx.inputs.identifier, "display-name": false

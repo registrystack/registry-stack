@@ -18,23 +18,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
-use registry_breg::compiler::{compile_project, CompileProfile, IngestionApiOperation};
+use registry_breg::compiler::{CompileProfile, IngestionApiOperation, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use zeroize::Zeroizing;
@@ -162,8 +162,8 @@ async fn create_run_schema_publishes_the_enforced_count_range() {
     let response = harness.get_json("/openapi.json", &claims).await;
     assert_eq!(response.status(), StatusCode::OK);
     let document = body_json(response).await;
-    let schema = &document["paths"]["/v1/records/widgets/ingestion-runs"]["post"]["requestBody"]
-        ["content"]["application/json"]["schema"];
+    let schema = &document["paths"]["/v1/records/widgets/ingestion-runs"]["post"]["requestBody"]["content"]
+        ["application/json"]["schema"];
     let range = json!({
         "type": "integer",
         "minimum": 1,
@@ -532,14 +532,14 @@ fn claims_with(
 /// label-only reader the concealment proofs stay outside. The batch byte bound
 /// is a parameter so one variant can sit at the protocol's highest.
 fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegistry> {
-    let fixture = json!({
+    let fixture = json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {
             "id": "ingestion-contract-registry", "version": "1", "defaultLanguage": "en",
             "canonicalBaseIri": "https://contract.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "widget", "primaryDataset": "test-dataset", "route": "widgets",
             "mutationMode": "mutable", "classification": "public",
             "batch": {"maximumItems": 3, "maximumBytes": batch_maximum_bytes},
@@ -559,8 +559,8 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
             {
                 "id": "operator", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "requiredPurposes": ["case-management"],
-                "permissions": {"entities": [{
-                    "entity": "widget", "operations": ["create", "get", "patch", "batch"],
+                "permissions": {"records": [{
+                    "recordType": "widget", "operations": ["create", "get", "patch", "batch"],
                     "readableFields": ["jurisdiction", "label", "quantity", "payload"],
                     "writableFields": ["jurisdiction", "label", "quantity", "payload"],
                     "rowBoundaries": [
@@ -570,8 +570,8 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
             },
             {
                 "id": "label-reader", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
-                "permissions": {"entities": [{
-                    "entity": "widget", "operations": ["get", "list"],
+                "permissions": {"records": [{
+                    "recordType": "widget", "operations": ["get", "list"],
                     "readableFields": ["label"],
                     "rowBoundaries": "unrestricted"
                 }]}

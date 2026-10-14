@@ -142,13 +142,13 @@ pub struct RegistryConfig {
     pub base_url: Url,
     /// The RFC 8707 resource indicator the person's access token names.
     pub resource: ResourceUri,
-    /// The change-request entity identifier.
-    pub entity: LocalId,
-    /// The reference field naming the record the request changes. The page
+    /// The proposal-mode Action identifier.
+    pub action: LocalId,
+    /// The reference input naming the record the Proposal changes. The page
     /// reads that record under the person's own token before it offers the
     /// submit form, because the registry does not tie a request's target to
     /// its requester.
-    pub target_field: LocalId,
+    pub target_input: LocalId,
     /// The registry access profile every read and submit names.
     pub access_profile: LocalId,
 }
@@ -893,8 +893,8 @@ signIn:
 registry:
   baseUrl: https://registry.example/base
   resource: https://registry.example/base
-  entity: address-correction-request
-  targetField: address
+  action: correct-address
+  targetInput: address
   accessProfile: citizen-review
 audit:
   hashKeyRef: secret:env/BREG_REVIEW_AUDIT_KEY
@@ -975,7 +975,7 @@ audit:
             120
         );
         assert_eq!(config.rate_limits.global_sign_in.burst.get(), 120);
-        assert_eq!(config.registry.target_field.as_str(), "address");
+        assert_eq!(config.registry.target_input.as_str(), "address");
     }
 
     #[test]
@@ -1352,29 +1352,29 @@ audit:
     fn registry_identifiers_are_local_identifiers() {
         for (from, to, path) in [
             (
-                "targetField: address",
-                "targetField: ''",
-                "/registry/targetField",
+                "targetInput: address",
+                "targetInput: ''",
+                "/registry/targetInput",
             ),
             (
-                "targetField: address",
-                "targetField: Address",
-                "/registry/targetField",
+                "targetInput: address",
+                "targetInput: Address",
+                "/registry/targetInput",
             ),
             (
-                "targetField: address",
-                "targetField: new address",
-                "/registry/targetField",
+                "targetInput: address",
+                "targetInput: new address",
+                "/registry/targetInput",
             ),
             (
-                "targetField: address",
-                "targetField: \"../address\"",
-                "/registry/targetField",
+                "targetInput: address",
+                "targetInput: \"../address\"",
+                "/registry/targetInput",
             ),
             (
-                "entity: address-correction-request",
-                "entity: address.correction",
-                "/registry/entity",
+                "action: correct-address",
+                "action: address.correction",
+                "/registry/action",
             ),
             (
                 "accessProfile: citizen-review",
@@ -1384,7 +1384,7 @@ audit:
         ] {
             refused(&document().replace(from, to), "config.invalid-value", path);
         }
-        let missing = document().replace("  targetField: address\n", "");
+        let missing = document().replace("  targetInput: address\n", "");
         let found = findings_of(&missing);
         assert!(
             found.contains(&("config.missing-key".to_owned(), "/registry".to_owned())),

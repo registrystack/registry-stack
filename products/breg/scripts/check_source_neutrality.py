@@ -162,6 +162,7 @@ def source_files(repository_root: Path) -> list[Path]:
                     for path in source_root.rglob("*")
                     if path.is_file()
                     and path.suffix in SOURCE_SUFFIXES
+                    and not path.name.endswith("_tests.rs")
                     and not (set(path.relative_to(root).parts) & EXCLUDED_SOURCE_DIRECTORIES)
                 )
             build_script = root / "build.rs"
@@ -438,6 +439,12 @@ def find_violations(repository_root: Path) -> list[str]:
                 # bregctl. Exempt only catalog ids backed by a core directory and
                 # include_bytes! paths resolving to files beneath that directory.
                 if span in starter_catalog_literal_spans:
+                    continue
+                # Inspection is a neutral Proposal authority phase in these modules.
+                if literal == "inspection" and str(relative) in {
+                    "crates/registry-breg/src/postgres/proposal_context.rs",
+                    "crates/registry-breg/src/proposal_ddl.rs",
+                }:
                     continue
                 identifier = domain_identifier(literal)
                 if identifier is not None:

@@ -334,7 +334,7 @@ fn unverified_patterns(compiled: &CompiledRegistry) -> Vec<registry_breg::Diagno
                 field.pattern.as_ref().map(|_| registry_breg::Diagnostic {
                     severity: DiagnosticSeverity::Finding,
                     code: "breg.field.pattern-unverified-offline".to_owned(),
-                    path: format!("entities[{}].fields[{}].pattern", entity.id, field.id),
+                    path: format!("recordTypes[{}].fields[{}].pattern", entity.id, field.id),
                     message: "Offline check validates pattern structure and bounds only. Run bregctl test against disposable PostgreSQL to verify native pattern syntax and storage behavior.".to_owned(),
                 })
             })
@@ -838,9 +838,9 @@ fn alternatives(steps: &[Step]) -> Vec<Vec<Step>> {
     };
     match steps {
         [Step::Member(entities), Step::Select { value: entity, .. }, Step::Member(profiles), Step::Select { value: profile, .. }, rest @ ..]
-            if entities == "entities" && profiles == "accessProfiles" =>
+            if entities == "recordTypes" && profiles == "accessProfiles" =>
         {
-            under_profile("entities", "entity", entity, profile, rest)
+            under_profile("records", "recordType", entity, profile, rest)
         }
         [Step::Member(actions), Step::Select { value: action, .. }, Step::Member(permissions), Step::Select {
             key,
@@ -916,7 +916,7 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
 }
 
 /// One step of a compiler path such as
-/// `entities[id=person].fields[name].pattern`.
+/// `recordTypes[id=person].fields[name].pattern`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Step {
     /// A mapping member.
@@ -1082,29 +1082,29 @@ mod tests {
     #[test]
     fn a_compiler_path_resolves_to_the_pointer_of_the_value_it_names() {
         let project = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\nentities:\n  - id: first\n    route: firsts\n    mutationMode: mutable\n    fields:\n      - id: label\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n  - id: second\n    route: seconds\n    mutationMode: mutable\n    fields:\n      - id: code\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\nrecordTypes:\n  - id: first\n    route: firsts\n    mutationMode: mutable\n    fields:\n      - id: label\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n  - id: second\n    route: seconds\n    mutationMode: mutable\n    fields:\n      - id: code\n        type: string\n        maximumLength: 20\n        required: true\n        classification: internal\n",
         );
         let found = resolve(
             project.root(),
-            &parse_steps("entities[id=second].fields[code].type"),
+            &parse_steps("recordTypes[id=second].fields[code].type"),
         );
-        assert_eq!(found.pointer, "/entities/1/fields/0/type");
+        assert_eq!(found.pointer, "/recordTypes/1/fields/0/type");
         assert!(found.complete);
 
         let partial = resolve(
             project.root(),
-            &parse_steps("entities[id=second].fields[absent].pattern"),
+            &parse_steps("recordTypes[id=second].fields[absent].pattern"),
         );
-        assert_eq!(partial.pointer, "/entities/1/fields");
+        assert_eq!(partial.pointer, "/recordTypes/1/fields");
         assert!(!partial.complete);
     }
 
     #[test]
     fn a_selector_value_may_hold_a_dot() {
         assert_eq!(
-            parse_steps("entities[id=a].readPaths[path=address.city]"),
+            parse_steps("recordTypes[id=a].readPaths[path=address.city]"),
             vec![
-                Step::Member("entities".to_owned()),
+                Step::Member("recordTypes".to_owned()),
                 Step::Select {
                     key: Some("id".to_owned()),
                     value: "a".to_owned()
@@ -1117,17 +1117,17 @@ mod tests {
             ]
         );
         assert_eq!(
-            without_values("entities[id=a].readPaths[path=address.city]"),
-            "entities[].readPaths[]"
+            without_values("recordTypes[id=a].readPaths[path=address.city]"),
+            "recordTypes[].readPaths[]"
         );
     }
 
     #[test]
     fn an_entity_access_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: clerk\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      entities:\n        - entity: other\n          operations: [get]\n          rowBoundaries: unrestricted\n        - entity: record\n          operations: [get]\n          rowBoundaries: unrestricted\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: clerk\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: other\n          operations: [get]\n          rowBoundaries: unrestricted\n        - recordType: record\n          operations: [get]\n          rowBoundaries: unrestricted\n",
         );
-        let steps = parse_steps("entities[id=record].accessProfiles[id=clerk].operations");
+        let steps = parse_steps("recordTypes[id=record].accessProfiles[id=clerk].operations");
         let found = alternatives(&steps)
             .iter()
             .map(|alternative| resolve(project.root(), alternative))
@@ -1135,17 +1135,17 @@ mod tests {
             .expect("the profile's permission names the entity");
         assert_eq!(
             found.pointer,
-            "/accessProfiles/0/permissions/entities/1/operations"
+            "/accessProfiles/0/permissions/records/1/operations"
         );
     }
 
     #[test]
     fn an_action_permission_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n  - id: steward\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      entities:\n        - entity: record\n          operations: [get]\n          rowBoundaries: unrestricted\n      actions:\n        - action: import-record\n          operations: [invoke]\n          targets:\n            - {entity: other, rowBoundaries: unrestricted}\n            - {entity: record, rowBoundaries: unrestricted}\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n  - id: steward\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: record\n          operations: [get]\n          rowBoundaries: unrestricted\n      actions:\n        - action: import-record\n          operations: [invoke]\n          targets:\n            - {recordType: other, rowBoundaries: unrestricted}\n            - {recordType: record, rowBoundaries: unrestricted}\n",
         );
         let steps = parse_steps(
-            "actions[id=import-record].permissions[profile=steward].targets[entity=record].rowBoundaries",
+            "actions[id=import-record].permissions[profile=steward].targets[recordType=record].rowBoundaries",
         );
         let found = alternatives(&steps)
             .iter()

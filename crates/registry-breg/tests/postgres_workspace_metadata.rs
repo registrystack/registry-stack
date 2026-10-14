@@ -11,9 +11,9 @@ mod pilot_acceptance_harness;
 mod postgres_harness;
 
 use axum::http::{Method, StatusCode};
-use pilot_acceptance_harness::{response_bytes, response_json, PilotHarness};
+use pilot_acceptance_harness::{PilotHarness, response_bytes, response_json};
 use registry_breg::mutation::parse_json_patch_document;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn operation<'a>(document: &'a Value, id: &str) -> &'a Value {
     document["operations"]
@@ -57,7 +57,7 @@ async fn real_postgres_workspace_metadata_marks_request_lifecycle_without_direct
         "direct"
     );
     assert_eq!(
-        metadata["entities"]
+        metadata["recordTypes"]
             .as_array()
             .unwrap()
             .iter()
@@ -84,8 +84,7 @@ async fn real_postgres_workspace_metadata_marks_request_lifecycle_without_direct
     )
     .await;
     assert_eq!(
-        operation(&submitter, "records.placement-correction-request.create")["request"]
-            ["mutationSemantics"],
+        operation(&submitter, "records.placement-correction-request.create")["request"]["mutationSemantics"],
         "direct"
     );
     let placement_list = operation(&submitter, "records.asset-placement.list");
@@ -150,11 +149,13 @@ async fn real_postgres_workspace_metadata_marks_request_lifecycle_without_direct
             .expect("ordinary list reference binding");
         assert_eq!(binding["accessProfile"], "correction-submitter");
         assert_eq!(binding["labelFields"], label_fields);
-        assert!(reference["operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|binding| binding["accessProfile"] == "correction-submitter"));
+        assert!(
+            reference["operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|binding| binding["accessProfile"] == "correction-submitter")
+        );
     }
     for operation_id in [
         "records.placement-correction-request.request.submit",
@@ -235,11 +236,13 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
         batch["request"]["schema"]["properties"]["items"]["maxItems"],
         batch["request"]["maximumItems"]
     );
-    assert!(metadata["operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|op| op["id"] != "records.inspection-event.patch"));
+    assert!(
+        metadata["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|op| op["id"] != "records.inspection-event.patch")
+    );
     let placement = operation(&metadata, "records.asset-placement.patch");
     let end = placement["fields"]
         .as_array()
@@ -309,17 +312,21 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
     )
     .await;
     assert_eq!(planner["revision"], metadata["revision"]);
-    assert!(planner["operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|op| op["accessProfile"] == "site-planner"));
-    assert!(planner["operations"].as_array().unwrap().iter().all(|op| ![
-        "records.asset-item.create",
-        "records.asset-item.patch",
-        "records.inspection-event.create"
-    ]
-    .contains(&op["id"].as_str().unwrap())));
+    assert!(
+        planner["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|op| op["accessProfile"] == "site-planner")
+    );
+    assert!(planner["operations"].as_array().unwrap().iter().all(|op| {
+        ![
+            "records.asset-item.create",
+            "records.asset-item.patch",
+            "records.inspection-event.create",
+        ]
+        .contains(&op["id"].as_str().unwrap())
+    }));
     let planner_rendered = planner.to_string();
     for hidden in [
         "asset-class",
@@ -337,11 +344,13 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
         json!(["asset", "site", "valid-from", "valid-to"])
     );
     let body = json!({"data":{"assetCode":"META-001","label":"Metadata contract asset","assetClass":"equipment"}});
-    assert!(jsonschema::JSONSchema::options()
-        .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&create["request"]["schema"])
-        .unwrap()
-        .is_valid(&body));
+    assert!(
+        jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&create["request"]["schema"])
+            .unwrap()
+            .is_valid(&body)
+    );
     let created = harness
         .send_json(
             Method::POST,

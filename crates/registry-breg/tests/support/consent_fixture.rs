@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
-use serde_json::{json, Value};
+use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_json};
+use serde_json::{Value, json};
 
 pub const PROJECT: &str = include_str!("../fixtures/consent-access.yaml");
 /// The index of the consent-record entity in the fixture.
@@ -54,10 +54,10 @@ pub fn refusal_codes(value: &Value) -> Vec<String> {
 #[allow(dead_code)]
 pub fn self_issued_project() -> Value {
     let mut value = source();
-    value["entities"][CONSENT_RECORD]["fields"].as_array_mut().unwrap().push(json!(
+    value["recordTypes"][CONSENT_RECORD]["fields"].as_array_mut().unwrap().push(json!(
         {"id": "link", "type": "reference", "target": "consent-subject-link", "classification": "internal"}
     ));
-    value["entities"].as_array_mut().unwrap().push(json!({
+    value["recordTypes"].as_array_mut().unwrap().push(json!({
         "id": "consent-subject-link", "primaryDataset": "consent-dataset", "route": "consent-subject-links",
         "mutationMode": "mutable", "classification": "restricted",
         "fields": [
@@ -68,6 +68,7 @@ pub fn self_issued_project() -> Value {
     }));
     value["actions"].as_array_mut().unwrap().push(json!({
         "id": "withdraw-consent",
+        "execution": {"mode":"immediate"},
         "consentIssuer": "self",
         "inputs": [
             {"id": "link", "type": "reference", "target": "consent-subject-link", "required": true, "classification": "internal"},
@@ -78,28 +79,28 @@ pub fn self_issued_project() -> Value {
             {"id": "decision", "type": "vocabulary-code", "vocabulary": "consent-decision", "values": ["withdrawn"], "required": true, "classification": "internal"},
             {"id": "effective-at", "type": "timestamp", "required": true, "classification": "internal"}
         ],
-        "requires": [
-            {"input": "link", "field": "subject", "equalsInput": "subject"},
+        "commitGuards": {"targets": [
+            {"input": "link", "field": "subject", "equalsFromInput": "subject"},
             {"input": "link", "field": "active", "equals": true}
-        ],
-        "effects": [{
-            "id": "decision", "target": {"entity": "consent-decision"}, "operation": "create",
+        ]},
+        "plan": {"type":"fixed", "effects": [{
+            "id": "decision", "target": {"recordType": "consent-decision"}, "operation": "create",
             "set": {
-                "subject": {"fromField": "subject"}, "recipient": {"fromField": "recipient"},
-                "purpose": {"fromField": "purpose"}, "scope": {"fromField": "scope"},
-                "decision": {"fromField": "decision"}, "effective-at": {"fromField": "effective-at"},
-                "link": {"fromField": "link"}
+                "subject": {"fromInput": "subject"}, "recipient": {"fromInput": "recipient"},
+                "purpose": {"fromInput": "purpose"}, "scope": {"fromInput": "scope"},
+                "decision": {"fromInput": "decision"}, "effective-at": {"fromInput": "effective-at"},
+                "link": {"fromInput": "link"}
             }
-        }]
+        }]}
     }));
     value["accessProfiles"].as_array_mut().unwrap().push(json!({
         "id": "consent-self", "principalClaim": "principal", "requiredScopes": ["consent:self"],
         "permissions": {"actions": [{
             "action": "withdraw-consent", "operations": ["invoke"],
             "targets": [
-                {"entity": "consent-subject-link", "rowBoundaries": [{"field": "principal", "claim": "principal", "operator": "equals"}]},
-                {"entity": "person", "rowBoundaries": "unrestricted"},
-                {"entity": "consent-decision", "rowBoundaries": "unrestricted"}
+                {"recordType": "consent-subject-link", "rowBoundaries": [{"field": "principal", "claim": "principal", "operator": "equals"}]},
+                {"recordType": "person", "rowBoundaries": "unrestricted"},
+                {"recordType": "consent-decision", "rowBoundaries": "unrestricted"}
             ],
             "results": ["decision"]
         }]}

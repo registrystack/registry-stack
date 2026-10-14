@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::auth::{AuthorityClaimConfig, RegistryAuthenticator};
-use crate::compiler::{compile_project, CompileProfile};
+use crate::compiler::{CompileProfile, compile_project};
 use crate::contract::parse_project_yaml;
 use crate::cursor::CursorCodec;
 use crate::model::{CompiledAction, CompiledRegistry};
@@ -12,7 +12,7 @@ use crate::postgres::{
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{ClaimNames, JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{oidc_verifier_config, MockIdp};
+use registry_platform_testing::{MockIdp, oidc_verifier_config};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -20,7 +20,8 @@ const PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project: {id: action-admission, version: "1", defaultLanguage: en, canonicalBaseIri: https://action-admission.example.test}
-entities:
+datasets: [{id: test-dataset}]
+recordTypes:
   - id: case
     primaryDataset: test-dataset
     route: cases
@@ -31,14 +32,17 @@ entities:
       - {id: region, type: string, maximumLength: 20, required: true, classification: internal}
 actions:
   - id: rename-case
+    execution: {mode: immediate}
     inputs:
       - {id: case-ref, apiName: caseId, type: reference, target: case, required: true, classification: restricted}
       - {id: case-label, apiName: newLabel, type: string, maximumLength: 40, required: true, classification: restricted}
-    effects:
-      - id: renamed
-        target: {fromField: case-ref}
-        operation: patch
-        set: {label: {fromField: case-label}}
+    plan:
+      type: fixed
+      effects:
+        - id: renamed
+          target: {fromInput: case-ref}
+          operation: patch
+          set: {label: {fromInput: case-label}}
 accessProfiles:
   - id: registrar
     default: true
@@ -50,7 +54,7 @@ accessProfiles:
         - action: rename-case
           operations: [invoke]
           targets:
-            - entity: case
+            - recordType: case
               rowBoundaries: [{field: region, claim: regions, operator: in}]
           results: [renamed]
   - id: supervisor
@@ -61,7 +65,7 @@ accessProfiles:
       actions:
         - action: rename-case
           operations: [invoke]
-          targets: [{entity: case, rowBoundaries: unrestricted}]
+          targets: [{recordType: case, rowBoundaries: unrestricted}]
           results: []
   - id: client-human
     principalClaim: registry_principal
@@ -74,7 +78,7 @@ accessProfiles:
         - action: rename-case
           operations: [invoke]
           targets:
-            - entity: case
+            - recordType: case
               rowBoundaries: [{field: region, claim: regions, operator: in}]
           results: [renamed]
 "#;
@@ -84,6 +88,387 @@ fn compiled() -> Arc<CompiledRegistry> {
     Arc::new(
         compile_project(&project, &[], CompileProfile::Authoring).expect("action fixture compiles"),
     )
+}
+
+fn task_action_registry() -> Arc<CompiledRegistry> {
+    let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
+    project.access_profiles.push(serde_json::from_value(json!({
+        "id":"task-invoker", "principalClaim":"registry_principal", "actorKind":"agent",
+        "requesterClients":["agent-client"], "requiredScopes":["case.rename"],
+        "requiredPurposes":["case-management"], "taskGrant":{"sourceIssuer":"https://casework.example"},
+        "permissions":{"actions":[{"action":"rename-case","operations":["invoke"],
+            "targets":[{"recordType":"case","rowBoundaries":[{"field":"region","claim":"grantRegion","operator":"equals"}]}],
+            "results":["renamed"]}]}
+    })).unwrap());
+    Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap())
+}
+
+#[tokio::test]
+async fn task_granted_invoke_uses_exact_action_scope_and_frozen_subjects() {
+    let registry = task_action_registry();
+    assert!(
+        registry
+            .entities()
+            .values()
+            .flat_map(|entity| entity.access_profiles.values())
+            .all(|profile| profile.task_grant.is_none())
+    );
+    assert_eq!(
+        crate::task_grant::required_source_issuers(&registry),
+        BTreeSet::from(["https://casework.example"]),
+        "Action-only grants require their startup status binding"
+    );
+    let idp = MockIdp::start().await;
+    let audience = "urn:example:breg";
+    let mut verifier = oidc_verifier_config(idp.issuer(), vec![audience.into()]);
+    verifier.allowed_clients = vec!["agent-client".into()];
+    let auth = RegistryAuthenticator::new(
+        &registry,
+        verifier,
+        Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        )),
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into())),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let token = json!({"aud":audience,"sub":"citizen","azp":"agent-client","registry_principal":"citizen",
+        "registry_actor_kind":"agent","registry_purpose":"case-management","scope":"case.rename",
+        "registry_grant_id":"00000000-0000-4000-8000-0000000000bb","registry_approver":"h:approver",
+        "registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
+        "registry_grant_resource":audience,"registry_grant_exp":now+600,
+        "registry_grant_bounds":{"type":"breg","permissions":[{"collection":"action:rename-case","operations":["invoke"]}]},
+        "identity":{"grantRegion":"north"},"grantRegion":"south"});
+    let claims = auth
+        .authenticate(&idp.mint_token(token.clone()))
+        .await
+        .unwrap();
+    let service = service_for(registry.clone(), true);
+    let route = registry
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::Invoke)
+        .unwrap();
+    let options = QueryOptions::parse(Some("accessProfile=task-invoker"), false).unwrap();
+    let surface = authorize_action(&service, route, &claims, &options).unwrap();
+    assert_eq!(
+        surface.context.target_authority()["case"][0].values(),
+        &BTreeSet::from(["north".into()])
+    );
+    assert_eq!(
+        surface.context.task_grant().unwrap().subjects()["grantRegion"],
+        "north"
+    );
+    assert!(
+        authorize_action(&service, route, &claims, &QueryOptions::default()).is_none(),
+        "ordinary profile cannot accept task authority"
+    );
+    for (collection, operation) in [
+        ("action:other", "invoke"),
+        ("action:rename-case", "start"),
+        ("cases", "patch"),
+    ] {
+        let mut wrong = token.clone();
+        wrong["registry_grant_bounds"]["permissions"] =
+            json!([{"collection":collection,"operations":[operation]}]);
+        let claims = auth.authenticate(&idp.mint_token(wrong)).await.unwrap();
+        assert!(authorize_action(&service, route, &claims, &options).is_none());
+    }
+    let mut wrong_issuer = token.clone();
+    wrong_issuer["registry_grant_source_issuer"] = json!("https://other.example");
+    let wrong = auth
+        .authenticate(&idp.mint_token(wrong_issuer))
+        .await
+        .unwrap();
+    assert!(authorize_action(&service, route, &wrong, &options).is_none());
+    let mut missing_subject = token;
+    missing_subject["identity"] = json!({"other":"north"});
+    let missing = auth
+        .authenticate(&idp.mint_token(missing_subject))
+        .await
+        .unwrap();
+    assert!(authorize_action(&service, route, &missing, &options).is_none());
+
+    // The service must check live task status before trying this unavailable pool.
+    let checker = Arc::new(RefusedTaskStatus(std::sync::atomic::AtomicUsize::new(0)));
+    let mutations = (**service.mutations.as_ref().unwrap())
+        .clone()
+        .with_task_status(checker.clone());
+    for _ in 0..2 {
+        let correlation = crate::correlation::RequestCorrelation::breg_created();
+        let result = mutations
+            .invoke_action(ImmediateActionInput {
+                route_id: &route.id,
+                action_id: &route.action_id,
+                idempotency_key: "task-status-before-pool",
+                context: &surface.context,
+                input: Map::new(),
+                preconditions: BTreeMap::new(),
+                body_bytes: 2,
+                correlation: &correlation,
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::mutation::MutationError::PreconditionFailed)
+        ));
+    }
+    assert_eq!(
+        checker.0.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "positive or negative status cannot be reused across invocations"
+    );
+}
+
+struct RefusedTaskStatus(std::sync::atomic::AtomicUsize);
+impl crate::task_grant::TaskGrantStatusChecker for RefusedTaskStatus {
+    fn check<'a>(
+        &'a self,
+        _: &'a crate::task_grant::TaskGrantBinding,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), crate::task_grant::TaskGrantError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Err(crate::task_grant::TaskGrantError::Refused) })
+    }
+}
+
+#[test]
+fn standing_agent_cannot_use_an_untyped_immediate_profile() {
+    let registry = compiled();
+    let service = service_for(registry.clone(), true);
+    let route = registry
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::Invoke)
+        .unwrap();
+    let agent = claims(
+        "registry_principal",
+        ["case.rename"],
+        Some("case-management"),
+        true,
+    )
+    .with_contextual_authority(
+        Some(registry_platform_oidc::ActorKind::Agent),
+        None,
+        None,
+        None,
+        BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(authorize_action(&service, route, &agent, &QueryOptions::default()).is_none());
+}
+
+#[tokio::test]
+async fn proposal_task_scopes_are_exact_and_standing_agents_only_start_or_edit_owned_drafts() {
+    use crate::{model::ProposalOperation, postgres::ProposalAuthorityOperation};
+    let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
+    let mut proposed = project.actions[0].clone();
+    proposed.id = "propose-rename".into();
+    proposed.execution=serde_json::from_value(json!({"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}})).unwrap();
+    project.actions.push(proposed);
+    let mut task_profile = json!({"id":"task-proposer","principalClaim":"registry_principal","actorKind":"agent","requesterClients":["agent-client"],
+        "requiredScopes":["case.rename"],"requiredPurposes":["case-management"],"taskGrant":{"sourceIssuer":"https://casework.example"},
+        "permissions":{"actions":[{"action":"propose-rename","operations":["start"],"targets":[{"recordType":"case","rowBoundaries":[{"field":"region","claim":"grantRegion","operator":"equals"}]}]}],
+            "proposals":[{"action":"propose-rename","operations":["get","list","edit","submit","revise","cancel","apply","rebase","retry","get-review-status"],"ownership":"caller",
+                "targets":[{"recordType":"case","rowBoundaries":[{"field":"region","claim":"grantRegion","operator":"equals"}]}]}]}});
+    project
+        .access_profiles
+        .push(serde_json::from_value(task_profile.clone()).unwrap());
+    task_profile["id"] = json!("standing-proposer");
+    task_profile.as_object_mut().unwrap().remove("taskGrant");
+    task_profile["permissions"]["proposals"][0]["operations"] = json!(["edit"]);
+    project
+        .access_profiles
+        .push(serde_json::from_value(task_profile).unwrap());
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let mut proposal_only = project.clone();
+    for profile in &mut proposal_only.access_profiles {
+        if profile.id == "task-proposer" {
+            profile.permissions.actions.clear();
+        }
+    }
+    let proposal_only = compile_project(&proposal_only, &[], CompileProfile::Authoring).unwrap();
+    assert_eq!(
+        crate::task_grant::required_source_issuers(&proposal_only),
+        BTreeSet::from(["https://casework.example"]),
+        "Proposal-only grants require their startup status binding"
+    );
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "propose-rename")
+        .unwrap();
+    let idp = MockIdp::start().await;
+    let audience = "urn:example:breg";
+    let mut verifier = oidc_verifier_config(idp.issuer(), vec![audience.into()]);
+    verifier.allowed_clients = vec!["agent-client".into()];
+    let auth = RegistryAuthenticator::new(
+        &registry,
+        verifier,
+        Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        )),
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into())),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let token = json!({"aud":audience,"sub":"citizen","azp":"agent-client","registry_principal":"citizen","registry_actor_kind":"agent",
+        "registry_purpose":"case-management","scope":"case.rename","registry_grant_id":"00000000-0000-4000-8000-0000000000bb",
+        "registry_approver":"h:approver","registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
+        "registry_grant_resource":audience,"registry_grant_exp":now+600,"identity":{"grantRegion":"north"},
+        "registry_grant_bounds":{"type":"breg","permissions":[{"collection":"action:propose-rename","operations":["start"]}]}});
+    let start = auth
+        .authenticate(&idp.mint_token(token.clone()))
+        .await
+        .unwrap();
+    let admit = |claims: &VerifiedRequestClaims, profile: &str, operation, id| {
+        super::super::proposals::authorize(&registry, action, claims, Some(profile), operation, id)
+    };
+    assert!(
+        admit(
+            &start,
+            "task-proposer",
+            ProposalAuthorityOperation::Start,
+            None
+        )
+        .is_some()
+    );
+    let proposal_id = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
+    let other = Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap();
+    assert!(
+        admit(
+            &start,
+            "task-proposer",
+            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
+            Some(proposal_id)
+        )
+        .is_none()
+    );
+    let mut lifecycle_token = token.clone();
+    lifecycle_token["registry_grant_bounds"]["permissions"] =
+        json!([{"collection":format!("proposal:{proposal_id}"),"operations":["submit","list"]}]);
+    let lifecycle = auth
+        .authenticate(&idp.mint_token(lifecycle_token.clone()))
+        .await
+        .unwrap();
+    assert!(
+        admit(
+            &lifecycle,
+            "task-proposer",
+            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
+            Some(proposal_id)
+        )
+        .is_some()
+    );
+    assert!(
+        admit(
+            &lifecycle,
+            "task-proposer",
+            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
+            Some(other)
+        )
+        .is_none()
+    );
+    assert!(
+        admit(
+            &lifecycle,
+            "task-proposer",
+            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply),
+            Some(proposal_id)
+        )
+        .is_none()
+    );
+    let list = admit(
+        &lifecycle,
+        "task-proposer",
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::List),
+        None,
+    )
+    .unwrap();
+    assert_eq!(list.proposal_scope, Some(BTreeSet::from([proposal_id])));
+    lifecycle_token["registry_grant_source_issuer"] = json!("https://other.example");
+    let wrong = auth
+        .authenticate(&idp.mint_token(lifecycle_token))
+        .await
+        .unwrap();
+    assert!(
+        admit(
+            &wrong,
+            "task-proposer",
+            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit),
+            Some(proposal_id)
+        )
+        .is_none()
+    );
+    let mut standing = token;
+    standing
+        .as_object_mut()
+        .unwrap()
+        .retain(|name, _| !name.starts_with("registry_grant_") && name != "registry_approver");
+    standing["grantRegion"] = json!("north");
+    let standing = auth.authenticate(&idp.mint_token(standing)).await.unwrap();
+    assert!(standing.actor_subject().is_none() && standing.grant().is_none());
+    assert!(
+        admit(
+            &standing,
+            "standing-proposer",
+            ProposalAuthorityOperation::Start,
+            None
+        )
+        .is_some()
+    );
+    assert!(
+        admit(
+            &standing,
+            "standing-proposer",
+            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit),
+            Some(proposal_id)
+        )
+        .is_some()
+    );
+    let discovery = service_for(Arc::new(registry.clone()), true);
+    let selected = QueryOptions::parse(Some("accessProfile=standing-proposer"), false).unwrap();
+    assert!(
+        visible_actions(&discovery, &standing, &selected)
+            .iter()
+            .any(|surface| surface.action.id == "propose-rename"
+                && surface.route.operation == Operation::Start),
+        "the permitted draft Start is also discoverable"
+    );
+    for operation in [
+        ProposalOperation::Get,
+        ProposalOperation::List,
+        ProposalOperation::Submit,
+        ProposalOperation::Apply,
+    ] {
+        assert!(
+            admit(
+                &standing,
+                "standing-proposer",
+                ProposalAuthorityOperation::Lifecycle(operation),
+                Some(proposal_id)
+            )
+            .is_none()
+        );
+    }
 }
 
 #[tokio::test]
@@ -234,27 +619,33 @@ fn handler_timestamp_admission_enforces_the_kernel_string_bound_without_changing
     }))
     .unwrap();
     let fixed = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    assert!(parse_body(
-        &fixed.actions().actions[0],
-        ActionRouteKind::Invoke,
-        &oversized
-    )
-    .is_ok());
+    assert!(
+        parse_body(
+            &fixed.actions().actions[0],
+            ActionRouteKind::Invoke,
+            &oversized
+        )
+        .is_ok()
+    );
 
-    project.actions[0].effects.clear();
-    project.actions[0].handler = Some(serde_json::from_value(json!({
-        "type": "rhai",
-        "script": "handlers/create-entry.rhai",
-        "abi": "registry.action-handler/v1",
-        "writes": [{"id": "created", "target": {"entity": "entry"}, "operation": "create", "fields": ["label"]}]
-    })).unwrap());
+    project.functions.push(
+        serde_json::from_value(json!({
+            "id":"create-entry-plan", "runtime":"rhai", "source":"handlers/create-entry.rhai",
+            "entrypoint":"plan", "abi":"registry.action-plan/v1"
+        }))
+        .unwrap(),
+    );
+    project.actions[0].plan = serde_json::from_value(json!({
+        "type":"function", "function":"create-entry-plan", "inputs":["label"],
+        "writes": [{"id": "created", "target": {"recordType": "entry"}, "operation": "create", "fields": ["label"]}]
+    })).unwrap();
     let handler = crate::compiler::compile_project_with_assets(
         &project,
         &[],
         &[crate::contract::ModuleAssetSource {
             module: None,
             path: "handlers/create-entry.rhai".to_owned(),
-            bytes: br#"fn handle(ctx) { #{effects:[#{id:"created",set:#{label:"2026-09-08T10:20:30Z"}}]} }"#.to_vec(),
+            bytes: br#"fn plan(ctx) { #{effects:[#{id:"created",set:#{label:"2026-09-08T10:20:30Z"}}]} }"#.to_vec(),
         }],
         CompileProfile::Authoring,
     ).unwrap();
@@ -444,11 +835,13 @@ fn action_authority_has_no_crud_requirement_or_profile_fallback() {
     );
     assert!(authorize_action(&service, route, &supervisor, &QueryOptions::default()).is_none());
     let explicit = QueryOptions::parse(Some("accessProfile=supervisor"), false).unwrap();
-    assert!(authorize_action(&service, route, &supervisor, &explicit)
-        .unwrap()
-        .context
-        .result_effects()
-        .is_empty());
+    assert!(
+        authorize_action(&service, route, &supervisor, &explicit)
+            .unwrap()
+            .context
+            .result_effects()
+            .is_empty()
+    );
     for denied in [
         claims("sub", ["case.rename"], Some("case-management"), true),
         claims("registry_principal", ["case.rename"], None, true),
@@ -469,19 +862,23 @@ fn action_authority_has_no_crud_requirement_or_profile_fallback() {
     }
     let mut forged = route.clone();
     forged.path.push_str("/forged");
-    assert!(authorize_action(
-        &service,
-        &forged,
-        &authorized_claims,
-        &QueryOptions::default()
-    )
-    .is_none());
-    assert!(visible_actions(
-        &service_for(registry, false),
-        &authorized_claims,
-        &QueryOptions::default()
-    )
-    .is_empty());
+    assert!(
+        authorize_action(
+            &service,
+            &forged,
+            &authorized_claims,
+            &QueryOptions::default()
+        )
+        .is_none()
+    );
+    assert!(
+        visible_actions(
+            &service_for(registry, false),
+            &authorized_claims,
+            &QueryOptions::default()
+        )
+        .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -534,10 +931,8 @@ async fn human_identity_is_the_principal_claim_and_a_human_token_without_it_is_r
     ));
 }
 
-/// The compiler admits no action permission on a standing agent profile, and
-/// action admission refuses every task-grant token, so a token carrying a
-/// verified trusted actor reaches no immediate action: a permission declaring
-/// no `actorKind` or another kind refuses it.
+/// A delegated actor without an explicit task grant cannot invoke an Action,
+/// including through a profile declaring no `actorKind` or a human kind.
 #[tokio::test]
 async fn delegated_token_is_refused_at_immediate_action_admission() {
     let registry = compiled();
@@ -630,7 +1025,7 @@ async fn action_only_discovery_is_profile_filtered_without_entity_read_access() 
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["entities"], json!([]));
+    assert_eq!(body["recordTypes"], json!([]));
     assert_eq!(body["actions"][0]["id"], "rename-case");
     assert_eq!(
         body["actions"][0]["requiredConditionKeys"],
@@ -649,11 +1044,13 @@ async fn action_only_discovery_is_profile_filtered_without_entity_read_access() 
     let body = response_json(response).await;
     assert!(body["paths"]["/v1/actions/rename-case"]["post"].is_object());
     assert!(body["paths"]["/v1/actions/rename-case/target-conditions"]["post"].is_object());
-    assert!(body["paths"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .all(|path| path.starts_with("/v1/actions/")));
+    assert!(
+        body["paths"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|path| path.starts_with("/v1/actions/"))
+    );
     let result_schema = crate::artifacts::openapi_action_response_schema_id("rename-case");
     assert_eq!(
         body["components"]["schemas"][&result_schema]["properties"]["results"]["properties"],
@@ -834,20 +1231,24 @@ fn fixed_action_optional_values_reject_explicit_null_in_schema_and_admission() {
         "preconditions": {"caseId": {"ifMatch": "\"opaque\""}}
     });
     assert!(validator.is_valid(&body));
-    assert!(parse_body(
-        action,
-        ActionRouteKind::Invoke,
-        &serde_json::to_vec(&body).unwrap()
-    )
-    .is_ok());
+    assert!(
+        parse_body(
+            action,
+            ActionRouteKind::Invoke,
+            &serde_json::to_vec(&body).unwrap()
+        )
+        .is_ok()
+    );
     body["input"]["newLabel"] = json!("Changed");
     assert!(validator.is_valid(&body));
-    assert!(parse_body(
-        action,
-        ActionRouteKind::Invoke,
-        &serde_json::to_vec(&body).unwrap()
-    )
-    .is_ok());
+    assert!(
+        parse_body(
+            action,
+            ActionRouteKind::Invoke,
+            &serde_json::to_vec(&body).unwrap()
+        )
+        .is_ok()
+    );
     body["input"]["newLabel"] = Value::Null;
     assert!(!validator.is_valid(&body));
     assert_eq!(
@@ -886,4 +1287,88 @@ async fn correlated_evidence_problem_exposes_only_a_safe_declared_capability_pat
         assert!(body.get("selectors").is_none());
         assert!(body.get("provider").is_none());
     }
+}
+
+#[tokio::test]
+async fn task_record_reads_intersect_profile_with_composed_proposal_scope() {
+    let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
+    project.access_profiles.push(serde_json::from_value(json!({
+        "id":"task-reader","principalClaim":"registry_principal","actorKind":"agent",
+        "requesterClients":["agent-client"],"requiredScopes":["case.read"],"requiredPurposes":["case-management"],
+        "taskGrant":{"sourceIssuer":"https://casework.example"},"permissions":{"records":[{
+            "recordType":"case","operations":["get","list"],"readableFields":["label","region"],
+            "rowBoundaries":[{"field":"region","claim":"grantRegion","operator":"equals"}]}]}
+    })).unwrap());
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let service = service_for(registry.clone(), true);
+    let idp = MockIdp::start().await;
+    let audience = "urn:example:breg";
+    let mut verifier = oidc_verifier_config(idp.issuer(), vec![audience.into()]);
+    verifier.allowed_clients = vec!["agent-client".into()];
+    let auth = RegistryAuthenticator::new(
+        &registry,
+        verifier,
+        Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        )),
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into())),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let token = json!({"aud":audience,"sub":"citizen","azp":"agent-client","registry_principal":"citizen",
+        "registry_actor_kind":"agent","registry_purpose":"case-management","scope":"case.read",
+        "registry_grant_id":"00000000-0000-4000-8000-0000000000bc","registry_approver":"h:approver",
+        "registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
+        "registry_grant_resource":audience,"registry_grant_exp":now+600,
+        "registry_grant_bounds":{"type":"breg","permissions":[
+            {"collection":"cases","operations":["get","list"]},
+            {"collection":"proposal:00000000-0000-4000-8000-0000000000bd","operations":["get","edit","list"]}]},
+        "identity":{"grantRegion":"north"},"grantRegion":"south"});
+    let claims = auth
+        .authenticate(&idp.mint_token(token.clone()))
+        .await
+        .unwrap();
+    let profile = &registry.entities()["case"].access_profiles["task-reader"];
+    let binding = task_grant_binding(profile, &claims)
+        .expect("composed independently scoped bounds are admitted")
+        .unwrap();
+    assert_eq!(binding.subjects()["grantRegion"], json!("north"));
+    let route = registry
+        .routes()
+        .routes
+        .iter()
+        .find(|route| route.entity_id == "case" && route.operation == Operation::Get)
+        .unwrap();
+    let options = QueryOptions::parse(Some("accessProfile=task-reader"), false).unwrap();
+    assert!(authorize_route(&service, route, &claims, &options).is_some());
+    let patch = registry
+        .routes()
+        .routes
+        .iter()
+        .find(|route| route.entity_id == "case" && route.operation == Operation::Patch);
+    assert!(
+        patch.is_none_or(|route| authorize_route(&service, route, &claims, &options).is_none()),
+        "extra bounds cannot create profile permissions"
+    );
+    for permissions in [
+        json!([{"collection":"proposal:00000000-0000-4000-8000-0000000000bd","operations":["get","edit"]}]),
+        json!([{"collection":"cases","operations":["get"]}]),
+    ] {
+        let mut wrong = token.clone();
+        wrong["registry_grant_bounds"]["permissions"] = permissions;
+        let claims = auth.authenticate(&idp.mint_token(wrong)).await.unwrap();
+        assert!(
+            task_grant_binding(profile, &claims).is_err(),
+            "missing profile powers remain refused"
+        );
+    }
+    let mut wrong = token;
+    wrong["registry_grant_source_issuer"] = json!("https://other.example");
+    let claims = auth.authenticate(&idp.mint_token(wrong)).await.unwrap();
+    assert!(task_grant_binding(profile, &claims).is_err());
 }

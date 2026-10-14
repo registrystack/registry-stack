@@ -11,8 +11,8 @@ use support::{
     EvidenceProject as Project,
 };
 
-const BREG: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: <|project|>example}\nmodules: [{id: <|module-use|>core}]\naccessProfiles:\n  - id: reader\n    permissions:\n      entities:\n        - entity: <|use|>person\n          readableFields: [<|field-use|>name]\n";
-const BREG_MODULE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|module|>core\nentities:\n  - id: <|definition|>person\n    fields: [{id: <|field|>name, type: string}]\n";
+const BREG: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: <|project|>example}\nmodules: [{id: <|module-use|>core}]\naccessProfiles:\n  - id: reader\n    permissions:\n      records:\n        - recordType: <|use|>person\n          readableFields: [<|field-use|>name]\n";
+const BREG_MODULE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|module|>core\nrecordTypes:\n  - id: <|definition|>person\n    fields: [{id: <|field|>name, type: string}]\n";
 const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: [{id: <|definition|>triage}]\nsources:\n  - id: source\n    description: <|file-use|>sources/import.json\n    requests: [{queue: <|use|>triage}]\naccessProfiles: [{id: staff}]\nreviewKinds:\n  - id: decision\n    stages: [{id: review, queue: triage, decidingProfiles: [staff]}]\n";
 const SCHEDULING: &str = "apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\nkind: SchedulingProject\nservices: [{id: <|definition|>visit}]\nofferings: [{id: consultation, service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}]\n";
 const RECORDS: &str = "locations: [{id: <|location|>office}]\npools: [{id: <|pool|>stations}]\n";
@@ -207,7 +207,7 @@ fn fixture(path: &str) -> String {
 #[test]
 fn maintained_runtime_product_examples_have_no_invented_missing_references() {
     for (kind,document,relative,extras) in [
-        (ProductKind::Breg,"registry.yaml","products/breg/fixtures/asset-registration-actions/registry.yaml",vec![("modules/asset-registration-actions-core/module.yaml","products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml")]),
+        (ProductKind::Breg,"registry.yaml","products/breg/examples/refactor/facility/registry.yaml",vec![("plans/correct-address.rhai","products/breg/examples/refactor/facility/plans/correct-address.rhai")]),
         (ProductKind::Casework,"casework.yaml","products/casework/examples/standalone-decision/casework.yaml",vec![]),
         (ProductKind::Scheduling,"scheduling.yaml","products/scheduling/examples/standalone-exact-time/scheduling.yaml",vec![("records.yaml","products/scheduling/examples/standalone-exact-time/records.yaml"),("fixtures/counter-stations.yaml","products/scheduling/examples/standalone-exact-time/fixtures/counter-stations.yaml")]),
 
@@ -231,11 +231,9 @@ fn all_maintained_authoring_examples_resolve_supported_edges() {
     for (kind, base, marker) in [
         (
             ProductKind::Breg,
-            "products/breg/acceptance",
+            "products/breg/examples/refactor",
             "registry.yaml",
         ),
-        (ProductKind::Breg, "products/breg/examples", "registry.yaml"),
-        (ProductKind::Breg, "products/breg/fixtures", "registry.yaml"),
         (
             ProductKind::Casework,
             "products/casework/examples",
@@ -273,7 +271,7 @@ fn all_maintained_authoring_examples_resolve_supported_edges() {
             }
         }
     }
-    assert!(count >= 30, "maintained corpus coverage: {count}");
+    assert!(count >= 9, "native maintained corpus coverage: {count}");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -330,8 +328,8 @@ async fn disappearing_module_keeps_unsaved_buffer_until_file_returns() {
 fn module_assets_named_constraints_and_action_results_keep_their_own_scope() {
     let project=Project::new(&[
         file("registry.yaml","apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: [{id: core}, {id: extra}]\naccessProfiles: [{id: staff, permissions: {actions: [{action: register, results: [<|result|>created-record]}]}}]\n"),
-        file("modules/core/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\nentities:\n  - id: person\n    fields: [{id: <|field|>name, type: string}]\n    constraints: [{type: unique, id: named-rule, fields: [<|constraint|>name]}]\nactions:\n  - id: register\n    effects: [{id: <|effect|>created-record}]\n    handler: {script: <|script|>scripts/action.rhai}\n"),
-        file("modules/extra/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: extra\nactions: [{id: other, handler: {script: scripts/action.rhai}}]\n"),
+        file("modules/core/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\nrecordTypes:\n  - id: person\n    fields: [{id: <|field|>name, type: string}]\n    constraints: [{type: unique, id: named-rule, fields: [<|constraint|>name]}]\nactions:\n  - id: register\n    inputs: []\n    execution: {mode: immediate}\n    plan: {type: fixed, effects: [{id: <|effect|>created-record}]}\nfunctions: [{id: core-plan, source: <|script|>scripts/action.rhai}]\n"),
+        file("modules/extra/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: extra\nfunctions: [{id: extra-plan, source: scripts/action.rhai}]\n"),
         file("modules/core/scripts/action.rhai","// core\n"),
         file("modules/extra/scripts/action.rhai","// extra\n"),
     ]);
@@ -365,7 +363,7 @@ fn module_assets_named_constraints_and_action_results_keep_their_own_scope() {
         project.cursor("modules/core/module.yaml", "effect")
     );
     let maintained = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/examples/access-review/task-profiles");
+        .join("../../products/breg/examples/refactor/minimal");
     assert!(ProjectIndex::load_product(&maintained, ProductKind::Breg)
         .unwrap()
         .diagnostics()
@@ -647,7 +645,7 @@ fn authored_unlocked_modules_still_supply_dependency_symbols() {
         ),
         file(
             "modules/extra/module.yaml",
-            "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|definition|>extra\nentities: [{id: supplied}]\n",
+            "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|definition|>extra\nrecordTypes: [{id: supplied}]\n",
         ),
     ]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();

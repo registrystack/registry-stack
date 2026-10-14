@@ -1,25 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
-use serde_json::{json, Value};
+use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_json};
+use serde_json::{Value, json};
 
 pub fn source(root: &str) -> Value {
-    let authored = registry_breg::parse_project_yaml(
-        include_str!(
-            "../../../../products/breg/fixtures/organization-membership-access/registry.yaml"
-        )
-        .as_bytes(),
-    )
-    .unwrap();
-    let mut value = serde_json::to_value(authored).unwrap();
-    value["entities"][2]["id"] = json!(root);
-    value["entities"][2]["route"] = json!(if root == "facility" {
+    let mut value: Value = serde_json::from_str(include_str!(
+        "../fixtures/native-models/products/breg/fixtures/organization-membership-access/registry.yaml"
+    )).unwrap();
+    value["recordTypes"][2]["id"] = json!(root);
+    value["recordTypes"][2]["route"] = json!(if root == "facility" {
         "facilities".to_owned()
     } else {
         format!("{root}s")
     });
-    value["accessProfiles"][0]["permissions"]["entities"][0]["entity"] = json!(root);
-    value["accessProfiles"][1]["permissions"]["entities"][2]["entity"] = json!(root);
+    value["accessProfiles"][0]["permissions"]["records"][0]["recordType"] = json!(root);
+    value["accessProfiles"][1]["permissions"]["records"][2]["recordType"] = json!(root);
     value
 }
 

@@ -10,24 +10,24 @@ use std::{
     time::Duration,
 };
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
     AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
-    PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
-    SecretError, SecretReference, SecretResolver, TaskGrantStatusConfig,
-    REMOVED_OIDC_JWKS_SOURCE_KIND,
+    PackageConfig as SharedPackageConfig, REMOVED_OIDC_JWKS_SOURCE_KIND, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
+    TaskGrantStatusConfig,
 };
-use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
+use registry_platform_crypto::{PublicJwk, SigningAlgorithm, parse_json_strict};
 #[cfg(feature = "schema")]
 use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery, ClaimNames, JwksFetcher, JwksFetcherConfig,
-    OidcDiscoveryConfig, TokenVerifierConfig,
+    ClaimNames, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery,
 };
 #[cfg(feature = "schema")]
 use registry_platform_yaml::{BoundedU32, BoundedU64};
@@ -48,8 +48,8 @@ use crate::{
     },
     model::CompiledRegistry,
     package::{
-        load_package_with_verified_envelope, load_predecessor_package_with_verified_envelope,
         PackageError, PackageLoadContext, VerifiedPackage, VerifiedPredecessorPackage,
+        load_package_with_verified_envelope, load_predecessor_package_with_verified_envelope,
     },
     postgres::{ConnectionConfig, PoolBounds, SqlIdentifier},
 };
@@ -265,7 +265,9 @@ pub enum RuntimeConfigError {
     Reader(ReaderRefusal),
     #[error("runtime configuration contains an invalid deployment binding")]
     InvalidBinding,
-    #[error("runtime configuration taskGrantStatus must contain at most 32 unique absolute source issuers; configure safe service/token URLs, non-empty client and assertion audience, absolute resource identifiers, one status scope token, and a status path with one {{grantId}} segment")]
+    #[error(
+        "runtime configuration taskGrantStatus must contain at most 32 unique absolute source issuers; configure safe service/token URLs, non-empty client and assertion audience, absolute resource identifiers, one status scope token, and a status path with one {{grantId}} segment"
+    )]
     InvalidTaskGrantStatus,
     #[error(
         "runtime configuration identity.instanceId must start with a lowercase letter and hold at most 64 lowercase letters, digits, `-`, or `_`; set identity.instanceId to such a value"
@@ -392,9 +394,11 @@ impl RuntimeConfigError {
     fn suggested_action(&self) -> &'static str {
         match self {
             Self::Reader(_) => "",
-            Self::InvalidTaskGrantStatus => "Configure at most 32 distinct taskGrantStatus source issuers, safe service/token URLs, a client and assertion audience, absolute resource identifiers, one statusScope token, and a statusPath that starts with / and holds exactly one {grantId} segment.",
+            Self::InvalidTaskGrantStatus => {
+                "Configure at most 32 distinct taskGrantStatus source issuers, safe service/token URLs, a client and assertion audience, absolute resource identifiers, one statusScope token, and a statusPath that starts with / and holds exactly one {grantId} segment."
+            }
             Self::InvalidBinding => {
-                "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, review authority, and review executor the package relies on."
+                "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, and review authority the package relies on."
             }
             Self::InvalidInstanceId => {
                 "Set identity.instanceId to a lowercase letter followed by at most 63 lowercase letters, digits, `-`, or `_`."
@@ -697,15 +701,22 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         ["attachmentStorage" | "attachmentVerification", "endpoint"]
         | ["eventDestinations", _, "origin"]
         | ["evidenceProviders", _, "baseUrl"]
-        | ["taskGrantStatus", _, "baseUrl"
-        | "sourceIssuer"
-        | "tokenEndpoint"
-        | "clientAssertionAudience"
-        | "caseworkResource"]
-        | ["reviewAuthorities" | "reviewExecutors", _, "endpoint"]
-        | ["reviewAuthorities" | "reviewExecutors", _, "privateKeyJwt", "tokenEndpoint" | "assertionAudience" | "resource"] => {
-            "https://deferred.invalid/"
-        }
+        | [
+            "taskGrantStatus",
+            _,
+            "baseUrl"
+            | "sourceIssuer"
+            | "tokenEndpoint"
+            | "clientAssertionAudience"
+            | "caseworkResource",
+        ]
+        | ["reviewAuthorities", _, "endpoint"]
+        | [
+            "reviewAuthorities",
+            _,
+            "privateKeyJwt",
+            "tokenEndpoint" | "assertionAudience" | "resource",
+        ] => "https://deferred.invalid/",
         _ => registry_platform_config::DEFAULT_STAND_IN,
     }
 }
@@ -743,7 +754,6 @@ pub struct RuntimeConfig {
     evidence_providers:
         std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
     review_authorities: BTreeMap<String, ReviewAuthorityConfig>,
-    review_executors: BTreeMap<String, ReviewExecutorConfig>,
     event_delivery: EventDeliveryConfig,
     idempotency: IdempotencyConfig,
     operational_timeouts: OperationalTimeouts,
@@ -788,13 +798,6 @@ impl RuntimeConfig {
                 ReviewAuthorityConfig::from_raw(&id, authority).map(|authority| (id, authority))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let review_executors = raw
-            .review_executors
-            .into_iter()
-            .map(|(id, executor)| {
-                ReviewExecutorConfig::from_raw(&id, executor).map(|executor| (id, executor))
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?;
         let operational_timeouts = OperationalTimeouts::from_raw(raw.operational_timeouts)?;
         let wasm_execution = WasmExecutionConfig::from_raw(raw.wasm_execution)?;
         let metrics_listener = raw
@@ -820,7 +823,6 @@ impl RuntimeConfig {
             event_destinations,
             evidence_providers: raw.evidence_providers,
             review_authorities,
-            review_executors,
             event_delivery,
             idempotency,
             operational_timeouts,
@@ -839,15 +841,9 @@ impl RuntimeConfig {
             &self.secret_resolver()?,
         )
         .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-        for profile in compiled
-            .entities()
-            .values()
-            .flat_map(|entity| entity.access_profiles.values())
-        {
-            if let Some(grant) = &profile.task_grant {
-                if !status.contains(&grant.source_issuer) {
-                    return Err(RuntimeConfigError::InvalidBinding);
-                }
+        for issuer in crate::task_grant::required_source_issuers(compiled) {
+            if !status.contains(issuer) {
+                return Err(RuntimeConfigError::InvalidBinding);
             }
         }
         Ok(Arc::new(status))
@@ -913,25 +909,11 @@ impl RuntimeConfig {
         &self,
         compiled: &CompiledRegistry,
     ) -> Result<Option<Arc<crate::review_store::ReviewAuthorityRegistry>>> {
-        let required = compiled
-            .entities()
-            .values()
-            .filter_map(|entity| entity.change_request.as_ref())
-            .filter_map(|request| match &request.review {
-                crate::model::CompiledChangeRequestReview::Required(requirement) => {
-                    Some(requirement.authority.as_str())
-                }
-                crate::model::CompiledChangeRequestReview::None => None,
-            })
-            .collect::<BTreeSet<_>>();
-        if required.is_empty() && self.review_authorities.is_empty() {
+        // Review is an optional runtime dependency. An absent binding disables
+        // only operations that need that authority; no replacement is inferred.
+        let _ = compiled;
+        if self.review_authorities.is_empty() {
             return Ok(None);
-        }
-        if required
-            .iter()
-            .any(|authority| !self.review_authorities.contains_key(*authority))
-        {
-            return Err(RuntimeConfigError::InvalidBinding);
         }
         let resolver = self.secret_resolver()?;
         let mut activated = BTreeMap::new();
@@ -975,129 +957,6 @@ impl RuntimeConfig {
             activated.insert(authority.clone(), Arc::new(authority_client));
         }
         crate::review_store::ReviewAuthorityRegistry::new(activated)
-            .map(Arc::new)
-            .map(Some)
-            .map_err(|_| RuntimeConfigError::InvalidBinding)
-    }
-
-    pub fn activate_review_executors(
-        &self,
-        compiled: &CompiledRegistry,
-    ) -> Result<Option<Arc<crate::review_store::ReviewExecutorRegistry>>> {
-        let required = compiled
-            .entities()
-            .values()
-            .filter_map(|entity| entity.change_request.as_ref())
-            .filter(|request| {
-                matches!(
-                    request.review,
-                    crate::model::CompiledChangeRequestReview::Required(_)
-                ) && request.on_approved.mode
-                    == crate::model::CompiledChangeRequestOnApprovedMode::Automatic
-            })
-            .filter_map(|request| request.on_approved.executor.as_deref())
-            .collect::<BTreeSet<_>>();
-        if required.is_empty() && self.review_executors.is_empty() {
-            return Ok(None);
-        }
-        if required
-            .iter()
-            .any(|executor| !self.review_executors.contains_key(*executor))
-        {
-            return Err(RuntimeConfigError::InvalidBinding);
-        }
-        for entity in compiled.entities().values() {
-            let Some(request) = entity.change_request.as_ref() else {
-                continue;
-            };
-            if !matches!(
-                request.review,
-                crate::model::CompiledChangeRequestReview::Required(_)
-            ) || request.on_approved.mode
-                != crate::model::CompiledChangeRequestOnApprovedMode::Automatic
-            {
-                continue;
-            }
-            let executor = request
-                .on_approved
-                .executor
-                .as_deref()
-                .ok_or(RuntimeConfigError::InvalidBinding)?;
-            let config = self
-                .review_executors
-                .get(executor)
-                .ok_or(RuntimeConfigError::InvalidBinding)?;
-            if entity
-                .access_profiles
-                .get(&config.access_profile)
-                .is_none_or(|profile| {
-                    !profile
-                        .operations
-                        .contains(&crate::contract::Operation::ApplyRequest)
-                })
-            {
-                return Err(RuntimeConfigError::InvalidBinding);
-            }
-        }
-        let mut activated = BTreeMap::new();
-        // An executor can remain necessary for an application job accepted
-        // under the previous package even when the new package no longer
-        // selects it. Activate every retained binding and derive the routes it
-        // is still authorized to call from the new package.
-        for (executor, config) in &self.review_executors {
-            if config.registry_id != compiled.registry_id() {
-                return Err(RuntimeConfigError::InvalidBinding);
-            }
-            let request_entities = compiled
-                .entities()
-                .values()
-                .filter(|entity| {
-                    entity.change_request.is_some()
-                        && entity
-                            .access_profiles
-                            .get(&config.access_profile)
-                            .is_some_and(|profile| {
-                                profile
-                                    .operations
-                                    .contains(&crate::contract::Operation::ApplyRequest)
-                            })
-                })
-                .collect::<Vec<_>>();
-            if request_entities.is_empty()
-                || request_entities.iter().any(|entity| {
-                    entity
-                        .access_profiles
-                        .get(&config.access_profile)
-                        .is_none_or(|profile| {
-                            !profile
-                                .operations
-                                .contains(&crate::contract::Operation::ApplyRequest)
-                        })
-                })
-            {
-                return Err(RuntimeConfigError::InvalidBinding);
-            }
-            let request_routes = request_entities
-                .into_iter()
-                .map(|entity| (entity.id.clone(), entity.route.clone()))
-                .collect::<BTreeMap<_, _>>();
-            let token_provider = self.review_token_provider(
-                config.token_ref.as_ref(),
-                config.private_key_jwt.as_ref(),
-            )?;
-            let executor_client = crate::review_store::ReviewExecutorClient::new(
-                executor.to_owned(),
-                config.endpoint.clone(),
-                token_provider,
-                config.registry_id.clone(),
-                config.access_profile.clone(),
-                request_routes,
-                self.operational_timeouts.http_request,
-            )
-            .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-            activated.insert(executor.clone(), Arc::new(executor_client));
-        }
-        crate::review_store::ReviewExecutorRegistry::new(activated)
             .map(Arc::new)
             .map(Some)
             .map_err(|_| RuntimeConfigError::InvalidBinding)
@@ -2795,68 +2654,6 @@ struct RawReviewPrivateKeyJwtConfig {
     ca_bundle_ref: Option<SecretReference>,
 }
 
-#[derive(Clone)]
-struct ReviewExecutorConfig {
-    endpoint: reqwest::Url,
-    token_ref: Option<SecretReference>,
-    private_key_jwt: Option<ReviewPrivateKeyJwtConfig>,
-    registry_id: String,
-    access_profile: String,
-}
-
-impl ReviewExecutorConfig {
-    fn from_raw(id: &str, raw: RawReviewExecutorConfig) -> Result<Self> {
-        if id.trim().is_empty()
-            || id.len() > 128
-            || id.chars().any(char::is_control)
-            || raw.registry_id.trim().is_empty()
-            || raw.registry_id.len() > 128
-            || raw.registry_id.chars().any(char::is_control)
-            || raw.access_profile.trim().is_empty()
-            || raw.access_profile.len() > 128
-            || raw.access_profile.chars().any(char::is_control)
-        {
-            return Err(RuntimeConfigError::InvalidBinding);
-        }
-        let endpoint =
-            reqwest::Url::parse(&raw.endpoint).map_err(|_| RuntimeConfigError::InvalidBinding)?;
-        registry_platform_httputil::client::ServiceBaseUrl::new(endpoint.clone())
-            .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-        let token_ref = raw.token_ref;
-        let private_key_jwt = raw
-            .private_key_jwt
-            .map(ReviewPrivateKeyJwtConfig::from_raw)
-            .transpose()?;
-        if token_ref.is_some() == private_key_jwt.is_some() {
-            return Err(RuntimeConfigError::InvalidBinding);
-        }
-        Ok(Self {
-            endpoint,
-            token_ref,
-            private_key_jwt,
-            registry_id: raw.registry_id,
-            access_profile: raw.access_profile,
-        })
-    }
-}
-
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawReviewExecutorConfig {
-    endpoint: String,
-    /// A static bearer token for the executing registry. Exactly one of
-    /// `tokenRef` and `privateKeyJwt` is written.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    token_ref: Option<SecretReference>,
-    /// A refreshing client-assertion credential for the executing registry.
-    /// Exactly one of `tokenRef` and `privateKeyJwt` is written.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    private_key_jwt: Option<RawReviewPrivateKeyJwtConfig>,
-    registry_id: String,
-    access_profile: String,
-}
-
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2910,12 +2707,6 @@ struct RawRuntimeConfig {
         schemars(schema_with = "local_id_map_schema::<RawReviewAuthorityConfig>")
     )]
     review_authorities: BTreeMap<String, RawReviewAuthorityConfig>,
-    #[serde(default, deserialize_with = "local_id_map")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "local_id_map_schema::<RawReviewExecutorConfig>")
-    )]
-    review_executors: BTreeMap<String, RawReviewExecutorConfig>,
     /// Optional event-delivery tuning. Defaults to the server's bounded retention policy.
     #[serde(default)]
     event_delivery: RawEventDeliveryConfig,

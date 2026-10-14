@@ -10,7 +10,7 @@ mod client_http;
 mod postgres_harness;
 
 use registry_breg::api::VerifiedRequestClaims;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg_client::{
     BRegAsOfListRequest, BRegBatchBuilder, BRegChangeContext, BRegCreateRequest,
@@ -18,14 +18,14 @@ use registry_breg_client::{
     BRegPreparedCreate, BRegProblemCode, BRegRecordFormat, BRegRecordOptions,
     BRegSnapshotListRequest,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(br#"{
+    let project = parse_project_json(br#"{"datasets":[{"id": "test-dataset"}],
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
       "project":{"id":"client-capabilities","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-      "entities":[{
+      "recordTypes":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","tombstone":true,"classification":"internal",
         "batch":{"maximumItems":4,"maximumBytes":16384},
         "fields":[
@@ -49,10 +49,10 @@ fn registry() -> registry_breg::CompiledRegistry {
       "accessProfiles":[{
         "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
-        "permissions":{"entities":[{"entity":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
+        "permissions":{"records":[{"recordType":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
           "readableFields":["code","label","valid-from","valid-to"],"writableFields":["code","label","valid-from","valid-to"],
           "filterableFields":["code"],"sortableFields":["valid-from"],"allowCount":true,"revisionAccess":true,"rowBoundaries":"unrestricted"
-        },{"entity":"timestamp-entry","operations":["snapshot"],
+        },{"recordType":"timestamp-entry","operations":["snapshot"],
           "readableFields":["code","valid-from","valid-to"],"writableFields":[],"rowBoundaries":"unrestricted"
         }]}
       }]
@@ -145,21 +145,27 @@ async fn sdk_atomic_corrections_snapshots_revisions_tombstone_and_recovery_use_r
     );
     let oversized =
         create(json!({"code":"LIMIT","label":"x".repeat(16_384),"validFrom":"2020-01-01"}));
-    assert!(BRegBatchBuilder::new(&batch_binding)
-        .create(&oversized)
-        .unwrap()
-        .build()
-        .is_err());
+    assert!(
+        BRegBatchBuilder::new(&batch_binding)
+            .create(&oversized)
+            .unwrap()
+            .build()
+            .is_err()
+    );
     let missing_required = create(json!({"code":"LIMIT","validFrom":"2020-01-01"}));
-    assert!(BRegBatchBuilder::new(&batch_binding)
-        .create(&missing_required)
-        .is_err());
+    assert!(
+        BRegBatchBuilder::new(&batch_binding)
+            .create(&missing_required)
+            .is_err()
+    );
     let unknown_field = create(
         json!({"code":"LIMIT","label":"bounded","validFrom":"2020-01-01","secret":"not writable"}),
     );
-    assert!(BRegBatchBuilder::new(&batch_binding)
-        .create(&unknown_field)
-        .is_err());
+    assert!(
+        BRegBatchBuilder::new(&batch_binding)
+            .create(&unknown_field)
+            .is_err()
+    );
 
     let old = client
         .create_record(
@@ -399,10 +405,12 @@ async fn sdk_atomic_corrections_snapshots_revisions_tombstone_and_recovery_use_r
         .await
         .unwrap();
     assert_eq!(live.value.value.items.len(), 1);
-    assert!(client
-        .record_revisions("entries", &current.value.data.record_identifier, None)
-        .await
-        .is_ok());
+    assert!(
+        client
+            .record_revisions("entries", &current.value.data.record_identifier, None)
+            .await
+            .is_ok()
+    );
 
     let request = create(json!({"code":"RECOVERY","label":"saved","validFrom":"2020-01-01"}));
     let prepared = client

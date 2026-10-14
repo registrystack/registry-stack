@@ -267,109 +267,6 @@
             "type"
           ],
           "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "etagCapture": {
-              "type": "string"
-            },
-            "recordCapture": {
-              "type": "string"
-            },
-            "type": {
-              "const": "submit-request",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "recordCapture",
-            "etagCapture"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "etagCapture": {
-              "type": "string"
-            },
-            "rebase": {
-              "type": "boolean"
-            },
-            "recordCapture": {
-              "type": "string"
-            },
-            "type": {
-              "const": "revise-request",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "recordCapture",
-            "etagCapture",
-            "rebase"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "etagCapture": {
-              "type": "string"
-            },
-            "recordCapture": {
-              "type": "string"
-            },
-            "type": {
-              "const": "cancel-request",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "recordCapture",
-            "etagCapture"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "effectDigest": {
-              "$ref": "#/$defs/Digest"
-            },
-            "effectDigestCapture": {
-              "type": "string"
-            },
-            "etagCapture": {
-              "type": "string"
-            },
-            "proposalVersion": {
-              "format": "uint32",
-              "maximum": 4294967295,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "proposalVersionCapture": {
-              "type": "string"
-            },
-            "recordCapture": {
-              "type": "string"
-            },
-            "type": {
-              "const": "apply-request",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "recordCapture",
-            "etagCapture"
-          ],
-          "type": "object"
         }
       ]
     },
@@ -461,11 +358,6 @@
         }
       },
       "type": "object"
-    },
-    "Digest": {
-      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
-      "pattern": "^sha256:[0-9a-f]{64}$",
-      "type": "string"
     },
     "DirectClaimSource": {
       "anyOf": [
@@ -617,15 +509,15 @@
         "claims": {
           "$ref": "#/$defs/ClaimsSource"
         },
-        "entity": {
-          "default": "",
-          "type": "string"
-        },
         "expect": {
           "$ref": "#/$defs/ExpectationSource"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
+        },
+        "recordType": {
+          "default": "",
+          "type": "string"
         },
         "request": {
           "$ref": "#/$defs/ActionSource"

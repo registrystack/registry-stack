@@ -35,43 +35,6 @@ manifestProjection:
     servesDatasets:
     - farmer-landholding-evidence
   distributions: []
-entities:
-- id: landholding
-  primaryDataset: farmer-landholding-evidence
-  route: landholdings
-  mutationMode: create-only
-  fields:
-  - id: farmer-number
-    apiName: farmerNumber
-    type: string
-    required: true
-    maximumLength: 77
-    classification: restricted
-  - id: parcel-code
-    apiName: parcelCode
-    type: string
-    required: true
-    maximumLength: 64
-    classification: restricted
-  - id: farmer-category
-    apiName: farmerCategory
-    type: string
-    required: false
-    maximumLength: 64
-    classification: restricted
-  constraints:
-  - type: unique
-    fields:
-    - parcel-code
-- id: procedure-check
-  primaryDataset: farmer-landholding-evidence
-  route: procedure-checks
-  mutationMode: create-only
-  fields:
-  - id: checked
-    type: boolean
-    required: true
-    classification: restricted
 actions:
 - id: register-landholding
   inputs:
@@ -117,24 +80,32 @@ actions:
     outputs:
     - category
     maximumObservationAgeSeconds: 60
-  handler:
-    type: rhai
-    script: scripts/register-landholding.rhai
-    abi: registry.action-handler/v1
-    refusals:
-    - code: invalid-farmer-number
-      label: A complete farmer identifier is required.
-    - code: farmer-inactive
-      label: Farmer is not eligible for registration.
+  execution:
+    mode: immediate
+  plan:
+    type: function
+    function: register-landholding-plan
+    inputs:
+    - farmer-prefix
+    - farmer-number
+    - parcel-code
+    - include-category
+    capabilities:
+    - evidence
     writes:
     - id: landholding
       target:
-        entity: landholding
+        recordType: landholding
       operation: create
       fields:
       - farmer-number
       - parcel-code
       - farmer-category
+    refusals:
+    - code: invalid-farmer-number
+      label: A complete farmer identifier is required.
+    - code: farmer-inactive
+      label: Farmer is not eligible for registration.
 - id: check-procedure
   inputs:
   - id: farmer-prefix
@@ -179,22 +150,30 @@ actions:
     outputs:
     - category
     maximumObservationAgeSeconds: 60
-  handler:
-    type: rhai
-    script: scripts/check-procedure.rhai
-    abi: registry.action-handler/v1
+  execution:
+    mode: immediate
+  plan:
+    type: function
+    function: check-procedure-plan
+    inputs:
+    - farmer-prefix
+    - farmer-number
+    - parcel-code
+    - include-category
+    capabilities:
+    - evidence
+    writes:
+    - id: procedure-check
+      target:
+        recordType: procedure-check
+      operation: create
+      fields:
+      - checked
     refusals:
     - code: invalid-farmer-number
       label: A complete farmer identifier is required.
     - code: farmer-inactive
       label: Farmer is not eligible for registration.
-    writes:
-    - id: procedure-check
-      target:
-        entity: procedure-check
-      operation: create
-      fields:
-      - checked
 accessProfiles:
 - id: landholding-registrar
   default: true
@@ -209,16 +188,16 @@ accessProfiles:
       operations:
       - invoke
       targets:
-      - entity: landholding
-        rowBoundaries: unrestricted
+      - rowBoundaries: unrestricted
+        recordType: landholding
       results:
       - landholding
     - action: check-procedure
       operations:
       - invoke
       targets:
-      - entity: procedure-check
-        rowBoundaries: unrestricted
+      - rowBoundaries: unrestricted
+        recordType: procedure-check
       results:
       - procedure-check
 - id: landholding-reader
@@ -229,22 +208,76 @@ accessProfiles:
   requiredPurposes:
   - land-registration-audit
   permissions:
-    entities:
-    - entity: landholding
-      operations:
+    records:
+    - operations:
       - get
       readableFields:
       - farmer-number
       - parcel-code
       - farmer-category
       rowBoundaries: unrestricted
-    - entity: procedure-check
-      operations:
+      recordType: landholding
+    - operations:
       - get
       readableFields:
       - checked
       rowBoundaries: unrestricted
+      recordType: procedure-check
 evidenceProviders:
 - id: farmer-registry
   contracts: evidence/farmer-contracts.json
   subjectResolution: trusted-provider-exact-selector
+recordTypes:
+- id: landholding
+  primaryDataset: farmer-landholding-evidence
+  route: landholdings
+  mutationMode: create-only
+  fields:
+  - id: farmer-number
+    apiName: farmerNumber
+    type: string
+    required: true
+    maximumLength: 77
+    classification: restricted
+  - id: parcel-code
+    apiName: parcelCode
+    type: string
+    required: true
+    maximumLength: 64
+    classification: restricted
+  - id: farmer-category
+    apiName: farmerCategory
+    type: string
+    required: false
+    maximumLength: 64
+    classification: restricted
+  constraints:
+  - type: unique
+    fields:
+    - parcel-code
+- id: procedure-check
+  primaryDataset: farmer-landholding-evidence
+  route: procedure-checks
+  mutationMode: create-only
+  fields:
+  - id: checked
+    type: boolean
+    required: true
+    classification: restricted
+functions:
+- id: register-landholding-plan
+  runtime: rhai
+  source: scripts/register-landholding.rhai
+  entrypoint: plan
+  abi: registry.action-plan/v1
+  capabilities:
+  - evidence
+- id: check-procedure-plan
+  runtime: rhai
+  source: scripts/check-procedure.rhai
+  entrypoint: plan
+  abi: registry.action-plan/v1
+  capabilities:
+  - evidence
+datasets:
+- id: farmer-landholding-evidence

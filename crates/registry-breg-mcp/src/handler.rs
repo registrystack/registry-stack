@@ -22,9 +22,9 @@ use crate::{
     gateway::Gateway,
     inbound::VerifiedCaller,
     tools::{
-        application_input_schema, empty_input_schema, start_input_schema, update_input_schema,
-        DESCRIBE_SERVICE, GET_APPLICATION_STATUS, GET_MY_DETAILS, PREPARE_REVIEW,
-        START_APPLICATION, TOOL_NAMES, UPDATE_APPLICATION,
+        application_input_schema, empty_input_schema, list_input_schema, start_input_schema,
+        update_input_schema, DESCRIBE_SERVICE, GET_APPLICATION_STATUS, GET_MY_DETAILS,
+        LIST_APPLICATIONS, PREPARE_REVIEW, START_APPLICATION, TOOL_NAMES, UPDATE_APPLICATION,
     },
 };
 
@@ -53,7 +53,7 @@ fn verified_caller(context: &RequestContext<RoleServer>) -> Result<Arc<VerifiedC
         .ok_or_else(|| McpError::internal_error("the request carries no verified caller", None))
 }
 
-/// The six tool definitions, with the start and update schemas taken from
+/// The tool definitions, with the start and update schemas taken from
 /// the contract the registry publishes for this caller.
 pub(crate) fn tool_definitions(service_name: &str, contract: &Contract) -> Vec<Tool> {
     vec![
@@ -109,6 +109,13 @@ pub(crate) fn tool_definitions(service_name: &str, contract: &Contract) -> Vec<T
             application_input_schema(),
         )
         .with_title("Prepare the review")
+        .with_annotations(read_only()),
+        Tool::new(
+            LIST_APPLICATIONS,
+            "Resume the signed-in citizen's own applications.",
+            list_input_schema(),
+        )
+        .with_title("List my applications")
         .with_annotations(read_only()),
         Tool::new(
             GET_APPLICATION_STATUS,

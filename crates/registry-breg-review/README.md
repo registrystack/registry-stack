@@ -1,7 +1,7 @@
 # Base Registry Engine review page
 
 `breg-review` is a small server-rendered page where a signed-in person reads
-their own Base Registry Engine change-request draft beside the record it would
+their own Base Registry Engine Proposal draft beside the record it would
 change, and submits it. It is the place a person confirms a change another
 tool, such as an agent acting for them, prepared as a draft.
 
@@ -54,8 +54,8 @@ signIn:
 registry:
   baseUrl: https://registry.example
   resource: https://registry.example/citizen-address-correction
-  entity: address-correction-request             # the change-request entity
-  targetField: address                           # the reference to the changed record
+  action: correct-address             # the proposal-mode Action
+  targetInput: address                           # the reference to the changed record
   accessProfile: citizen-review
 audit:
   hashKeyRef: secret:file/audit-key
@@ -93,7 +93,7 @@ with status 1.
 
 The page is an OpenID Connect relying party and a confidential OAuth client.
 
-1. `GET /signin?return=/requests/{id}` starts the authorization code flow with
+1. `GET /signin?return=/proposals/{id}` starts the authorization code flow with
    PKCE (S256), a `state`, a `nonce`, and the RFC 8707 `resource`. The pending
    sign-in lives on the server; the browser holds only a random identifier in a
    `SameSite=Lax` cookie.
@@ -122,20 +122,21 @@ sign-in continues on the provider's origin.
 
 ## Review and submit
 
-`GET /requests/{id}` reads the draft, then reads the record its `targetField`
-names, both under the person's token. The registry does not tie a request's
-target to the person holding the request, so a draft naming a record this
-person may not read renders the same neutral not-found page as a missing draft,
+`GET /proposals/{id}` reads the draft, then reads the record its `targetInput`
+names, both under the person's token. A draft naming a record this
+person may not currently read renders the same neutral not-found page as a missing draft,
 with no form. When both reads succeed, the page shows the current values next to
-the proposed ones, labelled from caller-filtered registry metadata.
+the proposed ones, labelled from caller-filtered registry metadata. Proposal inputs are shown only
+when the registry explicitly projects them through `readableInputs`. Get and
+List are separate grants, so opening a review never requires collection authority.
 
-The submit form appears only when the registry offers `submit-request` on the
-draft. The page remembers that exact action, the target record revision it
+The submit form appears only when the registry offers a promoted `submit` link on the
+draft. The page prepares and remembers the exact submit attempt, the target record revision it
 showed, and a fresh idempotency key as a view bound to the session and the
 request; the form carries only the view's random identifier. The action's
 `If-Match` binds the draft, and the remembered revision binds the target.
-`POST /requests/{id}/submit` checks the CSRF token, repeats both reads, and
-only then submits the remembered action under its key. A crafted form cannot
+`POST /proposals/{id}/submit` checks the CSRF token, repeats both reads, and
+only then revalidates and executes the original attempt under its original key. A crafted form cannot
 skip the target read, a replayed submit returns the first receipt while the
 target is unchanged, and a stale view renders the current state with a notice
 and status 409 instead of submitting. A view is stale when it is unknown, when
@@ -198,18 +199,10 @@ the platform test authorization server, and runs the built binary to check
 its offline `check`, its startup refusals, its shutdown on SIGINT and SIGTERM, and that a
 full journey leaves no credential in its log or journal.
 
-The `postgres-test` feature adds `tests/postgres_breg.rs`, which runs the page
-against a real Base Registry Engine serving the citizen address correction
-acceptance project on a disposable PostgreSQL database. It needs
-`BREG_TEST_DATABASE_URL` and fails, rather than skips, without it:
+The protocol suite exercises native Proposal metadata and promoted links,
+current human Record disclosure, browser sessions, CSRF, source ownership,
+exact submit replay and receipt expiry against loopback substitutes. The engine's
+native PostgreSQL suite owns database authorization and transaction proof.
 
-```bash
-BREG_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
-  cargo test --locked -p registry-breg-review --features postgres-test --test postgres_breg
-```
-
-`registry-breg` is a dev-dependency, linked only into tests; the page itself
-depends on the registry through `registry-breg-client` alone, and
-`products/breg/scripts/check-service-dependencies.sh` fails if the runtime
-enters its normal dependency graph. The Base Registry Engine PostgreSQL lane
-(`products/breg/scripts/test-postgres.sh`) runs this test.
+The page depends on the engine only through `registry-breg-client`.
+`products/breg/scripts/check-service-dependencies.sh` checks that boundary.

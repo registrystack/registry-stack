@@ -13,41 +13,41 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
+use registry_breg::CompiledRegistry;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::migration::{
-    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest,
+    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, apply_verified_package,
 };
 use registry_breg::migration_plan::{
     MigrationRehearsalReceipt, ReviewedChangeCover, ReviewedMigrationDescriptor,
     ReviewedMigrationFile, ReviewedMigrationRecovery, ReviewedMigrationSource,
 };
 use registry_breg::package::{
-    compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput,
-    PackageSourceFile, VerifiedPackage, FIXTURE_JOURNEYS_PATH,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, FIXTURE_JOURNEYS_PATH,
+    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile,
+    VerifiedPackage, compiled_registry_change_set, load_package, prepare_package,
 };
 use registry_breg::postgres::{
-    managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test,
-    rehearse_successor_migration, BaselineFingerprintDrift, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-    RegistryLockKey, SuccessorMigrationRehearsal,
+    BaselineFingerprintDrift, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
+    SuccessorMigrationRehearsal, managed_schema_fingerprint,
+    reconcile_compiled_runtime_acl_for_test, rehearse_successor_migration,
 };
 use registry_breg::startup::prepare_startup;
-use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::Service as _;
 use uuid::Uuid;
@@ -372,12 +372,16 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
         .iter()
         .map(|statement| statement.sql.as_str())
         .collect::<Vec<_>>();
-    assert!(changed_sql
-        .iter()
-        .any(|sql| sql.starts_with("DROP POLICY ")));
-    assert!(changed_sql
-        .iter()
-        .any(|sql| sql.starts_with("CREATE POLICY ")));
+    assert!(
+        changed_sql
+            .iter()
+            .any(|sql| sql.starts_with("DROP POLICY "))
+    );
+    assert!(
+        changed_sql
+            .iter()
+            .any(|sql| sql.starts_with("CREATE POLICY "))
+    );
     let active_changed = apply_package(
         &database,
         &changed_package.package,
@@ -442,12 +446,16 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
         .iter()
         .map(|statement| statement.sql.as_str())
         .collect::<Vec<_>>();
-    assert!(removed_sql
-        .iter()
-        .any(|sql| sql.starts_with("DROP POLICY ")));
-    assert!(!removed_sql
-        .iter()
-        .any(|sql| sql.starts_with("CREATE POLICY ")));
+    assert!(
+        removed_sql
+            .iter()
+            .any(|sql| sql.starts_with("DROP POLICY "))
+    );
+    assert!(
+        !removed_sql
+            .iter()
+            .any(|sql| sql.starts_with("CREATE POLICY "))
+    );
     let active_removed = apply_package(
         &database,
         &removed_package.package,
@@ -478,7 +486,7 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
 }
 
 /// A recipient organization added in a successor widens the recipient input
-/// of every consent-issuing action without review. The activated catalog must
+/// of every consent-issuing action and requires metadata review. The activated catalog must
 /// be exactly a fresh install of the successor, the action must accept the new
 /// recipient, and a key consumed under the prior contract must not replay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -534,8 +542,8 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
     assert_eq!(
         action_changes,
         vec![(
-            CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
-            CompiledRegistryChangeClass::CompatibleAdditive
+            CompiledRegistryChangeCode::ActionChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange
         )],
         "{:#?}",
         changes.changes
@@ -551,8 +559,16 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
             successor_project,
             Some(active_initial.package_digest.as_str()),
             &fresh_fingerprint,
-            PackageMigrationPlanInput::Successor {
+            PackageMigrationPlanInput::ReviewedSuccessor {
                 prior_registry: Box::new((*initial_registry).clone()),
+                prior_schema_fingerprint: active_initial.schema_fingerprint.clone(),
+                migrations: vec![metadata_only_source(
+                    &initial_registry,
+                    &successor_registry,
+                    &active_initial.package_digest,
+                    &active_initial.schema_fingerprint,
+                    &fresh_fingerprint,
+                )],
             },
         ),
         package_context(),
@@ -1248,9 +1264,9 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
               {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"}
             ],
             "effects":[
-              {"id":"person","target":{"entity":"person"},"operation":"create",
+              {"id":"person","target":{"recordType":"person"},"operation":"create",
                 "set":{"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"},"jurisdiction":{"fromField":"jurisdiction"}}},
-              {"id":"membership","target":{"entity":"group-membership"},"operation":"create",
+              {"id":"membership","target":{"recordType":"group-membership"},"operation":"create",
                 "set":{"person":{"fromEffect":"person"},"household":{"fromField":"household"},"jurisdiction":{"fromField":"jurisdiction"}}},
               {"id":"household","target":{"fromField":"household"},"operation":"patch",
                 "set":{"contact-person":{"fromEffect":"person"}}}
@@ -1274,9 +1290,9 @@ fn project_bytes(variant: Variant) -> Vec<u8> {
                     "action":"register-household-contact",
                     "operations":["invoke"],
                     "targets":[
-                      {{"entity":"household","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}},
-                      {{"entity":"person","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}},
-                      {{"entity":"group-membership","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}}
+                      {{"recordType":"household","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}},
+                      {{"recordType":"person","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}},
+                      {{"recordType":"group-membership","rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]}}
                     ],
                     "results":["person","membership","household"]
                   }}]}}

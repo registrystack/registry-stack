@@ -13,27 +13,27 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, Response, StatusCode};
 use chrono::{Days, Utc};
-use pilot_acceptance_harness::{response_json, PilotHarness};
+use pilot_acceptance_harness::{PilotHarness, response_json};
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims, router,
 };
 use registry_breg::cursor::CursorCodec;
 use registry_breg::history_erasure::{
-    erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
+    HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget, erase_record_history,
 };
 use registry_breg::history_rebaseline::{
-    rebaseline_history_coverage, HistoryRebaselineRequest, HistoryRebaselineTimeouts,
+    HistoryRebaselineRequest, HistoryRebaselineTimeouts, rebaseline_history_coverage,
 };
 use registry_breg::postgres::{
     ExpectedRegistryIdentity, PostgresRecordReadService, PostgresStatisticsService,
     RegistryLockKey, StatisticsPublishPause,
 };
-use registry_breg::statistics::{current_period, PeriodGranularity};
+use registry_breg::statistics::{PeriodGranularity, current_period};
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;

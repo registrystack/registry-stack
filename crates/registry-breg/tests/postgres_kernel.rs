@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 
 use postgres_harness::TestDatabase;
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_kernel_registry_state_for_test, install_kernel_schema,
-    test_activation_id, test_package_digest, verify_btree_gist, verify_catalog_identity,
-    verify_migration_role, verify_runtime_role, ClaimContext, DedicatedApplyConnection,
-    ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey, RegistryStateTestIdentity,
+    ClaimContext, DedicatedApplyConnection, ExpectedRegistryIdentity, PostgresKernelError,
+    RegistryLockKey, RegistryStateTestIdentity, begin_record_transaction,
+    initialize_kernel_registry_state_for_test, install_kernel_schema, test_activation_id,
+    test_package_digest, verify_btree_gist, verify_catalog_identity, verify_migration_role,
+    verify_runtime_role,
 };
 
 const RECORD_ALPHA: &str = "00000000-0000-0000-0000-000000000001";
@@ -116,8 +117,8 @@ async fn field_encryption_catalog_enforces_key_state_and_runtime_authority() {
                      entity_id, field_id, boundary_package_revision, history_choice,
                      history_commit_position,
                      sealed_row_count, sealed_journal_row_count,
-                     accepted_plaintext_journal_row_count, accepted_request_target_row_count,
-                     accepted_request_proposal_row_count, accepted_idempotency_row_count,
+                     accepted_plaintext_journal_row_count, accepted_proposal_target_row_count,
+                     accepted_proposal_submission_row_count, accepted_idempotency_row_count,
                      accepted_outbox_row_count
                  ) VALUES ('asset', 'secret', 'package-1', 'retain-plaintext-history',
                            1, 0, 0, 0, 0, 0, 0, 0)"
@@ -259,18 +260,26 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
     verify_runtime_role(&**runtime, &database.migration_role)
         .await
         .expect("runtime role has no ownership, bypass, or DDL authority");
-    assert!(runtime
-        .batch_execute("CREATE TABLE registry_data.forbidden (id integer)")
-        .await
-        .is_err());
-    assert!(runtime
-        .batch_execute("CREATE EXTENSION hstore")
-        .await
-        .is_err());
-    assert!(runtime
-        .batch_execute("UPDATE registry_internal.registry_state SET maintenance_status = 'failed'")
-        .await
-        .is_err());
+    assert!(
+        runtime
+            .batch_execute("CREATE TABLE registry_data.forbidden (id integer)")
+            .await
+            .is_err()
+    );
+    assert!(
+        runtime
+            .batch_execute("CREATE EXTENSION hstore")
+            .await
+            .is_err()
+    );
+    assert!(
+        runtime
+            .batch_execute(
+                "UPDATE registry_internal.registry_state SET maintenance_status = 'failed'"
+            )
+            .await
+            .is_err()
+    );
     verify_catalog_identity(
         &**runtime,
         &initial,
@@ -326,15 +335,17 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
         .expect("missing context remains a valid empty RLS view")
         .get(0);
     assert_eq!(invisible, 0);
-    assert!(runtime
-        .execute(
-            "INSERT INTO registry_data.kernel_records
+    assert!(
+        runtime
+            .execute(
+                "INSERT INTO registry_data.kernel_records
              (record_id, authority, payload, package_revision)
              VALUES (CAST($1::text AS uuid), 'alpha', 'secret', 'package-1')",
-            &[&RECORD_ALPHA],
-        )
-        .await
-        .is_err());
+                &[&RECORD_ALPHA],
+            )
+            .await
+            .is_err()
+    );
     drop(runtime);
 
     let lock_key = RegistryLockKey::derive("registry-under-test")
@@ -708,11 +719,13 @@ async fn sql_error_does_not_leak(
     )
     .await
     .expect("record transaction starts");
-    assert!(transaction
-        .transaction_for_test()
-        .query_one("SELECT 'not-an-integer'::integer", &[])
-        .await
-        .is_err());
+    assert!(
+        transaction
+            .transaction_for_test()
+            .query_one("SELECT 'not-an-integer'::integer", &[])
+            .await
+            .is_err()
+    );
     drop(transaction);
     drop(client);
     assert_pool_context_clean(pool).await;
@@ -821,10 +834,11 @@ async fn panic_does_not_leak(
         .expect("record transaction starts");
         panic!("intentional pool-isolation proof panic");
     });
-    assert!(task
-        .await
-        .expect_err("task intentionally panics")
-        .is_panic());
+    assert!(
+        task.await
+            .expect_err("task intentionally panics")
+            .is_panic()
+    );
     assert_pool_context_clean(pool).await;
 }
 

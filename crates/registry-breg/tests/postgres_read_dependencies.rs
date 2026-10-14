@@ -10,23 +10,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
-use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_json, ModuleAssetSource};
+use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
+use registry_breg::contract::{ModuleAssetSource, parse_project_json};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
     ClaimContext, ExpectedManagedCatalog, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity, RowBoundaryContext,
+    RegistryStateTestIdentity, RowBoundaryContext, begin_record_transaction,
+    initialize_registry_state_for_catalog_test, install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::Service as _;
 use zeroize::Zeroizing;
 
@@ -250,24 +250,26 @@ async fn exercise_read_dependencies(case: &str, invalid_population: bool, active
             derived_work > narrow_work,
             "joined aggregate processes extra rows"
         );
-        eprintln!("{case}: narrow plan row visits={narrow_work}, selected aggregate plan row visits={derived_work}");
+        eprintln!(
+            "{case}: narrow plan row visits={narrow_work}, selected aggregate plan row visits={derived_work}"
+        );
     }
 
     // Neither field is returned. Recursive filter predicates and ordering
     // still reach their derived relation, including its cardinality guard.
     for query in [
-            "/v1/records/entries?$select=code&$filter=not%20(population%20lt%2032%20or%20population%20gt%2032)&$count=true",
-            "/v1/records/entries?$select=code&$orderby=population&$top=1",
-        ] {
-            let (status, body) = send(&app, query, false, "visible").await;
-            if invalid_population {
-                assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{case}: {body}");
-            } else {
-                assert_eq!(status, StatusCode::OK, "{case}: {body}");
-                assert_eq!(body["items"][0]["domainData"], json!({"code": "code-01"}));
-                take_plan(&plans, 1);
-            }
+        "/v1/records/entries?$select=code&$filter=not%20(population%20lt%2032%20or%20population%20gt%2032)&$count=true",
+        "/v1/records/entries?$select=code&$orderby=population&$top=1",
+    ] {
+        let (status, body) = send(&app, query, false, "visible").await;
+        if invalid_population {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{case}: {body}");
+        } else {
+            assert_eq!(status, StatusCode::OK, "{case}: {body}");
+            assert_eq!(body["items"][0]["domainData"], json!({"code": "code-01"}));
+            take_plan(&plans, 1);
         }
+    }
     drop(app);
     drop(pool);
     database.cleanup().await;
@@ -394,11 +396,11 @@ fn compiled_registry(
     active_expression: &str,
     combined_dependencies: bool,
 ) -> registry_breg::CompiledRegistry {
-    let mut project = parse_project_json(br#"{
+    let mut project = parse_project_json(br#"{"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"read-dependencies","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
-        "entities":[{
+        "recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
             "fields":[
                 {"id":"code","type":"string","required":true,"maximumLength":32,"classification":"internal"},
@@ -413,8 +415,8 @@ fn compiled_registry(
         }],
         "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":{"entities":[{
-                "entity":"entry","operations":["create","get","list","lookup"],
+            "permissions":{"records":[{
+                "recordType":"entry","operations":["create","get","list","lookup"],
                 "readableFields":["code","active","population"],
                 "writableFields":["code","tenant","amount"],
                 "filterableFields":["population"],"sortableFields":["population"],

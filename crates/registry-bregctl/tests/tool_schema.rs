@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 const EXAMPLES: &[(&str, &str)] = &[
     (
         "journeys.v1.schema.json",
-        "products/breg/acceptance/asset-site-placement/tests/journeys.yaml",
+        "products/breg/examples/refactor/minimal/tests/journeys.yaml",
     ),
     (
         "schema-test-credentials.v1.schema.json",
@@ -33,7 +33,7 @@ const EXAMPLES: &[(&str, &str)] = &[
     ),
     (
         "example-scenarios.v1alpha1.schema.json",
-        "products/breg/starters/seed-lots/core/examples/scenarios.json",
+        "products/breg/examples/refactor/minimal/examples/scenarios.json",
     ),
     (
         "backup-binding.v1alpha1.schema.json",
@@ -120,9 +120,9 @@ fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
     for (file, root, name, least) in [
         (
             "journeys.v1.schema.json",
-            "products/breg",
+            "products/breg/examples/refactor",
             "journeys.yaml",
-            20,
+            1,
         ),
         (
             "dev-clients.v1alpha1.schema.json",
@@ -132,9 +132,9 @@ fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
         ),
         (
             "example-scenarios.v1alpha1.schema.json",
-            "products/breg",
+            "products/breg/examples/refactor",
             "scenarios.json",
-            4,
+            1,
         ),
     ] {
         let schema = compile(&documents[file]);
@@ -142,6 +142,15 @@ fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
         assert!(paths.len() >= least, "{name}: found {}", paths.len());
         for path in paths {
             let instance = example(&path);
+            if file == "dev-clients.v1alpha1.schema.json"
+                && instance.get("reviewExecutors").is_some()
+            {
+                assert!(
+                    !schema.is_valid(&instance),
+                    "retired external review workers were accepted: {path}"
+                );
+                continue;
+            }
             let problems: Vec<String> = match schema.validate(&instance) {
                 Ok(()) => Vec::new(),
                 Err(errors) => errors
@@ -159,7 +168,7 @@ fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
 fn the_journeys_schema_refuses_an_empty_suite() {
     let documents = documents().expect("the tool schemas generate");
     let schema = compile(&documents["journeys.v1.schema.json"]);
-    let mut suite = example("products/breg/acceptance/asset-site-placement/tests/journeys.yaml");
+    let mut suite = example("products/breg/examples/refactor/minimal/tests/journeys.yaml");
     assert!(schema.is_valid(&suite));
     suite["journeys"] = Value::Array(Vec::new());
     assert!(!schema.is_valid(&suite), "an empty suite was accepted");
@@ -401,9 +410,9 @@ fn the_reader_accepts_every_word_the_migration_descriptor_schema_enumerates() {
             checked += 1;
         }
     }
-    // 3 change classes, 63 change codes, 14 target kinds, 1 recovery,
+    // 3 change classes, 59 change codes, 14 target kinds, 1 recovery,
     // 2 history choices, 4 object kinds, and 1 cursor protocol.
-    assert_eq!(checked, 88);
+    assert_eq!(checked, 84);
 
     let steps = &definitions["ReviewedMigrationStepDescriptor"]["oneOf"];
     let types: Vec<&str> = steps

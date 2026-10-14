@@ -10,27 +10,27 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
-    VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims, router,
 };
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
 use uuid::Uuid;
@@ -823,7 +823,7 @@ const FIXTURE_TAIL: &str = r#"
     "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
     "permissions":{"entities":[{
-      "entity":"widget","operations":["create","get","patch","batch"],
+      "recordType":"widget","operations":["create","get","patch","batch"],
       "readableFields":["jurisdiction","label","quantity"],
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]

@@ -43,18 +43,18 @@ pub(crate) struct ReviewRecoveryOutcome {
 pub(crate) fn recover(
     operation: ReviewRecoveryOperation,
     runtime_config: &Path,
-    request_entity: &str,
-    request_id: &str,
-    proposal_version: i64,
+    action_id: &str,
+    proposal_id: &str,
+    submission_version: i64,
 ) -> Result<ReviewRecoveryOutcome, ReviewRecoveryCliError> {
-    if !runtime_config.is_absolute() || request_entity.is_empty() || proposal_version <= 0 {
+    if !runtime_config.is_absolute() || action_id.is_empty() || submission_version <= 0 {
         return Err(ReviewRecoveryCliError::Operator);
     }
-    let request_id = Uuid::parse_str(request_id).map_err(|_| ReviewRecoveryCliError::Operator)?;
+    let proposal_id = Uuid::parse_str(proposal_id).map_err(|_| ReviewRecoveryCliError::Operator)?;
     let scope = ReviewRecoveryScope {
-        request_entity_id: request_entity,
-        request_id,
-        proposal_version,
+        action_id,
+        proposal_id,
+        submission_version,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -100,12 +100,12 @@ mod tests {
     fn ineligible_refusal_keeps_its_reason_state_and_code() {
         assert_eq!(
             map_error(ReviewRecoveryError::Ineligible {
-                reason: ReviewRecoveryRefusal::RequestErased,
+                reason: ReviewRecoveryRefusal::DetailErased,
                 state: "failed".to_owned(),
                 code: Some("result-poll-attempts-exhausted".to_owned()),
             }),
             ReviewRecoveryCliError::Ineligible {
-                reason: "request-erased",
+                reason: "detail-erased",
                 state: "failed".to_owned(),
                 code: Some("result-poll-attempts-exhausted".to_owned()),
             }

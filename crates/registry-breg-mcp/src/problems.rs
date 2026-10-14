@@ -8,8 +8,8 @@
 //! may not see.
 
 use registry_breg_client::{
-    BRegLifecycleDecodeError, BRegMetadataSelectionError, BRegMutationRequestError,
-    BRegProblemCode, BRegRequestError, BaseRegistryClientError, TokenError,
+    BRegActionError, BRegMetadataSelectionError, BRegMutationRequestError, BRegProblemCode,
+    BRegRequestError, BaseRegistryClientError, TokenError,
 };
 use rmcp::model::CallToolResult;
 use serde_json::{json, Value};
@@ -69,7 +69,9 @@ impl ToolErrorCode {
             Self::AuthorizationFailed => {
                 "The registry did not accept the delegated authorization. Sign in again."
             }
-            Self::RegistryUnavailable => "The registry is temporarily unavailable. Try again later.",
+            Self::RegistryUnavailable => {
+                "The registry is temporarily unavailable. Try again later."
+            }
             Self::ServiceUnavailable => "This service is not available right now.",
             Self::UnexpectedResponse => "The registry returned a response this service cannot use.",
         }
@@ -155,18 +157,6 @@ impl From<TokenError> for ToolError {
     }
 }
 
-impl From<BRegRequestError> for ToolError {
-    fn from(_: BRegRequestError) -> Self {
-        Self::new(ToolErrorCode::ServiceUnavailable)
-    }
-}
-
-impl From<BRegLifecycleDecodeError> for ToolError {
-    fn from(_: BRegLifecycleDecodeError) -> Self {
-        Self::new(ToolErrorCode::UnexpectedResponse)
-    }
-}
-
 impl From<IdempotencyError> for ToolError {
     fn from(_: IdempotencyError) -> Self {
         Self::new(ToolErrorCode::ServiceUnavailable)
@@ -242,6 +232,18 @@ fn token_code(error: &TokenError) -> ToolErrorCode {
             ToolErrorCode::RegistryUnavailable
         }
         _ => ToolErrorCode::UnexpectedResponse,
+    }
+}
+
+impl From<BRegActionError> for ToolError {
+    fn from(_: BRegActionError) -> Self {
+        Self::new(ToolErrorCode::InvalidArguments)
+    }
+}
+
+impl From<BRegRequestError> for ToolError {
+    fn from(_: BRegRequestError) -> Self {
+        Self::new(ToolErrorCode::InvalidArguments)
     }
 }
 

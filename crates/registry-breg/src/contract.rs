@@ -12,10 +12,7 @@ use registry_platform_yaml::{
     Severity, Url,
 };
 pub use registry_platform_yaml::{Decoded, Report};
-use serde::{
-    de::DeserializeOwned, de::Error as _, de::IntoDeserializer, Deserialize, Deserializer,
-    Serialize,
-};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -76,9 +73,9 @@ pub struct RegistryProject {
     pub api_version: String,
     pub kind: String,
     pub project: RegistryIdentitySource,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<PackageIdentitySource>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest_projection: Option<ManifestProjectionSource>,
     #[serde(default)]
     pub modules: Vec<ModuleLockSource>,
@@ -89,7 +86,8 @@ pub struct RegistryProject {
     pub datasets: Vec<DatasetSource>,
     #[serde(default)]
     pub review_authorities: Vec<ReviewAuthoritySource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "local_id_map")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "local_id_map_schema::<FieldTypeSource>"))]
     pub value_types: BTreeMap<String, FieldTypeSource>,
     #[serde(default)]
     pub functions: Vec<FunctionSource>,
@@ -133,6 +131,8 @@ pub struct RelationshipSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DatasetSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
     #[serde(default)]
     pub display: DisplaySource,
@@ -141,6 +141,8 @@ pub struct DatasetSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ReviewAuthoritySource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
     pub protocol: String,
     #[serde(default)]
@@ -148,14 +150,18 @@ pub struct ReviewAuthoritySource {
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "mode", deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(remote = "Self", deny_unknown_fields, rename_all = "kebab-case")]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "mode"))]
 pub enum ActionExecutionSource {
-    Immediate,
+    Immediate {},
     Proposal { proposal: ProposalPolicySource },
 }
+registry_platform_yaml::tagged_union!(ActionExecutionSource, tag = "mode");
+serialize_tagged_union!(ActionExecutionSource, tag = "mode");
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(remote = "Self", deny_unknown_fields, rename_all = "kebab-case")]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum ActionPlanSource {
     Fixed {
         effects: Vec<ActionEffectSource>,
@@ -167,9 +173,11 @@ pub enum ActionPlanSource {
         #[serde(default)]
         refusals: Vec<ActionHandlerRefusalSource>,
         #[serde(default)]
-        capabilities: BTreeSet<String>,
+        capabilities: UniqueSet<String>,
     },
 }
+registry_platform_yaml::tagged_union!(ActionPlanSource);
+serialize_tagged_union!(ActionPlanSource, tag = "type");
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -177,7 +185,7 @@ pub struct CommitGuardsSource {
     #[serde(default)]
     pub targets: Vec<ActionRequirementSource>,
     #[serde(default)]
-    pub evidence: Vec<ChangeRequestEvidenceSource>,
+    pub evidence: Vec<CommitEvidenceSource>,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -189,23 +197,61 @@ pub enum GuardRevisionSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FunctionSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
     pub runtime: ActionHandlerKindSource,
     pub source: String,
     pub entrypoint: String,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "action_plan_abi_schema"))]
     pub abi: String,
     #[serde(default)]
-    pub capabilities: BTreeSet<String>,
+    pub capabilities: UniqueSet<String>,
     #[serde(default)]
     pub limits: FunctionLimitsSource,
+}
+
+#[cfg(feature = "schema")]
+fn action_plan_abi_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type":"string", "const": ACTION_PLAN_ABI_V1})
+}
+
+/// Review policy identifiers are issued by the review authority. Keep their
+/// spelling, and enforce the review protocol's UTF-8 byte bound at the reader.
+fn review_policy_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let id = ExternalId::deserialize(deserializer)?.into_string();
+    if id.trim().is_empty() || id.len() > registry_review_protocol::MAXIMUM_IDENTIFIER_BYTES {
+        return Err(Invalid::expected(
+            "a nonblank review policy identifier of at most 128 UTF-8 bytes",
+            "Use the exact bounded identifier issued by the review authority.",
+        ).into_error());
+    }
+    Ok(id)
+}
+
+#[cfg(feature = "schema")]
+fn review_context_fields_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type":"object",
+        "maxProperties":64,
+        "x-registry-member-names":true,
+        "propertyNames":{
+            "type":"string", "minLength":1, "maxLength":64,
+            "pattern":"^[a-z][A-Za-z0-9]{0,63}$",
+            "not":{"enum":["id","recordId","revision","createdAt","updatedAt","deletedAt"]}
+        },
+        "additionalProperties":generator.subschema_for::<ProposalContextValueSource>()
+    })
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FunctionLimitsSource {
-    #[serde(default = "default_function_operations")]
+    #[serde(default = "default_function_operations", deserialize_with = "bounded_u64::<_, 1, { crate::rhai_planner::MAXIMUM_OPERATIONS }>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, { crate::rhai_planner::MAXIMUM_OPERATIONS }>"))]
     pub maximum_operations: u64,
-    #[serde(default = "default_function_output_bytes")]
+    #[serde(default = "default_function_output_bytes", deserialize_with = "bounded_u32::<_, 1, { crate::plan::MAX_PLAN_SNAPSHOT_BYTES }>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU32<1, { crate::plan::MAX_PLAN_SNAPSHOT_BYTES }>"))]
     pub maximum_output_bytes: u32,
 }
 impl Default for FunctionLimitsSource {
@@ -227,26 +273,34 @@ fn default_function_output_bytes() -> u32 {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProposalPolicySource {
     pub review: ProposalReviewSource,
+    #[serde(default)]
     pub application: ProposalApplicationSource,
     pub retention: ProposalRetentionSource,
+    #[serde(default)]
+    pub attachments: Vec<AttachmentSlotSource>,
     #[serde(default)]
     pub review_context: Option<ProposalReviewContextSource>,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(remote = "Self", deny_unknown_fields, rename_all = "kebab-case")]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum ProposalReviewSource {
-    None,
+    None {},
     Required {
         authority: String,
         source: String,
         policy: PolicyBindingSource,
     },
 }
+registry_platform_yaml::tagged_union!(ProposalReviewSource);
+serialize_tagged_union!(ProposalReviewSource, tag = "type");
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PolicyBindingSource {
+    #[serde(deserialize_with = "review_policy_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub id: String,
     pub version: String,
     pub digest: Digest,
@@ -254,18 +308,28 @@ pub struct PolicyBindingSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(
-    tag = "mode",
+    remote = "Self",
     rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "mode"))]
 pub enum ProposalApplicationSource {
-    Manual,
+    Manual {},
     Automatic {
-        executor: String,
-        #[serde(default = "default_apply_attempts")]
+        #[serde(default = "default_apply_attempts", deserialize_with = "bounded_u16::<_, 1, 32>")]
+        #[cfg_attr(feature = "schema", schemars(with = "BoundedU32<1, 32>"))]
         maximum_attempts: u16,
     },
+}
+registry_platform_yaml::tagged_union!(ProposalApplicationSource, tag = "mode");
+serialize_tagged_union!(ProposalApplicationSource, tag = "mode");
+impl Default for ProposalApplicationSource {
+    fn default() -> Self {
+        Self::Automatic {
+            maximum_attempts: default_apply_attempts(),
+        }
+    }
 }
 fn default_apply_attempts() -> u16 {
     3
@@ -287,7 +351,10 @@ pub enum ProposalRetentionMode {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProposalReviewContextSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "review_context_fields_schema"))]
     pub fields: BTreeMap<String, ProposalContextValueSource>,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -307,11 +374,32 @@ pub struct ProposalContextValueSource {
 pub enum ProposalOperation {
     Get,
     List,
+    Edit,
     Submit,
     Revise,
     Cancel,
     Apply,
+    Rebase,
+    Retry,
+    GetReviewStatus,
     GetReviewContext,
+}
+impl ProposalOperation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "get",
+            Self::List => "list",
+            Self::Edit => "edit",
+            Self::Submit => "submit",
+            Self::Revise => "revise",
+            Self::Cancel => "cancel",
+            Self::Apply => "apply",
+            Self::Rebase => "rebase",
+            Self::Retry => "retry",
+            Self::GetReviewStatus => "get-review-status",
+            Self::GetReviewContext => "get-review-context",
+        }
+    }
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -324,6 +412,8 @@ pub enum ProposalOwnership {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProposalPermissionSource {
     pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_authority: Option<String>,
     pub operations: UniqueSet<ProposalOperation>,
     #[serde(default)]
     pub ownership: Option<ProposalOwnership>,
@@ -331,13 +421,23 @@ pub struct ProposalPermissionSource {
     pub targets: Vec<ProposalTargetPermissionSource>,
     #[serde(default)]
     pub readable_context_fields: UniqueSet<String>,
+    #[serde(default)]
+    pub readable_inputs: UniqueSet<String>,
+    #[serde(default)]
+    pub readable_attachments: UniqueSet<String>,
+    #[serde(default)]
+    pub writable_attachments: UniqueSet<String>,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProposalTargetPermissionSource {
     pub record_type: String,
-    #[serde(default)]
+    #[serde(
+        deserialize_with = "sentinel::row_boundaries",
+        serialize_with = "sentinel::serialize_row_boundaries"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "sentinel::RowBoundaries"))]
     pub row_boundaries: Vec<RowBoundarySource>,
 }
 
@@ -347,10 +447,10 @@ fn resolve_local_value_types(value: &mut Value) -> Result<(), (String, &'static 
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    for collection in ["recordTypes", "actions"] {
+    for collection in ["recordTypes", "extendRecordTypes", "actions"] {
         if let Some(items) = value.get_mut(collection).and_then(Value::as_array_mut) {
             for (item_index, item) in items.iter_mut().enumerate() {
-                let member = if collection == "recordTypes" {
+                let member = if collection != "actions" {
                     "fields"
                 } else {
                     "inputs"
@@ -879,13 +979,18 @@ pub struct RegistryModule {
     /// Identifiers of modules that must be applied before this module.
     #[serde(default)]
     pub dependencies: Vec<String>,
-    /// Entities introduced by this module.
-    #[serde(default, deserialize_with = "unique_ids")]
+    /// Record types introduced by this module.
+    #[serde(default, rename = "recordTypes", deserialize_with = "unique_ids")]
     pub entities: Vec<EntitySource>,
     /// Additive contributions to entities already declared by the project or another module.
-    #[serde(default)]
+    #[serde(default, rename = "extendRecordTypes")]
     pub extend_entities: Vec<EntityExtensionSource>,
-    /// Named immediate actions introduced by this module.
+    #[serde(default, deserialize_with = "local_id_map")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "local_id_map_schema::<FieldTypeSource>"))]
+    pub value_types: BTreeMap<String, FieldTypeSource>,
+    #[serde(default)]
+    pub functions: Vec<FunctionSource>,
+    /// Named Actions introduced by this module.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<ActionSource>,
 }
@@ -954,9 +1059,6 @@ pub struct EntitySource {
     pub classification: Classification,
     #[serde(default)]
     pub fields: Vec<FieldSource>,
-    /// Governed binary slots on change-request entities, projected under their exact IDs.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<AttachmentSlotSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geojson: Option<GeoJsonSource>,
     /// Mandatory request-access requirements checked against every profile, including module contributions.
@@ -1000,10 +1102,7 @@ pub struct EntitySource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub change_control: Option<ChangeControlSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(skip)]
-    pub change_request: Option<ChangeRequestSource>,
+    pub mutation_policy: Option<MutationPolicySource>,
     /// Declares this entity's rows as subject-issued consent decisions that
     /// `requireConsent` permissions check before returning a subject's row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1205,6 +1304,7 @@ pub struct BatchSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EntityExtensionSource {
+    #[serde(rename = "recordType")]
     pub entity: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geojson: Option<GeoJsonSource>,
@@ -1246,9 +1346,7 @@ pub struct EntityExtensionSource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub change_control: Option<ChangeControlSource>,
-    #[serde(skip)]
-    pub change_request: Option<ChangeRequestSource>,
+    pub mutation_policy: Option<MutationPolicySource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1269,41 +1367,36 @@ pub enum MutationMode {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeControlSource {
-    #[serde(default)]
-    pub required_for: UniqueSet<Operation>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestSource {
-    #[serde(default)]
-    pub effects: Vec<ChangeRequestEffectSource>,
+pub struct MutationPolicySource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub planner: Option<ChangeRequestPlannerSource>,
-    pub review: ChangeRequestReviewSource,
-    #[serde(default)]
-    pub on_approved: ChangeRequestOnApprovedSource,
-    #[serde(default)]
-    pub application: ChangeRequestApplicationSource,
-    #[serde(default)]
-    pub retention: ChangeRequestRetentionSource,
+    pub create: Option<MutationPolicyMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch: Option<MutationPolicyMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tombstone: Option<MutationPolicyMode>,
 }
 
-pub const CHANGE_REQUEST_PLAN_ABI_V1: &str = "registry.change-request-plan/v1";
+impl MutationPolicySource {
+    pub fn proposal_required_operations(&self) -> BTreeSet<Operation> {
+        [
+            (Operation::Create, self.create),
+            (Operation::Patch, self.patch),
+            (Operation::Tombstone, self.tombstone),
+        ]
+        .into_iter()
+        .filter_map(|(operation, policy)| {
+            (policy == Some(MutationPolicyMode::ProposalRequired)).then_some(operation)
+        })
+        .collect()
+    }
+}
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestPlannerSource {
-    pub kind: ChangeRequestPlannerKindSource,
-    pub script: String,
-    pub abi: String,
-    #[serde(default)]
-    pub request_fields: Vec<String>,
-    #[serde(default)]
-    pub writes: Vec<ChangeRequestPlannerWriteSource>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MutationPolicyMode {
+    Direct,
+    ProposalRequired,
 }
 
 /// The authored action-handler backend. The wasm backend is admitted when
@@ -1320,119 +1413,10 @@ pub enum ActionHandlerKindSource {
     Wasm,
 }
 
-/// The authored change-request planner backend. The wasm backend is
-/// expressible so a declared WASM planner is refused by the compiler with a
-/// pinned diagnostic; WASM planners stay unsupported. Retained Rust name for
-/// the reviewed change-request authoring contract.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum ChangeRequestPlannerKindSource {
-    Rhai,
-    Wasm,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestPlannerWriteSource {
-    pub target: ChangeRequestPlannerTargetSource,
-    pub operation: Operation,
-    #[serde(default)]
-    pub fields: Vec<String>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestPlannerTargetSource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_field: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entity: Option<String>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestApplicationSource {
-    #[serde(
-        default,
-        skip_serializing_if = "ChangeRequestPreconditionsSource::is_empty"
-    )]
-    pub preconditions: ChangeRequestPreconditionsSource,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestPreconditionsSource {
-    /// Predicates over the frozen request intake itself.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub request: Vec<ChangeRequestPredicateSource>,
-    /// Existing records read and revision-bound at proposal preparation.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub targets: Vec<ChangeRequestGuardTargetSource>,
-    /// Governed Evidence acquisitions required immediately before application.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<ChangeRequestEvidenceSource>,
-}
-
-impl ChangeRequestPreconditionsSource {
-    pub fn is_empty(&self) -> bool {
-        self.request.is_empty() && self.targets.is_empty() && self.evidence.is_empty()
-    }
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestGuardTargetSource {
-    #[serde(deserialize_with = "local_id")]
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
-    pub id: String,
-    pub entity: String,
-    pub from_field: String,
-    #[serde(default)]
-    pub requires: Vec<ChangeRequestPredicateSource>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestPredicateSource {
-    pub field: String,
-    #[serde(
-        default,
-        deserialize_with = "present_scalar_literal",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "EventScalarValue"))]
-    pub equals: Option<Value>,
-    /// Requires the stored value to be unset. Only `true` is read.
-    #[serde(
-        default,
-        deserialize_with = "only_true",
-        skip_serializing_if = "std::ops::Not::not"
-    )]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "only_true_schema"))]
-    pub is_null: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub equals_from_request_field: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
-    pub at_least: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
-    pub at_most: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_date: Option<ChangeRequestCurrentDatePredicateSource>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ChangeRequestCurrentDatePredicateSource {
+pub enum CurrentDatePredicateSource {
     OnOrAfter,
     OnOrBefore,
 }
@@ -1440,7 +1424,7 @@ pub enum ChangeRequestCurrentDatePredicateSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestEvidenceSource {
+pub struct CommitEvidenceSource {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
@@ -1449,11 +1433,11 @@ pub struct ChangeRequestEvidenceSource {
     #[serde(deserialize_with = "external_id_map")]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "external_id_map_schema::<ChangeRequestEvidenceSubjectSource>")
+        schemars(schema_with = "external_id_map_schema::<CommitEvidenceSubjectSource>")
     )]
-    pub subjects: BTreeMap<String, ChangeRequestEvidenceSubjectSource>,
+    pub subjects: BTreeMap<String, CommitEvidenceSubjectSource>,
     #[serde(default)]
-    pub requires: Vec<ChangeRequestEvidenceRequirementSource>,
+    pub requires: Vec<CommitEvidenceRequirementSource>,
     #[serde(
         deserialize_with = "bounded_u64::<_, 1, { crate::action_evidence_contracts::MAX_EVIDENCE_AGE_SECONDS }>"
     )]
@@ -1469,33 +1453,33 @@ pub struct ChangeRequestEvidenceSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestEvidenceSubjectSource {
+pub struct CommitEvidenceSubjectSource {
     pub profile: String,
     /// Exact governed selector-profile field map. Every profile field must be
     /// present exactly once and no undeclared field is admitted.
     #[serde(deserialize_with = "external_id_map")]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "external_id_map_schema::<ChangeRequestSelectorSource>")
+        schemars(schema_with = "external_id_map_schema::<CommitEvidenceSelectorSource>")
     )]
-    pub selectors: BTreeMap<String, ChangeRequestSelectorSource>,
+    pub selectors: BTreeMap<String, CommitEvidenceSelectorSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(remote = "Self", deny_unknown_fields, rename_all = "kebab-case")]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
-pub enum ChangeRequestSelectorSource {
-    RequestField { field: String },
-    TargetField { target: String, field: String },
+pub enum CommitEvidenceSelectorSource {
+    Input { input: String },
+    TargetField { input: String, field: String },
 }
-registry_platform_yaml::tagged_union!(ChangeRequestSelectorSource);
-serialize_tagged_union!(ChangeRequestSelectorSource, tag = "type");
+registry_platform_yaml::tagged_union!(CommitEvidenceSelectorSource);
+serialize_tagged_union!(CommitEvidenceSelectorSource, tag = "type");
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestEvidenceRequirementSource {
+pub struct CommitEvidenceRequirementSource {
     pub output: String,
     #[serde(
         default,
@@ -1504,74 +1488,13 @@ pub struct ChangeRequestEvidenceRequirementSource {
     )]
     pub equals: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub equals_from_request_field: Option<String>,
+    pub equals_from_input: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
     pub at_least: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
     pub at_most: Option<i64>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub enum ChangeRequestRetentionModeSource {
-    #[default]
-    Retain,
-    OperatorErase,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestRetentionSource {
-    #[serde(default)]
-    pub mode: ChangeRequestRetentionModeSource,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestEffectSource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(deserialize_with = "optional_local_id")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::LocalId>")
-    )]
-    pub id: Option<String>,
-    pub target: ChangeRequestTargetSource,
-    pub operation: Operation,
-    #[serde(default)]
-    #[serde(deserialize_with = "local_id_map")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "local_id_map_schema::<ChangeRequestValueSource>")
-    )]
-    pub set: BTreeMap<String, ChangeRequestValueSource>,
-    #[serde(default)]
-    pub clear: UniqueSet<String>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestTargetSource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_field: Option<String>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestValueSource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_field: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_effect: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1611,38 +1534,12 @@ impl ActionSource {
 
 pub const ACTION_PLAN_ABI_V1: &str = "registry.action-plan/v1";
 
-/// The authored action handler: the shared hook handler declaration, with the
-/// authorization members a governed action adds.
-///
-/// `handler` is [`HookHandlerSource`], the same declaration an entity hook
-/// carries, so this product spells a handler one way. It is flattened, so the
-/// authored member set stays `type`, the source reference the type names,
-/// `abi`, `writes`, and `refusals`. `writes` and `refusals` are this
-/// product's own: they bound what the handler may write and the refusals it
-/// may return, and no hook declares them.
-///
-/// Two rules narrow the shared declaration to what this path runs. `abi` is
-/// optional there and required here, refused at deserialization, because
-/// every backend an action may declare speaks one. The `url` kind is refused
-/// by the compiler at `actions[].handler.type`, because an action handler
-/// runs inside the triggering transaction and cannot be remote.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-// Flattening drops the closed member set schemars derives, so the authoring
-// schema restates it: an unknown member of `handler:` is refused by the
-// schema an editor reads as well as by deserialization.
-#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
-#[serde(rename_all = "camelCase")]
-pub struct ActionHandlerSource {
-    /// Where the handler runs, with the source reference and ABI it declares.
-    #[serde(flatten)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "action_handler_half_schema")
-    )]
+/// Private compiler adapter combining a resolved function asset with Action
+/// write/refusal ceilings. It is never an authored or schema-visible shape.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ActionHandlerSource {
     pub handler: HookHandlerSource,
     pub writes: Vec<ActionHandlerWriteSource>,
-    #[serde(default)]
     pub refusals: Vec<ActionHandlerRefusalSource>,
 }
 
@@ -1688,122 +1585,6 @@ impl ActionHandlerSource {
     }
 }
 
-impl<'de> Deserialize<'de> for ActionHandlerSource {
-    /// Deserialization is manual because serde refuses `deny_unknown_fields`
-    /// beside `flatten`, and the authored member set must stay closed. The
-    /// members the shared declaration owns are handed to it unchanged, so the
-    /// kind and its source reference pair by that one rule, and the members
-    /// this product owns keep deserializing through the caller's
-    /// deserializer, so a refusal inside them still names the member path.
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(field_identifier, rename_all = "camelCase")]
-        enum Field {
-            Type,
-            Script,
-            Module,
-            Abi,
-            DestinationId,
-            Writes,
-            Refusals,
-        }
-
-        struct ActionHandlerVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for ActionHandlerVisitor {
-            type Value = ActionHandlerSource;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("an action handler declaration")
-            }
-
-            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-            where
-                A: serde::de::MapAccess<'de>,
-            {
-                let mut handler = serde_json::Map::new();
-                let mut declared = BTreeSet::new();
-                let mut writes: Option<Vec<ActionHandlerWriteSource>> = None;
-                let mut refusals: Option<Vec<ActionHandlerRefusalSource>> = None;
-                while let Some(field) = map.next_key::<Field>()? {
-                    let member = match field {
-                        Field::Type => "type",
-                        Field::Script => "script",
-                        Field::Module => "module",
-                        Field::Abi => "abi",
-                        Field::DestinationId => "destinationId",
-                        Field::Writes => {
-                            if writes.replace(map.next_value()?).is_some() {
-                                return Err(A::Error::duplicate_field("writes"));
-                            }
-                            continue;
-                        }
-                        Field::Refusals => {
-                            if refusals.replace(map.next_value()?).is_some() {
-                                return Err(A::Error::duplicate_field("refusals"));
-                            }
-                            continue;
-                        }
-                    };
-                    if !declared.insert(member) {
-                        return Err(A::Error::duplicate_field(member));
-                    }
-                    // An explicit null reads as an undeclared member, the
-                    // reading the optional source references already carried.
-                    if let Some(value) = map.next_value::<Option<String>>()? {
-                        handler.insert(member.to_owned(), Value::String(value));
-                    }
-                }
-                let source = ActionHandlerSource {
-                    // The trait method, not the inherent function the union's
-                    // remote derive leaves behind, which skips the tag rewrite.
-                    handler: <HookHandlerSource as Deserialize>::deserialize(
-                        Value::Object(handler).into_deserializer(),
-                    )
-                    .map_err(A::Error::custom)?,
-                    writes: writes.ok_or_else(|| A::Error::missing_field("writes"))?,
-                    refusals: refusals.unwrap_or_default(),
-                };
-                if source.kind().is_some() && source.abi().is_none() {
-                    return Err(A::Error::missing_field("abi"));
-                }
-                Ok(source)
-            }
-        }
-
-        deserializer.deserialize_map(ActionHandlerVisitor)
-    }
-}
-
-/// The handler half as this product's authoring schema already described it:
-/// the two backends an action may declare, their paired source references,
-/// and the closed ABI list. The shared declaration's own rendering carries a
-/// third kind an action cannot run and leaves the ABI open, so the schema an
-/// author's editor reads is written here rather than derived from it.
-#[cfg(feature = "schema")]
-fn action_handler_half_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    let kind = generator.subschema_for::<ActionHandlerKindSource>();
-    schemars::json_schema!({
-        "type": "object",
-        "properties": {
-            "type": kind,
-            "script": {
-                "description": "The Rhai handler script path. Declared for rhai handlers only; the\ncompiler enforces the pairing with the declared backend.",
-                "type": ["string", "null"],
-            },
-            "module": {
-                "description": "The WASM handler module path, project-local. Declared for wasm\nhandlers only; the compiler enforces the pairing with the declared\nbackend.",
-                "type": ["string", "null"],
-            },
-            "abi": {"type": "string", "enum": [ACTION_PLAN_ABI_V1]},
-        },
-        "required": ["type", "abi"],
-    })
-}
-
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1814,18 +1595,6 @@ pub struct ActionHandlerWriteSource {
     pub target: ActionTargetSource,
     pub operation: Operation,
     pub fields: Vec<String>,
-}
-
-impl ChangeRequestPredicateSource {
-    /// The literal the stored value is compared with: `null` when `isNull`
-    /// is written, else the `equals` literal.
-    pub(crate) fn literal(&self) -> Option<Value> {
-        if self.is_null {
-            Some(Value::Null)
-        } else {
-            self.equals.clone()
-        }
-    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1863,6 +1632,14 @@ pub struct ActionRequirementSource {
     pub equals_input: Option<String>,
     #[serde(default)]
     pub revision: Option<GuardRevisionSource>,
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
+    pub at_least: Option<i64>,
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
+    pub at_most: Option<i64>,
+    #[serde(default)]
+    pub current_date: Option<CurrentDatePredicateSource>,
 }
 
 impl ActionRequirementSource {
@@ -1890,6 +1667,8 @@ pub struct ActionInputSource {
     #[serde(default)]
     pub required: bool,
     pub classification: Classification,
+    #[serde(default)]
+    pub display: DisplaySource,
 }
 
 impl<'de> Deserialize<'de> for ActionInputSource {
@@ -1917,6 +1696,7 @@ impl<'de> Deserialize<'de> for ActionInputSource {
             field_type,
             required: raw.required,
             classification: raw.classification,
+            display: raw.display,
         })
     }
 }
@@ -1943,8 +1723,6 @@ pub struct ActionEffectSource {
     pub set: BTreeMap<String, ActionValueSource>,
     #[serde(default)]
     pub clear: UniqueSet<String>,
-    #[serde(default)]
-    pub after: UniqueSet<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1974,46 +1752,6 @@ pub struct ActionValueSource {
         skip_serializing_if = "Option::is_none"
     )]
     pub value: Option<Value>,
-}
-
-/// Either a required review, `type: required` naming `authority` and
-/// `policyId`, or `type: none`.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(
-    remote = "Self",
-    deny_unknown_fields,
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase"
-)]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
-pub enum ChangeRequestReviewSource {
-    Required {
-        authority: String,
-        policy_id: String,
-    },
-    None {},
-}
-registry_platform_yaml::tagged_union!(ChangeRequestReviewSource);
-serialize_tagged_union!(ChangeRequestReviewSource, tag = "type");
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestOnApprovedSource {
-    #[serde(default)]
-    pub mode: ChangeRequestOnApprovedModeSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub executor: Option<String>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ChangeRequestOnApprovedModeSource {
-    #[default]
-    Manual,
-    Automatic,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -3005,7 +2743,7 @@ fn reject_type_options<E: serde::de::Error>(
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(
     deny_unknown_fields,
     tag = "type",
@@ -3090,6 +2828,58 @@ pub enum FieldTypeSource {
         )]
         schema: Value,
     },
+}
+
+/// A named value type has the same typed options as a field, but none of a
+/// field's identity, classification or persistence attributes. A flat reader
+/// preserves source positions and shares the field validator instead of
+/// buffering a serde-tagged union.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawValueTypeSource {
+    #[serde(rename = "type")]
+    kind: RawFieldKind,
+    #[serde(default, rename = "minimumLength", deserialize_with = "optional_bounded_u32::<_, 0, MAX_STRING_FIELD_LENGTH>")]
+    min_length: Option<u32>,
+    #[serde(default, rename = "maximumLength", deserialize_with = "optional_bounded_u32::<_, 1, MAX_TEXT_FIELD_LENGTH>")]
+    max_length: Option<u32>,
+    #[serde(default, deserialize_with = "optional_bounded_u8::<_, 0, MAX_DECIMAL_PRECISION>")]
+    precision: Option<u8>,
+    #[serde(default, deserialize_with = "optional_bounded_u8::<_, 0, MAX_DECIMAL_PRECISION>")]
+    scale: Option<u8>,
+    #[serde(default)]
+    minimum: Option<String>,
+    #[serde(default)]
+    maximum: Option<String>,
+    #[serde(default)]
+    bbox: Option<Crs84BboxSource>,
+    #[serde(default, rename = "maximumBytes", deserialize_with = "optional_bounded_u32::<_, 1, MAX_STRUCTURED_VALUE_BYTES>")]
+    max_bytes: Option<u32>,
+    #[serde(default)]
+    schema: Option<Value>,
+    #[serde(default)]
+    vocabulary: Option<String>,
+    #[serde(default)]
+    values: Vec<String>,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    on_delete: Option<ReferenceDelete>,
+}
+
+impl<'de> Deserialize<'de> for FieldTypeSource {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawValueTypeSource::deserialize(deserializer)?;
+        parse_field_type::<D::Error>(&RawFieldSource {
+            id:String::new(), api_name:None, kind:raw.kind, required:false,
+            classification:Classification::Internal, valid_time_role:None,
+            min_length:raw.min_length, max_length:raw.max_length, precision:raw.precision,
+            scale:raw.scale, minimum:raw.minimum, maximum:raw.maximum, bbox:raw.bbox,
+            max_bytes:raw.max_bytes, schema:raw.schema, vocabulary:raw.vocabulary,
+            values:raw.values, target:raw.target, on_delete:raw.on_delete,
+            pattern:None, encrypted:None, lookup:None, display:DisplaySource::default(), relationship:None,
+        })
+    }
 }
 
 impl FieldTypeSource {
@@ -3216,11 +3006,7 @@ pub(crate) fn decimal_scaled_value(value: &str, precision: u8, scale: u8) -> Opt
     let digits = format!("{integer}{fraction}");
     let scaled = digits.parse::<i128>().ok()?;
     if value.starts_with('-') {
-        if scaled == 0 {
-            None
-        } else {
-            Some(-scaled)
-        }
+        if scaled == 0 { None } else { Some(-scaled) }
     } else {
         Some(scaled)
     }
@@ -3614,12 +3400,6 @@ pub struct AccessProfileSource {
     pub operations: UniqueSet<Operation>,
     #[serde(default)]
     pub readable_fields: UniqueSet<String>,
-    /// Readable change-request decision detail.
-    #[serde(
-        default = "default_readable_request_fields",
-        skip_serializing_if = "is_default_readable_request_fields"
-    )]
-    pub readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
     #[serde(default)]
     pub writable_fields: UniqueSet<String>,
     #[serde(default)]
@@ -3636,20 +3416,10 @@ pub struct AccessProfileSource {
     /// Current subject-issued consent required for each row, ANDed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub require_consent: Vec<ConsentRequirementSource>,
-    /// Restricts change-request reads to rows owned by the authenticated principal.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_visibility: Option<RequestVisibilitySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lookups: Vec<LookupPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathPermissionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub apply_targets: Vec<ApplyTargetPermissionSource>,
-    /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
-    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
-    pub submitter_targets: UniqueSet<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_count: bool,
     #[serde(default)]
@@ -3668,26 +3438,6 @@ pub struct AccessProfileSource {
     pub allow_data_export: bool,
 }
 
-/// Fields of request decision metadata governed separately from stored record fields.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RequestMetadataFieldSource {
-    ActorReference,
-    Reason,
-    ReviewState,
-}
-
-fn default_readable_request_fields<S: From<[RequestMetadataFieldSource; 1]>>() -> S {
-    S::from([RequestMetadataFieldSource::Reason])
-}
-
-pub(crate) fn is_default_readable_request_fields(
-    fields: &BTreeSet<RequestMetadataFieldSource>,
-) -> bool {
-    fields == &default_readable_request_fields::<BTreeSet<_>>()
-}
-
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -3701,10 +3451,6 @@ pub enum Operation {
     Batch,
     Revisions,
     Snapshot,
-    SubmitRequest,
-    ReviseRequest,
-    CancelRequest,
-    ApplyRequest,
     Invoke,
     Start,
     /// Create records through a durable ingestion run, and nothing else. The
@@ -3874,12 +3620,6 @@ pub enum EventConditionSource {
         #[serde(default)]
         after_is_null: UniqueSet<String>,
     },
-    RequestLifecycle {
-        #[serde(default)]
-        transitions: UniqueSet<String>,
-        #[serde(default)]
-        to_states: UniqueSet<String>,
-    },
 }
 registry_platform_yaml::tagged_union!(EventConditionSource);
 
@@ -3901,10 +3641,6 @@ enum EventConditionWire<'a> {
         #[serde(skip_serializing_if = "BTreeSet::is_empty")]
         after_is_null: &'a BTreeSet<String>,
     },
-    RequestLifecycle {
-        transitions: &'a BTreeSet<String>,
-        to_states: &'a BTreeSet<String>,
-    },
 }
 
 impl Serialize for EventConditionSource {
@@ -3922,13 +3658,6 @@ impl Serialize for EventConditionSource {
                 after_equals,
                 before_is_null,
                 after_is_null,
-            },
-            Self::RequestLifecycle {
-                transitions,
-                to_states,
-            } => EventConditionWire::RequestLifecycle {
-                transitions,
-                to_states,
             },
         }
         .serialize(serializer)
@@ -4192,9 +3921,6 @@ pub struct EntityPermissionSource {
     pub entity: String,
     pub operations: UniqueSet<Operation>,
     pub readable_fields: UniqueSet<String>,
-    /// Readable change-request decision detail.
-    #[serde(skip_serializing_if = "is_default_readable_request_fields")]
-    pub readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
     pub writable_fields: UniqueSet<String>,
     pub filterable_fields: UniqueSet<String>,
     pub sortable_fields: UniqueSet<String>,
@@ -4209,26 +3935,10 @@ pub struct EntityPermissionSource {
     /// Current subject-issued consent required for each row, ANDed.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub require_consent: Vec<ConsentRequirementSource>,
-    /// Restricts change-request reads to rows owned by the authenticated principal.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_visibility: Option<RequestVisibilitySource>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub lookups: Vec<LookupPermissionSource>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathPermissionSource>,
-    #[serde(
-        serialize_with = "sentinel::serialize_apply_targets",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub apply_targets: Vec<ApplyTargetPermissionSource>,
-    /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
-    #[serde(skip_serializing_if = "UniqueSet::is_empty")]
-    pub submitter_targets: UniqueSet<String>,
-    #[serde(
-        serialize_with = "sentinel::serialize_request_presence",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(skip_serializing_if = "is_false")]
     pub allow_count: bool,
     pub revision_access: bool,
@@ -4310,32 +4020,6 @@ pub struct ReadPathPermissionSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ApplyTargetPermissionSource {
-    pub entity: String,
-    /// Compiled row reach; an empty array permits every row, as the authored `unrestricted` does.
-    pub row_boundaries: Vec<RowBoundarySource>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RequestPresencePermissionSource {
-    pub request_type: String,
-    /// Compiled row reach; an empty array permits every row, as the authored `unrestricted` does.
-    pub row_boundaries: Vec<RowBoundarySource>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RequestVisibilitySource {
-    /// Expose only requests created by the current authenticated principal.
-    Owner,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionTargetPermissionSource {
     #[serde(rename = "recordType")]
     pub entity: String,
@@ -4365,60 +4049,20 @@ pub enum EventTrigger {
     Created,
     Patched,
     Tombstoned,
-    RequestLifecycle,
 }
 
 pub fn parse_project_json(bytes: &[u8]) -> Result<RegistryProject, CompileFailure> {
-    parse_json(bytes, "project")
+    parse_json_value(bytes, "project")?;
+    read_project_yaml("registry.json", bytes)
+        .map(|decoded| decoded.value)
+        .map_err(|report| compile_failure_from_report("project", &report))
 }
 
 pub fn parse_module_json(bytes: &[u8]) -> Result<RegistryModule, CompileFailure> {
-    let mut value = parse_json_value(bytes, "module")?;
-    check_module_header(&mut value)?;
-    deserialize_value(value, "module")
-}
-
-/// Take the header out of a module read as JSON and refuse one that is
-/// missing or names another format. What is left is the module the compiler
-/// reads. The shared reader makes the same check on `module.yaml`.
-fn check_module_header(value: &mut serde_json::Value) -> Result<(), CompileFailure> {
-    let Some(object) = value.as_object_mut() else {
-        return Ok(());
-    };
-    let mut errors = Vec::new();
-    for (member, expected, path, code, message) in [
-        (
-            "apiVersion",
-            MODULE_API_VERSION,
-            "module.apiVersion",
-            "breg.module.api-version-unsupported",
-            "the module uses an unsupported API version",
-        ),
-        (
-            "kind",
-            MODULE_KIND,
-            "module.kind",
-            "breg.module.kind-unsupported",
-            "the module uses an unsupported document kind",
-        ),
-    ] {
-        match object.remove(member) {
-            Some(serde_json::Value::String(found)) if found == expected => {}
-            Some(serde_json::Value::String(_)) => {
-                errors.push(Diagnostic::error(code, path, message));
-            }
-            _ => errors.push(Diagnostic::error(
-                "breg.source.shape-invalid",
-                path,
-                "the module header member is missing or is not a string",
-            )),
-        }
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(CompileFailure::from_errors(errors))
-    }
+    parse_json_value(bytes, "module")?;
+    read_module_yaml("module.json", bytes)
+        .map(|decoded| decoded.value)
+        .map_err(|report| compile_failure_from_report("module", &report))
 }
 
 /// The file name a project read from bytes alone is reported under.
@@ -4463,7 +4107,7 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
         replacement: "Rename the top-level `registry` block to `project`, keeping its members.",
     },
     RemovedKey {
-        pointer: "/entities/*/hooks/*/handler/kind",
+        pointer: "/recordTypes/*/hooks/*/handler/kind",
         replacement: HANDLER_TYPE_REPLACEMENT,
     },
     RemovedKey {
@@ -4487,7 +4131,7 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
         replacement: ANONYMOUS_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/accessProfiles/*/anonymous",
+        pointer: "/recordTypes/*/accessProfiles/*/anonymous",
         replacement: ANONYMOUS_REPLACEMENT,
     },
     RemovedKey {
@@ -4495,31 +4139,31 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
         replacement: "Rename `externalRef` to `externalReference`, keeping its value.",
     },
     RemovedKey {
-        pointer: "/entities/*/consentRecord/validity/maxDuration",
+        pointer: "/recordTypes/*/consentRecord/validity/maxDuration",
         replacement: MAXIMUM_DURATION_DAYS_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/fields/*/minLength",
+        pointer: "/recordTypes/*/fields/*/minLength",
         replacement: MINIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/fields/*/maxLength",
+        pointer: "/recordTypes/*/fields/*/maxLength",
         replacement: MAXIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/fields/*/maxBytes",
+        pointer: "/recordTypes/*/fields/*/maxBytes",
         replacement: MAXIMUM_BYTES_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/derived/*/fields/*/minLength",
+        pointer: "/recordTypes/*/derived/*/fields/*/minLength",
         replacement: MINIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/derived/*/fields/*/maxLength",
+        pointer: "/recordTypes/*/derived/*/fields/*/maxLength",
         replacement: MAXIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/derived/*/fields/*/maxBytes",
+        pointer: "/recordTypes/*/derived/*/fields/*/maxBytes",
         replacement: MAXIMUM_BYTES_REPLACEMENT,
     },
     RemovedKey {
@@ -4539,11 +4183,11 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
 /// Members a module no longer accepts, each with the member that replaced it.
 const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     RemovedKey {
-        pointer: "/entities/*/hooks/*/handler/kind",
+        pointer: "/recordTypes/*/hooks/*/handler/kind",
         replacement: HANDLER_TYPE_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/extendEntities/*/hooks/*/handler/kind",
+        pointer: "/extendRecordTypes/*/hooks/*/handler/kind",
         replacement: HANDLER_TYPE_REPLACEMENT,
     },
     RemovedKey {
@@ -4551,63 +4195,63 @@ const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
         replacement: HANDLER_TYPE_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/accessProfiles/*/anonymous",
+        pointer: "/recordTypes/*/accessProfiles/*/anonymous",
         replacement: ANONYMOUS_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/extendEntities/*/accessProfiles/*/anonymous",
+        pointer: "/extendRecordTypes/*/accessProfiles/*/anonymous",
         replacement: ANONYMOUS_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/consentRecord/validity/maxDuration",
+        pointer: "/recordTypes/*/consentRecord/validity/maxDuration",
         replacement: MAXIMUM_DURATION_DAYS_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/fields/*/minLength",
+        pointer: "/recordTypes/*/fields/*/minLength",
         replacement: MINIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/fields/*/maxLength",
+        pointer: "/recordTypes/*/fields/*/maxLength",
         replacement: MAXIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/fields/*/maxBytes",
+        pointer: "/recordTypes/*/fields/*/maxBytes",
         replacement: MAXIMUM_BYTES_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/derived/*/fields/*/minLength",
+        pointer: "/recordTypes/*/derived/*/fields/*/minLength",
         replacement: MINIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/derived/*/fields/*/maxLength",
+        pointer: "/recordTypes/*/derived/*/fields/*/maxLength",
         replacement: MAXIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/entities/*/derived/*/fields/*/maxBytes",
+        pointer: "/recordTypes/*/derived/*/fields/*/maxBytes",
         replacement: MAXIMUM_BYTES_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/extendEntities/*/fields/*/minLength",
+        pointer: "/extendRecordTypes/*/fields/*/minLength",
         replacement: MINIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/extendEntities/*/fields/*/maxLength",
+        pointer: "/extendRecordTypes/*/fields/*/maxLength",
         replacement: MAXIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/extendEntities/*/fields/*/maxBytes",
+        pointer: "/extendRecordTypes/*/fields/*/maxBytes",
         replacement: MAXIMUM_BYTES_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/extendEntities/*/derived/*/fields/*/minLength",
+        pointer: "/extendRecordTypes/*/derived/*/fields/*/minLength",
         replacement: MINIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/extendEntities/*/derived/*/fields/*/maxLength",
+        pointer: "/extendRecordTypes/*/derived/*/fields/*/maxLength",
         replacement: MAXIMUM_LENGTH_REPLACEMENT,
     },
     RemovedKey {
-        pointer: "/extendEntities/*/derived/*/fields/*/maxBytes",
+        pointer: "/extendRecordTypes/*/derived/*/fields/*/maxBytes",
         replacement: MAXIMUM_BYTES_REPLACEMENT,
     },
     RemovedKey {
@@ -4662,10 +4306,18 @@ pub const MODULE_FORMAT: FormatSpec<'static> = FormatSpec {
 /// column, and the action that fixes it (CFG-DIAG-1), and none repeats a
 /// value from the file.
 pub fn read_project_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryProject>, Report> {
+    read_with_value_types(file, bytes, &PROJECT_FORMAT)
+}
+
+fn read_with_value_types<T: DeserializeOwned>(
+    file: &str,
+    bytes: &[u8],
+    format: &FormatSpec<'_>,
+) -> Result<Decoded<T>, Report> {
     let Decoded {
         mut value,
         document,
-    } = read_authored::<Value>(file, bytes, &PROJECT_FORMAT)?;
+    } = read_authored::<Value>(file, bytes, format)?;
     if value.get("valueTypes").is_none() {
         return document.decode().map(|value| Decoded { value, document });
     }
@@ -4679,7 +4331,7 @@ pub fn read_project_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryPro
         )])
     })?;
     let normalized = serde_json::to_vec(&value).expect("normalized authoring value serializes");
-    match read_authored::<RegistryProject>(file, &normalized, &PROJECT_FORMAT) {
+    match read_authored::<T>(file, &normalized, format) {
         Ok(decoded) => Ok(Decoded {
             value: decoded.value,
             document,
@@ -4712,7 +4364,7 @@ pub fn read_project_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryPro
 /// Read an authored module through the shared reader, as
 /// [`read_project_yaml`] reads a project.
 pub fn read_module_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryModule>, Report> {
-    read_authored(file, bytes, &MODULE_FORMAT)
+    read_with_value_types(file, bytes, &MODULE_FORMAT)
 }
 
 fn read_authored<T: DeserializeOwned>(
@@ -4738,10 +4390,6 @@ pub fn parse_module_yaml(bytes: &[u8]) -> Result<RegistryModule, CompileFailure>
         .map_err(|report| compile_failure_from_report("module", &report))
 }
 
-fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, CompileFailure> {
-    deserialize_value(parse_json_value(bytes, root)?, root)
-}
-
 fn parse_json_value(bytes: &[u8], root: &str) -> Result<serde_json::Value, CompileFailure> {
     parse_json_strict(bytes).map_err(|error| {
         CompileFailure::from_one(Diagnostic::error(
@@ -4750,23 +4398,6 @@ fn parse_json_value(bytes: &[u8], root: &str) -> Result<serde_json::Value, Compi
             &format!(
                 "the JSON source is structurally invalid: {}",
                 redact_authored_values(&error.to_string())
-            ),
-        ))
-    })
-}
-
-fn deserialize_value<T: DeserializeOwned>(
-    value: serde_json::Value,
-    root: &str,
-) -> Result<T, CompileFailure> {
-    let deserializer = value.into_deserializer();
-    serde_path_to_error::deserialize(deserializer).map_err(|error| {
-        CompileFailure::from_one(Diagnostic::error(
-            "breg.source.shape-invalid",
-            document_path(root, &error),
-            &format!(
-                "the source field is unknown, duplicated, missing, or has the wrong type: {}",
-                redact_authored_values(&error.inner().to_string())
             ),
         ))
     })
@@ -4852,19 +4483,6 @@ pub fn compiler_path(root: &str, pointer: &str) -> String {
         }
     }
     path
-}
-
-/// Join the document root with the member path `serde_path_to_error` recorded.
-pub(crate) fn document_path<E: std::fmt::Display>(
-    root: &str,
-    error: &serde_path_to_error::Error<E>,
-) -> String {
-    let suffix = error.path().to_string();
-    if suffix.is_empty() {
-        root.to_owned()
-    } else {
-        format!("{root}.{suffix}")
-    }
 }
 
 /// Keep the parts of a deserialization message an adopter needs, the member

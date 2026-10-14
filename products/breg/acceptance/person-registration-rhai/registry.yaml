@@ -31,7 +31,8 @@ manifestProjection:
       endpointUrl: https://person-registration-rhai.example.gov
       servesDatasets: [person-registration-rhai]
   distributions: []
-entities:
+datasets: [{id: person-registration-rhai}]
+recordTypes:
   - id: person
     primaryDataset: person-registration-rhai
     route: people
@@ -73,24 +74,29 @@ entities:
       - {id: last-person, apiName: lastPerson, type: reference, target: person, required: false, classification: internal}
     constraints:
       - {type: unique, fields: [register-code]}
+functions:
+  - {id: register-person-plan, runtime: rhai, source: scripts/register-person.rhai, entrypoint: plan, abi: registry.action-plan/v1}
+  - {id: register-with-registration-plan, runtime: rhai, source: scripts/register-person-with-registration.rhai, entrypoint: plan, abi: registry.action-plan/v1}
 actions:
   - id: register-person
+    execution: {mode: immediate}
     inputs:
       - {id: identifier, type: string, required: true, maximumLength: 13, classification: internal}
       - {id: given-name, apiName: givenName, type: string, required: false, maximumLength: 80, classification: internal}
       - {id: family-name, apiName: familyName, type: string, required: false, maximumLength: 80, classification: internal}
-    handler:
-      type: rhai
-      script: scripts/register-person.rhai
-      abi: registry.action-handler/v1
+    plan:
+      type: function
+      function: register-person-plan
+      inputs: [identifier, given-name, family-name]
       refusals:
         - {code: blank-name, label: At least one name part is required.}
       writes:
         - id: person
-          target: {entity: person}
+          target: {recordType: person}
           operation: create
           fields: [identifier, display-name]
   - id: register-person-with-registration
+    execution: {mode: immediate}
     inputs:
       - {id: identifier, type: string, required: true, maximumLength: 13, classification: internal}
       - {id: given-name, apiName: givenName, type: string, required: false, maximumLength: 80, classification: internal}
@@ -99,25 +105,26 @@ actions:
       - {id: registration-code, apiName: registrationCode, type: string, required: true, maximumLength: 64, classification: internal}
       - {id: record-registration, apiName: recordRegistration, type: boolean, required: true, classification: internal}
       - {id: update-register, apiName: updateRegister, type: boolean, required: true, classification: internal}
-    requires:
-      - {input: register, field: active, equals: true}
-    handler:
-      type: rhai
-      script: scripts/register-person-with-registration.rhai
-      abi: registry.action-handler/v1
+    commitGuards:
+      targets:
+        - {input: register, field: active, equals: true}
+    plan:
+      type: function
+      function: register-with-registration-plan
+      inputs: [identifier, given-name, family-name, register, registration-code, record-registration, update-register]
       refusals:
         - {code: blank-name, label: At least one name part is required.}
       writes:
         - id: person
-          target: {entity: person}
+          target: {recordType: person}
           operation: create
           fields: [identifier, display-name]
         - id: registration
-          target: {entity: registration}
+          target: {recordType: registration}
           operation: create
           fields: [registration-code, person, register]
         - id: register
-          target: {fromField: register}
+          target: {fromInput: register}
           operation: patch
           fields: [last-person]
 accessProfiles:
@@ -130,11 +137,11 @@ accessProfiles:
       actions:
         - action: register-person
           operations: [invoke]
-          targets: [{entity: person, rowBoundaries: unrestricted}]
+          targets: [{recordType: person, rowBoundaries: unrestricted}]
           results: [person]
         - action: register-person-with-registration
           operations: [invoke]
-          targets: [{entity: person, rowBoundaries: unrestricted}, {entity: registration, rowBoundaries: unrestricted}, {entity: register, rowBoundaries: unrestricted}]
+          targets: [{recordType: person, rowBoundaries: unrestricted}, {recordType: registration, rowBoundaries: unrestricted}, {recordType: register, rowBoundaries: unrestricted}]
           results: [person, registration, register]
   - id: person-reader
     default: true
@@ -142,15 +149,15 @@ accessProfiles:
     requiredScopes: [registry:person:read]
     requiredPurposes: [person-registration-audit]
     permissions:
-      entities:
-        - {entity: person, operations: [get], readableFields: [identifier, display-name], rowBoundaries: unrestricted}
-        - {entity: registration, operations: [get], readableFields: [registration-code, person, register], rowBoundaries: unrestricted}
-        - {entity: register, operations: [get], readableFields: [register-code, active, last-person], rowBoundaries: unrestricted}
+      records:
+        - {recordType: person, operations: [get], readableFields: [identifier, display-name], rowBoundaries: unrestricted}
+        - {recordType: registration, operations: [get], readableFields: [registration-code, person, register], rowBoundaries: unrestricted}
+        - {recordType: register, operations: [get], readableFields: [register-code, active, last-person], rowBoundaries: unrestricted}
   - id: person-administrator
     principalClaim: registry_principal
     requiredScopes: [registry:person:manage]
     requiredPurposes: [person-maintenance]
     permissions:
-      entities:
-        - {entity: person, operations: [create, get, patch], readableFields: [identifier, display-name], writableFields: [identifier, display-name], rowBoundaries: unrestricted}
-        - {entity: register, operations: [create, get, patch], readableFields: [register-code, active, last-person], writableFields: [register-code, active, last-person], rowBoundaries: unrestricted}
+      records:
+        - {recordType: person, operations: [create, get, patch], readableFields: [identifier, display-name], writableFields: [identifier, display-name], rowBoundaries: unrestricted}
+        - {recordType: register, operations: [create, get, patch], readableFields: [register-code, active, last-person], writableFields: [register-code, active, last-person], rowBoundaries: unrestricted}

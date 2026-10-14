@@ -2,8 +2,8 @@
 //! Input-only immediate action evaluation inside the shared bounded Rhai kernel.
 
 use crate::{
-    contract::{FieldTypeSource, ACTION_PLAN_ABI_V1},
-    data::{validate_field_value, FieldValue},
+    contract::{ACTION_PLAN_ABI_V1, FieldTypeSource},
+    data::{FieldValue, validate_field_value},
     model::*,
     rhai_planner::{self, PlanError},
 };
@@ -11,7 +11,7 @@ use crate::{
 use std::collections::BTreeMap;
 
 use registry_platform_script::rhai as platform;
-use rhai::{Dynamic, Map, AST};
+use rhai::{AST, Dynamic, Map};
 use serde_json::{Map as JsonMap, Value};
 use std::{collections::BTreeSet, time::Instant};
 
@@ -141,23 +141,13 @@ pub fn compile_source(source: &str) -> Result<AST, ActionHandlerError> {
     compile_source_for_function(source, "plan", true)
 }
 
-/// Compile handler source for an action. `evidence_declared` states whether
-/// the action declares Evidence capabilities, which is what exposes the
-/// `evidence` module to its handler.
-pub(crate) fn compile_source_for_action(
-    source: &str,
-    evidence_declared: bool,
-) -> Result<AST, ActionHandlerError> {
-    compile_source_for_function(source, "plan", evidence_declared)
-}
-
 pub(crate) fn compile_source_for_function(
     source: &str,
     entrypoint: &str,
     evidence_declared: bool,
 ) -> Result<AST, ActionHandlerError> {
-    let ast = rhai_planner::compile_entrypoint(source, entrypoint)
-        .map_err(ActionHandlerError::from)?;
+    let ast =
+        rhai_planner::compile_entrypoint(source, entrypoint).map_err(ActionHandlerError::from)?;
     // An invalid helper arity would otherwise be a catchable language dispatch
     // error before the host can poison the evaluation. Reject it at compilation,
     // along with every Evidence call in an action that declares no Evidence.
@@ -291,7 +281,7 @@ fn validate_inputs(
                     slot: None,
                     field: Some(input.id.clone()),
                     message: "Supply a non-null value for this required input.",
-                })
+                });
             }
             Some(value) if !value.is_null() => {
                 if let Err(message) = validate_input_value(value, &input.field_type) {
@@ -322,6 +312,7 @@ pub(crate) fn evaluate_admitted_action_detailed(
 
 /// Both Action modes evaluate the same plan. Fixed plans never run a function;
 /// Proposal submission freezes this exact result and application never replans.
+#[cfg(feature = "runtime")]
 pub(crate) fn evaluate_plan_detailed(
     action: &CompiledAction,
     inputs: &JsonMap<String, Value>,
@@ -381,7 +372,8 @@ pub(crate) fn evaluate_with_engine(
     }
     let source =
         std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
-    let ast = compile_source_for_function(source, &handler.entrypoint, !action.evidence.is_empty())?;
+    let ast =
+        compile_source_for_function(source, &handler.entrypoint, !action.evidence.is_empty())?;
     execute_compiled_handler(
         action,
         handler,
@@ -442,9 +434,11 @@ fn admit_handler<'a>(
             ));
         }
     }
-    if handler.limits.as_ref().is_some_and(|limits| {
-        handler.script_bytes.len() > limits.maximum_source_bytes as usize
-    }) {
+    if handler
+        .limits
+        .as_ref()
+        .is_some_and(|limits| handler.script_bytes.len() > limits.maximum_source_bytes as usize)
+    {
         return Err(ActionHandlerError::Source.into());
     }
     Ok(handler)
@@ -463,12 +457,14 @@ fn execute_compiled_handler(
     resolver: Option<EvidenceResolver>,
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
-    let selected_inputs = handler.bound_inputs.iter().filter_map(|id| {
-        inputs.get(id).map(|value| (id.clone(), value.clone()))
-    }).collect::<JsonMap<String, Value>>();
+    let selected_inputs = handler
+        .bound_inputs
+        .iter()
+        .filter_map(|id| inputs.get(id).map(|value| (id.clone(), value.clone())))
+        .collect::<JsonMap<String, Value>>();
     let mut ctx = Map::new();
     ctx.insert(
-        "input".into(),
+        "inputs".into(),
         rhai_planner::json_to_dynamic(&Value::Object(selected_inputs), 0)?,
     );
     #[cfg(feature = "postgres-test")]
@@ -579,8 +575,9 @@ fn execute_compiled_handler(
             (Instant::now() >= deadline).then_some(Dynamic::UNIT)
         });
     }
-    let result = platform::call_with_fresh_scope(&engine, ast, &handler.entrypoint, (Dynamic::from(ctx),))
-        .map_err(|error| {
+    let result =
+        platform::call_with_fresh_scope(&engine, ast, &handler.entrypoint, (Dynamic::from(ctx),))
+            .map_err(|error| {
             let kind = if Instant::now() >= deadline
                 || cancellation
                     .as_ref()
@@ -617,9 +614,14 @@ fn execute_compiled_handler(
     // The decode recurses to build the document, so the result is bounded
     // while it is still a Rhai value; the decoded document then passes the
     // shared bound every backend's outcome passes.
-    let output_budget = handler.limits.as_ref().map_or(action.maximum_snapshot_bytes, |limits| {
-        action.maximum_snapshot_bytes.min(limits.maximum_output_bytes)
-    });
+    let output_budget = handler
+        .limits
+        .as_ref()
+        .map_or(action.maximum_snapshot_bytes, |limits| {
+            action
+                .maximum_snapshot_bytes
+                .min(limits.maximum_output_bytes)
+        });
     crate::action_outcome::bound_rhai_result(&result, output_budget)?;
     let document = crate::action_outcome::rhai_document(result);
     crate::action_outcome::bound_document(&document, output_budget)?;

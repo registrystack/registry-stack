@@ -216,7 +216,7 @@ async fn receive(
     };
     let Some(delivery) = inbox.deliveries.get(&(
         record["eventType"].as_str().unwrap_or_default().to_owned(),
-        record["entity"].as_str().unwrap_or_default().to_owned(),
+        record["recordType"].as_str().unwrap_or_default().to_owned(),
     )) else {
         return (
             StatusCode::UNAUTHORIZED,
@@ -341,10 +341,9 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
     let object = data
         .as_object()
         .context("webhook envelope data must be an object")?;
-    let lifecycle = data["trigger"] == "request-lifecycle";
-    if object.len() != if lifecycle { 7 } else { 6 }
+    if object.len() != 6
         || ![
-            "entity",
+            "recordType",
             "recordId",
             "revision",
             "trigger",
@@ -353,16 +352,15 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         ]
         .iter()
         .all(|field| object.contains_key(*field))
-        || (lifecycle && !data["request"].is_object())
         || !data["values"].is_object()
         || data["revision"].as_u64().is_none_or(|n| n == 0)
         || !data["packageRevision"].as_str().is_some_and(digest)
-        || !data["entity"]
+        || !data["recordType"]
             .as_str()
             .is_some_and(|entity| !entity.is_empty() && entity.len() <= 64)
         || !matches!(
             data["trigger"].as_str(),
-            Some("created" | "patched" | "tombstoned" | "request-lifecycle")
+            Some("created" | "patched" | "tombstoned")
         )
         || !data["recordId"].as_str().is_some_and(|id| {
             uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id)
@@ -378,7 +376,7 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         .0;
     let prefix = format!(
         "urn:breg:event-schema:{registry}:{}:{}:",
-        data["entity"]
+        data["recordType"]
             .as_str()
             .context("webhook entity is invalid")?,
         signed[3]
@@ -387,7 +385,7 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         bail!("webhook schema does not match event metadata");
     }
     let record = json!({
-        "eventId":signed[1],"eventType":signed[3],"entity":data["entity"],
+        "eventId":signed[1],"eventType":signed[3],"recordType":data["recordType"],
         "trigger":data["trigger"],"deliveryId":null,"idempotencyKey":idempotency_key,
         "generation":generation,"attempt":attempt,"status":"received",
         "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":data["values"]
@@ -494,7 +492,7 @@ pub(super) fn report(root: &Path, include_payload: bool) -> Result<Value> {
                         key.as_str(),
                         "eventId"
                             | "eventType"
-                            | "entity"
+                            | "recordType"
                             | "trigger"
                             | "deliveryId"
                             | "destinationId"
@@ -536,45 +534,17 @@ mod tests {
         if vocabulary {
             field = json!({"id":"label", "type":"vocabulary-code", "vocabulary":"labels", "values":["projected-value-canary", "ready"], "classification":"internal"});
         }
-        let mut project = json!({
+        let project = json!({
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
             "project":{"id":"example", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
             "package":{"sourceRevision":"test"},
-            "entities":[{
+            "datasets":[{"id":"test-dataset","display":{"label":"Test dataset"}}],
+            "recordTypes":[{
                 "id":"record", "primaryDataset":"test-dataset", "route":"records", "mutationMode":"mutable",
-                "classification":"internal", "fields":[field],
+                "fields":[field],
                 "hooks":[{"phase":"after","id":"record-created-v1", "trigger":trigger, "projection":["label"], "handler":{"type":"url","destinationId":"local-hook"}}]
             }]
         });
-        if trigger == EventTrigger::RequestLifecycle {
-            project["entities"][0]["fields"].as_array_mut().unwrap().push(json!({
-                "id":"target", "type":"reference", "target":"target-record", "required":true, "classification":"internal"
-            }));
-            project["entities"][0]["fields"].as_array_mut().unwrap().push(json!({
-                "id":"proposed-label", "type":"string", "maximumLength":64, "required":true, "classification":"internal"
-            }));
-            project["entities"][0]["changeRequest"] = json!({
-                "effects":[{"target":{"fromField":"target"}, "operation":"patch", "set":{"label":{"fromField":"proposed-label"}}}],
-                "review":{"type":"required","authority":"casework", "policyId":"record-change"},
-                "onApproved":{"mode":"manual"}
-            });
-            project["entities"].as_array_mut().unwrap().push(json!({
-                "id":"target-record", "primaryDataset":"test-dataset", "route":"target-records", "mutationMode":"mutable", "classification":"internal",
-                "changeControl":{"requiredFor":["patch"]},
-                "fields":[{"id":"label", "type":"string", "maximumLength":64, "classification":"internal"}]
-            }));
-        }
-        if trigger == EventTrigger::RequestLifecycle {
-            project["accessProfiles"] = json!([{
-                "id":"operator", "default":true, "principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                "permissions":{"entities":[{
-                    "entity":"record", "operations":["create", "get", "list", "patch", "submit-request", "apply-request"],
-                    "readableFields":["label", "target", "proposed-label"],
-                    "writableFields":["label", "target", "proposed-label"], "rowBoundaries":"unrestricted",
-                    "applyTargets":[{"entity":"target-record", "rowBoundaries":"unrestricted"}]
-                }]}
-            }]);
-        }
         let project = parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap();
         let compiled = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
         let mut delivery = Delivery::compile(
@@ -647,7 +617,7 @@ mod tests {
     /// The product projection a delivered envelope carries as `data`.
     fn event_data() -> Value {
         json!({
-            "entity":"record", "recordId":"00000000-0000-4000-8000-000000000002",
+            "recordType":"record", "recordId":"00000000-0000-4000-8000-000000000002",
             "revision":1,"trigger":"created","packageRevision":format!("sha256:{}", "0".repeat(64)),
             "values":{"label":"projected-value-canary"}
         })
@@ -969,62 +939,6 @@ mod tests {
             let (headers, body) = signed(1, 1);
             assert_eq!(request(port, headers, body), 204);
         }
-    }
-
-    #[test]
-    fn signed_lifecycle_requests_must_match_the_complete_generated_contract() {
-        let (root, port, _receiver) = fixture_with_contract(EventTrigger::RequestLifecycle, false);
-        let valid = json!({
-            "proposalVersion":1, "workflowRevision":2, "transition":"submit",
-            "fromState":"draft", "toState":"submitted",
-            "effectDigest":null, "deduplicationKey":"sha256:synthetic",
-            "reasonPresent":false
-        });
-        let mut invalid = vec![json!({})];
-        let mut missing_presence = valid.clone();
-        missing_presence
-            .as_object_mut()
-            .unwrap()
-            .remove("reasonPresent");
-        invalid.push(missing_presence);
-        for (field, value) in [
-            ("proposalVersion", json!("one")),
-            ("workflowRevision", json!(0)),
-            ("transition", json!(false)),
-            ("fromState", json!(1)),
-            ("toState", json!([])),
-            ("effectDigest", json!(7)),
-            ("deduplicationKey", Value::Null),
-            ("reasonPresent", Value::Null),
-            ("reasonPresent", json!(true)),
-            ("reason", json!("not present")),
-            ("undeclared", json!(true)),
-        ] {
-            let mut request = valid.clone();
-            request[field] = value;
-            invalid.push(request);
-        }
-        for request_body in invalid {
-            let mut data = event_data();
-            data["trigger"] = json!("request-lifecycle");
-            data["request"] = request_body;
-            let (headers, body) = signed_data(1, 1, data);
-            assert_eq!(request(port, headers, body), 401);
-            assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
-        }
-        let mut data = event_data();
-        data["trigger"] = json!("request-lifecycle");
-        data["request"] = valid;
-        data["values"]["label"] = Value::Null;
-        let (headers, body) = signed_data(1, 1, data);
-        assert_eq!(request(port, headers, body), 204);
-        assert_eq!(
-            report(root.path(), true).unwrap()["deliveries"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
     }
 
     #[test]

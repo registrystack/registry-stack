@@ -70,7 +70,6 @@ def operation(identifier: str, method: str, path: str, kind: str, request: dict)
         "titleFields": ["legal-name"],
         "fields": [field()],
         "readableFields": ["legal-name"],
-        "readableRequestFields": [],
         "createWritableFields": [],
         "patchWritableFields": [],
         "selectors": [],
@@ -144,7 +143,6 @@ def metadata() -> dict:
         {"fieldNames": "api", "queryParameters": [], "body": "none"},
     )
     get["readPath"] = {"id": "related-companies", "label": "Related companies"}
-    get["readableRequestFields"] = ["reason"]
     get["selectors"] = [
         {
             "id": "by-name",
@@ -194,7 +192,7 @@ def metadata() -> dict:
         "revision": REVISION,
         "metadataVersion": "1",
         "futureDescription": {"label": "Future registry description"},
-        "entities": [
+        "recordTypes": [
             {
                 "id": "company",
                 "datasetIdentifier": "legal-entities",
@@ -205,72 +203,18 @@ def metadata() -> dict:
                 ],
                 "readableFields": ["legal-name"],
                 "schema": "/v1/schemas/company",
-                "changeRequest": {
-                    "planner": {
-                        "kind": "rhai",
-                        "abi": "registry.change-request-plan/v1",
-                        "limits": {
-                            "maximumTargets": 16,
-                            "maximumFieldMutations": 128,
-                            "maximumSnapshotBytes": 2_097_152,
-                            "maximumSourceBytes": 65_536,
-                            "maximumOperations": 100_000,
-                            "maximumCallDepth": 32,
-                            "maximumExpressionDepth": 64,
-                            "maximumStringBytes": 16_384,
-                            "maximumArrayItems": 256,
-                            "maximumMapEntries": 256,
-                            "maximumModules": 0,
-                        },
-                        "possibleWriteCount": 2,
-                        "possibleWriteOperations": ["patch"],
-                        "writes": [
-                            {
-                                "target": {
-                                    "entity": "company",
-                                    "fromField": "legal-name",
-                                },
-                                "operation": "patch",
-                                "fields": ["legal-name"],
-                            }
-                        ],
-                    },
-                    "effects": [
-                        {
-                            "id": "branch",
-                            "operation": "create",
-                            "target": {"entity": "company"},
-                            "set": [{"field": "legal-name"}],
-                            "clear": [],
-                        },
-                        {
-                            "id": "rename",
-                            "operation": "patch",
-                            "target": {"entity": "company", "fromEffect": "branch"},
-                            "set": [{"field": "legal-name", "fromField": "legal-name"}],
-                            "clear": [],
-                        },
-                    ],
-                    "review": {
-                        "type": "required",
-                        "authority": "casework",
-                        "policyId": "address-review",
-                    },
-                    "onApproved": {
-                        "mode": "automatic",
-                        "executor": "breg-worker",
-                    },
-                    "application": {"preconditions": {"request": []}},
-                },
             }
         ],
         "operations": [get, tombstone, batch],
         "actions": [
             {
                 "id": "rename-company",
+                "apiName": "renameCompany",
+                "display": {},
                 "route": "/v1/actions/rename-company",
                 "conditionRoute": "/v1/actions/rename-company/target-conditions",
-                "contractFingerprint": ACTION_REVISION,
+                "revision": ACTION_REVISION,
+                "execution": {"mode": "immediate"},
                 "inputMode": "fixed",
                 "maximumInputStringBytes": None,
                 "inputs": [
@@ -300,7 +244,7 @@ def metadata() -> dict:
                 ],
                 "requiredConditionKeys": ["targetId"],
                 "resultEffects": [
-                    {"effect": "company", "entity": "company", "operation": "patch"}
+                    {"effect": "company", "recordType": "company", "operation": "patch"}
                 ],
                 "access": {"selectedProfile": "company-writer"},
                 "routes": {
@@ -387,7 +331,7 @@ class MutationParityTests(unittest.TestCase):
                             "applicationId": APPLICATION_ID,
                             "results": {
                                 "company": {
-                                    "entity": "company",
+                                    "recordType": "company",
                                     "recordId": RECORD_ID,
                                     "revision": 2,
                                 }
@@ -457,7 +401,7 @@ class MutationParityTests(unittest.TestCase):
 
     def test_metadata_descriptors_and_immediate_action(self) -> None:
         get = self.contract.operations[0]
-        self.assertEqual(get["readable_request_fields"], ["reason"])
+        self.assertEqual(get["source_record_type"], "company")
         self.assertEqual(get["selectors"][0]["request_fields"], ["legalName"])
         self.assertEqual(get["read_path"]["id"], "related-companies")
         self.assertEqual(get["fields"][0]["code_labels"], {"active": "Active"})
@@ -468,49 +412,6 @@ class MutationParityTests(unittest.TestCase):
         self.assertEqual(
             get["query"]["spatialQueries"]["bbox"]["coordinateReferenceSystem"],
             "CRS84",
-        )
-        capability = self.contract.change_request_capability("company")
-        self.assertEqual(capability["planner"]["kind"], "rhai")
-        self.assertEqual(capability["planner"]["limits"]["maximum_modules"], 0)
-        self.assertEqual(
-            capability["planner"]["writes"],
-            [
-                {
-                    "target": {"entity": "company", "from_field": "legal-name"},
-                    "operation": "patch",
-                    "fields": ["legal-name"],
-                }
-            ],
-        )
-        self.assertEqual(
-            capability["effects"],
-            [
-                {
-                    "id": "branch",
-                    "operation": "create",
-                    "target": {"entity": "company"},
-                    "set": [{"field": "legal-name"}],
-                    "clear": [],
-                },
-                {
-                    "id": "rename",
-                    "operation": "patch",
-                    "target": {"entity": "company", "from_effect": "branch"},
-                    "set": [{"field": "legal-name", "from_field": "legal-name"}],
-                    "clear": [],
-                },
-            ],
-        )
-        self.assertEqual(
-            capability["review"],
-            {"type": "required", "authority": "casework", "policy_id": "address-review"},
-        )
-        self.assertEqual(
-            capability["on_approved"],
-            {"mode": "automatic", "executor": "breg-worker"},
-        )
-        self.assertEqual(
-            capability["application"], {"preconditions": {"request": []}}
         )
         self.assertEqual(self.contract.actions[0]["input_mode"], "fixed")
         batch_operation = next(

@@ -13,7 +13,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
-    BRegComplete, BRegIdempotencyKey, BRegActionBinding, BaseRegistryClient,
+    BRegActionBinding, BRegComplete, BRegIdempotencyKey, BaseRegistryClient,
     BaseRegistryClientError,
 };
 
@@ -208,7 +208,7 @@ struct ActionRequestBinding {
     registry_revision: String,
     action_identifier: String,
     access_profile: String,
-    contract_fingerprint: String,
+    action_revision: String,
     mode: crate::BRegActionMode,
     path: String,
 }
@@ -266,7 +266,7 @@ impl ActionRequestBinding {
             registry_revision: action.registry_revision().to_owned(),
             action_identifier: action.action_identifier().to_owned(),
             access_profile: action.access_profile().to_owned(),
-            contract_fingerprint: action.contract_fingerprint().to_owned(),
+            action_revision: action.definition_revision().to_owned(),
             mode: action.mode(),
             path: action.invoke_path().to_owned(),
         }
@@ -500,13 +500,24 @@ impl BaseRegistryClient {
         if action.mode() != crate::BRegActionMode::Proposal {
             return Err(action_recovery_refusal());
         }
-        let raw = self.execute_action_start(action.invoke_path(), action.access_profile(),
-            request.body.to_vec(), idempotency_key).await?;
+        let raw = self
+            .execute_action_start(
+                action.invoke_path(),
+                action.access_profile(),
+                request.body.to_vec(),
+                idempotency_key,
+            )
+            .await?;
         let proposal = crate::BRegProposal::from_slice(raw.value.as_bytes())?;
-        if proposal.action_id() != action.action_identifier() {
+        if proposal.action_id() != action.action_identifier()
+            || proposal.action_revision() != action.definition_revision()
+        {
             return Err(action_recovery_refusal());
         }
-        Ok(BRegComplete { value: proposal.bind(self.source_binding()), metadata: raw.metadata })
+        Ok(BRegComplete {
+            value: proposal.bind_profile(self.source_binding(), action.access_profile())?,
+            metadata: raw.metadata,
+        })
     }
 
     fn validate_action_request(
@@ -595,8 +606,8 @@ fn decode_conditions(
     action: &BRegActionBinding,
     request: &BRegActionTargetConditionsRequest,
 ) -> Result<BRegActionTargetConditions, BRegActionError> {
-    let value = crate::strict_json::from_slice(bytes)
-        .map_err(|_| BRegActionError::InvalidResponse)?;
+    let value =
+        crate::strict_json::from_slice(bytes).map_err(|_| BRegActionError::InvalidResponse)?;
     let object = value
         .as_object()
         .filter(|object| object.len() == 1)
@@ -643,8 +654,8 @@ fn decode_receipt(
     bytes: &[u8],
     action: &BRegActionBinding,
 ) -> Result<BRegActionReceipt, BRegActionError> {
-    let value = crate::strict_json::from_slice(bytes)
-        .map_err(|_| BRegActionError::InvalidResponse)?;
+    let value =
+        crate::strict_json::from_slice(bytes).map_err(|_| BRegActionError::InvalidResponse)?;
     let object = value
         .as_object()
         .filter(|object| object.len() == 3)
@@ -733,10 +744,7 @@ fn valid_condition(value: &str) -> bool {
             .all(|byte| matches!(byte, 0x21 | 0x23..=0x7e))
 }
 
-fn encode_bounded(
-    value: &impl Serialize,
-    maximum_bytes: u64,
-) -> Result<Vec<u8>, BRegActionError> {
+fn encode_bounded(value: &impl Serialize, maximum_bytes: u64) -> Result<Vec<u8>, BRegActionError> {
     let body = serde_json::to_vec(value).map_err(|_| BRegActionError::BodyEncoding)?;
     if u64::try_from(body.len()).map_or(true, |length| length > maximum_bytes) {
         return Err(BRegActionError::BodyTooLarge);
@@ -1035,7 +1043,6 @@ mod tests {
                 "id": "update-item", "apiName":"updateItem", "revision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "display":{}, "execution":{"mode":"immediate"},
                 "route": "/v1/actions/update-item",
                 "conditionRoute": "/v1/actions/update-item/target-conditions",
-                "contractFingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "inputMode": input_mode,
                 "maximumInputStringBytes": maximum_string_bytes,
                 "inputs": [
@@ -1143,7 +1150,7 @@ mod tests {
             "/binding/source_binding",
             "/binding/access_profile",
             "/binding/registry_revision",
-            "/binding/contract_fingerprint",
+            "/binding/action_revision",
             "/binding/action_identifier",
         ] {
             let mut changed: Value = serde_json::from_slice(prepared.as_bytes()).unwrap();

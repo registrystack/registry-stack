@@ -17,9 +17,10 @@ use super::postgres_harness::TestDatabase;
 use registry_breg::api::{HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedRegistryIdentity,
-    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
-    PostgresSnapshotReadService, RegistryLockKey, RegistryStateTestIdentity,
+    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
+    PostgresRevisionReadService, PostgresSnapshotReadService, RegistryLockKey,
+    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
 use zeroize::Zeroizing;
@@ -65,6 +66,9 @@ pub struct ClientFixture {
     pub registry: Arc<registry_breg::CompiledRegistry>,
     pub identity: ExpectedRegistryIdentity,
     pub http: ClientHttp,
+    pub mutations: Arc<PostgresRecordMutationService>,
+    pub pool: registry_breg::postgres::RuntimePool,
+    pub audit_capture: registry_breg::audit::test_support::AuditCapture,
     service: Arc<HttpService>,
 }
 
@@ -72,6 +76,14 @@ impl ClientFixture {
     pub async fn start(
         registry: registry_breg::CompiledRegistry,
         claims: VerifiedRequestClaims,
+    ) -> Self {
+        Self::start_with_mutations(registry, claims, |mutations| mutations).await
+    }
+
+    pub async fn start_with_mutations(
+        registry: registry_breg::CompiledRegistry,
+        claims: VerifiedRequestClaims,
+        configure: impl FnOnce(PostgresRecordMutationService) -> PostgresRecordMutationService,
     ) -> Self {
         assert!(
             !registry.ddl().requires_postgis,
@@ -106,10 +118,9 @@ impl ClientFixture {
         migration_task.abort();
         let pool = database.runtime_config.build_pool().unwrap();
         let lock_key = RegistryLockKey::derive(registry.registry_id()).unwrap();
-        let audit = registry_breg::audit::test_support::capturing(
+        let (audit, audit_capture) = registry_breg::audit::test_support::capturing(
             AuditProfile::production_from_secret_bytes(vec![0x61; 32].into()).unwrap(),
-        )
-        .0;
+        );
         let cursors = Arc::new(
             CursorCodec::new(Zeroizing::new(vec![0x62; 32]), Duration::from_secs(300)).unwrap(),
         );
@@ -122,7 +133,7 @@ impl ClientFixture {
             audit.clone(),
             cursors.clone(),
         );
-        let mutations = PostgresRecordMutationService::new(
+        let mutations = Arc::new(configure(PostgresRecordMutationService::new(
             pool.clone(),
             registry.clone(),
             identity.clone(),
@@ -130,7 +141,7 @@ impl ClientFixture {
             lock_key,
             Duration::from_secs(2),
             audit.clone(),
-        );
+        )));
         let revisions = PostgresRevisionReadService::new(
             pool.clone(),
             registry.clone(),
@@ -140,7 +151,7 @@ impl ClientFixture {
             audit.clone(),
         );
         let snapshots = PostgresSnapshotReadService::new(
-            pool,
+            pool.clone(),
             registry.clone(),
             identity.clone(),
             lock_key,
@@ -158,7 +169,7 @@ impl ClientFixture {
             Arc::new(Ready),
             cursors,
         )
-        .with_postgres_mutations(Arc::new(mutations))
+        .with_postgres_mutations(Arc::clone(&mutations))
         .with_postgres_revisions(Arc::new(revisions))
         .with_snapshots(Arc::new(snapshots));
         let service = Arc::new(service);
@@ -168,6 +179,9 @@ impl ClientFixture {
             registry,
             identity,
             http,
+            mutations,
+            pool,
+            audit_capture,
             service,
         }
     }
@@ -176,6 +190,19 @@ impl ClientFixture {
     /// that need a second caller over one database.
     pub async fn client_for(&self, claims: VerifiedRequestClaims) -> ClientHttp {
         ClientHttp::start(registry_breg::api::router(self.service.clone()), claims).await
+    }
+
+    pub async fn client_with_mutations(
+        &self,
+        claims: VerifiedRequestClaims,
+        mutations: PostgresRecordMutationService,
+    ) -> ClientHttp {
+        let service = Arc::new(
+            (*self.service)
+                .clone()
+                .with_postgres_mutations(Arc::new(mutations)),
+        );
+        ClientHttp::start(registry_breg::api::router(service), claims).await
     }
 
     pub async fn finish(self) {

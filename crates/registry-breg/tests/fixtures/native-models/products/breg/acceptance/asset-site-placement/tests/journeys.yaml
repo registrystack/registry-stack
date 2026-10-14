@@ -1,0 +1,130 @@
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: asset-and-site-caller-surfaces
+    steps:
+      - id: create-asset
+        recordType: asset-item
+        accessProfile: asset-operator
+        claims:
+          principal: synthetic-asset-operator
+          purpose: asset-management
+        request:
+          type: create
+          data:
+            asset-code: ASSET-SYNTH-001
+            label: Synthetic water pump
+            asset-class: equipment
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            asset-code: ASSET-SYNTH-001
+            label: Synthetic water pump
+            asset-class: equipment
+        capture: first-asset
+      - id: planner-gets-asset
+        recordType: asset-item
+        accessProfile: site-planner
+        claims:
+          principal: synthetic-site-planner
+          purpose: site-planning
+        request:
+          type: get
+          recordCapture: first-asset
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            asset-code: ASSET-SYNTH-001
+            label: Synthetic water pump
+      - id: planner-lists-assets
+        recordType: asset-item
+        accessProfile: site-planner
+        claims:
+          principal: synthetic-site-planner
+          purpose: site-planning
+        request:
+          type: list
+        expect:
+          outcome: success
+          status: 200
+          count: 1
+      - id: operator-renames-asset
+        recordType: asset-item
+        accessProfile: asset-operator
+        claims:
+          principal: synthetic-asset-operator
+          purpose: asset-management
+        request:
+          type: patch
+          recordCapture: first-asset
+          etagCapture: first-asset
+          changes:
+            - field: label
+              value: Synthetic irrigation pump
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            asset-code: ASSET-SYNTH-001
+            label: Synthetic irrigation pump
+            asset-class: equipment
+        capture: renamed-asset
+      - id: create-site
+        recordType: asset-site
+        accessProfile: asset-operator
+        claims:
+          principal: synthetic-asset-operator
+          purpose: asset-management
+        request:
+          type: create
+          data:
+            site-code: SITE-SYNTH-001
+            label: Synthetic northern depot
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            site-code: SITE-SYNTH-001
+            label: Synthetic northern depot
+        capture: first-site
+      - id: planner-gets-site
+        recordType: asset-site
+        accessProfile: site-planner
+        claims:
+          principal: synthetic-site-planner
+          purpose: site-planning
+        request:
+          type: get
+          recordCapture: first-site
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            site-code: SITE-SYNTH-001
+            label: Synthetic northern depot
+      - id: planner-lists-sites
+        recordType: asset-site
+        accessProfile: site-planner
+        claims:
+          principal: synthetic-site-planner
+          purpose: site-planning
+        request:
+          type: list
+        expect:
+          outcome: success
+          status: 200
+          count: 1
+      - id: planner-without-purpose-is-concealed
+        recordType: asset-item
+        accessProfile: site-planner
+        claims:
+          principal: synthetic-site-planner
+        request:
+          type: get
+          recordCapture: renamed-asset
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found

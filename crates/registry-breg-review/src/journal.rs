@@ -59,7 +59,7 @@ pub(crate) struct Operation {
     action: Action,
     client: String,
     citizen: Option<String>,
-    change_request_id: Option<String>,
+    proposal_id: Option<String>,
 }
 
 /// A pseudonym could not be derived.
@@ -91,23 +91,23 @@ impl Journal {
         &self,
         action: Action,
         citizen: Option<&str>,
-        change_request_id: Option<&str>,
+        proposal_id: Option<&str>,
     ) -> Result<Operation, AuditUnavailable> {
         let citizen = citizen.map(str::to_owned);
-        let change_request_id = change_request_id.map(str::to_owned);
+        let proposal_id = proposal_id.map(str::to_owned);
         let request_record = record(
             action,
             None,
             &self.client,
             citizen.as_deref(),
-            change_request_id.as_deref(),
+            proposal_id.as_deref(),
         );
         let unfinished = record(
             action,
             Some("unfinished"),
             &self.client,
             citizen.as_deref(),
-            change_request_id.as_deref(),
+            proposal_id.as_deref(),
         );
         let request = self
             .writer
@@ -123,7 +123,7 @@ impl Journal {
             action,
             client: self.client.clone(),
             citizen,
-            change_request_id,
+            proposal_id,
         })
     }
 
@@ -146,7 +146,7 @@ impl Operation {
             Some(outcome.as_str()),
             &self.client,
             citizen,
-            self.change_request_id.as_deref(),
+            self.proposal_id.as_deref(),
         );
         self.request.finish(response).await
     }
@@ -157,7 +157,7 @@ fn record(
     outcome: Option<&str>,
     client: &str,
     citizen: Option<&str>,
-    change_request_id: Option<&str>,
+    proposal_id: Option<&str>,
 ) -> Value {
     let mut record = json!({
         "event": "breg-review",
@@ -170,8 +170,8 @@ fn record(
     if let Some(citizen) = citizen {
         record["principalPseudonym"] = Value::from(citizen);
     }
-    if let Some(change_request_id) = change_request_id {
-        record["changeRequestId"] = Value::from(change_request_id);
+    if let Some(proposal_id) = proposal_id {
+        record["proposalId"] = Value::from(proposal_id);
     }
     record
 }
@@ -261,7 +261,7 @@ mod tests {
                     | "outcome"
                     | "clientPseudonym"
                     | "principalPseudonym"
-                    | "changeRequestId"
+                    | "proposalId"
             )));
         }
     }

@@ -1608,9 +1608,12 @@ def load_harness(path: Path) -> dict[str, dict[str, Any]]:
             raise HarnessError(f"{path.name}: {format_id}: `prepare` is not a list of commands")
         init = harness.get("init")
         if init is not None and not (
-            isinstance(init, dict) and set(init) == {"command", "file"} and all(isinstance(v, str) for v in init.values())
+            isinstance(init, dict)
+            and {"command", "file"} <= set(init) <= {"command", "file", "association"}
+            and all(isinstance(v, str) for v in init.values())
+            and ("association" not in init or (format_id == "breg/project" and init["association"] == "native-kind"))
         ):
-            raise HarnessError(f"{path.name}: {format_id}: `init` needs exactly `command` and `file`, both text")
+            raise HarnessError(f"{path.name}: {format_id}: `init` needs command and file; only breg/project may select association: native-kind")
     return formats
 
 
@@ -1857,6 +1860,33 @@ def modeline_problems(path: Path, name: str, schema_id: str | None) -> list[str]
     return [f"the modeline in {name} names neither the format's schema `$id` nor a local copy of that schema"]
 
 
+def native_kind_schema_problems(path: Path, name: str, kind: str | None, schema_path: str | None, schema_id: str | None) -> list[str]:
+    """Bind BReg init's native envelope to the schema selected by its editor kind catalog.
+
+    The native LSP catalog recognizes BRegProject and its exact project version;
+    no modeline or generated runtime scaffold is needed for that association.
+    Other products retain their existing modeline proof.
+    """
+    if not path.is_file():
+        return [f"init wrote no {name}"]
+    if schema_path is None or schema_id is None:
+        return ["the native kind association needs a registered schema"]
+    document = load_yaml(path)
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    if not isinstance(schema, dict) or schema.get("$id") != schema_id:
+        return ["the registered schema does not declare its registered identifier"]
+    properties = schema.get("properties", {})
+    if kind != "BRegProject" or properties.get("kind", {}).get("const") != kind:
+        return ["the native editor kind is not bound to the registered schema"]
+    if not isinstance(document, dict):
+        return ["init did not write a native project mapping"]
+    for member in ("apiVersion", "kind"):
+        expected = properties.get(member, {}).get("const")
+        if expected is None or document.get(member) != expected:
+            return [f"init's {member} does not select the registered native schema"]
+    return []
+
+
 def run_init_cell(fmt: Format, bin_dir: Path) -> list[str]:
     """Run the format's init command in a fresh directory and check the modeline of the file it writes."""
     init = fmt.harness["init"]
@@ -1869,7 +1899,10 @@ def run_init_cell(fmt: Format, bin_dir: Path) -> list[str]:
         code, stdout, stderr = run_command(argv, work, check_environment(bin_dir))
         problems = exit_problem(code, 0, stderr, "init: ") + marker_problems(stdout, stderr)
         if code == 0:
-            problems += modeline_problems(work / "init" / init["file"], init["file"], fmt.schema_id)
+            if init.get("association") == "native-kind":
+                problems += native_kind_schema_problems(work / "init" / init["file"], init["file"], fmt.kind, fmt.schema, fmt.schema_id)
+            else:
+                problems += modeline_problems(work / "init" / init["file"], init["file"], fmt.schema_id)
         return list(dict.fromkeys(sanitize(problem, str(work)) for problem in problems))
     finally:
         remove_tree(work)

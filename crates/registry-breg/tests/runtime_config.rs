@@ -10,22 +10,21 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::event_destination::EventDestinationActivationError;
 use registry_breg::runtime_config::{
-    load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
-    parse_runtime_config_with_env, RuntimeConfigError, RUNTIME_CONFIG_API_VERSION,
-    RUNTIME_CONFIG_KIND,
+    RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND, RuntimeConfigError, load_runtime_config,
+    load_runtime_config_with_env, parse_runtime_config, parse_runtime_config_with_env,
 };
-use registry_platform_config::package::{write_sum_file, PackageLimits};
+use registry_platform_config::package::{PackageLimits, write_sum_file};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::destination::{
     DestinationDnsFamily, DestinationSendError, EventDeliveryHeaders,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const DATABASE_URL_CANARY: &str =
     "postgresql://registry_runtime:database-url-canary@db.example/registry";
@@ -387,11 +386,11 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
             },
         )
         .collect::<Vec<Value>>();
-    let project = json!({
+    let project = json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "runtime-event-destinations", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "entities": [{
+        "recordTypes": [{
             "id": "case",
             "primaryDataset": "test-dataset",
             "route": "cases",
@@ -1565,77 +1564,6 @@ fn governed_unknown_keys_are_refused_before_they_become_runtime() {
     raw.push_str("entities: []\n");
     let error = parse_runtime_config_with_env(&raw, env_lookup).expect_err("governed key refused");
     assert_eq!(reader_refusal(&error), ("config.unknown-key", "/entities"));
-}
-
-#[test]
-fn review_executors_are_strict_ordinary_self_http_bindings() {
-    let fixture = RuntimeFixture::new();
-    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let valid = format!(
-        "{base}reviewExecutors:\n  registry-automatic:\n    endpoint: https://registry.example/registry-a/\n    tokenRef: secret:file/automatic-executor-token\n    registryId: registry-a\n    accessProfile: automatic-applier\n"
-    );
-    parse_runtime_config_with_env(&valid, env_lookup).expect("strict HTTPS executor binding");
-    parse_runtime_config_with_env(
-        &valid.replace(
-            "https://registry.example/registry-a/",
-            "http://127.0.0.1:8080/registry-a/",
-        ),
-        env_lookup,
-    )
-    .expect("loopback executor binding");
-
-    for (invalid, expected) in [
-        (
-            valid.replace(
-                "https://registry.example/registry-a/",
-                "http://registry.example/registry-a/",
-            ),
-            Refusal::Runtime(RuntimeConfigError::InvalidBinding),
-        ),
-        (
-            valid.replace("    accessProfile: automatic-applier\n", ""),
-            READER,
-        ),
-        (
-            valid.replace(
-                "    accessProfile: automatic-applier\n",
-                "    accessProfile: automatic-applier\n    authority: internal\n",
-            ),
-            READER,
-        ),
-    ] {
-        assert_eq!(
-            refusal(
-                parse_runtime_config_with_env(&invalid, env_lookup)
-                    .expect_err("unsafe executor binding refused")
-            ),
-            expected
-        );
-    }
-}
-
-#[test]
-fn review_executors_accept_exactly_one_refreshing_or_static_credential() {
-    let fixture = RuntimeFixture::new();
-    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let credential = "    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientIdRef: secret:file/executor-client-id\n      clientAssertionKeyRef: secret:file/executor-private-jwk\n      assertionAudience: https://issuer.example\n      resource: urn:registry:primary\n      scopes: [requests:apply]\n";
-    let refreshing = format!("{base}reviewExecutors:\n  applier:\n    endpoint: https://registry.example/\n    registryId: registry-a\n    accessProfile: automatic-applier\n{credential}");
-    parse_runtime_config_with_env(&refreshing, env_lookup).expect("renewable executor binding");
-    for invalid in [
-        refreshing.replace(credential, ""),
-        refreshing.replace(
-            "    privateKeyJwt:",
-            "    tokenRef: secret:file/opaque-token\n    privateKeyJwt:",
-        ),
-        refreshing.replace("scopes: [requests:apply]", "scopes: []"),
-        refreshing.replace("resource: urn:registry:primary", "resource: not-a-resource"),
-    ] {
-        assert_eq!(
-            parse_runtime_config_with_env(&invalid, env_lookup)
-                .expect_err("ambiguous or invalid executor auth"),
-            RuntimeConfigError::InvalidBinding
-        );
-    }
 }
 
 #[test]
@@ -4457,7 +4385,9 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
             .unwrap(),
         AttachmentStorage::Database
     ));
-    let invalid = format!("{base}\nattachmentStorage:\n  type: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n");
+    let invalid = format!(
+        "{base}\nattachmentStorage:\n  type: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n"
+    );
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentStorage);
     assert_eq!(path_of(&error), "/attachmentStorage");
@@ -4488,7 +4418,9 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
         .unwrap(),
         AttachmentVerification::Disabled
     ));
-    let invalid = format!("{base}\nattachmentVerification:\n  type: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n");
+    let invalid = format!(
+        "{base}\nattachmentVerification:\n  type: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
+    );
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentVerification);
     assert_eq!(path_of(&error), "/attachmentVerification");
@@ -4517,7 +4449,9 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
         "field encryption is unconfigured by default"
     );
 
-    let transit = format!("{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n");
+    let transit = format!(
+        "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n"
+    );
     let config = parse_runtime_config(&transit).unwrap();
     assert!(matches!(
         config.field_encryption().provider(),
@@ -4530,7 +4464,9 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     );
     assert!(!rendered.contains("breg-field-dek"), "no key name in debug");
 
-    let local = format!("{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/breg-field-dek\n");
+    let local = format!(
+        "{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/breg-field-dek\n"
+    );
     let config = parse_runtime_config(&local).unwrap();
     assert!(matches!(
         config.field_encryption().provider(),
@@ -4539,9 +4475,13 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
 
     for invalid in [
         // A relative socket path never reaches a provider.
-        format!("{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: transit.sock\n    mount: transit\n    keyName: breg-field-dek\n"),
+        format!(
+            "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: transit.sock\n    mount: transit\n    keyName: breg-field-dek\n"
+        ),
         // The local data key must come from a secret file.
-        format!("{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:env/BREG_FIELD_DEK\n"),
+        format!(
+            "{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:env/BREG_FIELD_DEK\n"
+        ),
     ] {
         let error = parse_runtime_config(&invalid).unwrap_err();
         assert_eq!(error, RuntimeConfigError::InvalidFieldEncryption);
@@ -4551,7 +4491,9 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     // The request timeout stays above zero and at or below the provider
     // maximum, refused at decode where the member is.
     for timeout in ["0", "30001"] {
-        let invalid = format!("{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: {timeout}\n");
+        let invalid = format!(
+            "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: {timeout}\n"
+        );
         let error = parse_runtime_config(&invalid).unwrap_err();
         assert_eq!(
             reader_refusal(&error),

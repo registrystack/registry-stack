@@ -1,0 +1,105 @@
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+- id: farmer-evidence-registration
+  steps:
+  - id: register-category
+    action: register-landholding
+    accessProfile: landholding-registrar
+    claims:
+      principal: synthetic-landholding-registrar
+      scopes:
+      - registry:landholding:register
+      purpose: land-registration
+    request:
+      type: invoke
+      idempotencyKey: schema-landholding-001
+      input:
+        farmerPrefix: ' TH '
+        farmerNumber: ' 00042 '
+        parcelCode: SCHEMA-P-001
+        includeCategory: true
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      landholding: registered-landholding
+  - id: read-canonical-fields
+    recordType: landholding
+    accessProfile: landholding-reader
+    claims:
+      principal: synthetic-landholding-reader
+      scopes:
+      - registry:landholding:read
+      purpose: land-registration-audit
+    request:
+      type: get
+      recordCapture: registered-landholding
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        farmerNumber: TH-00042
+        parcelCode: SCHEMA-P-001
+        farmerCategory: smallholder
+  - id: replay
+    action: register-landholding
+    accessProfile: landholding-registrar
+    claims:
+      principal: synthetic-landholding-registrar
+      scopes:
+      - registry:landholding:register
+      purpose: land-registration
+    request:
+      type: invoke
+      idempotencyKey: schema-landholding-001
+      input:
+        farmerPrefix: ' TH '
+        farmerNumber: ' 00042 '
+        parcelCode: SCHEMA-P-001
+        includeCategory: true
+    expect:
+      outcome: success
+      status: 200
+  - id: blank
+    action: register-landholding
+    accessProfile: landholding-registrar
+    claims:
+      principal: synthetic-landholding-registrar
+      scopes:
+      - registry:landholding:register
+      purpose: land-registration
+    request:
+      type: invoke
+      idempotencyKey: schema-blank
+      input:
+        farmerPrefix: ' TH '
+        farmerNumber: ' '
+        parcelCode: SCHEMA-P-001
+        includeCategory: true
+    expect:
+      outcome: refusal
+      status: 422
+      problemCode: action.refused
+      refusalCode: invalid-farmer-number
+  - id: inactive
+    action: register-landholding
+    accessProfile: landholding-registrar
+    claims:
+      principal: synthetic-landholding-registrar
+      scopes:
+      - registry:landholding:register
+      purpose: land-registration
+    request:
+      type: invoke
+      idempotencyKey: schema-inactive
+      input:
+        farmerPrefix: ' TH '
+        farmerNumber: '00043'
+        parcelCode: SCHEMA-INACTIVE
+        includeCategory: true
+    expect:
+      outcome: refusal
+      status: 422
+      problemCode: action.refused
+      refusalCode: farmer-inactive

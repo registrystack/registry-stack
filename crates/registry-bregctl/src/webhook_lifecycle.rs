@@ -124,7 +124,7 @@ pub(crate) fn sample(
         values.insert(field_id.clone(), value);
     }
     let data = json!({
-        "entity": delivery.entity_id,
+        "recordType": delivery.entity_id,
         "recordId": SAMPLE_RECORD_ID,
         "revision": 1,
         "trigger": trigger_name(delivery.trigger),
@@ -369,7 +369,6 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
-        EventTrigger::RequestLifecycle => "request-lifecycle",
     }
 }
 

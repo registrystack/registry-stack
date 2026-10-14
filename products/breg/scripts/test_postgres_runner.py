@@ -109,8 +109,8 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertEqual(default, explicit)
         self.assertEqual(expected, self.inventory(ordinary) + self.inventory(actions))
         self.assertFalse(self.inventory(ordinary) & self.inventory(actions))
-        self.assertEqual(6, len(ordinary))
-        self.assertEqual(7, len(default))
+        self.assertEqual(4, len(ordinary))
+        self.assertEqual(5, len(default))
         self.assertEqual([shlex.split(
             "test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_actions"
         )], actions)

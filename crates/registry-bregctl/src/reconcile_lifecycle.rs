@@ -123,6 +123,7 @@ pub(crate) fn run(
     let reconcile = |current, audit| {
         runtime
             .block_on(reconcile_failed_migration(ReconcileRequest {
+                proposal_activation_compatibility_inventory: None,
                 config: &connection,
                 target_package: &target,
                 current: &current,

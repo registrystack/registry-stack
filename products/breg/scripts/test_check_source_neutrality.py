@@ -209,7 +209,7 @@ class SourceNeutralityTests(unittest.TestCase):
             )
 
     def test_domain_metric_and_error_identifiers_are_rejected(self) -> None:
-        for value in ("registry.farmer.requests", "person.not_found"):
+        for value in ("registry.farmer.requests", "person.not_found", "inspection.failure"):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 source = root / "crates/registry-breg/src/lib.rs"

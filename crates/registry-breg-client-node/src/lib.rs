@@ -8,35 +8,27 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
 use napi_derive::napi;
 use registry_breg_client::{
-    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionInvocationRequest,
-    BRegActionTargetConditions as CoreActionTargetConditions, BRegActionTargetConditionsRequest,
-    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest,
-    BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
-    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus,
-    BRegBatchBinding, BRegBatchBuilder, BRegBatchRequest, BRegBoundingBox, BRegChangeContext,
-    BRegComplete, BRegContinuation, BRegContinuationProjection, BRegCreateBinding,
-    BRegCreateRequest, BRegCurrentContinuation, BRegCurrentContinuationProjection,
-    BRegCurrentListRequest, BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation,
-    BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest, BRegGeoJsonOptions,
-    BRegActionBinding, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
+    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionBinding,
+    BRegActionInvocationRequest, BRegActionTargetConditions as CoreActionTargetConditions,
+    BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
+    BRegAsOfListRequest, BRegBatchBinding, BRegBatchBuilder, BRegBatchRequest, BRegBoundingBox,
+    BRegChangeContext, BRegComplete, BRegContinuation, BRegContinuationProjection,
+    BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
+    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
+    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
+    BRegGeoJsonOptions, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
     BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
-    BRegIngestionRunRequest, 
-      
-    BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
-    BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest,
-    BRegPreparedAction as CorePreparedAction, BRegPreparedCreate as CorePreparedCreate,
-     BRegProblemCode, BRegProtocolFailure,
+    BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
+    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
+    BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
+    BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
-    BRegReleaseStatus, 
-     
-    
-     BRegSnapshotContinuation,
-    BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegStatisticsFormat,
-    BRegTombstoneBinding, BRegWebhookDelivery as CoreWebhookDelivery, BRegWebhookVerificationError,
-    BRegWithdrawalReason, BaseRegistryClient as CoreClient, BaseRegistryClientConfig,
-    BaseRegistryClientError, PrivateKeyJwt, PrivateKeyJwtConfig, RegistryRecordRepresentation,
-    RegistryRecordResponse, StaticToken, TokenError, TokenProvider,
+    BRegReleaseStatus, BRegSnapshotContinuation, BRegSnapshotContinuationProjection,
+    BRegSnapshotListRequest, BRegStatisticsFormat, BRegTombstoneBinding,
+    BRegWebhookDelivery as CoreWebhookDelivery, BRegWebhookVerificationError, BRegWithdrawalReason,
+    BaseRegistryClient as CoreClient, BaseRegistryClientConfig, BaseRegistryClientError,
+    PrivateKeyJwt, PrivateKeyJwtConfig, StaticToken, TokenError, TokenProvider,
 };
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::exchange_authorization_from_json;
@@ -223,35 +215,62 @@ pub struct Proposal {
 }
 
 #[napi(js_name = "BRegProposalCollection")]
-pub struct ProposalCollection { inner: registry_breg_client::BRegProposalCollection }
+pub struct ProposalCollection {
+    inner: registry_breg_client::BRegProposalCollection,
+}
+#[napi(js_name = "BRegProposalGetBinding")]
+pub struct ProposalGetBinding {
+    inner: registry_breg_client::BRegProposalGetBinding,
+}
 
-#[napi(object)]
-pub struct ProposalPage { pub items: Vec<Proposal>, pub next_cursor: Option<String> }
+#[napi(object, object_from_js = false)]
+pub struct ProposalPage {
+    pub items: Vec<Proposal>,
+    pub next_cursor: Option<String>,
+}
 
 #[napi]
 impl Proposal {
     #[napi(getter)]
-    pub fn identifier(&self) -> String { self.inner.id().to_owned() }
+    pub fn input_json(&self) -> Result<Option<String>> {
+        self.inner
+            .input()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| binding_error("protocol", "Proposal input is not representable"))
+    }
     #[napi(getter)]
-    pub fn action_identifier(&self) -> String { self.inner.action_id().to_owned() }
+    pub fn identifier(&self) -> String {
+        self.inner.id().to_owned()
+    }
+    #[napi(getter)]
+    pub fn action_identifier(&self) -> String {
+        self.inner.action_id().to_owned()
+    }
     #[napi(getter)]
     pub fn document_json(&self) -> Result<String> {
-        serde_json::to_string(&self.inner).map_err(|_| binding_error("protocol", "Proposal is not representable"))
+        serde_json::to_string(&self.inner)
+            .map_err(|_| binding_error("protocol", "Proposal is not representable"))
     }
 }
 
 #[napi(js_name = "BRegPreparedProposal")]
-pub struct PreparedProposal { inner: registry_breg_client::BRegPreparedProposal }
+pub struct PreparedProposal {
+    inner: registry_breg_client::BRegPreparedProposal,
+}
 
 #[napi]
 impl PreparedProposal {
     #[napi(factory)]
     pub fn from_bytes(bytes: Buffer) -> Result<Self> {
         registry_breg_client::BRegPreparedProposal::from_slice(bytes.as_ref())
-            .map(|inner| Self { inner }).map_err(client_error)
+            .map(|inner| Self { inner })
+            .map_err(client_error)
     }
     #[napi]
-    pub fn to_bytes(&self) -> Buffer { self.inner.as_bytes().to_vec().into() }
+    pub fn to_bytes(&self) -> Buffer {
+        self.inner.as_bytes().to_vec().into()
+    }
 }
 
 #[napi]
@@ -920,41 +939,13 @@ fn statistics_version(value: i64) -> Result<u64> {
     Ok(value as u64)
 }
 
-/// Preconditions every attachment mutation shares, parsed before any request.
-fn attachment_preconditions(
-    record_identifier: String,
-    etag: String,
-    idempotency_key: String,
-) -> Result<(
-    uuid::Uuid,
-    BRegEtag,
-    registry_breg_client::BRegIdempotencyKey,
-)> {
-    let record_identifier = uuid::Uuid::parse_str(&record_identifier)
-        .map_err(|_| binding_error("invalid-request", "recordIdentifier must be a UUID"))?;
-    let etag = BRegEtag::parse(&etag).map_err(|_| {
-        binding_error(
-            "invalid-request",
-            "etag must be a strong Base Registry Engine entity tag",
-        )
-    })?;
-    let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
-    Ok((record_identifier, etag, key))
-}
-
 fn record_options(object: Option<&Map<String, Value>>) -> Result<BRegRecordOptions> {
     let Some(object) = object else {
         return Ok(BRegRecordOptions::default());
     };
     only_fields(
         object,
-        &[
-            "select",
-            "accessProfile",
-            "format",
-            "requestHistoryAfterProposalVersion",
-        ],
+        &["select", "accessProfile", "format"],
         "invalid-request",
         "record options contain an unsupported field",
     )?;
@@ -992,21 +983,6 @@ fn record_options(object: Option<&Map<String, Value>>) -> Result<BRegRecordOptio
         options = options
             .access_profile(value)
             .map_err(|error| binding_error("invalid-request", error.to_string()))?;
-    }
-    match object.get("requestHistoryAfterProposalVersion") {
-        None | Some(Value::Null) => {}
-        Some(value) => {
-            let value = safe_integer(
-                value,
-                1,
-                i64::from(u32::MAX),
-                "invalid-request",
-                "requestHistoryAfterProposalVersion must be 1 through 4294967295",
-            )?;
-            options = options
-                .request_history_after_proposal_version(value as u32)
-                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
-        }
     }
     Ok(options)
 }
@@ -1295,7 +1271,7 @@ fn geojson_options(object: &Map<String, Value>) -> Result<BRegGeoJsonOptions> {
             return Err(binding_error(
                 "invalid-request",
                 "select must be an array of strings",
-            ))
+            ));
         }
     }
     if let Some(value) = optional_string(
@@ -1371,7 +1347,7 @@ fn lookup_request(
             return Err(binding_error(
                 "invalid-request",
                 "lookup values must be an object",
-            ))
+            ));
         }
     }
     Ok(request)
@@ -1612,7 +1588,7 @@ fn change_context(value: Value) -> Result<BRegChangeContext> {
             return Err(binding_error(
                 "invalid-request",
                 "changeContext.kind or reasonCode is invalid",
-            ))
+            ));
         }
     };
     if let Some(value) = optional_string(
@@ -1644,7 +1620,7 @@ fn change_context(value: Value) -> Result<BRegChangeContext> {
             return Err(binding_error(
                 "invalid-request",
                 "changeContext.sourceReferences must be an array",
-            ))
+            ));
         }
     }
     Ok(context)
@@ -1731,7 +1707,7 @@ fn batch_request(binding: &BRegBatchBinding, value: Value) -> Result<BRegBatchRe
                 return Err(binding_error(
                     "invalid-request",
                     "batch item operation is unsupported",
-                ))
+                ));
             }
         };
     }
@@ -1781,7 +1757,7 @@ fn ingestion_run_request(value: Value) -> Result<BRegIngestionRunRequest> {
             return Err(binding_error(
                 "invalid-request",
                 "run request operation must be create or patch",
-            ))
+            ));
         }
     };
     let builder = BRegIngestionRunRequest::builder().operation(operation);
@@ -1928,7 +1904,7 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
                 return Err(binding_error(
                     "invalid-request",
                     "run list query status is unsupported",
-                ))
+                ));
             }
         };
         query = query.status(status);
@@ -2047,65 +2023,16 @@ impl IngestionPrefixDigest {
     }
 }
 
-fn parse_record(
-    value: Value,
-    format: BRegRecordFormat,
-) -> Result<registry_breg_client::RegistryRecordSingleResponse> {
-    let representation = match format {
-        BRegRecordFormat::Json => RegistryRecordRepresentation::Json,
-        BRegRecordFormat::JsonLd => RegistryRecordRepresentation::JsonLdSharedContext,
-    };
-    match RegistryRecordResponse::from_value(value, representation) {
-        Ok(RegistryRecordResponse::Single(value)) => Ok(value),
-        _ => Err(binding_error(
-            "invalid-request",
-            "record must be one Registry Record response",
-        )),
-    }
-}
-
-fn attachment_state_value(value: &BRegAttachmentState) -> Value {
-    json!({
-        "slotIdentifier": value.slot_identifier(),
-        "proposalVersion": value.proposal_version(),
-        "erased": value.erased(),
-        "byteSize": value.byte_size(),
-        "sha256": value.sha256(),
-        "contentType": value.content_type(),
-        "uploadedAt": value.uploaded_at(),
-        "uploadedBy": value.uploaded_by(),
-        "verificationStatus": value
-            .verification_status()
-            .map(BRegAttachmentVerificationStatus::as_str),
-    })
-}
-
-fn attachment_slot_value(value: &BRegAttachmentSlotValue) -> Value {
-    match value {
-        BRegAttachmentSlotValue::NotSelected => json!({"kind": "not-selected", "value": null}),
-        BRegAttachmentSlotValue::Empty => json!({"kind": "empty", "value": null}),
-        BRegAttachmentSlotValue::Filled(state) => json!({
-            "kind": "filled",
-            "value": attachment_state_value(state),
-        }),
-    }
-}
-
-fn attachment_error(error: registry_breg_client::BRegAttachmentError) -> NapiError {
-    binding_error("invalid-request", error.reason())
-}
-
-fn action_descriptor_value(
-    value: &registry_breg_client::BRegActionDescriptor,
-) -> Value {
+fn action_descriptor_value(value: &registry_breg_client::BRegActionDescriptor) -> Value {
     let bounds = value.bounds();
     json!({
         "id": value.identifier(), "apiName": value.api_name(), "revision": value.definition_revision(), "display": value.display(), "mode": value.mode(),
-        "contractFingerprint": value.contract_fingerprint(),
         "inputMode": value.input_mode(),
         "maximumInputStringBytes": value.maximum_input_string_bytes(),
         "inputs": value.inputs().iter().map(|input| json!({
             "id": input.identifier(), "apiName": input.api_name(),
+            "label": input.label(), "description": input.description(),
+            "schemaJson": input.schema().map(Value::to_string),
             "fieldTypeJson": input.field_type().to_string(), "required": input.required(),
             "nullable": input.nullable(), "classification": input.classification(),
         })).collect::<Vec<_>>(),
@@ -2115,7 +2042,7 @@ fn action_descriptor_value(
         })).collect::<Vec<_>>(),
         "requiredConditionKeys": value.required_condition_keys(),
         "resultEffects": value.result_effects().iter().map(|effect| json!({
-            "effect": effect.effect_identifier(), "entity": effect.record_type_identifier(),
+            "effect": effect.effect_identifier(), "recordType": effect.record_type_identifier(),
             "operation": effect.operation().as_str(),
         })).collect::<Vec<_>>(),
         "accessProfile": value.access_profile(), "invokePath": value.invoke_path(),
@@ -2126,109 +2053,6 @@ fn action_descriptor_value(
             "maximumSnapshotBytes": bounds.maximum_snapshot_bytes(),
         },
     })
-}
-
-/// Opaque governed attachment slot selected from metadata fetched by this client source.
-#[napi(js_name = "BRegAttachmentSlot")]
-pub struct AttachmentSlot {
-    inner: CoreAttachmentSlot,
-}
-
-/// Opaque bytes already accepted by one slot's served upload policy.
-#[napi(js_name = "BRegAttachmentUpload")]
-pub struct AttachmentUpload {
-    inner: CoreAttachmentUpload,
-}
-
-#[napi]
-impl AttachmentSlot {
-    #[napi(getter)]
-    pub fn slot_identifier(&self) -> String {
-        self.inner.slot_identifier().to_owned()
-    }
-
-    #[napi(getter)]
-    pub fn record_type_identifier(&self) -> String {
-        self.inner.record_type_identifier().to_owned()
-    }
-
-    #[napi(getter)]
-    pub fn access_profile(&self) -> String {
-        self.inner.access_profile().to_owned()
-    }
-
-    #[napi(getter)]
-    pub fn required_for_submit(&self) -> bool {
-        self.inner.required_for_submit()
-    }
-
-    /// Largest body the served slot policy accepts, in bytes.
-    #[napi(getter)]
-    pub fn maximum_bytes(&self) -> i64 {
-        i64::try_from(self.inner.maximum_bytes()).unwrap_or(MAXIMUM_JAVASCRIPT_SAFE_INTEGER)
-    }
-
-    #[napi(getter)]
-    pub fn content_types(&self) -> Vec<String> {
-        self.inner.content_types().to_vec()
-    }
-
-    /// Authored sensitivity of this slot's content.
-    #[napi(getter)]
-    pub fn classification(&self) -> String {
-        self.inner.classification().as_str().to_owned()
-    }
-
-    #[napi(getter)]
-    pub fn can_download(&self) -> bool {
-        self.inner.can_download()
-    }
-
-    #[napi(getter)]
-    pub fn can_upload(&self) -> bool {
-        self.inner.can_upload()
-    }
-
-    #[napi(getter)]
-    pub fn can_remove(&self) -> bool {
-        self.inner.can_remove()
-    }
-
-    #[napi]
-    pub fn accepts_content_type(&self, content_type: String) -> bool {
-        self.inner.accepts_content_type(&content_type)
-    }
-
-    /// Bind exact bytes to this slot. Refusals happen here, before any request.
-    #[napi]
-    pub fn prepare_upload(&self, content_type: String, body: Buffer) -> Result<AttachmentUpload> {
-        CoreAttachmentUpload::new(&self.inner, &content_type, body.to_vec())
-            .map(|inner| AttachmentUpload { inner })
-            .map_err(attachment_error)
-    }
-
-    /// Read this slot's engine-owned state out of one Registry Record envelope.
-    #[napi]
-    pub fn value_in(&self, record: Value, format_value: Option<String>) -> Result<Value> {
-        let record = parse_record(record, format(format_value)?)?;
-        self.inner
-            .value_in(&record.data)
-            .map(|value| attachment_slot_value(&value))
-            .map_err(attachment_error)
-    }
-}
-
-#[napi]
-impl AttachmentUpload {
-    #[napi(getter)]
-    pub fn content_type(&self) -> String {
-        self.inner.content_type().to_owned()
-    }
-
-    #[napi(getter)]
-    pub fn byte_size(&self) -> i64 {
-        i64::try_from(self.inner.byte_size()).unwrap_or(MAXIMUM_JAVASCRIPT_SAFE_INTEGER)
-    }
 }
 
 #[napi(js_name = "BRegCreateBinding")]
@@ -2321,7 +2145,6 @@ impl Metadata {
                 "recordTypeLabel": operation.record_type_label(), "titleFields": operation.title_fields(),
                 "requiredCapabilities": operation.required_capabilities(),
                 "readableFields": operation.readable_fields(),
-                "readableRequestFields": operation.readable_request_fields(),
                 "createWritableFields": operation.create_writable_fields(),
                 "patchWritableFields": operation.patch_writable_fields(), "query": operation.query(),
                 "selectors": operation.selectors().iter().map(|selector| json!({
@@ -2339,12 +2162,13 @@ impl Metadata {
                     "id": field.identifier(), "apiName": field.api_name(), "label": field.label(),
                     "schemaJson": field.schema().to_string(), "required": field.required(),
                     "nullable": field.nullable(), "readOnly": field.read_only(), "removable": field.removable(),
-                    "referenceTargetEntity": field.reference_target_record_type(),
+                    "referenceTargetRecordType": field.reference_target_record_type(),
                     "codeLabels": field.code_labels(),
                     "storageValidation": field.storage_validation().map(|validation| json!({
                         "kind": validation.kind(), "pattern": validation.pattern(),
                     })),
                     "reference": field.reference().map(|reference| json!({
+                        "name":reference.name(),"cardinality":reference.cardinality(),"inverseName":reference.inverse_name(),
                         "manualEntry": reference.manual_entry(), "targetRecordType": reference.target_record_type(),
                         "operations": reference.operations().iter().map(|operation| json!({
                             "operationId": operation.operation_identifier(),
@@ -2366,7 +2190,17 @@ impl Metadata {
 
     #[napi]
     pub fn select_proposals(&self, profile: String) -> Result<ProposalCollection> {
-        self.inner.select_proposals(&profile).map(|inner| ProposalCollection { inner }).map_err(selection_error)
+        self.inner
+            .select_proposals(&profile)
+            .map(|inner| ProposalCollection { inner })
+            .map_err(selection_error)
+    }
+    #[napi]
+    pub fn select_proposal_get(&self, profile: String) -> Result<ProposalGetBinding> {
+        self.inner
+            .select_proposal_get(&profile)
+            .map(|inner| ProposalGetBinding { inner })
+            .map_err(selection_error)
     }
 
     /// Complete typed caller-filtered Action descriptors.
@@ -2458,23 +2292,6 @@ impl Metadata {
                 "operation is not a patch",
             )),
         }
-    }
-
-    #[napi]
-    pub fn select_attachments(
-        &self,
-        record_type_identifier: String,
-        expected_profile: String,
-    ) -> Result<Vec<AttachmentSlot>> {
-        self.inner
-            .select_attachments(&record_type_identifier, &expected_profile)
-            .map(|slots| {
-                slots
-                    .into_iter()
-                    .map(|inner| AttachmentSlot { inner })
-                    .collect()
-            })
-            .map_err(selection_error)
     }
 
     #[napi]
@@ -3046,45 +2863,182 @@ impl BaseRegistryClient {
     }
 
     #[napi]
-    pub async fn start_proposal(&self, binding: &ActionBinding, inputs_json: String, key: String) -> Result<Proposal> {
-        let inputs = input_object(exact_input(&inputs_json)?, "action inputs must be an object")?;
+    pub async fn start_proposal(
+        &self,
+        binding: &ActionBinding,
+        inputs_json: String,
+        key: String,
+    ) -> Result<Proposal> {
+        let inputs = input_object(
+            exact_input(&inputs_json)?,
+            "action inputs must be an object",
+        )?;
         let request = action_invocation(binding, inputs, None)?;
         let key = idempotency_key(key)?;
-        self.inner.start_proposal(&binding.inner, &request, &key).await
-            .map(|response| Proposal { inner: response.value }).map_err(client_error)
+        self.inner
+            .start_proposal(&binding.inner, &request, &key)
+            .await
+            .map(|response| Proposal {
+                inner: response.value,
+            })
+            .map_err(client_error)
     }
 
     #[napi]
     pub async fn read_proposal(&self, proposal: &Proposal) -> Result<Proposal> {
-        self.inner.read_proposal(&proposal.inner).await
-            .map(|response| Proposal { inner: response.value }).map_err(client_error)
+        self.inner
+            .read_proposal(&proposal.inner)
+            .await
+            .map(|response| Proposal {
+                inner: response.value,
+            })
+            .map_err(client_error)
+    }
+    #[napi]
+    pub async fn get_proposal(&self, binding: &ProposalGetBinding, id: String) -> Result<Proposal> {
+        self.inner
+            .get_proposal(&binding.inner, &id)
+            .await
+            .map(|response| Proposal {
+                inner: response.value,
+            })
+            .map_err(client_error)
     }
 
     #[napi]
-    pub async fn list_proposals(&self, collection: &ProposalCollection, query_json: String) -> Result<ProposalPage> {
-        let query = serde_json::from_value(exact_input(&query_json)?).map_err(|_| binding_error("invalid-request", "Proposal query does not conform"))?;
-        self.inner.list_proposals(&collection.inner, &query).await.map(|response| ProposalPage {
-            items: response.value.items.into_iter().map(|inner| Proposal { inner }).collect(),
-            next_cursor: response.value.next_cursor,
-        }).map_err(client_error)
+    pub async fn download_proposal_attachment(
+        &self,
+        proposal: &Proposal,
+        slot: String,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .download_proposal_attachment(&proposal.inner, &slot)
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+    #[napi]
+    pub async fn read_proposal_review_status(
+        &self,
+        proposal: &Proposal,
+    ) -> Result<CompleteOutcome> {
+        let response = self
+            .inner
+            .read_proposal_review_status(&proposal.inner)
+            .await
+            .map_err(client_error)?;
+        complete_value(response.value, response.metadata)
+    }
+    #[napi]
+    pub async fn read_proposal_review_context(
+        &self,
+        proposal: &Proposal,
+    ) -> Result<CompleteOutcome> {
+        let response = self
+            .inner
+            .read_proposal_review_context(&proposal.inner)
+            .await
+            .map_err(client_error)?;
+        complete_value(response.value, response.metadata)
+    }
+    #[napi]
+    pub async fn upload_proposal_attachment(
+        &self,
+        proposal: &Proposal,
+        slot: String,
+        content_type: String,
+        bytes: Buffer,
+        key: String,
+    ) -> Result<Proposal> {
+        let key = idempotency_key(key)?;
+        self.inner
+            .upload_proposal_attachment(&proposal.inner, &slot, &content_type, &bytes, &key)
+            .await
+            .map(|response| Proposal {
+                inner: response.value,
+            })
+            .map_err(client_error)
+    }
+    #[napi]
+    pub async fn delete_proposal_attachment(
+        &self,
+        proposal: &Proposal,
+        slot: String,
+        key: String,
+    ) -> Result<Proposal> {
+        let key = idempotency_key(key)?;
+        self.inner
+            .delete_proposal_attachment(&proposal.inner, &slot, &key)
+            .await
+            .map(|response| Proposal {
+                inner: response.value,
+            })
+            .map_err(client_error)
     }
 
     #[napi]
-    pub fn prepare_proposal(&self, proposal: &Proposal, operation: String, body_json: String, key: String) -> Result<PreparedProposal> {
-        self.inner.prepare_proposal(&proposal.inner, &operation, exact_input(&body_json)?, &idempotency_key(key)?)
-            .map(|inner| PreparedProposal { inner }).map_err(client_error)
+    pub async fn list_proposals(
+        &self,
+        collection: &ProposalCollection,
+        query_json: String,
+    ) -> Result<ProposalPage> {
+        let query = serde_json::from_value(exact_input(&query_json)?)
+            .map_err(|_| binding_error("invalid-request", "Proposal query does not conform"))?;
+        self.inner
+            .list_proposals(&collection.inner, &query)
+            .await
+            .map(|response| ProposalPage {
+                items: response
+                    .value
+                    .items
+                    .into_iter()
+                    .map(|inner| Proposal { inner })
+                    .collect(),
+                next_cursor: response.value.next_cursor,
+            })
+            .map_err(client_error)
     }
 
     #[napi]
-    pub fn recover_proposal(&self, proposal: &Proposal, attempt: &PreparedProposal) -> Result<PreparedProposal> {
-        self.inner.recover_proposal(&proposal.inner, &attempt.inner)
-            .map(|inner| PreparedProposal { inner }).map_err(client_error)
+    pub fn prepare_proposal(
+        &self,
+        proposal: &Proposal,
+        operation: String,
+        body_json: String,
+        key: String,
+    ) -> Result<PreparedProposal> {
+        self.inner
+            .prepare_proposal(
+                &proposal.inner,
+                &operation,
+                exact_input(&body_json)?,
+                &idempotency_key(key)?,
+            )
+            .map(|inner| PreparedProposal { inner })
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub fn recover_proposal(
+        &self,
+        proposal: &Proposal,
+        attempt: &PreparedProposal,
+    ) -> Result<PreparedProposal> {
+        self.inner
+            .recover_proposal(&proposal.inner, &attempt.inner)
+            .map(|inner| PreparedProposal { inner })
+            .map_err(client_error)
     }
 
     #[napi]
     pub async fn execute_proposal(&self, attempt: &PreparedProposal) -> Result<Proposal> {
-        self.inner.execute_proposal(&attempt.inner).await
-            .map(|response| Proposal { inner: response.value }).map_err(client_error)
+        self.inner
+            .execute_proposal(&attempt.inner)
+            .await
+            .map(|response| Proposal {
+                inner: response.value,
+            })
+            .map_err(client_error)
     }
 
     /// Fetch opaque target conditions for one metadata-selected action.
@@ -3191,6 +3145,22 @@ impl BaseRegistryClient {
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
+    }
+
+    /// Execute a recovered proposal start with its exact original request and key.
+    #[napi]
+    pub async fn execute_recovered_proposal_start(
+        &self,
+        binding: &ActionBinding,
+        recovered: &RecoveredAction,
+    ) -> Result<Proposal> {
+        self.inner
+            .start_proposal(&binding.inner, &recovered.request, &recovered.key)
+            .await
+            .map(|response| Proposal {
+                inner: response.value,
+            })
+            .map_err(client_error)
     }
 
     #[napi]
@@ -3479,75 +3449,6 @@ impl BaseRegistryClient {
                 &key,
                 format(format_value)?,
             )
-            .await
-            .map_err(client_error)?;
-        complete_value(value, metadata)
-    }
-
-    /// Replace one governed attachment slot with exact bytes. The prepared
-    /// upload already satisfies the slot's served size and content-type policy.
-    #[napi]
-    pub async fn upload_attachment(
-        &self,
-        slot: &AttachmentSlot,
-        record_identifier: String,
-        etag: String,
-        upload: &AttachmentUpload,
-        idempotency_key: String,
-        format_value: Option<String>,
-    ) -> Result<CompleteOutcome> {
-        let (record_identifier, etag, key) =
-            attachment_preconditions(record_identifier, etag, idempotency_key)?;
-        let (slot, upload) = (slot.inner.clone(), upload.inner.clone());
-        let BRegComplete { value, metadata } = self
-            .inner
-            .upload_attachment(
-                &slot,
-                record_identifier,
-                &etag,
-                &upload,
-                &key,
-                format(format_value)?,
-            )
-            .await
-            .map_err(client_error)?;
-        complete_value(value, metadata)
-    }
-
-    /// Read the exact bytes one governed slot holds for one proposal version.
-    #[napi]
-    pub async fn download_attachment(
-        &self,
-        slot: &AttachmentSlot,
-        record_identifier: String,
-        proposal_version: u32,
-    ) -> Result<RawOutcome> {
-        let record_identifier = uuid::Uuid::parse_str(&record_identifier)
-            .map_err(|_| binding_error("invalid-request", "recordIdentifier must be a UUID"))?;
-        let slot = slot.inner.clone();
-        self.inner
-            .download_attachment(&slot, record_identifier, proposal_version)
-            .await
-            .map(raw_value)
-            .map_err(client_error)
-    }
-
-    /// Empty one governed attachment slot.
-    #[napi]
-    pub async fn delete_attachment(
-        &self,
-        slot: &AttachmentSlot,
-        record_identifier: String,
-        etag: String,
-        idempotency_key: String,
-        format_value: Option<String>,
-    ) -> Result<CompleteOutcome> {
-        let (record_identifier, etag, key) =
-            attachment_preconditions(record_identifier, etag, idempotency_key)?;
-        let slot = slot.inner.clone();
-        let BRegComplete { value, metadata } = self
-            .inner
-            .delete_attachment(&slot, record_identifier, &etag, &key, format(format_value)?)
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
@@ -4075,54 +3976,4 @@ impl BaseRegistryClient {
             .map_err(client_error)?;
         complete_json_value(value, metadata)
     }
-
-    #[napi]
-    pub async fn upload_attachment_json(
-        &self,
-        slot: &AttachmentSlot,
-        record_identifier: String,
-        etag: String,
-        upload: &AttachmentUpload,
-        idempotency_key: String,
-        format_value: Option<String>,
-    ) -> Result<JsonOutcome> {
-        let (record_identifier, etag, key) =
-            attachment_preconditions(record_identifier, etag, idempotency_key)?;
-        let (slot, upload) = (slot.inner.clone(), upload.inner.clone());
-        let BRegComplete { value, metadata } = self
-            .inner
-            .upload_attachment(
-                &slot,
-                record_identifier,
-                &etag,
-                &upload,
-                &key,
-                format(format_value)?,
-            )
-            .await
-            .map_err(client_error)?;
-        complete_json_value(value, metadata)
-    }
-
-    #[napi]
-    pub async fn delete_attachment_json(
-        &self,
-        slot: &AttachmentSlot,
-        record_identifier: String,
-        etag: String,
-        idempotency_key: String,
-        format_value: Option<String>,
-    ) -> Result<JsonOutcome> {
-        let (record_identifier, etag, key) =
-            attachment_preconditions(record_identifier, etag, idempotency_key)?;
-        let slot = slot.inner.clone();
-        let BRegComplete { value, metadata } = self
-            .inner
-            .delete_attachment(&slot, record_identifier, &etag, &key, format(format_value)?)
-            .await
-            .map_err(client_error)?;
-        complete_json_value(value, metadata)
-    }
-
-
 }

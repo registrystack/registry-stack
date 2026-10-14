@@ -7,16 +7,13 @@ use registry_platform_canonical_json::canonicalize_json;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::plan::{
-    MAX_PLAN_FIELD_MUTATIONS, MAX_PLAN_SNAPSHOT_BYTES,
-    MAX_PLAN_TARGETS,
-};
 use crate::contract::{
     AccessProfileSource, ActionEffectSource, ActionSource, ActionValueSource, FieldTypeSource,
     Operation, ProjectAccessProfileSource, RowBoundarySource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::logical_names::{default_api_name, reserved_logical_name, valid_api_name};
+mod commit_evidence;
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledActionAccessEntry, CompiledActionInput,
     CompiledActionInventory, CompiledActionPermission, CompiledActionRoute,
@@ -24,6 +21,7 @@ use crate::model::{
     CompiledCommitGuard, CompiledEntity, CompiledPlanEffect, CompiledPlanMutation,
     CompiledPlanTarget, CompiledPlanTargetBinding, CompiledPlanValue, HttpMethod,
 };
+use crate::plan::{MAX_PLAN_FIELD_MUTATIONS, MAX_PLAN_SNAPSHOT_BYTES, MAX_PLAN_TARGETS};
 
 type CompiledEffectSet = (
     Vec<CompiledPlanEffect>,
@@ -37,14 +35,19 @@ pub(crate) struct CollectedActionSource {
     pub source_module: Option<String>,
 }
 
+pub(crate) struct CollectedFunctionSource {
+    pub source: crate::contract::FunctionSource,
+    pub source_module: Option<String>,
+}
+
 pub(crate) fn compile_immediate_actions(
     actions: &BTreeMap<String, CollectedActionSource>,
     entities: &BTreeMap<String, CompiledEntity>,
     profiles: &[ProjectAccessProfileSource],
     assets: &[crate::contract::ModuleAssetSource],
-    vocabularies: &BTreeMap<String, Vec<String>>,
-    functions: &[crate::contract::FunctionSource],
+    functions: &BTreeMap<String, CollectedFunctionSource>,
     review_authorities: &[crate::contract::ReviewAuthoritySource],
+    project: &crate::contract::RegistryProject,
 ) -> Result<CompiledActionInventory, Vec<Diagnostic>> {
     let mut errors = Vec::new();
     validate_action_permission_sources(actions, profiles, &mut errors);
@@ -61,6 +64,7 @@ pub(crate) fn compile_immediate_actions(
             assets,
             functions,
             review_authorities,
+            project,
             &mut wasm_module_count,
             &mut errors,
         ) {
@@ -96,36 +100,46 @@ pub(crate) fn compile_immediate_actions(
     if !errors.is_empty() {
         return Err(errors);
     }
-    let input_vocabularies = compiled_actions
-        .iter()
-        .flat_map(|action| &action.inputs)
-        .filter_map(|input| match &input.field_type {
-            FieldTypeSource::VocabularyCode { vocabulary, .. } => vocabularies
-                .get(vocabulary)
-                .map(|codes| (vocabulary.clone(), codes.iter().cloned().collect())),
-            _ => None,
-        })
-        .collect();
     Ok(CompiledActionInventory {
         actions: compiled_actions,
         routes,
         access,
-        input_vocabularies,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_action(
     collected: &CollectedActionSource,
     entities: &BTreeMap<String, CompiledEntity>,
     profiles: &[ProjectAccessProfileSource],
     assets: &[crate::contract::ModuleAssetSource],
-    functions: &[crate::contract::FunctionSource],
+    functions: &BTreeMap<String, CollectedFunctionSource>,
     review_authorities: &[crate::contract::ReviewAuthoritySource],
+    project: &crate::contract::RegistryProject,
     wasm_module_count: &mut usize,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledAction> {
     let action = &collected.source;
     validate_id(&action.id, "actions[].id", errors);
+    if action
+        .evidence
+        .len()
+        .saturating_add(action.commit_guards.evidence.len())
+        > crate::action_evidence_contracts::MAX_EVIDENCE_CAPABILITIES
+    {
+        errors.push(Diagnostic::error(
+            "breg.action.evidence-capabilities-bounds",
+            "actions[].commitGuards.evidence",
+            "plan and commit Evidence together support at most two capabilities",
+        ));
+    }
+    if action.is_proposal() && action.consent_issuer.is_some() {
+        errors.push(Diagnostic::error(
+            "breg.action.proposal-consent-unsupported",
+            "actions[].consentIssuer",
+            "consentIssuer requires immediate Action authority semantics",
+        ));
+    }
     crate::consent::validate_action(action, entities, profiles, errors);
     if action.inputs.is_empty() {
         errors.push(Diagnostic::error(
@@ -139,7 +153,7 @@ fn compile_action(
         .iter()
         .map(|input| (input.id.as_str(), input))
         .collect::<BTreeMap<_, _>>();
-    let (handler, (effects, target_uses, result_effects)) =
+    let (handler, (effects, mut target_uses, result_effects)) =
         if let crate::contract::ActionPlanSource::Function {
             function,
             inputs: bound_inputs,
@@ -148,7 +162,7 @@ fn compile_action(
             capabilities,
         } = &action.plan
         {
-            let Some(function) = functions.iter().find(|asset| &asset.id == function) else {
+            let Some(function_source) = functions.get(function) else {
                 errors.push(Diagnostic::error(
                     "breg.action.function-unknown",
                     "actions[].plan.function",
@@ -156,6 +170,7 @@ fn compile_action(
                 ));
                 return None;
             };
+            let function = &function_source.source;
             if !capabilities.is_subset(&function.capabilities)
                 || function.abi != crate::contract::ACTION_PLAN_ABI_V1
             {
@@ -197,13 +212,22 @@ fn compile_action(
                 writes: writes.clone(),
                 refusals: refusals.clone(),
             };
+            let function_inputs = bound_inputs
+                .iter()
+                .filter_map(|id| {
+                    input_map
+                        .get(id.as_str())
+                        .map(|input| (id.as_str(), *input))
+                })
+                .collect::<BTreeMap<_, _>>();
             let (handler, effects) = compile_handler(
                 collected,
                 &source,
                 function,
+                function_source.source_module.as_deref(),
                 bound_inputs,
                 capabilities,
-                &input_map,
+                &function_inputs,
                 entities,
                 assets,
                 wasm_module_count,
@@ -213,9 +237,75 @@ fn compile_action(
         } else {
             (None, compile_effects(action, &input_map, entities, errors)?)
         };
+    for input in &inputs {
+        let FieldTypeSource::Reference { target, .. } = &input.field_type else {
+            continue;
+        };
+        if !target_uses.iter().any(|use_| matches!(&use_.source, CompiledActionTargetUseSource::Input { input: binding } if binding == &input.id)) {
+            target_uses.push(CompiledActionTargetUse { entity_id: target.clone(), operation: Operation::Get, fields: BTreeSet::new(), source: CompiledActionTargetUseSource::Input { input: input.id.clone() }, condition_required: false });
+        }
+    }
+    for guard in &action.commit_guards.targets {
+        let Some(input) = input_map.get(guard.input.as_str()) else {
+            continue;
+        };
+        let FieldTypeSource::Reference { target, .. } = &input.field_type else {
+            continue;
+        };
+        if let Some(use_) = target_uses.iter_mut().find(|use_| {
+            use_.operation == Operation::Get
+                && matches!(&use_.source,
+            CompiledActionTargetUseSource::Input {input} if input == &guard.input)
+        }) {
+            if !guard.field.is_empty() {
+                use_.fields.insert(guard.field.clone());
+            }
+            use_.condition_required |= !action.is_proposal() && guard.revision.is_some();
+        } else {
+            target_uses.push(CompiledActionTargetUse {
+                entity_id: target.clone(),
+                operation: Operation::Get,
+                fields: if guard.field.is_empty() {
+                    BTreeSet::new()
+                } else {
+                    BTreeSet::from([guard.field.clone()])
+                },
+                source: CompiledActionTargetUseSource::Input {
+                    input: guard.input.clone(),
+                },
+                condition_required: !action.is_proposal() && guard.revision.is_some(),
+            });
+        }
+    }
+    let commit_evidence = commit_evidence::compile(
+        project,
+        action,
+        &input_map,
+        entities,
+        assets,
+        &mut target_uses,
+        errors,
+    );
+    if let crate::contract::ActionExecutionSource::Proposal { proposal } = &action.execution {
+        if let Some(context) = &proposal.review_context {
+            for projection in context.fields.values() {
+                if let (Some(input), Some(field)) = (&projection.from_record, &projection.field) {
+                    if let Some(binding) = input_map.get(input.as_str()) {
+                        if let FieldTypeSource::Reference { target, .. } = &binding.field_type {
+                            if let Some(existing) = target_uses.iter_mut().find(|use_| use_.operation == Operation::Get && matches!(&use_.source, CompiledActionTargetUseSource::Input { input: selected } if selected == input)) {
+                                existing.fields.insert(field.clone());
+                            } else {
+                                target_uses.push(CompiledActionTargetUse { entity_id: target.clone(), operation: Operation::Get, fields: BTreeSet::from([field.clone()]), source: CompiledActionTargetUseSource::Input { input: input.clone() }, condition_required: false });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     let requires = compile_requirements(action, &input_map, entities, &target_uses, errors);
     let writes_path = if handler.is_some() {
-        "actions[].handler.writes"
+        "actions[].plan.writes"
     } else {
         "actions[].plan.effects"
     };
@@ -242,10 +332,9 @@ fn compile_action(
             "an Action requires at least one explicit invoke permission",
         ));
     }
-    let condition_route = target_uses
-        .iter()
-        .any(|use_| use_.condition_required)
-        .then(|| format!("/v1/actions/{}/target-conditions", action.id));
+    let condition_route = (!action.is_proposal()
+        && target_uses.iter().any(|use_| use_.condition_required))
+    .then(|| format!("/v1/actions/{}/target-conditions", action.id));
     let execution = compile_execution(
         action,
         entities,
@@ -254,7 +343,7 @@ fn compile_action(
         &target_uses,
         errors,
     );
-    let mut compiled = CompiledAction {
+    let compiled = CompiledAction {
         api_name: action
             .api_name
             .clone()
@@ -263,6 +352,7 @@ fn compile_action(
         execution,
         definition_revision: String::new(),
         evidence: Vec::new(),
+        commit_evidence,
         id: action.id.clone(),
         source_module: collected.source_module.clone(),
         route: format!(
@@ -275,14 +365,6 @@ fn compile_action(
             }
         ),
         condition_route,
-        contract_fingerprint: contract_fingerprint(
-            &action.id,
-            entities,
-            &inputs,
-            (&effects, handler.as_ref()),
-            (&requires, action.consent_issuer),
-            &permissions,
-        ),
         handler,
         inputs,
         effects,
@@ -295,15 +377,15 @@ fn compile_action(
         maximum_snapshot_bytes: MAX_PLAN_SNAPSHOT_BYTES,
         consent_issuer: action.consent_issuer,
     };
-    compiled.contract_fingerprint = definition_revision(&compiled, entities);
-    compiled.definition_revision = compiled.contract_fingerprint.clone();
     Some(compiled)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_handler(
     collected: &CollectedActionSource,
     source: &crate::contract::ActionHandlerSource,
     function: &crate::contract::FunctionSource,
+    function_module: Option<&str>,
     bound_inputs: &[String],
     capabilities: &BTreeSet<String>,
     inputs: &BTreeMap<&str, &CompiledActionInput>,
@@ -317,7 +399,8 @@ fn compile_handler(
         CompiledPlanFunctionWrite, CompiledPlanReferenceSources, CompiledPlanWrite,
     };
 
-    let path = format!("actions[{}].handler", collected.source.id);
+    let path = format!("actions[id={}].plan", collected.source.id);
+    let function_path = format!("functions[id={}]", function.id);
     let Some(kind) = source.kind() else {
         // The shared handler declaration also offers a remote destination. An
         // action handler runs inside the triggering transaction and has no
@@ -325,8 +408,8 @@ fn compile_handler(
         // into a handler that never runs.
         errors.push(Diagnostic::error(
             "breg.action.handler-kind-unsupported",
-            format!("{path}.type"),
-            "an action handler runs in the registry; declare handler type rhai or wasm",
+            format!("{function_path}.runtime"),
+            "a plan function runs in the registry; declare runtime rhai or wasm",
         ));
         return None;
     };
@@ -336,8 +419,8 @@ fn compile_handler(
     if abi != crate::contract::ACTION_PLAN_ABI_V1 {
         errors.push(Diagnostic::error(
             "breg.action.handler-abi-invalid",
-            format!("{path}.abi"),
-            "the action handler ABI is not supported; declare registry.action-handler/v1",
+            format!("{function_path}.abi"),
+            "the action handler ABI is not supported; declare registry.action-plan/v1",
         ));
     }
     let is_wasm = kind == crate::contract::ActionHandlerKindSource::Wasm;
@@ -348,7 +431,7 @@ fn compile_handler(
         // compiler support.
         errors.push(Diagnostic::error(
             "breg.action.handler-wasm-build-unsupported",
-            format!("{path}.type"),
+            format!("{function_path}.runtime"),
             "this build of the compiler does not admit WASM action handlers",
         ));
         return None;
@@ -357,21 +440,21 @@ fn compile_handler(
     let source_path: &str = if is_wasm {
         #[cfg(feature = "wasm")]
         {
-            wasm_handler_module_path(source, &path, errors)?
+            wasm_handler_module_path(source, &function_path, errors)?
         }
         #[cfg(not(feature = "wasm"))]
         {
             return None;
         }
     } else {
-        rhai_handler_script_path(source, &path, errors)?
+        rhai_handler_script_path(source, &function_path, errors)?
     };
     if is_wasm {
         *wasm_module_count += 1;
         if *wasm_module_count > crate::wasm_handler::MAX_PACKAGE_WASM_MODULES {
             errors.push(Diagnostic::error(
                 "breg.action.handler-modules-bound",
-                format!("{path}.module"),
+                format!("{function_path}.source"),
                 &format!(
                     "a package carries at most {} WASM handler modules",
                     crate::wasm_handler::MAX_PACKAGE_WASM_MODULES
@@ -457,7 +540,6 @@ fn compile_handler(
             operation: slot.operation,
             set: BTreeMap::new(),
             clear: Default::default(),
-            after: Default::default(),
         };
         let diagnostics_start = errors.len();
         let target = compile_target(
@@ -644,24 +726,22 @@ fn compile_handler(
     }
     let Some(asset) = assets
         .iter()
-        .find(|asset| asset.module == collected.source_module && asset.path == source_path)
+        .find(|asset| asset.module.as_deref() == function_module && asset.path == source_path)
     else {
-        let (code, member, message) = if is_wasm {
+        let (code, message) = if is_wasm {
             (
                 "breg.action.handler-module-asset-missing",
-                "module",
                 format!("supply the action's owned handler module asset at {source_path}"),
             )
         } else {
             (
                 "breg.action.handler-source-missing",
-                "script",
                 format!("supply the action's owned handler asset at {source_path}"),
             )
         };
         errors.push(Diagnostic::error(
             code,
-            format!("{path}.{member}"),
+            format!("{function_path}.source"),
             &message,
         ));
         return None;
@@ -672,7 +752,7 @@ fn compile_handler(
         {
             errors.push(Diagnostic::error(
                 "breg.action.handler-module-bound",
-                format!("{path}.module"),
+                format!("{function_path}.source"),
                 &format!(
                     "the handler module must be non-empty and at most {} bytes; {} bytes supplied",
                     crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES,
@@ -684,21 +764,25 @@ fn compile_handler(
         if !crate::wasm_handler::is_wasm_binary(&asset.bytes) {
             errors.push(Diagnostic::error(
                 "breg.action.handler-module-invalid",
-                format!("{path}.module"),
+                format!("{function_path}.source"),
                 "the handler module must be a WebAssembly binary, not WebAssembly text",
             ));
             return None;
         }
         #[cfg(feature = "wasm")]
         if let Some((code, message)) = crate::wasm_handler::structural_violation(&asset.bytes) {
-            errors.push(Diagnostic::error(code, format!("{path}.module"), &message));
+            errors.push(Diagnostic::error(
+                code,
+                format!("{function_path}.source"),
+                &message,
+            ));
             return None;
         }
     } else {
         if asset.bytes.is_empty() || asset.bytes.len() > crate::rhai_planner::MAXIMUM_SOURCE_BYTES {
             errors.push(Diagnostic::error(
                 "breg.action.handler-source-bound",
-                format!("{path}.script"),
+                format!("{function_path}.source"),
                 "the handler source must be non-empty and within its fixed byte bound",
             ));
             return None;
@@ -706,7 +790,7 @@ fn compile_handler(
         let Ok(script) = std::str::from_utf8(&asset.bytes) else {
             errors.push(Diagnostic::error(
                 "breg.action.handler-source-encoding",
-                format!("{path}.script"),
+                format!("{function_path}.source"),
                 "the handler source must be UTF-8",
             ));
             return None;
@@ -736,7 +820,16 @@ fn compile_handler(
                     "declare exactly one public configured function entry point and do not overload functions".to_owned(),
                 ),
             };
-            errors.push(Diagnostic::error(code, format!("{path}.script"), &message));
+            let member = if code == "breg.action.handler-entrypoint" {
+                "entrypoint"
+            } else {
+                "source"
+            };
+            errors.push(Diagnostic::error(
+                code,
+                format!("{function_path}.{member}"),
+                &message,
+            ));
             return None;
         }
         // The action's own Evidence declaration is what exposes the helper.
@@ -752,14 +845,12 @@ fn compile_handler(
         {
             errors.push(Diagnostic::error(
                 "breg.action.handler-helper-contract",
-                format!("{path}.script"),
+                format!("{function_path}.source"),
                 "Evidence helpers require an evidence declaration on the action and evidence::resolve with exactly two arguments",
             ));
             return None;
         }
     }
-    writes.sort_by(|left, right| left.id.cmp(&right.id));
-    effects.sort_by(|left, right| left.id.cmp(&right.id));
     let conditioned = target_uses
         .values()
         .filter(|use_| use_.condition_required)
@@ -793,7 +884,7 @@ fn compile_handler(
             } else {
                 CompiledPlanFunctionKind::Rhai
             },
-            source_module: collected.source_module.clone(),
+            source_module: function_module.map(str::to_owned),
             script_path: if is_wasm {
                 String::new()
             } else {
@@ -805,8 +896,7 @@ fn compile_handler(
                 String::new()
             },
             abi: abi.to_owned(),
-            rhai_version: (!is_wasm)
-                .then(|| crate::plan::PLAN_RHAI_VERSION.to_owned()),
+            rhai_version: (!is_wasm).then(|| crate::plan::PLAN_RHAI_VERSION.to_owned()),
             script_sha256: (!is_wasm)
                 .then(|| format!("sha256:{}", hex_lower(&Sha256::digest(&asset.bytes)))),
             module_sha256: is_wasm
@@ -842,11 +932,7 @@ fn compile_handler(
     ))
 }
 
-/// The authored source reference a Rhai handler declares: its script path.
-///
-/// The declaration pairs the kind with its source reference, so a rhai
-/// handler carries a script and nothing else; the caller reaches here only
-/// for that kind.
+/// Validate the source asset of an already resolved named Rhai function.
 fn rhai_handler_script_path<'a>(
     source: &'a crate::contract::ActionHandlerSource,
     path: &str,
@@ -856,7 +942,7 @@ fn rhai_handler_script_path<'a>(
     if !crate::plan::valid_function_path(script) {
         errors.push(Diagnostic::error(
             "breg.action.handler-source-invalid",
-            format!("{path}.script"),
+            format!("{path}.source"),
             "the handler script must be a bounded relative .rhai path",
         ));
         return None;
@@ -864,11 +950,7 @@ fn rhai_handler_script_path<'a>(
     Some(script)
 }
 
-/// The authored source reference a WASM handler declares: its module path.
-///
-/// The declaration pairs the kind with its source reference, so a wasm
-/// handler carries a module and nothing else; the caller reaches here only
-/// for that kind.
+/// Validate the source asset of an already resolved named WASM function.
 #[cfg(feature = "wasm")]
 fn wasm_handler_module_path<'a>(
     source: &'a crate::contract::ActionHandlerSource,
@@ -879,7 +961,7 @@ fn wasm_handler_module_path<'a>(
     if !crate::wasm_handler::valid_wasm_module_path(module) {
         errors.push(Diagnostic::error(
             "breg.action.handler-module-source-invalid",
-            format!("{path}.module"),
+            format!("{path}.source"),
             "the handler module must be a bounded relative .wasm path",
         ));
         return None;
@@ -895,9 +977,8 @@ fn compile_requirements(
     errors: &mut Vec<Diagnostic>,
 ) -> Vec<CompiledCommitGuard> {
     if action.commit_guards.targets.len() > usize::from(MAX_PLAN_FIELD_MUTATIONS)
-        || serde_json::to_vec(&action.commit_guards.targets).map_or(true, |bytes| {
-            bytes.len() > MAX_PLAN_SNAPSHOT_BYTES as usize
-        })
+        || serde_json::to_vec(&action.commit_guards.targets)
+            .map_or(true, |bytes| bytes.len() > MAX_PLAN_SNAPSHOT_BYTES as usize)
     {
         errors.push(Diagnostic::error(
             "breg.action.commit_guards.targets-bounds",
@@ -945,16 +1026,25 @@ fn compile_requirements(
             continue;
         }
         if requirement.revision.is_some() {
-            if !action.is_proposal()
+            let revision_is_bound = action.is_proposal()
+                || target_uses.iter().any(|target| {
+                    target.condition_required
+                        && matches!(&target.source,
+                    CompiledActionTargetUseSource::Input { input } if input == &requirement.input)
+                });
+            if !revision_is_bound
                 || !requirement.field.is_empty()
                 || requirement.equals.is_some()
                 || requirement.equals_input.is_some()
                 || requirement.is_null
+                || requirement.at_least.is_some()
+                || requirement.at_most.is_some()
+                || requirement.current_date.is_some()
             {
                 errors.push(Diagnostic::error(
                     "breg.action.guard-revision-invalid",
                     "actions[].commitGuards.targets[].revision",
-                    "revision: unchanged requires a proposal Action and no field predicate",
+                    "revision: unchanged requires a frozen Proposal or a bound immediate target condition and no field predicate",
                 ));
             } else {
                 compiled.push(CompiledCommitGuard {
@@ -964,6 +1054,9 @@ fn compile_requirements(
                     equals: None,
                     equals_input: None,
                     revision_unchanged: true,
+                    at_least: None,
+                    at_most: None,
+                    current_date: None,
                 });
             }
             continue;
@@ -989,7 +1082,10 @@ fn compile_requirements(
         }
         let choices = usize::from(requirement.equals.is_some())
             + usize::from(requirement.is_null)
-            + usize::from(requirement.equals_input.is_some());
+            + usize::from(requirement.equals_input.is_some())
+            + usize::from(requirement.at_least.is_some())
+            + usize::from(requirement.at_most.is_some())
+            + usize::from(requirement.current_date.is_some());
         let literal = requirement.literal();
         let literal_invalid = literal.as_ref().is_some_and(|equals| {
             equals.is_array()
@@ -1020,11 +1116,14 @@ fn compile_requirements(
             )
             || literal_invalid
             || input_invalid
+            || ((requirement.at_least.is_some() || requirement.at_most.is_some())
+                && field.field_type != FieldTypeSource::Int64)
+            || (requirement.current_date.is_some() && field.field_type != FieldTypeSource::Date)
         {
             errors.push(Diagnostic::error(
                 "breg.action.commit_guards.targets-value-invalid",
                 "actions[].commitGuards.targets[]",
-                "an action requirement must declare exactly one compatible scalar literal, isNull, or action input",
+                "a guard declares one typed equality, null check, input equality, integer bound, or current-date comparison",
             ));
             continue;
         }
@@ -1035,6 +1134,16 @@ fn compile_requirements(
             equals: literal,
             equals_input: requirement.equals_input.clone(),
             revision_unchanged: false,
+            at_least: requirement.at_least,
+            at_most: requirement.at_most,
+            current_date: requirement.current_date.map(|relation| match relation {
+                crate::contract::CurrentDatePredicateSource::OnOrAfter => {
+                    crate::model::CompiledCurrentDateRelation::OnOrAfter
+                }
+                crate::contract::CurrentDatePredicateSource::OnOrBefore => {
+                    crate::model::CompiledCurrentDateRelation::OnOrBefore
+                }
+            }),
         });
     }
     compiled.sort_by(|left, right| (&left.input, &left.field).cmp(&(&right.input, &right.field)));
@@ -1099,6 +1208,7 @@ fn compile_inputs(
             field_type: input.field_type.clone(),
             required: input.required,
             classification: input.classification,
+            display: input.display.clone(),
         });
     }
     inputs
@@ -1136,7 +1246,7 @@ fn compile_effects(
         }
     }
 
-    let mut compiled_by_id = BTreeMap::new();
+    let mut compiled_by_id = Vec::new();
     let mut writes = BTreeMap::new();
     let mut target_uses = BTreeMap::<(String, String, Operation), CompiledActionTargetUse>::new();
     for (index, effect) in action.effects().iter().enumerate() {
@@ -1157,7 +1267,7 @@ fn compile_effects(
             ));
         }
         let mut mutations = Vec::new();
-        let mut depends_on = effect.after.as_set().clone();
+        let mut depends_on = BTreeSet::new();
         for (field, value) in &effect.set {
             let Some(target_field) = target_entity.fields.get(field) else {
                 errors.push(Diagnostic::error(
@@ -1232,16 +1342,13 @@ fn compile_effects(
             );
         }
         remember_effect_use(&id, effect.operation, &target, &mutations, &mut target_uses);
-        compiled_by_id.insert(
-            id.clone(),
-            CompiledPlanEffect {
-                id,
-                target,
-                operation: effect.operation,
-                mutations,
-                depends_on,
-            },
-        );
+        compiled_by_id.push(CompiledPlanEffect {
+            id,
+            target,
+            operation: effect.operation,
+            mutations,
+            depends_on,
+        });
     }
 
     let ordered = order_effects(compiled_by_id, errors)?;
@@ -1359,14 +1466,6 @@ fn validate_mutable_target(
     proposal: bool,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<()> {
-    if entity.change_request.is_some() {
-        errors.push(Diagnostic::error(
-            "breg.action.effect-request-target",
-            "actions[].plan.effects[].target",
-            "Actions cannot target change-request workflow entities",
-        ));
-        return None;
-    }
     if operation == Operation::Patch
         && entity.mutation_mode == crate::contract::MutationMode::CreateOnly
     {
@@ -1403,6 +1502,14 @@ fn compile_value(
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledPlanValue> {
     if let Some(literal) = &value.value {
+        if !literal.is_null() && matches!(target_type, FieldTypeSource::Reference { .. }) {
+            errors.push(Diagnostic::error(
+                "breg.action.effect-reference-input-required",
+                format!("actions[].plan.effects[].set.{target_field}"),
+                "a reference must come from a typed input or an earlier create effect so its target can be authorized",
+            ));
+            return None;
+        }
         if value.from_field.is_some()
             || value.from_effect.is_some()
             || (literal.is_null() && target_required)
@@ -1580,16 +1687,12 @@ fn remember_link_reference_use(
     let FieldTypeSource::Reference { target, .. } = &input.field_type else {
         return;
     };
-    let key = (
-        target.clone(),
-        format!("input:{input_id}"),
-        Operation::Invoke,
-    );
+    let key = (target.clone(), format!("input:{input_id}"), Operation::Get);
     target_uses
         .entry(key)
         .or_insert_with(|| CompiledActionTargetUse {
             entity_id: target.clone(),
-            operation: Operation::Invoke,
+            operation: Operation::Get,
             fields: BTreeSet::new(),
             source: CompiledActionTargetUseSource::Input {
                 input: input_id.to_owned(),
@@ -1628,10 +1731,10 @@ fn remember_write(
 }
 
 fn order_effects(
-    effects: BTreeMap<String, CompiledPlanEffect>,
+    effects: Vec<CompiledPlanEffect>,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<Vec<CompiledPlanEffect>> {
-    match crate::plan::order_plan_effects(effects.into_values().collect()) {
+    match crate::plan::order_plan_effects(effects) {
         Ok(effects) => Some(effects),
         Err(failures) => {
             errors.extend(failures);
@@ -1782,6 +1885,7 @@ fn compile_permissions(
                 profile_id: profile.id.clone(),
                 default: profile.default,
                 actor_kind: profile.actor_kind,
+                task_grant: profile.task_grant.clone(),
                 requester_clients: profile.requester_clients.as_set().clone(),
                 principal_claim: Some(profile.principal_claim.clone()),
                 required_scopes: profile.required_scopes.as_set().clone(),
@@ -1981,7 +2085,6 @@ fn validate_permission_access_requirements(
             required_purposes: profile.required_purposes.clone(),
             operations: [Operation::Invoke].into(),
             readable_fields: Default::default(),
-            readable_request_fields: Default::default(),
             writable_fields: Default::default(),
             filterable_fields: Default::default(),
             sortable_fields: Default::default(),
@@ -1989,12 +2092,8 @@ fn validate_permission_access_requirements(
             row_boundaries: row_boundaries.to_vec(),
             membership_boundaries: Vec::new(),
             require_consent: Vec::new(),
-            request_visibility: None,
             lookups: Vec::new(),
             read_paths: Vec::new(),
-            apply_targets: Vec::new(),
-            submitter_targets: Default::default(),
-            request_presence: Vec::new(),
             allow_count: false,
             revision_access: false,
             provenance_fields: Vec::new(),
@@ -2082,192 +2181,6 @@ fn route_default_profile<'a>(
         ));
     }
     defaults.first().copied()
-}
-
-/// Whether `after` differs from `before` only by vocabulary codes added to its
-/// inputs, and by fields of the entities it targets whose candidate type
-/// `target_field_admits` accepts over the previous one, so every request the
-/// previous contract accepted keeps the same meaning. An input may gain only
-/// codes new to its vocabulary in this revision: one that starts accepting a
-/// code its vocabulary already had, such as a withdrawal that starts giving,
-/// changes what the action does. Any other difference, including a fingerprint
-/// an earlier compiler derived differently, is not.
-#[cfg(feature = "runtime")]
-pub(crate) fn contract_only_widens(
-    (before, previous_vocabularies): (&CompiledAction, &BTreeMap<String, BTreeSet<String>>),
-    previous_entities: &BTreeMap<String, CompiledEntity>,
-    (after, vocabularies): (&CompiledAction, &BTreeMap<String, BTreeSet<String>>),
-    entities: &BTreeMap<String, CompiledEntity>,
-    target_field_admits: fn(&FieldTypeSource, &FieldTypeSource) -> bool,
-) -> bool {
-    let inputs = after
-        .inputs
-        .iter()
-        .map(|input| {
-            let mut input = input.clone();
-            if let Some(previous) = before.inputs.iter().find(|other| other.id == input.id) {
-                if input_gains_only_new_codes(
-                    &previous.field_type,
-                    &input.field_type,
-                    previous_vocabularies,
-                    vocabularies,
-                ) {
-                    input.field_type = previous.field_type.clone();
-                }
-            }
-            input
-        })
-        .collect::<Vec<_>>();
-    let entities = entities
-        .iter()
-        .map(|(entity_id, entity)| {
-            let mut entity = entity.clone();
-            if let Some(previous) = previous_entities.get(entity_id) {
-                for (field_id, field) in &mut entity.fields {
-                    if let Some(previous_field) = previous.fields.get(field_id) {
-                        if target_field_admits(&field.field_type, &previous_field.field_type) {
-                            field.field_type = previous_field.field_type.clone();
-                        }
-                    }
-                }
-            }
-            (entity_id.clone(), entity)
-        })
-        .collect::<BTreeMap<_, _>>();
-    contract_fingerprint(
-        &after.id,
-        &entities,
-        &inputs,
-        (&after.effects, after.handler.as_ref()),
-        (&after.requires, after.consent_issuer),
-        &after.permissions,
-    ) == before.contract_fingerprint
-}
-
-/// Whether an action input keeps every code it accepted and gains only codes
-/// its vocabulary did not have before. A predecessor that recorded no codes for
-/// the vocabulary cannot tell, so the input fails closed to a reviewed change.
-#[cfg(feature = "runtime")]
-fn input_gains_only_new_codes(
-    previous: &FieldTypeSource,
-    after: &FieldTypeSource,
-    previous_vocabularies: &BTreeMap<String, BTreeSet<String>>,
-    vocabularies: &BTreeMap<String, BTreeSet<String>>,
-) -> bool {
-    let (
-        FieldTypeSource::VocabularyCode {
-            vocabulary,
-            values: previous_values,
-        },
-        FieldTypeSource::VocabularyCode { values, .. },
-    ) = (previous, after)
-    else {
-        return false;
-    };
-    let (Some(previous_codes), Some(codes)) = (
-        previous_vocabularies.get(vocabulary),
-        vocabularies.get(vocabulary),
-    ) else {
-        return false;
-    };
-    after.keeps_vocabulary_codes_of(previous)
-        && values
-            .iter()
-            .filter(|value| !previous_values.contains(value))
-            .all(|value| codes.contains(value) && !previous_codes.contains(value))
-}
-
-fn contract_fingerprint(
-    action_id: &str,
-    entities: &BTreeMap<String, CompiledEntity>,
-    inputs: &[CompiledActionInput],
-    (effects, handler): (
-        &[CompiledPlanEffect],
-        Option<&crate::model::CompiledPlanFunction>,
-    ),
-    (requires, consent_issuer): (
-        &[CompiledCommitGuard],
-        Option<crate::contract::ConsentIssuerSource>,
-    ),
-    permissions: &[CompiledActionPermission],
-) -> String {
-    let target_entities = effects
-        .iter()
-        .map(|effect| effect.target.entity_id.as_str())
-        .chain(
-            requires
-                .iter()
-                .map(|requirement| requirement.entity_id.as_str()),
-        )
-        .collect::<BTreeSet<_>>();
-    let target_contracts = target_entities
-        .iter()
-        .filter_map(|entity_id| {
-            entities
-                .get(*entity_id)
-                .map(|entity| ((*entity_id).to_owned(), entity_contract_payload(entity)))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let mut payload = json!({
-        "version": 1,
-        "id": action_id,
-        "inputs": inputs,
-        "targetEntities": target_contracts,
-        "effects": effects,
-        "permissions": permissions,
-        "limits": {
-            "maximumTargets": MAX_PLAN_TARGETS,
-            "maximumFieldMutations": MAX_PLAN_FIELD_MUTATIONS,
-            "maximumSnapshotBytes": MAX_PLAN_SNAPSHOT_BYTES
-        }
-    });
-    if let Some(handler) = handler {
-        payload["handler"] = json!(handler);
-    }
-    // Preserve existing action identities when no acceptance requirement is added.
-    if !requires.is_empty() {
-        payload["requires"] = json!(requires);
-    }
-    // Only actions that create consent rows carry an issuer, so every other
-    // action keeps its identity.
-    if let Some(issuer) = consent_issuer {
-        payload["consentIssuer"] = json!(issuer);
-    }
-    let bytes = canonicalize_json(&payload).expect("compiled Action canonicalizes");
-    let digest = Sha256::digest(bytes);
-    format!("sha256:{}", hex_lower(&digest))
-}
-
-fn entity_contract_payload(entity: &CompiledEntity) -> serde_json::Value {
-    let fields = entity
-        .fields
-        .iter()
-        .map(|(field_id, field)| {
-            (field_id.clone(), {
-                let mut payload = json!({
-                    "type": field.field_type,
-                    "required": field.required,
-                    "classification": field.classification,
-                    "validTimeRole": field.valid_time_role,
-                });
-                if let Some(pattern) = &field.pattern {
-                    payload["postgresPattern"] = json!(pattern);
-                }
-                payload
-            })
-        })
-        .collect::<BTreeMap<_, _>>();
-    json!({
-        "id": entity.id,
-        "route": entity.route,
-        "mutationMode": entity.mutation_mode,
-        "tombstone": entity.tombstone,
-        "classification": entity.classification,
-        "accessRequirements": entity.access_requirements,
-        "fields": fields,
-        "constraints": entity.constraints,
-        "changeControl": entity.change_control,
-    })
 }
 
 fn validate_field_type_bounds(
@@ -2479,8 +2392,28 @@ fn compile_execution(
     let ActionExecutionSource::Proposal { proposal } = &action.execution else {
         return CompiledActionExecution::Immediate;
     };
+    let attachment_field_names = action
+        .inputs
+        .iter()
+        .flat_map(|input| [input.id.clone(), default_api_name(&input.id)])
+        .chain([
+            "proposalId".to_owned(),
+            "actionId".to_owned(),
+            "actionRevision".to_owned(),
+            "submissionVersion".to_owned(),
+            "revision".to_owned(),
+            "status".to_owned(),
+        ])
+        .collect();
+    crate::compiler::attachments::validate_slots(
+        &proposal.attachments,
+        &attachment_field_names,
+        &format!("actions[id={}].execution.proposal.attachments", action.id),
+        errors,
+    );
+    let attachments = crate::compiler::attachments::compile_slots(&proposal.attachments);
     let review = match &proposal.review {
-        ProposalReviewSource::None => CompiledProposalReview::None,
+        ProposalReviewSource::None {} => CompiledProposalReview::None,
         ProposalReviewSource::Required {
             authority,
             source,
@@ -2492,33 +2425,37 @@ fn compile_execution(
             }) {
                 errors.push(Diagnostic::error("breg.proposal.review-authority-unknown","actions[].execution.proposal.review.authority","required review must name a declared authority implementing the review protocol"));
             }
+            let binding = registry_review_protocol::PolicyBinding {
+                id: policy.id.clone(),
+                version: policy.version.clone(),
+                digest: registry_review_protocol::ContentDigest::parse(policy.digest.as_str())
+                    .expect("reader checked SHA-256 digest"),
+            };
+            if binding.check().is_err()
+                || source.is_empty()
+                || source.len() > 256
+                || source.chars().any(char::is_control)
+            {
+                errors.push(Diagnostic::error("breg.proposal.review-binding-invalid", "actions[].execution.proposal.review", "review source and exact policy identifier/version must satisfy the review protocol bounds"));
+            }
             CompiledProposalReview::Required {
                 authority: authority.clone(),
                 source: source.clone(),
-                policy: registry_review_protocol::PolicyBinding {
-                    id: policy.id.clone(),
-                    version: policy.version.clone(),
-                    digest: registry_review_protocol::ContentDigest::parse(policy.digest.as_str())
-                        .expect("reader checked SHA-256 digest"),
-                },
+                policy: binding,
             }
         }
     };
     let application = match &proposal.application {
-        ProposalApplicationSource::Manual => CompiledProposalApplication::Manual,
-        ProposalApplicationSource::Automatic {
-            executor,
-            maximum_attempts,
-        } => {
-            if executor.is_empty() || !(1..=32).contains(maximum_attempts) {
+        ProposalApplicationSource::Manual {} => CompiledProposalApplication::Manual,
+        ProposalApplicationSource::Automatic { maximum_attempts } => {
+            if !(1..=32).contains(maximum_attempts) {
                 errors.push(Diagnostic::error(
                     "breg.proposal.application-invalid",
                     "actions[].execution.proposal.application",
-                    "automatic application requires a named executor and 1 through 32 attempts",
+                    "automatic application supports 1 through 32 built-in worker attempts",
                 ));
             }
             CompiledProposalApplication::Automatic {
-                executor: executor.clone(),
                 maximum_attempts: *maximum_attempts,
             }
         }
@@ -2531,6 +2468,43 @@ fn compile_execution(
             .iter()
             .filter(|grant| grant.action == action.id)
         {
+            crate::consent::validate_proposal_permission(profile, grant, entities, errors);
+            let authority_status = grant.review_authority.is_some();
+            if authority_status {
+                let matches_authority = matches!(&review, CompiledProposalReview::Required { authority, .. }
+                    if Some(authority) == grant.review_authority.as_ref());
+                if !matches_authority
+                    || profile.actor_kind != Some(ActorKindSource::Service)
+                    || grant.operations.len() != 1
+                    || !grant
+                        .operations
+                        .contains(&ProposalOperation::GetReviewStatus)
+                    || grant.ownership.is_some()
+                    || !grant.targets.is_empty()
+                    || !grant.readable_context_fields.is_empty()
+                    || !grant.readable_inputs.is_empty()
+                    || !grant.readable_attachments.is_empty()
+                    || !grant.writable_attachments.is_empty()
+                {
+                    errors.push(Diagnostic::error(
+                        "breg.proposal.review-status-authority-invalid",
+                        "accessProfiles[].permissions.proposals[].reviewAuthority",
+                        "a named review authority requires a service-only GetReviewStatus grant with no Record targets or projected fields",
+                    ));
+                }
+            }
+
+            if profile.actor_kind == Some(ActorKindSource::Agent)
+                && profile.task_grant.is_none()
+                && (grant
+                    .operations
+                    .iter()
+                    .any(|operation| !matches!(operation, ProposalOperation::Edit))
+                    || (grant.operations.contains(&ProposalOperation::Edit)
+                        && grant.ownership != Some(ProposalOwnership::Caller)))
+            {
+                errors.push(Diagnostic::error("breg.proposal.standing-agent-operation-forbidden", "accessProfiles[].permissions.proposals", "an agent without a task grant can only start and edit caller-owned draft Proposals; other operations require delegated or human authority"));
+            }
             if grant.operations.is_empty()
                 || permissions
                     .iter()
@@ -2578,9 +2552,10 @@ fn compile_execution(
                     row_boundaries: target.row_boundaries.clone(),
                 });
             }
-            if target_uses
-                .iter()
-                .any(|use_| !seen.contains(&use_.entity_id))
+            if !authority_status
+                && target_uses
+                    .iter()
+                    .any(|use_| !seen.contains(&use_.entity_id))
             {
                 errors.push(Diagnostic::error(
                     "breg.proposal.permission-targets-incomplete",
@@ -2600,10 +2575,41 @@ fn compile_execution(
                     "context grants must name fields in this Action's declared review context",
                 ));
             }
+            let input_ids = action
+                .inputs
+                .iter()
+                .map(|input| input.id.clone())
+                .collect::<BTreeSet<_>>();
+            if !grant.readable_inputs.is_subset(&input_ids)
+                || (!grant.readable_inputs.is_empty()
+                    && !grant.operations.contains(&ProposalOperation::Get))
+            {
+                errors.push(Diagnostic::error(
+                    "breg.proposal.input-grant-invalid",
+                    "accessProfiles[].permissions.proposals[].readableInputs",
+                    "input disclosure grants must name declared Action inputs and require Get",
+                ));
+            }
+            let attachment_ids = attachments.keys().cloned().collect::<BTreeSet<_>>();
+            if !grant.readable_attachments.is_subset(&attachment_ids)
+                || !grant.writable_attachments.is_subset(&attachment_ids)
+                || (!grant.readable_attachments.is_empty()
+                    && !grant.operations.contains(&ProposalOperation::Get))
+                || (!grant.writable_attachments.is_empty()
+                    && !grant.operations.contains(&ProposalOperation::Edit))
+            {
+                errors.push(Diagnostic::error(
+                    "breg.proposal.attachment-grant-invalid",
+                    "accessProfiles[].permissions.proposals",
+                    "attachment grants must name declared slots and require Get for reads or Edit for writes",
+                ));
+            }
             permissions.push(CompiledProposalPermission {
                 profile_id: profile.id.clone(),
+                review_authority: grant.review_authority.clone(),
                 default: profile.default,
                 actor_kind: profile.actor_kind,
+                task_grant: profile.task_grant.clone(),
                 requester_clients: profile.requester_clients.as_set().clone(),
                 principal_claim: Some(profile.principal_claim.clone()),
                 required_scopes: profile.required_scopes.as_set().clone(),
@@ -2612,10 +2618,18 @@ fn compile_execution(
                 ownership: grant.ownership,
                 targets,
                 readable_context_fields: grant.readable_context_fields.as_set().clone(),
+                readable_inputs: grant.readable_inputs.as_set().clone(),
+                readable_attachments: grant.readable_attachments.as_set().clone(),
+                writable_attachments: grant.writable_attachments.as_set().clone(),
             });
         }
     }
     if let Some(context) = &proposal.review_context {
+        validate_id(
+            &context.id,
+            "actions[].execution.proposal.reviewContext.id",
+            errors,
+        );
         if context.fields.len() > 64 {
             errors.push(Diagnostic::error(
                 "breg.proposal.context-bounds",
@@ -2623,7 +2637,14 @@ fn compile_execution(
                 "review context supports at most 64 fields",
             ));
         }
-        for value in context.fields.values() {
+        for (name, value) in &context.fields {
+            if !valid_api_name(name) || reserved_logical_name(name) {
+                errors.push(Diagnostic::error(
+                    "breg.proposal.context-name-invalid",
+                    "actions[].execution.proposal.reviewContext.fields",
+                    "review-context fields must use distinct public API names",
+                ));
+            }
             let valid = match (&value.from_input, &value.from_record, &value.field) {
                 (Some(input), None, None) => action.inputs.iter().any(|field| &field.id == input),
                 (None, Some(input), Some(field)) => action
@@ -2650,6 +2671,7 @@ fn compile_execution(
     }
     CompiledActionExecution::Proposal {
         proposal: CompiledProposalPolicy {
+            system_apply_grant: None,
             review,
             application,
             retention: match proposal.retention.mode {
@@ -2659,12 +2681,78 @@ fn compile_execution(
                 }
             },
             review_context: proposal.review_context.clone(),
+            attachments,
             permissions,
         },
     }
 }
 
-fn definition_revision(
+pub(crate) fn finalize_action_revisions(
+    inventory: &mut CompiledActionInventory,
+    entities: &BTreeMap<String, CompiledEntity>,
+) {
+    for action in &mut inventory.actions {
+        action.definition_revision = definition_revision(action, entities);
+        let mut targets =
+            BTreeMap::<(String, Operation), crate::model::CompiledSystemApplyTarget>::new();
+        for use_ in &action.target_uses {
+            let operation = if use_.operation == Operation::Invoke {
+                Operation::Get
+            } else {
+                use_.operation
+            };
+            let target = targets
+                .entry((use_.entity_id.clone(), operation))
+                .or_insert_with(|| crate::model::CompiledSystemApplyTarget {
+                    entity_id: use_.entity_id.clone(),
+                    operation,
+                    fields: BTreeSet::new(),
+                    read_fields: BTreeSet::new(),
+                });
+            if matches!(operation, Operation::Create | Operation::Patch) {
+                target.fields.extend(use_.fields.iter().cloned());
+            }
+            target.read_fields.extend(use_.fields.iter().cloned());
+        }
+        for guard in &action.requires {
+            let target = targets
+                .entry((guard.entity_id.clone(), Operation::Get))
+                .or_insert_with(|| crate::model::CompiledSystemApplyTarget {
+                    entity_id: guard.entity_id.clone(),
+                    operation: Operation::Get,
+                    fields: BTreeSet::new(),
+                    read_fields: BTreeSet::new(),
+                });
+            if !guard.field.is_empty() {
+                target.read_fields.insert(guard.field.clone());
+            }
+        }
+        let targets = targets.into_values().collect::<Vec<_>>();
+        let payload = json!({"actionId":action.id,"actionRevision":action.definition_revision,"targets":targets});
+        let revision = format!(
+            "sha256:{}",
+            hex_lower(&Sha256::digest(
+                canonicalize_json(&payload).expect("normalized system grant canonicalizes")
+            ))
+        );
+        if let crate::model::CompiledActionExecution::Proposal { proposal } = &mut action.execution
+        {
+            if matches!(
+                proposal.application,
+                crate::model::CompiledProposalApplication::Automatic { .. }
+            ) {
+                proposal.system_apply_grant = Some(crate::model::CompiledSystemApplyGrant {
+                    revision,
+                    action_id: action.id.clone(),
+                    action_revision: action.definition_revision.clone(),
+                    targets,
+                });
+            }
+        }
+    }
+}
+
+pub(crate) fn definition_revision(
     action: &CompiledAction,
     entities: &BTreeMap<String, CompiledEntity>,
 ) -> String {
@@ -2683,17 +2771,34 @@ fn definition_revision(
     }
     let targets=used.into_iter().filter_map(|(id,mut fields)| {
         let target=entities.get(&id)?;
-        if action.effects.iter().any(|effect|effect.target.entity_id==id && effect.operation==Operation::Create) {fields.extend(target.fields.keys().cloned());}
+        // Both write operations freeze and validate complete before/after rows,
+        // so requiredness and retained-field bounds belong to their closure.
+        if action.effects.iter().any(|effect|effect.target.entity_id==id && matches!(effect.operation,Operation::Create|Operation::Patch)) {fields.extend(target.fields.keys().cloned());}
         let fields=fields.into_iter().filter_map(|id|target.fields.get(&id).map(|field|(id,json!({"type":field.field_type,"required":field.required,"classification":field.classification,"pattern":field.pattern,"encrypted":field.encryption})))).collect::<BTreeMap<_,_>>();
         Some((id,json!({"fields":fields,"constraints":target.constraints,"mutationMode":target.mutation_mode,"changeControl":target.change_control})))
     }).collect::<BTreeMap<_,_>>();
     let policy = match &action.execution {
         crate::model::CompiledActionExecution::Immediate => json!({"mode":"immediate"}),
         crate::model::CompiledActionExecution::Proposal { proposal } => {
-            json!({"mode":"proposal","review":proposal.review,"application":proposal.application,"retention":proposal.retention,"reviewContext":proposal.review_context})
+            json!({"mode":"proposal","review":proposal.review,"application":proposal.application,"retention":proposal.retention,"reviewContext":proposal.review_context,"attachments":proposal.attachments})
         }
     };
-    let payload = json!({"id":action.id,"apiName":action.api_name,"inputs":action.inputs,"plan":{"effects":action.effects,"function":action.handler},"commitGuards":action.requires,"targets":targets,"execution":policy,"consentIssuer":action.consent_issuer});
+    let inputs = action
+        .inputs
+        .iter()
+        .map(|input| {
+            json!({
+                "id":input.id,"apiName":input.api_name,"fieldType":input.field_type,
+                "required":input.required,"classification":input.classification,
+            })
+        })
+        .collect::<Vec<_>>();
+    let function = action.handler.as_ref().map(|function| {
+        let mut value = serde_json::to_value(function).expect("compiled function serializes");
+        value["refusals"] = json!(function.refusals.keys().collect::<Vec<_>>());
+        value
+    });
+    let payload = json!({"id":action.id,"apiName":action.api_name,"inputs":inputs,"plan":{"effects":action.effects,"function":function},"commitGuards":{"targets":action.requires,"evidence":action.commit_evidence},"planEvidence":action.evidence,"targets":targets,"execution":policy,"consentIssuer":action.consent_issuer});
     format!(
         "sha256:{}",
         hex_lower(&Sha256::digest(

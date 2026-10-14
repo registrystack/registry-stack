@@ -437,7 +437,7 @@ pub(crate) async fn install_migration_ledger(
 
 /// Installs the order of the package revisions a pre-ledger database's
 /// ledger named, as an earlier release's adoption of it recorded them.
-/// Field-encryption flips and request proposals recorded before adoption name
+/// Field-encryption flips and Proposals recorded before adoption name
 /// those revisions, and erasure orders them against each other here; every
 /// position precedes the first activation, so a revision the ledger records
 /// always follows them. The table is empty on a database the ledger recorded

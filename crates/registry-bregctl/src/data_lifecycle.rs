@@ -1728,7 +1728,8 @@ mod tests {
             "kind": "BRegProject",
             "project": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
                          "canonicalBaseIri": "https://ctl-data.example.test"},
-            "entities": [{
+            "datasets": [{"id":"test-dataset"}],
+            "recordTypes": [{
                 "id": ENTITY,
                 "primaryDataset": "test-dataset",
                 "route": "records",
@@ -1743,8 +1744,8 @@ mod tests {
                 "id": PROFILE,
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",
-                "permissions": {"entities": [{
-                    "entity": ENTITY,
+                "permissions": {"records": [{
+                    "recordType": ENTITY,
                     "operations": operations,
                     "readableFields": ["code"],
                     "writableFields": ["code"],
@@ -2215,7 +2216,8 @@ mod tests {
             "kind": "BRegProject",
             "project": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
                          "canonicalBaseIri": "https://ctl-data.example.test"},
-            "entities": [{
+            "datasets": [{"id":"test-dataset"}],
+            "recordTypes": [{
                 "id": ENTITY,
                 "primaryDataset": "test-dataset",
                 "route": "records",
@@ -2233,8 +2235,8 @@ mod tests {
                 "id": PROFILE,
                 "principalClaim": "principal",
                 "requiredScopes": "unrestricted",
-                "permissions": {"entities": [{
-                    "entity": ENTITY,
+                "permissions": {"records": [{
+                    "recordType": ENTITY,
                     "operations": ["create", "batch", "list"],
                     "readableFields": ["payload"],
                     "writableFields": ["payload"],

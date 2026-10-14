@@ -12,13 +12,13 @@ mod postgres_harness;
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_breg::api::VerifiedRequestClaims;
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg_client::{
     BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey, BRegListRequest, BRegProblemCode,
     BRegRecordFormat, BRegRecordOptions, BRegRelationshipListRequest,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sdk_relationship_continuation_keeps_source_path_authority_and_target_projection() {
@@ -98,12 +98,14 @@ async fn sdk_relationship_continuation_keeps_source_path_authority_and_target_pr
         record.record_identifier == unlinked.value.data.record_identifier
             && record.domain_data == BTreeMap::from([("sensitiveNote".into(), json!("private-4"))])
     }));
-    assert!(direct
-        .value
-        .value
-        .items
-        .iter()
-        .all(|record| !record.domain_data.contains_key("personCode")));
+    assert!(
+        direct
+            .value
+            .value
+            .items
+            .iter()
+            .all(|record| !record.domain_data.contains_key("personCode"))
+    );
 
     let request = BRegRelationshipListRequest::default()
         .options(
@@ -424,11 +426,11 @@ fn compile(source: &str, label: &str) -> registry_breg::CompiledRegistry {
         .unwrap_or_else(|error| panic!("{label} compiles: {error:?}"))
 }
 
-const UNGRANTED_TARGET_PROJECT: &str = r#"{
+const UNGRANTED_TARGET_PROJECT: &str = r#"{"datasets":[{"id": "test-dataset"}],
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"ungranted-read-path-target","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-  "entities":[
+  "recordTypes":[
     {
       "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
       "fields":[{"id":"household-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"}],
@@ -451,13 +453,13 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{
       "id":"operator","default":true,"principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
-        "entities":[
+        "records":[
           {
-            "entity":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
+            "recordType":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
             "readableFields":["household-code"],"writableFields":["household-code"],
             "readPaths":[{"path":"people","readableFields":["person-code"]}]
           },
-          {"entity":"membership","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]}
+          {"recordType":"membership","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]}
         ]
       }
     },
@@ -465,8 +467,8 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{
       "id":"writer","principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
-        "entities":[
-          {"entity":"person","rowBoundaries":"unrestricted","operations":["create","get","list"],"readableFields":["person-code"],"writableFields":["person-code"]}
+        "records":[
+          {"recordType":"person","rowBoundaries":"unrestricted","operations":["create","get","list"],"readableFields":["person-code"],"writableFields":["person-code"]}
         ]
       }
     },
@@ -474,19 +476,19 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{
       "id":"viewer","principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
-        "entities":[
-          {"entity":"household","rowBoundaries":"unrestricted","operations":["get","list"],"readableFields":["household-code"]}
+        "records":[
+          {"recordType":"household","rowBoundaries":"unrestricted","operations":["get","list"],"readableFields":["household-code"]}
         ]
       }
     }
   ]
 }"#;
 
-const CHANGE_REQUEST_TARGET_PROJECT: &str = r#"{
+const CHANGE_REQUEST_TARGET_PROJECT: &str = r#"{"datasets":[{"id": "test-dataset"}],
   "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
   "kind":"BRegProject",
   "project":{"id":"change-request-read-path-target","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-  "entities":[
+  "recordTypes":[
     {
       "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
       "changeControl":{"requiredFor":["patch"]},
@@ -508,7 +510,7 @@ const CHANGE_REQUEST_TARGET_PROJECT: &str = r#"{
         {"id":"reason","type":"string","required":true,"maximumLength":64,"classification":"restricted"}
       ],
       "changeRequest":{
-        "effects":[{"target":{"fromField":"household"},"operation":"patch","set":{"household-code":{"fromField":"proposed-code"}}}],
+        "effects":[{"target":{"fromInput":"household"},"operation":"patch","set":{"household-code":{"fromInput":"proposed-code"}}}],
         "review":{"type":"required","authority":"casework-main","policyId":"claim-review"},
         "onApproved":{"mode":"manual"}
       }
@@ -519,13 +521,13 @@ const CHANGE_REQUEST_TARGET_PROJECT: &str = r#"{
       "id":"operator","default":true,"principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
-        "entities":[
+        "records":[
           {
-            "entity":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
+            "recordType":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
             "readableFields":["household-code"],"writableFields":["household-code"],
             "readPaths":[{"path":"claims","readableFields":["reason"]}]
           },
-          {"entity":"claim-link","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","claim"],"writableFields":["household","claim"]}
+          {"recordType":"claim-link","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","claim"],"writableFields":["household","claim"]}
         ]
       }
     },
@@ -533,9 +535,9 @@ const CHANGE_REQUEST_TARGET_PROJECT: &str = r#"{
       "id":"submitter","principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
-        "entities":[
+        "records":[
           {
-            "entity":"claim","rowBoundaries":"unrestricted","operations":["create","get","list","submit-request"],
+            "recordType":"claim","rowBoundaries":"unrestricted","operations":["create","get","list","submit-request"],
             "readableFields":["household","proposed-code","reason"],"writableFields":["household","proposed-code","reason"],
             "requestVisibility":"owner"
           }
@@ -546,11 +548,11 @@ const CHANGE_REQUEST_TARGET_PROJECT: &str = r#"{
       "id":"applier","principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":{
-        "entities":[
+        "records":[
           {
-            "entity":"claim","rowBoundaries":"unrestricted","operations":["get","apply-request"],
+            "recordType":"claim","rowBoundaries":"unrestricted","operations":["get","apply-request"],
             "readableFields":["household","proposed-code","reason"],
-            "applyTargets":[{"entity":"household","rowBoundaries":"unrestricted"}]
+            "applyTargets":[{"recordType":"household","rowBoundaries":"unrestricted"}]
           }
         ]
       }
@@ -596,11 +598,11 @@ fn claims() -> VerifiedRequestClaims {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"client-relationships","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
-          "entities":[
+          "recordTypes":[
             {
               "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"restricted",
               "fields":[{"id":"household-code","type":"string","required":true,"maximumLength":64,"classification":"restricted"}],
@@ -625,15 +627,15 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
             "permissions":{
-              "entities":[
+              "records":[
                 {
-                  "entity":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
+                  "recordType":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
                   "readableFields":["household-code"],"writableFields":["household-code"],
                   "readPaths":[{"path":"people","readableFields":["person-code"],"sortableFields":["person-code"],"allowCount":true}]
                 },
-                {"entity":"membership","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]},
+                {"recordType":"membership","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]},
                 {
-                  "entity":"person","rowBoundaries":"unrestricted","operations":["create","get","list"],
+                  "recordType":"person","rowBoundaries":"unrestricted","operations":["create","get","list"],
                   "readableFields":["sensitive-note"],"writableFields":["person-code","sensitive-note"]
                 }
               ]

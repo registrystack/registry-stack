@@ -7,9 +7,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::contract::{
-    AccessProfileSource, ActorKindSource, DatasetOperation, FieldTypeSource, Operation,
-    RegistryProject, StatisticalPeriodGranularitySource, StatisticalPeriodSource,
-    StatisticalValiditySource, MAX_EXACT_JSON_INTEGER,
+    AccessProfileSource, ActorKindSource, DatasetOperation, FieldTypeSource,
+    MAX_EXACT_JSON_INTEGER, Operation, RegistryProject, StatisticalPeriodGranularitySource,
+    StatisticalPeriodSource, StatisticalValiditySource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
@@ -18,7 +18,7 @@ use crate::model::{
     CompiledStatisticalValidity,
 };
 use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
-use crate::statistics::{period_for_code, DisclosureParameters, PeriodGranularity};
+use crate::statistics::{DisclosureParameters, PeriodGranularity, period_for_code};
 
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
 
@@ -104,7 +104,7 @@ pub(super) fn compile(
                 standing_agent(access.actor_kind, access.task_grant.is_some())
             }) {
                 Some(format!(
-                    "entities[id={}].accessProfiles[id={profile}]",
+                    "recordTypes[id={}].accessProfiles[id={profile}]",
                     unit.id
                 ))
             } else {
@@ -530,7 +530,6 @@ fn authentication_profile(
         required_purposes: profile.required_purposes.clone(),
         operations: Default::default(),
         readable_fields: Default::default(),
-        readable_request_fields: Default::default(),
         writable_fields: Default::default(),
         filterable_fields: Default::default(),
         sortable_fields: Default::default(),
@@ -538,12 +537,8 @@ fn authentication_profile(
         row_boundaries: Vec::new(),
         membership_boundaries: Vec::new(),
         require_consent: Vec::new(),
-        request_visibility: None,
         lookups: Vec::new(),
         read_paths: Vec::new(),
-        apply_targets: Vec::new(),
-        submitter_targets: Default::default(),
-        request_presence: Vec::new(),
         allow_count: false,
         revision_access: false,
         provenance_fields: Vec::new(),
@@ -891,8 +886,6 @@ fn validate_publisher_independence(
             Some("requiredPurposes")
         } else if !grant.require_consent.is_empty() {
             Some("requireConsent")
-        } else if grant.request_visibility.is_some() {
-            Some("requestVisibility")
         } else {
             None
         };
@@ -972,7 +965,6 @@ fn definition_digest(
         membership_boundaries: serde_json::Value,
         required_purposes: serde_json::Value,
         require_consent: serde_json::Value,
-        request_visibility: serde_json::Value,
         access_requirement_row_boundaries: serde_json::Value,
     }
     let unit = &dependencies.entities[&source.unit];
@@ -1057,11 +1049,12 @@ fn definition_digest(
                         membership_boundaries: json!(profile.membership_boundaries),
                         required_purposes: json!(profile.required_purposes),
                         require_consent: json!(profile.require_consent),
-                        request_visibility: json!(profile.request_visibility),
-                        access_requirement_row_boundaries: json!(entity
-                            .access_requirements
-                            .as_ref()
-                            .map(|requirements| &requirements.row_boundaries)),
+                        access_requirement_row_boundaries: json!(
+                            entity
+                                .access_requirements
+                                .as_ref()
+                                .map(|requirements| &requirements.row_boundaries)
+                        ),
                     })
                 })
                 .collect::<Vec<_>>()

@@ -3,8 +3,8 @@
 //! PostgreSQL computation and immutable storage for governed statistical datasets.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -16,9 +16,8 @@ use crate::api::{AuthorizedRequestContext, ReadServiceError};
 use crate::audit::RegistryAudit;
 use crate::history_reference::SnapshotReference;
 use crate::idempotency::{
-    insert_result, lock_and_load, resolve_binding, HeldResponse, IdempotencyBinding,
-    IdempotencyError, IdempotencyKeyDomain, IdempotencyPolicy, PermittedResponseHeader,
-    StoredResultMetadata,
+    HeldResponse, IdempotencyBinding, IdempotencyError, IdempotencyKeyDomain, IdempotencyPolicy,
+    PermittedResponseHeader, StoredResultMetadata, insert_result, lock_and_load, resolve_binding,
 };
 use crate::model::{
     CompiledEntity, CompiledRegistry, CompiledStatisticalDataset,
@@ -27,19 +26,19 @@ use crate::model::{
 };
 use crate::mutation::BoundValue;
 use crate::statistics::{
-    apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
-    period_for_code, period_range, Cell, DatasetDocument, DimensionDomain, DisclosureDocument,
-    GroupedCell, LiveDocument, Measure, Period, PeriodDocument, PeriodGranularity, PeriodKind,
+    Cell, DatasetDocument, DimensionDomain, DisclosureDocument, GroupedCell, LiveDocument,
+    MAX_CELLS_PER_RESPONSE, Measure, Period, PeriodDocument, PeriodGranularity, PeriodKind,
     PeriodVersionHeader, ReleaseDocument, ReleaseStatus, ReleaseVersionHeader, StatisticsDocument,
-    StatisticsError, WithdrawalDocument, WithdrawalReason, MAX_CELLS_PER_RESPONSE,
+    StatisticsError, WithdrawalDocument, WithdrawalReason, apply_disclosure, build_exact_cells,
+    canonical_document_and_digest, current_period, period_for_code, period_range,
 };
 
 use super::read::{
-    install_statistics_evaluation_date, read_predicates, strict_claim_context, ReadRelations,
+    ReadRelations, install_statistics_evaluation_date, read_predicates, strict_claim_context,
 };
 use super::{
-    begin_record_transaction, ExpectedRegistryIdentity, GuardedTransaction, RegistryLockKey,
-    RuntimePool,
+    ExpectedRegistryIdentity, GuardedTransaction, RegistryLockKey, RuntimePool,
+    begin_record_transaction,
 };
 
 const CONTENT_TYPE_JSON: &[u8] = b"application/json";
@@ -615,15 +614,6 @@ impl PostgresStatisticsService {
             .set_statement_budget(remaining_budget(deadline)?)
             .await
             .map_err(unavailable)?;
-        crate::mutation::install_request_visibility_context(
-            transaction.transaction(),
-            entity,
-            &claims,
-            self.audit.profile(),
-            &self.expected.database_id,
-        )
-        .await
-        .map_err(unavailable)?;
         install_statistics_evaluation_date(transaction.transaction(), &evaluation_date.to_string())
             .await
             .map_err(map_read_error)?;

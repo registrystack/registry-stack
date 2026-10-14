@@ -9,33 +9,33 @@ mod postgres_harness;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderName, HeaderValue, Method, Request};
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
-    authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, authenticated_router,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::data::{
-    execute_export_page, execute_import_chunk, DataError, DataExportCheckpoint,
-    DataExportOutputState, DataExportPlan, DataHttpMethod, DataHttpRequest, DataHttpResponse,
-    DataImportCheckpoint, DataImportOperation, DataImportPlan,
+    DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan, DataHttpMethod,
+    DataHttpRequest, DataHttpResponse, DataImportCheckpoint, DataImportOperation, DataImportPlan,
+    execute_export_page, execute_import_chunk,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+    install_compiled_schema,
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{oidc_verifier_config, MockIdp};
-use serde_json::{json, Value};
+use registry_platform_testing::{MockIdp, oidc_verifier_config};
+use serde_json::{Value, json};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
@@ -358,11 +358,11 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
 }
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
         "kind":"BRegProject",
         "project":{"id":"data-export-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-        "entities":[{
+        "recordTypes":[{
             "id":"entry", "primaryDataset":"test-dataset", "route":"entries", "mutationMode":"create-only",
             "batch":{"maximumItems":60,"maximumBytes":131072},
             "fields":[
@@ -379,8 +379,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         "accessProfiles":[{
             "id":PROFILE, "principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["data-export"],
-            "permissions":{"entities":[{
-                "entity":"entry",
+            "permissions":{"records":[{
+                "recordType":"entry",
                 "operations":["create","batch","list"],
                 "readableFields":["code"],
                 "writableFields":["code","jurisdiction","secret"],

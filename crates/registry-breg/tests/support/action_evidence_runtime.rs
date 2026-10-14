@@ -2,8 +2,8 @@
 use super::*;
 use crate as breg;
 use crate::{
-    compiler::{compile_project_with_assets, CompileProfile},
-    contract::{parse_project_yaml, ModuleAssetSource},
+    compiler::{CompileProfile, compile_project_with_assets},
+    contract::{ModuleAssetSource, parse_project_yaml},
 };
 use std::time::Duration;
 
@@ -179,15 +179,15 @@ fn dependency_diagnostics_preserve_only_first_declared_capability() {
 
     for (source, expected) in [
         (
-            r#"fn handle(ctx) { try { evidence::resolve("unknown-selector-canary", #{farmer: #{"farmer-number":"private-selector-canary"}}); } catch (error) {} try { evidence::resolve("farmer-status", #{}); } catch (error) {} #{effects: []} }"#,
+            r#"fn plan(ctx) { try { evidence::resolve("unknown-selector-canary", #{farmer: #{"farmer-number":"private-selector-canary"}}); } catch (error) {} try { evidence::resolve("farmer-status", #{}); } catch (error) {} #{effects: []} }"#,
             None,
         ),
         (
-            r#"fn handle(ctx) { try { evidence::resolve(42, #{}); } catch (error) {} #{effects: []} }"#,
+            r#"fn plan(ctx) { try { evidence::resolve(42, #{}); } catch (error) {} #{effects: []} }"#,
             None,
         ),
         (
-            r#"fn handle(ctx) { try { evidence::resolve("farmer-status", "private-selector-canary"); } catch (error) {} try { evidence::resolve("farmer-category", #{}); } catch (error) {} #{effects: []} }"#,
+            r#"fn plan(ctx) { try { evidence::resolve("farmer-status", "private-selector-canary"); } catch (error) {} try { evidence::resolve("farmer-category", #{}); } catch (error) {} #{effects: []} }"#,
             Some("farmer-status"),
         ),
     ] {

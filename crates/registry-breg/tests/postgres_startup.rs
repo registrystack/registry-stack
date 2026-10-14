@@ -9,40 +9,41 @@ mod postgres_harness;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{Request, StatusCode};
 use postgres_harness::TestDatabase;
-use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::migration::{
-    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest,
+    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, apply_verified_package,
 };
 use registry_breg::package::{
-    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, VerifiedPackage,
+    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
+    PackageSourceFile, VerifiedPackage, load_package, prepare_package,
 };
 use registry_breg::postgres::{
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryStateTestIdentity, RoleMode,
     initialize_registry_state_for_catalog_test, install_compiled_schema,
-    managed_schema_fingerprint, verify_runtime_role, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, RegistryStateTestIdentity, RoleMode,
+    managed_schema_fingerprint, verify_runtime_role,
 };
 use registry_breg::startup::{
-    check_with_connection_config_for_test, prepare_with_connection_and_key_source_for_test,
-    prepare_with_connection_config_for_test, serve_until_shutdown, PreparedServer, StartupError,
+    PreparedServer, StartupError, check_with_connection_config_for_test,
+    prepare_with_connection_and_key_source_for_test, prepare_with_connection_config_for_test,
+    serve_until_shutdown,
 };
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, fetch_discovery_with_policy,
 };
 use registry_platform_testing::{
-    fixtures as testing_fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, MockIdp,
+    MockIdp, fixtures as testing_fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt,
 };
 use serde_json::json;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -810,8 +811,8 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays_unavailable_until_preloaded(
-) {
+async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays_unavailable_until_preloaded()
+ {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
@@ -928,9 +929,11 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         .iter()
         .find(|advisory| advisory.code() == "postgres.pg_stat_statements.unavailable")
         .expect("pg_stat_statements is installed but this server never preloaded it");
-    assert!(pg_stat_statements
-        .message()
-        .contains("shared_preload_libraries"));
+    assert!(
+        pg_stat_statements
+            .message()
+            .contains("shared_preload_libraries")
+    );
     drop(prepared);
 
     // A configured pg_stat_statements.max without the preload is only a
@@ -952,9 +955,11 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         .iter()
         .find(|advisory| advisory.code() == "postgres.pg_stat_statements.unavailable")
         .expect("a placeholder setting does not mean the module is loaded");
-    assert!(pg_stat_statements
-        .message()
-        .contains("shared_preload_libraries"));
+    assert!(
+        pg_stat_statements
+            .message()
+            .contains("shared_preload_libraries")
+    );
     drop(prepared);
     idp.stop().await;
     database.cleanup().await;
@@ -1254,9 +1259,11 @@ async fn startup_refuses_an_unapplied_database_naming_the_initial_apply_and_writ
             .err();
 
     assert_eq!(refusal, Some(StartupError::DatabaseUninitialized));
-    assert!(StartupError::DatabaseUninitialized
-        .to_string()
-        .contains("run `bregctl apply --package DIR --initial`"));
+    assert!(
+        StartupError::DatabaseUninitialized
+            .to_string()
+            .contains("run `bregctl apply --package DIR --initial`")
+    );
     assert_eq!(
         managed_database_snapshot(&database.admin).await,
         before,
@@ -1301,9 +1308,11 @@ async fn startup_refuses_an_unrecognised_registry_state_and_writes_nothing() {
             .err();
 
     assert_eq!(refusal, Some(StartupError::UnrecognizedDatabase));
-    assert!(StartupError::UnrecognizedDatabase
-        .to_string()
-        .contains("upgrade the database one release at a time"));
+    assert!(
+        StartupError::UnrecognizedDatabase
+            .to_string()
+            .contains("upgrade the database one release at a time")
+    );
     assert_eq!(
         managed_database_snapshot(&database.admin).await,
         before,
@@ -1431,9 +1440,11 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
             Err(other) => panic!("{grant}: {other:?}"),
         }
     }
-    assert!(StartupError::RuntimeWriteAuthority
-        .to_string()
-        .contains("run `bregctl apply --package DIR`"));
+    assert!(
+        StartupError::RuntimeWriteAuthority
+            .to_string()
+            .contains("run `bregctl apply --package DIR`")
+    );
 
     // A revoked runtime grant is pending work the apply reissues.
     database
@@ -1447,9 +1458,11 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
             .await
             .err();
     assert_eq!(refusal, Some(StartupError::RuntimeGrantsMissing));
-    assert!(StartupError::RuntimeGrantsMissing
-        .to_string()
-        .contains("run `bregctl apply --package DIR` to reissue them"));
+    assert!(
+        StartupError::RuntimeGrantsMissing
+            .to_string()
+            .contains("run `bregctl apply --package DIR` to reissue them")
+    );
     assert_eq!(managed_database_snapshot(&database.admin).await, before);
     active = apply_startup_package_result(
         &database,
@@ -1473,9 +1486,11 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
     .await
     .err();
     assert_eq!(refusal, Some(StartupError::RoleModeChanged));
-    assert!(StartupError::RoleModeChanged
-        .to_string()
-        .contains("run `bregctl apply --package DIR`"));
+    assert!(
+        StartupError::RoleModeChanged
+            .to_string()
+            .contains("run `bregctl apply --package DIR`")
+    );
     assert_eq!(managed_database_snapshot(&database.admin).await, before);
     let single = apply_verified_package(ApplyVerifiedPackageRequest::new(
         &database.migration_config,
@@ -3059,7 +3074,7 @@ impl PackageFixture {
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     let project = format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"datasets":[{{"id": "neutral-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     );
     parse_project_yaml(project.as_bytes()).expect("project fixture parses");
     project.into_bytes()
@@ -3080,7 +3095,7 @@ fn module_bytes(successor: bool) -> Vec<u8> {
 /// One module whose `holder` entity carries an encrypted restricted field, so
 /// a production package built from it requires field-encryption key state.
 fn module_bytes_with_encrypted_field() -> Vec<u8> {
-    r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maximumLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
+    r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maximumLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
         .to_owned()
         .into_bytes()
 }

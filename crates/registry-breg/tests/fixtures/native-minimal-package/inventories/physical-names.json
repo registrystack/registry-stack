@@ -1,0 +1,1 @@
+{"entities":{"contact":{"constraints":{},"fields":{"email":"breg_f_contact_email_81e3bc296a8eee9d","jurisdiction":"breg_f_contact_jurisdiction_2f8e3324037bb7f5","name":"breg_f_contact_name_65097df652ed4b63"},"indexes":{},"policies":{"directory-editor":"breg_p_contact_directory_editor_02b19ad1074c225d"},"table":"breg_e_contact_67133dce65a54144"}}}

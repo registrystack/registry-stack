@@ -13,32 +13,32 @@ mod consent_fixture;
 #[allow(dead_code)]
 mod postgres_harness;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
+use registry_breg::CompiledRegistry;
 use registry_breg::api::{
-    authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, authenticated_router,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
-    verify_catalog_identity_for_catalog, ClaimContext, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-    PostgresRevisionReadService, PostgresSnapshotReadService, RegistryLockKey,
-    RegistryStateTestIdentity, RuntimePool,
+    ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
+    PostgresRecordReadService, PostgresRevisionReadService, PostgresSnapshotReadService,
+    RegistryLockKey, RegistryStateTestIdentity, RuntimePool, begin_record_transaction,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    verify_catalog_identity_for_catalog,
 };
-use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{oidc_verifier_config, MockIdp};
-use serde_json::{json, Value};
+use registry_platform_testing::{MockIdp, oidc_verifier_config};
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tower::Service as _;
 use zeroize::Zeroizing;
 
@@ -1068,7 +1068,7 @@ fn ungrouped_recipient_source() -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_selector() {
     let mut selector = ungrouped_recipient_source();
-    selector["entities"][consent_fixture::CONSENT_RECORD]["selectorProfiles"] =
+    selector["recordTypes"][consent_fixture::CONSENT_RECORD]["selectorProfiles"] =
         json!([{"id": "recipient", "fields": ["recipient"]}]);
     selector["accessProfiles"]
         .as_array_mut()
@@ -1076,8 +1076,8 @@ async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_s
         .push(json!({
             "id": "recipient-lookup", "principalClaim": "principal", "actorKind": "service",
             "requesterClients": [BETA_CLIENT], "requiredScopes": ["consent:read"],
-            "permissions": {"entities": [{
-                "entity": "consent-decision", "operations": ["lookup"],
+            "permissions": {"records": [{
+                "recordType": "consent-decision", "operations": ["lookup"],
                 "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": "unrestricted",
                 "lookups": [{
                     "selector": "recipient", "valueOrigin": "verified-claim",
@@ -1096,7 +1096,7 @@ async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_s
             .collect::<Vec<_>>(),
         [(
             "breg.consent.feed-claim",
-            "entities[id=consent-decision].accessProfiles[id=recipient-lookup].lookups[selector=recipient].claimMapping"
+            "recordTypes[id=consent-decision].accessProfiles[id=recipient-lookup].lookups[selector=recipient].claimMapping"
         )]
     );
 
@@ -1436,12 +1436,12 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     // the compiler-applicable plan removes the complete predecessor policy set
     // before retiring its consent helper.
     let mut gated = consent_fixture::source();
-    gated["accessProfiles"][0]["permissions"]["entities"]
+    gated["accessProfiles"][0]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
         .retain(|permission| permission["entity"] != "household");
     let mut base = gated.clone();
-    for permission in base["accessProfiles"][0]["permissions"]["entities"]
+    for permission in base["accessProfiles"][0]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
     {
@@ -1451,7 +1451,7 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     // former id is retired, since codes are append-only.
     let mut removed = gated.clone();
     removed["accessProfiles"][0]["id"] = json!("food-targeting-open");
-    for permission in removed["accessProfiles"][0]["permissions"]["entities"]
+    for permission in removed["accessProfiles"][0]["permissions"]["records"]
         .as_array_mut()
         .unwrap()
     {
@@ -1459,7 +1459,7 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
     }
     removed["retiredConsentScopes"] = json!(["food-targeting-2025", "food-targeting"]);
     let mut changed = gated.clone();
-    let record = changed["entities"]
+    let record = changed["recordTypes"]
         .as_array_mut()
         .unwrap()
         .iter_mut()

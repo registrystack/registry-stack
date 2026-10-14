@@ -5,7 +5,7 @@ use std::fmt;
 
 use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -30,26 +30,26 @@ const MAX_IDENTIFIER_BYTES: usize = 512;
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProposalWorkflow {
-    request: ProposalKey,
+    key: ProposalKey,
     owner: TrustedActorRef,
     state: ProposalState,
-    current_version: ProposalVersion,
+    current_version: SubmissionVersion,
     workflow_revision: StateRevision,
-    proposals: BTreeMap<ProposalVersion, ProposalSnapshot>,
+    proposals: BTreeMap<SubmissionVersion, ProposalSnapshot>,
     application: Option<ApplicationReceipt>,
 }
 
 impl ProposalWorkflow {
     pub fn new_draft(
-        request: ProposalKey,
+        key: ProposalKey,
         owner: TrustedActorRef,
         workflow_revision: StateRevision,
     ) -> Self {
         Self {
-            request,
+            key,
             owner,
             state: ProposalState::Draft,
-            current_version: ProposalVersion::first(),
+            current_version: SubmissionVersion::first(),
             workflow_revision,
             proposals: BTreeMap::new(),
             application: None,
@@ -60,15 +60,15 @@ impl ProposalWorkflow {
         self.state
     }
 
-    pub fn request(&self) -> &ProposalKey {
-        &self.request
+    pub fn key(&self) -> &ProposalKey {
+        &self.key
     }
 
     pub fn owner(&self) -> &TrustedActorRef {
         &self.owner
     }
 
-    pub fn current_version(&self) -> ProposalVersion {
+    pub fn current_version(&self) -> SubmissionVersion {
         self.current_version
     }
 
@@ -76,7 +76,7 @@ impl ProposalWorkflow {
         self.workflow_revision
     }
 
-    pub fn proposal(&self, version: ProposalVersion) -> Option<&ProposalSnapshot> {
+    pub fn proposal(&self, version: SubmissionVersion) -> Option<&ProposalSnapshot> {
         self.proposals.get(&version)
     }
 
@@ -96,16 +96,16 @@ impl ProposalWorkflow {
     #[cfg(feature = "runtime")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn restore(
-        request: ProposalKey,
+        key: ProposalKey,
         owner: TrustedActorRef,
         state: ProposalState,
-        current_version: ProposalVersion,
+        current_version: SubmissionVersion,
         workflow_revision: StateRevision,
-        proposals: BTreeMap<ProposalVersion, ProposalSnapshot>,
+        proposals: BTreeMap<SubmissionVersion, ProposalSnapshot>,
         application: Option<ApplicationReceipt>,
     ) -> Result<Self, WorkflowError> {
         Self {
-            request,
+            key,
             owner,
             state,
             current_version,
@@ -128,7 +128,7 @@ impl ProposalWorkflow {
             return Err(WorkflowError::InvalidTransition);
         }
         let version = self.current_version;
-        let proposal = proposal.freeze(&self.request, version, context)?;
+        let proposal = proposal.freeze(&self.key, version, context)?;
         let effect_digest = proposal.effect_digest.clone();
         let review_requirement = proposal.review_requirement().clone();
         self.proposals.insert(version, proposal);
@@ -168,11 +168,15 @@ impl ProposalWorkflow {
         mut self,
         _context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
-        if self.state != ProposalState::Submitted {
+        if !matches!(self.state, ProposalState::Draft | ProposalState::Submitted) {
             return Err(WorkflowError::InvalidTransition);
         }
+        let version = if self.state == ProposalState::Submitted {
+            self.current_version.next()?
+        } else {
+            self.current_version
+        };
         self.state = ProposalState::Draft;
-        let version = self.current_version.next()?;
         self.current_version = version;
         self.workflow_revision = self.workflow_revision.next()?;
         Ok(WorkflowTransition {
@@ -186,12 +190,14 @@ impl ProposalWorkflow {
 
     pub fn cancel(
         mut self,
-        context: TrustedTransitionContext,
+        _context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
-        if context.actor != self.owner {
-            return Err(WorkflowError::NotOwner);
-        }
-        if matches!(self.state, ProposalState::Applied | ProposalState::Cancelled) {
+        // Operation-specific ownership is checked by the Proposal controller;
+        // a separately granted operator may cancel another author's work.
+        if matches!(
+            self.state,
+            ProposalState::Applied | ProposalState::Cancelled
+        ) {
             return Err(WorkflowError::InvalidTransition);
         }
         self.state = ProposalState::Cancelled;
@@ -202,11 +208,43 @@ impl ProposalWorkflow {
         })
     }
 
+    pub fn edit_draft(
+        mut self,
+        _context: TrustedTransitionContext,
+    ) -> Result<WorkflowTransition, WorkflowError> {
+        if self.state != ProposalState::Draft {
+            return Err(WorkflowError::InvalidTransition);
+        }
+        self.workflow_revision = self.workflow_revision.next()?;
+        let version = self.current_version;
+        Ok(WorkflowTransition {
+            workflow: self,
+            effect: TransitionEffect::DraftVersionStarted {
+                version,
+                reason: DraftStartReason::Edit,
+            },
+        })
+    }
+
+    pub fn retry(
+        mut self,
+        _context: TrustedTransitionContext,
+    ) -> Result<WorkflowTransition, WorkflowError> {
+        if self.state != ProposalState::Submitted {
+            return Err(WorkflowError::InvalidTransition);
+        }
+        self.workflow_revision = self.workflow_revision.next()?;
+        Ok(WorkflowTransition {
+            workflow: self,
+            effect: TransitionEffect::RetryScheduled,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn apply(
         mut self,
         context: TrustedTransitionContext,
-        version: ProposalVersion,
+        version: SubmissionVersion,
         displayed_digest: &ProposalDigest,
         contract_fingerprint: &ContractFingerprint,
         review_evidence: Option<&crate::review_integration::AcceptedReviewEvidence>,
@@ -224,7 +262,7 @@ impl ProposalWorkflow {
             return Err(WorkflowError::InvalidTransition);
         }
         if version != self.current_version {
-            return Err(WorkflowError::StaleProposalVersion);
+            return Err(WorkflowError::StaleSubmissionVersion);
         }
         if self.application.is_some() {
             return Err(WorkflowError::AlreadyApplied);
@@ -233,7 +271,7 @@ impl ProposalWorkflow {
             .proposals
             .get(&version)
             .ok_or(WorkflowError::ProposalUnavailable)?;
-        proposal.verify_digest(&self.request)?;
+        proposal.verify_digest(&self.key)?;
         if !proposal.effect_digest.matches(displayed_digest) {
             return Err(WorkflowError::DigestMismatch);
         }
@@ -242,18 +280,21 @@ impl ProposalWorkflow {
         }
         match proposal.review_requirement() {
             crate::model::CompiledProposalReview::None if review_evidence.is_none() => {}
-            crate::model::CompiledProposalReview::Required { authority, source, policy }
-                if review_evidence.is_some_and(|evidence| {
-                    evidence.matches_proposal(
-                        authority,
-                        source,
-                        policy,
-                        self.request.record_id().as_str(),
-                        version.get(),
-                        proposal.effect_digest().as_str(),
-                        context.now.as_str(),
-                    )
-                }) => {}
+            crate::model::CompiledProposalReview::Required {
+                authority,
+                source,
+                policy,
+            } if review_evidence.is_some_and(|evidence| {
+                evidence.matches_proposal(
+                    authority,
+                    source,
+                    policy,
+                    self.key.proposal_id().as_str(),
+                    version.get(),
+                    proposal.effect_digest().as_str(),
+                    context.now.as_str(),
+                )
+            }) => {}
             _ => return Err(WorkflowError::ReviewEvidenceMismatch),
         }
         proposal.verify_observed_targets(&observed_targets)?;
@@ -279,7 +320,7 @@ impl ProposalWorkflow {
     }
 
     fn validate_restored_invariants(&self) -> Result<(), WorkflowError> {
-        self.request.validate()?;
+        self.key.validate()?;
         self.owner.validate()?;
         self.current_version.validate()?;
         self.workflow_revision.validate()?;
@@ -292,7 +333,7 @@ impl ProposalWorkflow {
             if *version > self.current_version {
                 return Err(WorkflowError::InvalidRestoredState);
             }
-            proposal.validate_restored(&self.request)?;
+            proposal.validate_restored(&self.key)?;
         }
 
         self.validate_restored_application()?;
@@ -347,6 +388,28 @@ impl ProposalWorkflow {
 
 /// Exact review binding copied into the immutable proposal snapshot.
 pub type FrozenReviewRequirement = crate::model::CompiledProposalReview;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FrozenInputTarget {
+    pub record_type: String,
+    pub record_id: RecordId,
+}
+
+fn validate_input_targets(targets: &[FrozenInputTarget]) -> Result<(), WorkflowError> {
+    if targets.len() > MAX_PROPOSAL_TARGETS {
+        return Err(WorkflowError::TooManyTargets);
+    }
+    let mut seen = BTreeSet::new();
+    for target in targets {
+        EntityId::new(&target.record_type)?.validate()?;
+        target.record_id.validate()?;
+        if !seen.insert((&target.record_type, &target.record_id)) {
+            return Err(WorkflowError::InvalidRestoredState);
+        }
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -451,6 +514,8 @@ fn validate_attachment_manifest(
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FrozenApplicationPreconditions {
     pub contract: Vec<crate::model::CompiledCommitGuard>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<crate::model::CompiledCommitEvidence>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub input_values: BTreeMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -459,26 +524,82 @@ pub struct FrozenApplicationPreconditions {
 
 impl FrozenApplicationPreconditions {
     pub fn validate(&self) -> Result<(), WorkflowError> {
-        if self.contract.is_empty() || self.targets.len() > MAX_PROPOSAL_TARGETS {
+        if (self.contract.is_empty() && self.evidence.is_empty())
+            || self.targets.len() > MAX_PROPOSAL_TARGETS
+        {
             return Err(WorkflowError::InvalidRestoredState);
         }
-        let expected_inputs = self.contract.iter().map(|guard| guard.input.as_str())
+        let expected_inputs = self
+            .contract
+            .iter()
+            .map(|guard| guard.input.as_str())
+            .chain(
+                self.evidence
+                    .iter()
+                    .flat_map(|guard| guard.subjects.values())
+                    .flat_map(|subject| subject.selectors.values())
+                    .filter_map(|selector| match selector {
+                        crate::model::CompiledCommitEvidenceSelector::TargetField {
+                            input, ..
+                        } => Some(input.as_str()),
+                        _ => None,
+                    }),
+            )
             .collect::<BTreeSet<_>>();
-        let actual_inputs = self.targets.iter().map(|target| target.id.as_str())
+        let actual_inputs = self
+            .targets
+            .iter()
+            .map(|target| target.id.as_str())
             .collect::<BTreeSet<_>>();
         if expected_inputs != actual_inputs || actual_inputs.len() != self.targets.len() {
             return Err(WorkflowError::InvalidRestoredState);
         }
         for guard in &self.contract {
-            let target = self.targets.iter().find(|target| target.id == guard.input)
+            let target = self
+                .targets
+                .iter()
+                .find(|target| target.id == guard.input)
                 .ok_or(WorkflowError::InvalidRestoredState)?;
             target.validate()?;
             if target.entity_id != guard.entity_id
                 || self.input_values.get(&guard.input).and_then(Value::as_str)
                     != Some(target.record_id.as_str())
                 || (!guard.field.is_empty() && !target.values.contains_key(&guard.field))
-                || guard.equals_input.as_ref().is_some_and(|input| !self.input_values.contains_key(input)) {
+                || guard
+                    .equals_input
+                    .as_ref()
+                    .is_some_and(|input| !self.input_values.contains_key(input))
+            {
                 return Err(WorkflowError::InvalidRestoredState);
+            }
+        }
+        for target in &self.targets {
+            target.validate()?;
+        }
+        for guard in &self.evidence {
+            for selector in guard
+                .subjects
+                .values()
+                .flat_map(|subject| subject.selectors.values())
+            {
+                let present = match selector {
+                    crate::model::CompiledCommitEvidenceSelector::Input { input } => {
+                        self.input_values.contains_key(input)
+                    }
+                    crate::model::CompiledCommitEvidenceSelector::TargetField { input, field } => {
+                        self.targets
+                            .iter()
+                            .find(|target| target.id == *input)
+                            .is_some_and(|target| {
+                                target.values.contains_key(field)
+                                    && self.input_values.get(input).and_then(Value::as_str)
+                                        == Some(target.record_id.as_str())
+                            })
+                    }
+                };
+                if !present {
+                    return Err(WorkflowError::InvalidRestoredState);
+                }
             }
         }
         Ok(())
@@ -497,10 +618,7 @@ pub struct FrozenGuardTargetSnapshot {
 
 impl FrozenGuardTargetSnapshot {
     fn validate(&self) -> Result<(), WorkflowError> {
-        if self.id.is_empty()
-            || self.entity_id.is_empty()
-            || self.expected_revision <= 0
-        {
+        if self.id.is_empty() || self.entity_id.is_empty() || self.expected_revision <= 0 {
             return Err(WorkflowError::InvalidRestoredState);
         }
         self.record_id.validate()?;
@@ -511,6 +629,8 @@ impl FrozenGuardTargetSnapshot {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PreparedProposal {
+    inputs: serde_json::Map<String, Value>,
+    input_targets: Vec<FrozenInputTarget>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     attachments: BTreeMap<String, AttachmentManifestEntry>,
     input_revision: RecordRevision,
@@ -523,6 +643,8 @@ pub struct PreparedProposal {
     review_requirement: FrozenReviewRequirement,
     #[serde(default)]
     application_policy: crate::model::CompiledProposalApplication,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_grant_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application_preconditions: Option<FrozenApplicationPreconditions>,
 }
@@ -540,6 +662,8 @@ impl PreparedProposal {
         planning_binding.validate()?;
         validate_effects(&effects, combined_snapshot_bytes)?;
         Ok(Self {
+            inputs: serde_json::Map::new(),
+            input_targets: Vec::new(),
             input_revision,
             contract_fingerprint,
             originating_package,
@@ -548,6 +672,7 @@ impl PreparedProposal {
             planning_binding: Some(planning_binding),
             review_requirement,
             application_policy: crate::model::CompiledProposalApplication::Manual,
+            system_grant_revision: None,
             attachments: BTreeMap::new(),
             application_preconditions: None,
         })
@@ -576,8 +701,25 @@ impl PreparedProposal {
         application_policy: crate::model::CompiledProposalApplication,
     ) -> Result<Self, WorkflowError> {
         crate::review_integration::validate_application_binding(&application_policy)
-        .map_err(|_| WorkflowError::InvalidRestoredState)?;
+            .map_err(|_| WorkflowError::InvalidRestoredState)?;
         self.application_policy = application_policy;
+        Ok(self)
+    }
+
+    pub fn with_system_grant_revision(mut self, revision: &str) -> Result<Self, WorkflowError> {
+        ProposalDigest::new(revision)?.validate()?;
+        self.system_grant_revision = Some(revision.to_owned());
+        Ok(self)
+    }
+
+    pub fn with_input_binding(
+        mut self,
+        inputs: serde_json::Map<String, Value>,
+        targets: Vec<FrozenInputTarget>,
+    ) -> Result<Self, WorkflowError> {
+        validate_input_targets(&targets)?;
+        self.inputs = inputs;
+        self.input_targets = targets;
         Ok(self)
     }
 
@@ -630,11 +772,13 @@ impl PreparedProposal {
     fn freeze(
         self,
         request: &ProposalKey,
-        version: ProposalVersion,
+        version: SubmissionVersion,
         context: TrustedTransitionContext,
     ) -> Result<ProposalSnapshot, WorkflowError> {
         validate_attachment_manifest(&self.attachments)?;
         let effect_digest = proposal_digest(ProposalDigestInput {
+            inputs: &self.inputs,
+            input_targets: &self.input_targets,
             request,
             version,
             input_revision: self.input_revision,
@@ -644,10 +788,13 @@ impl PreparedProposal {
             planning_binding: self.planning_binding.as_ref(),
             review_requirement: &self.review_requirement,
             application_policy: &self.application_policy,
+            system_grant_revision: self.system_grant_revision.as_deref(),
             attachments: &self.attachments,
             application_preconditions: self.application_preconditions.as_ref(),
         })?;
         Ok(ProposalSnapshot {
+            inputs: self.inputs,
+            input_targets: self.input_targets,
             version,
             input_revision: self.input_revision,
             contract_fingerprint: self.contract_fingerprint,
@@ -657,6 +804,7 @@ impl PreparedProposal {
             planning_binding: self.planning_binding,
             review_requirement: self.review_requirement,
             application_policy: self.application_policy,
+            system_grant_revision: self.system_grant_revision,
             application_preconditions: self.application_preconditions,
             effect_digest,
             attachments: self.attachments,
@@ -669,9 +817,12 @@ impl PreparedProposal {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProposalSnapshot {
+    inputs: serde_json::Map<String, Value>,
+    input_targets: Vec<FrozenInputTarget>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     attachments: BTreeMap<String, AttachmentManifestEntry>,
-    version: ProposalVersion,
+    #[serde(rename = "submissionVersion")]
+    version: SubmissionVersion,
     input_revision: RecordRevision,
     contract_fingerprint: ContractFingerprint,
     originating_package: PackageFingerprint,
@@ -683,6 +834,8 @@ pub struct ProposalSnapshot {
     #[serde(default)]
     application_policy: crate::model::CompiledProposalApplication,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_grant_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     application_preconditions: Option<FrozenApplicationPreconditions>,
     effect_digest: ProposalDigest,
     submitted_by: TrustedActorRef,
@@ -690,11 +843,17 @@ pub struct ProposalSnapshot {
 }
 
 impl ProposalSnapshot {
+    pub fn inputs(&self) -> &serde_json::Map<String, Value> {
+        &self.inputs
+    }
+    pub fn input_targets(&self) -> &[FrozenInputTarget] {
+        &self.input_targets
+    }
     pub fn attachments(&self) -> &BTreeMap<String, AttachmentManifestEntry> {
         &self.attachments
     }
 
-    pub fn version(&self) -> ProposalVersion {
+    pub fn version(&self) -> SubmissionVersion {
         self.version
     }
 
@@ -734,6 +893,10 @@ impl ProposalSnapshot {
         &self.application_policy
     }
 
+    pub fn system_grant_revision(&self) -> Option<&str> {
+        self.system_grant_revision.as_deref()
+    }
+
     pub fn application_preconditions(&self) -> Option<&FrozenApplicationPreconditions> {
         self.application_preconditions.as_ref()
     }
@@ -748,6 +911,8 @@ impl ProposalSnapshot {
 
     pub fn verify_digest(&self, request: &ProposalKey) -> Result<(), WorkflowError> {
         let actual = proposal_digest(ProposalDigestInput {
+            inputs: &self.inputs,
+            input_targets: &self.input_targets,
             request,
             version: self.version,
             input_revision: self.input_revision,
@@ -757,6 +922,7 @@ impl ProposalSnapshot {
             planning_binding: self.planning_binding.as_ref(),
             review_requirement: &self.review_requirement,
             application_policy: &self.application_policy,
+            system_grant_revision: self.system_grant_revision.as_deref(),
             attachments: &self.attachments,
             application_preconditions: self.application_preconditions.as_ref(),
         })?;
@@ -768,6 +934,7 @@ impl ProposalSnapshot {
     }
 
     fn validate_restored(&self, request: &ProposalKey) -> Result<(), WorkflowError> {
+        validate_input_targets(&self.input_targets)?;
         self.version.validate()?;
         validate_attachment_manifest(&self.attachments)?;
         self.input_revision.validate()?;
@@ -777,6 +944,9 @@ impl ProposalSnapshot {
             .as_ref()
             .ok_or(WorkflowError::InvalidRestoredState)?
             .validate()?;
+        if self.application_policy.is_automatic() != self.system_grant_revision.is_some() {
+            return Err(WorkflowError::InvalidRestoredState);
+        }
         if let Some(preconditions) = &self.application_preconditions {
             if self.planning_binding.is_none() {
                 return Err(WorkflowError::InvalidRestoredState);
@@ -902,7 +1072,9 @@ impl PreparedEffect {
         self
     }
 
-    pub fn depends_on(&self) -> &BTreeSet<String> { &self.depends_on }
+    pub fn depends_on(&self) -> &BTreeSet<String> {
+        &self.depends_on
+    }
 
     pub fn id(&self) -> &EffectId {
         &self.id
@@ -1269,7 +1441,8 @@ impl PreparedApplication {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ApplicationReceipt {
     application_id: ApplicationId,
-    version: ProposalVersion,
+    #[serde(rename = "submissionVersion")]
+    version: SubmissionVersion,
     effect_digest: ProposalDigest,
     applied_by: TrustedActorRef,
     applied_at: TrustedTimestamp,
@@ -1285,7 +1458,7 @@ impl ApplicationReceipt {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn restore(
         application_id: ApplicationId,
-        version: ProposalVersion,
+        version: SubmissionVersion,
         effect_digest: ProposalDigest,
         applied_by: TrustedActorRef,
         applied_at: TrustedTimestamp,
@@ -1311,7 +1484,7 @@ impl ApplicationReceipt {
         &self.application_id
     }
 
-    pub fn version(&self) -> ProposalVersion {
+    pub fn version(&self) -> SubmissionVersion {
         self.version
     }
 
@@ -1370,8 +1543,10 @@ impl ApplicationReceipt {
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ApplicationResultLink {
+    #[serde(rename = "recordType")]
     entity_id: EntityId,
     record_id: RecordId,
+    #[serde(rename = "revision")]
     record_revision: RecordRevision,
 }
 
@@ -1425,13 +1600,14 @@ impl WorkflowTransition {
 
 #[derive(Clone, PartialEq)]
 pub enum TransitionEffect {
+    RetryScheduled,
     Submitted {
-        version: ProposalVersion,
+        version: SubmissionVersion,
         effect_digest: ProposalDigest,
         review_requirement: FrozenReviewRequirement,
     },
     DraftVersionStarted {
-        version: ProposalVersion,
+        version: SubmissionVersion,
         reason: DraftStartReason,
     },
     Cancelled,
@@ -1440,6 +1616,7 @@ pub enum TransitionEffect {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DraftStartReason {
+    Edit,
     Revision,
     Rebase,
 }
@@ -1478,37 +1655,37 @@ impl ProposalState {
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProposalKey {
-    entity_id: EntityId,
-    record_id: RecordId,
+    action_id: EntityId,
+    proposal_id: RecordId,
 }
 
 impl ProposalKey {
-    pub fn new(entity_id: EntityId, record_id: RecordId) -> Self {
+    pub fn new(action_id: EntityId, proposal_id: RecordId) -> Self {
         Self {
-            entity_id,
-            record_id,
+            action_id,
+            proposal_id,
         }
     }
 
-    pub fn entity_id(&self) -> &EntityId {
-        &self.entity_id
+    pub fn action_id(&self) -> &EntityId {
+        &self.action_id
     }
 
-    pub fn record_id(&self) -> &RecordId {
-        &self.record_id
+    pub fn proposal_id(&self) -> &RecordId {
+        &self.proposal_id
     }
 
     fn validate(&self) -> Result<(), WorkflowError> {
-        self.entity_id.validate()?;
-        self.record_id.validate()
+        self.action_id.validate()?;
+        self.proposal_id.validate()
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ProposalVersion(u32);
+pub struct SubmissionVersion(u32);
 
-impl ProposalVersion {
+impl SubmissionVersion {
     pub fn new(value: u32) -> Result<Self, WorkflowError> {
         if value == 0 {
             return Err(WorkflowError::InvalidIdentifier);
@@ -1876,7 +2053,7 @@ impl fmt::Debug for ProposalWorkflow {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ProposalWorkflow")
-            .field("request", &self.request)
+            .field("request", &self.key)
             .field("owner", &Redacted)
             .field("state", &self.state)
             .field("current_version", &self.current_version)
@@ -2046,6 +2223,7 @@ impl fmt::Debug for WorkflowTransition {
 impl fmt::Debug for TransitionEffect {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RetryScheduled => formatter.write_str("RetryScheduled"),
             Self::Submitted { version, .. } => formatter
                 .debug_struct("Submitted")
                 .field("version", version)
@@ -2066,8 +2244,8 @@ impl fmt::Debug for ProposalKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ProposalKey")
-            .field("entity_id", &self.entity_id)
-            .field("record_id", &Redacted)
+            .field("action_id", &self.action_id)
+            .field("proposal_id", &Redacted)
             .finish()
     }
 }
@@ -2121,7 +2299,7 @@ pub enum WorkflowError {
     #[error("application reason is invalid or exceeds its bounds")]
     InvalidApplicationReason,
     #[error("proposal version is stale")]
-    StaleProposalVersion,
+    StaleSubmissionVersion,
     #[error("proposal digest does not match the frozen version")]
     DigestMismatch,
     #[error("proposal is unavailable")]
@@ -2187,7 +2365,9 @@ fn validate_effects(
     let mut effect_ids = BTreeSet::new();
     for effect in effects {
         effect.validate_restored()?;
-        if !effect.depends_on.is_subset(&effect_ids) || !effect_ids.insert(effect.id.as_str().to_owned()) {
+        if !effect.depends_on.is_subset(&effect_ids)
+            || !effect_ids.insert(effect.id.as_str().to_owned())
+        {
             return Err(WorkflowError::InvalidRestoredState);
         }
         let target = effect.target.identity();
@@ -2223,9 +2403,11 @@ fn validate_effects(
 }
 
 struct ProposalDigestInput<'a> {
+    inputs: &'a serde_json::Map<String, Value>,
+    input_targets: &'a [FrozenInputTarget],
     attachments: &'a BTreeMap<String, AttachmentManifestEntry>,
     request: &'a ProposalKey,
-    version: ProposalVersion,
+    version: SubmissionVersion,
     input_revision: RecordRevision,
     contract_fingerprint: &'a ContractFingerprint,
     originating_package: &'a PackageFingerprint,
@@ -2233,11 +2415,14 @@ struct ProposalDigestInput<'a> {
     planning_binding: Option<&'a FrozenPlanningBinding>,
     review_requirement: &'a FrozenReviewRequirement,
     application_policy: &'a crate::model::CompiledProposalApplication,
+    system_grant_revision: Option<&'a str>,
     application_preconditions: Option<&'a FrozenApplicationPreconditions>,
 }
 
 fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, WorkflowError> {
     let ProposalDigestInput {
+        inputs,
+        input_targets,
         attachments,
         request,
         version,
@@ -2248,31 +2433,36 @@ fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, Wor
         planning_binding,
         review_requirement,
         application_policy,
+        system_grant_revision,
         application_preconditions,
     } = input;
     let planning_binding = planning_binding.ok_or(WorkflowError::InvalidPlanningBinding)?;
     let mut value = match application_preconditions {
         None => json!({
             "schema": "breg.proposal/v1",
-            "request": request,
-            "version": version,
+            "inputs":inputs,"inputTargets":input_targets,
+            "proposal": request,
+            "submissionVersion": version,
             "inputRevision": input_revision,
             "contractFingerprint": contract_fingerprint,
             "originatingPackage": originating_package,
             "review": review_requirement,
             "application": application_policy,
+            "systemGrantRevision": system_grant_revision,
             "planningBinding": planning_binding,
             "effects": effects,
         }),
         Some(application_preconditions) => json!({
             "schema": "breg.proposal/v1",
-            "request": request,
-            "version": version,
+            "inputs":inputs,"inputTargets":input_targets,
+            "proposal": request,
+            "submissionVersion": version,
             "inputRevision": input_revision,
             "contractFingerprint": contract_fingerprint,
             "originatingPackage": originating_package,
             "review": review_requirement,
             "application": application_policy,
+            "systemGrantRevision": system_grant_revision,
             "planningBinding": planning_binding,
             "effects": effects,
             "applicationPreconditions": application_preconditions,
@@ -2299,7 +2489,6 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod source_owned_review_tests {
     use super::*;
-    use crate::model::CompiledChangeRequestReviewRequirement;
     use crate::review_integration::{
         AcceptedReviewBinding, AcceptedReviewEvidence, ReviewPolicyBinding, ReviewResultEnvelope,
         ReviewSubjectBinding, TerminalReviewStatus,
@@ -2342,12 +2531,14 @@ mod source_owned_review_tests {
                 record("placement-1"),
                 revision(3),
             ),
-            vec![PreparedFieldChange::set(
-                FieldId::new("site").expect("field id"),
-                FieldValue::present(json!("site-a")),
-                json!("site-b"),
-            )
-            .expect("field change")],
+            vec![
+                PreparedFieldChange::set(
+                    FieldId::new("site").expect("field id"),
+                    FieldValue::present(json!("site-a")),
+                    json!("site-b"),
+                )
+                .expect("field change"),
+            ],
         )
         .expect("effect");
         let snapshot_bytes = canonicalize_json(
@@ -2362,7 +2553,7 @@ mod source_owned_review_tests {
             review,
             FrozenPlanningBinding::new(
                 FrozenPlannerKind::Declarative,
-                "registry.change-request-plan/v1",
+                "registry.action-plan/v1",
                 None,
             )
             .expect("planning binding"),
@@ -2377,10 +2568,13 @@ mod source_owned_review_tests {
     }
 
     fn required_review() -> FrozenReviewRequirement {
-        FrozenReviewRequirement::Required(CompiledChangeRequestReviewRequirement {
+        FrozenReviewRequirement::Required {
             authority: "casework-main".to_owned(),
-            policy_id: "request-review".to_owned(),
-        })
+            source: "breg".to_owned(),
+            policy: serde_json::from_value(json!({"id":"request-review","version":"7",
+                "digest":format!("sha256:{}","b".repeat(64))}))
+            .unwrap(),
+        }
     }
 
     fn application() -> PreparedApplication {
@@ -2406,7 +2600,7 @@ mod source_owned_review_tests {
     fn accepted_evidence(proposal: &ProposalSnapshot) -> AcceptedReviewEvidence {
         let subject = ReviewSubjectBinding {
             source: "breg".to_owned(),
-            subject_type: "change_request".to_owned(),
+            subject_type: "proposal".to_owned(),
             id: "request-1".to_owned(),
             version: proposal.version().get().to_string(),
             digest: proposal.effect_digest().as_str().to_owned(),
@@ -2418,14 +2612,14 @@ mod source_owned_review_tests {
         };
         let accepted = AcceptedReviewBinding {
             authority: "casework-main".to_owned(),
-            proposal_id: Uuid::from_u128(1),
+            request_id: Uuid::from_u128(1),
             subject: subject.clone(),
             policy: policy.clone(),
             submission_digest: format!("sha256:{}", "c".repeat(64)),
         };
         let result = ReviewResultEnvelope {
             result_id: Uuid::from_u128(2),
-            proposal_id: accepted.proposal_id,
+            request_id: accepted.request_id,
             subject,
             policy,
             submission_digest: accepted.submission_digest.clone(),
@@ -2435,6 +2629,7 @@ mod source_owned_review_tests {
         };
         AcceptedReviewEvidence::from_approved("casework-main", &accepted, &result)
             .expect("accepted evidence")
+            .with_observed_at_for_test("2026-09-19T00:01:50Z")
     }
 
     #[test]
@@ -2472,7 +2667,7 @@ mod source_owned_review_tests {
         let evidence = accepted_evidence(frozen);
         let refused = submitted.clone().apply(
             context("applier", "2026-09-19T00:02:00Z"),
-            ProposalVersion::first(),
+            SubmissionVersion::first(),
             &digest,
             &contract,
             Some(&evidence),
@@ -2488,7 +2683,7 @@ mod source_owned_review_tests {
         let applied = submitted
             .apply(
                 context("applier", "2026-09-19T00:02:00Z"),
-                ProposalVersion::first(),
+                SubmissionVersion::first(),
                 &digest,
                 &contract,
                 None,
@@ -2516,7 +2711,7 @@ mod source_owned_review_tests {
 
         let refused = submitted.clone().apply(
             context("applier", "2026-09-19T00:02:00Z"),
-            ProposalVersion::first(),
+            SubmissionVersion::first(),
             &digest,
             &contract,
             None,
@@ -2533,7 +2728,7 @@ mod source_owned_review_tests {
         let applied = submitted
             .apply(
                 context("applier", "2026-09-19T00:02:00Z"),
-                ProposalVersion::first(),
+                SubmissionVersion::first(),
                 &digest,
                 &contract,
                 Some(&evidence),
@@ -2558,12 +2753,13 @@ mod source_owned_review_tests {
         let second = workflow()
             .submit(
                 context("submitter", "2026-09-19T00:00:00Z"),
-                proposal(FrozenReviewRequirement::Required(
-                    CompiledChangeRequestReviewRequirement {
-                        authority: "casework-secondary".to_owned(),
-                        policy_id: "request-review-v2".to_owned(),
-                    },
-                )),
+                proposal(FrozenReviewRequirement::Required {
+                    authority: "casework-secondary".to_owned(),
+                    source: "breg".to_owned(),
+                    policy: serde_json::from_value(json!({"id":"request-review-v2","version":"8",
+                        "digest":format!("sha256:{}","d".repeat(64))}))
+                    .unwrap(),
+                }),
             )
             .expect("submit")
             .into_workflow();
@@ -2576,18 +2772,29 @@ mod source_owned_review_tests {
     #[test]
     fn proposal_v3_digest_binds_frozen_application_contract_and_values() {
         let preconditions = FrozenApplicationPreconditions {
-            contract: crate::model::CompiledChangeRequestPreconditions {
-                request: vec![crate::model::CompiledChangeRequestPredicate {
-                    field: "valid-through".to_owned(),
-                    expected: crate::model::CompiledChangeRequestPredicateExpected::CurrentDate {
-                        relation: crate::model::CompiledCurrentDateRelation::OnOrAfter,
-                    },
-                }],
-                targets: Vec::new(),
-                evidence: Vec::new(),
-            },
-            request_values: BTreeMap::from([("valid-through".to_owned(), json!("2026-09-12"))]),
-            targets: Vec::new(),
+            evidence: vec![],
+            contract: vec![crate::model::CompiledCommitGuard {
+                input: "guard".to_owned(),
+                entity_id: "asset-placement".to_owned(),
+                field: "valid-through".to_owned(),
+                equals: None,
+                equals_input: None,
+                revision_unchanged: true,
+                at_least: None,
+                at_most: None,
+                current_date: Some(crate::model::CompiledCurrentDateRelation::OnOrAfter),
+            }],
+            input_values: BTreeMap::from([
+                ("guard".to_owned(), json!("guard-1")),
+                ("valid-through".to_owned(), json!("2026-09-12")),
+            ]),
+            targets: vec![FrozenGuardTargetSnapshot {
+                id: "guard".to_owned(),
+                entity_id: "asset-placement".to_owned(),
+                record_id: record("guard-1"),
+                expected_revision: 3,
+                values: BTreeMap::from([("valid-through".to_owned(), json!("2026-09-12"))]),
+            }],
         };
         let submitted = workflow()
             .submit(
@@ -2600,17 +2807,17 @@ mod source_owned_review_tests {
             .into_workflow();
         let snapshot = submitted.current_proposal().expect("proposal");
         snapshot
-            .verify_digest(submitted.request())
+            .verify_digest(submitted.key())
             .expect("digest verifies");
         let mut tampered = snapshot.clone();
         tampered
             .application_preconditions
             .as_mut()
             .expect("preconditions")
-            .request_values
+            .input_values
             .insert("valid-through".to_owned(), json!("2099-01-01"));
         assert_eq!(
-            tampered.verify_digest(submitted.request()),
+            tampered.verify_digest(submitted.key()),
             Err(WorkflowError::DigestMismatch)
         );
     }
@@ -2639,7 +2846,7 @@ mod source_owned_review_tests {
             .into_workflow();
         let snapshot = frozen.current_proposal().expect("proposal");
         snapshot
-            .verify_digest(frozen.request())
+            .verify_digest(frozen.key())
             .expect("digest verifies");
         assert_eq!(snapshot.attachments(), &manifest);
         let original = snapshot.effect_digest().clone();
@@ -2685,7 +2892,7 @@ mod source_owned_review_tests {
             .expect("slot")
             .sha256 = "c".repeat(64);
         assert_eq!(
-            tampered.verify_digest(frozen.request()),
+            tampered.verify_digest(frozen.key()),
             Err(WorkflowError::DigestMismatch)
         );
     }

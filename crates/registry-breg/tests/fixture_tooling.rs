@@ -2,9 +2,9 @@
 
 #![cfg(all(feature = "runtime", feature = "tooling"))]
 
-use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
 use registry_breg::contract::{parse_module_yaml, parse_project_json, parse_project_yaml};
-use registry_breg::fixtures::{validate_fixture_journeys, FixtureError, LogicalReferenceRefusal};
+use registry_breg::fixtures::{FixtureError, LogicalReferenceRefusal, validate_fixture_journeys};
 
 const PROJECT_TEMPLATE: &[u8] = include_bytes!("fixtures/fixture-tooling/project.yaml");
 const MODULE_SOURCE: &[u8] = include_bytes!("fixtures/fixture-tooling/module.yaml");
@@ -51,7 +51,7 @@ fn fixture_tooling_strict_parser_refuses_unclosed_authority_and_source_shapes() 
         ("accessProfile: operator", "accessProfile: administrator"),
         ("type: create", "type: tombstone"),
         ("label: first", "record_id: first"),
-        ("entity: widget", "entity: registry_data"),
+        ("recordType: widget", "recordType: registry_data"),
     ] {
         let changed = String::from_utf8(JOURNEY_SOURCE.to_vec())
             .expect("fixture is UTF-8")
@@ -101,8 +101,8 @@ fn fixture_tooling_refused_logical_references_name_their_cause() {
         ),
         (
             "step naming an entity and an action",
-            "entity: widget\n        accessProfile: operator",
-            "entity: widget\n        action: canary-action\n        accessProfile: operator",
+            "recordType: widget\n        accessProfile: operator",
+            "recordType: widget\n        action: canary-action\n        accessProfile: operator",
             LogicalReferenceRefusal::EntityOrAction,
         ),
         (
@@ -148,7 +148,7 @@ journeys:
   - id: claim-set-query
     steps:
       - id: query-people
-        entity: person
+        recordType: person
         accessProfile: registrar
         claims:
           principal: fixture-registrar
@@ -233,7 +233,7 @@ journeys:
   - id: public-field-crud-flow
     steps:
       - id: create-person
-        entity: person
+        recordType: person
         accessProfile: registrar
         claims:
           principal: fixture-registrar
@@ -248,7 +248,7 @@ journeys:
           fields: {jurisdiction: zone-a, personCode: P-001, legalName: Alex Example}
         capture: person
       - id: query-person
-        entity: person
+        recordType: person
         accessProfile: registrar
         claims:
           principal: fixture-registrar
@@ -257,7 +257,7 @@ journeys:
         request: {type: query, select: [personCode, legalName], count: true}
         expect: {outcome: success, status: 200, count: 1}
       - id: patch-person
-        entity: person
+        recordType: person
         accessProfile: registrar
         claims:
           principal: fixture-registrar
@@ -323,169 +323,6 @@ journeys:
 }
 
 #[test]
-fn fixture_tooling_source_request_actions_are_closed_and_get_precondition_bound() {
-    let registry = compiled_request_fixture();
-    let valid = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
-kind: BRegJourneys
-journeys:
-  - id: request-action-flow
-    steps:
-      - id: create-request
-        entity: correction-request
-        accessProfile: submitter
-        claims: {principal: submitter}
-        request:
-          type: create
-          data: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
-        expect:
-          outcome: success
-          status: 201
-          fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
-        capture: created-request
-      - id: get-before-submit
-        entity: correction-request
-        accessProfile: reviewer
-        claims: {principal: reviewer}
-        request: {type: get, recordCapture: created-request}
-        expect:
-          outcome: success
-          status: 200
-          fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
-        capture: before-submit
-      - id: submit-request
-        entity: correction-request
-        accessProfile: submitter
-        claims: {principal: submitter}
-        request: {type: submit-request, recordCapture: before-submit, etagCapture: before-submit}
-        expect: {outcome: success, status: 200}
-      - id: get-before-revise
-        entity: correction-request
-        accessProfile: reviewer
-        claims: {principal: reviewer}
-        request: {type: get, recordCapture: created-request}
-        expect:
-          outcome: success
-          status: 200
-          fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
-        capture: before-revise
-      - id: revise-request
-        entity: correction-request
-        accessProfile: submitter
-        claims: {principal: submitter}
-        request: {type: revise-request, recordCapture: before-revise, etagCapture: before-revise, rebase: true}
-        expect: {outcome: success, status: 200}
-"#;
-    validate_fixture_journeys(valid, &registry).expect("closed request action fixture validates");
-
-    for (label, from, to) in [
-        (
-            "raw body",
-            "request: {type: submit-request, recordCapture: before-submit, etagCapture: before-submit}",
-            "request: {type: submit-request, recordCapture: before-submit, etagCapture: before-submit, body: {}}",
-        ),
-        (
-            "missing revise rebase",
-            "request: {type: revise-request, recordCapture: before-revise, etagCapture: before-revise, rebase: true}",
-            "request: {type: revise-request, recordCapture: before-revise, etagCapture: before-revise}",
-        ),
-        (
-            "action capture",
-            "expect: {outcome: success, status: 200}\n      - id: get-before-revise",
-            "expect: {outcome: success, status: 200}\n        capture: submitted-request\n      - id: get-before-revise",
-        ),
-        (
-            "create precondition",
-            "request: {type: submit-request, recordCapture: before-submit, etagCapture: before-submit}",
-            "request: {type: submit-request, recordCapture: created-request, etagCapture: created-request}",
-        ),
-    ] {
-        let changed = String::from_utf8(valid.to_vec())
-            .expect("fixture is UTF-8")
-            .replacen(from, to, 1);
-        let error = match validate_fixture_journeys(changed.as_bytes(), &registry) {
-            Ok(_) => panic!("{label} shape was not refused"),
-            Err(error) => error,
-        };
-        assert!(
-            matches!(
-                underlying_fixture_error(&error),
-                FixtureError::JourneyShapeRefused
-                    | FixtureError::JourneyDocument(_)
-                    | FixtureError::LogicalReferenceRefused
-            ),
-            "{label} returned {error:?}"
-        );
-        assert!(!format!("{error:?}").contains(to));
-    }
-}
-
-#[test]
-fn fixture_tooling_expects_a_refused_change_request_plan() {
-    let registry = compiled_request_fixture();
-    let valid = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
-kind: BRegJourneys
-journeys:
-  - id: refused-plan
-    steps:
-      - id: create-request
-        entity: correction-request
-        accessProfile: submitter
-        claims: {principal: submitter}
-        request:
-          type: create
-          data: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
-        expect:
-          outcome: success
-          status: 201
-          fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
-        capture: created-request
-      - id: get-before-submit
-        entity: correction-request
-        accessProfile: reviewer
-        claims: {principal: reviewer}
-        request: {type: get, recordCapture: created-request}
-        expect:
-          outcome: success
-          status: 200
-          fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
-        capture: before-submit
-      - id: submit-refused-plan
-        entity: correction-request
-        accessProfile: submitter
-        claims: {principal: submitter}
-        request: {type: submit-request, recordCapture: before-submit, etagCapture: before-submit}
-        expect: {outcome: refusal, status: 400, problemCode: request.plan_refused}
-"#;
-    validate_fixture_journeys(valid, &registry).expect("a refused plan is an expectable outcome");
-
-    for (label, from, to) in [
-        (
-            "unregistered code",
-            "problemCode: request.plan_refused",
-            "problemCode: request.plan_declined",
-        ),
-        (
-            "unregistered status",
-            "status: 400, problemCode: request.plan_refused",
-            "status: 422, problemCode: request.plan_refused",
-        ),
-    ] {
-        let changed = String::from_utf8(valid.to_vec())
-            .expect("fixture is UTF-8")
-            .replacen(from, to, 1);
-        let error = match validate_fixture_journeys(changed.as_bytes(), &registry) {
-            Ok(_) => panic!("{label} was not refused"),
-            Err(error) => error,
-        };
-        assert_eq!(
-            underlying_fixture_error(&error),
-            &FixtureError::JourneyShapeRefused,
-            "{label} returned {error:?}"
-        );
-    }
-}
-
-#[test]
 fn fixture_tooling_immediate_actions_use_action_routes_and_public_input_names() {
     let registry = compiled_action_fixture();
     let valid = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
@@ -494,7 +331,7 @@ journeys:
   - id: immediate-action-flow
     steps:
       - id: create-household
-        entity: household
+        recordType: household
         accessProfile: household-seed
         claims:
           principal: fixture-seed
@@ -565,7 +402,7 @@ journeys:
             householdId: {conditionCapture: household-action-condition}
         expect: {outcome: success, status: 200}
       - id: get-created-person
-        entity: person
+        recordType: person
         accessProfile: person-reader
         claims:
           principal: fixture-reader
@@ -599,7 +436,7 @@ journeys:
         (
             "fake entity selector",
             "action: register-household-contact",
-            "entity: register-household-contact",
+            "recordType: register-household-contact",
         ),
         (
             "unknown action selector",
@@ -732,7 +569,9 @@ fn production_schema_test_executor_has_no_raw_server_source_or_receipt_seams() {
                 .expect("database is first accessed"),
         "credential shape and mode must fail before database I/O"
     );
-    assert!(internal_executor.contains("let final_facts = database_execution_facts(&runtime.pool)"));
+    assert!(
+        internal_executor.contains("let final_facts = database_execution_facts(&runtime.pool)")
+    );
     assert!(internal_executor.contains("final_facts != runtime.initial_facts"));
     assert!(internal_executor.contains("!runtime.readiness.is_ready().await"));
     assert!(!implementation.contains("pub fn build_schema_test_receipt"));
@@ -771,7 +610,7 @@ journeys:
   - id: spatial-query
     steps:
       - id: declared-bbox
-        entity: site
+        recordType: site
         accessProfile: map-reader
         claims: {principal: synthetic-reader, scopes: [sites.read]}
         request:
@@ -780,7 +619,7 @@ journeys:
           select: [code, location]
         expect: {outcome: success, status: 200, count: 0}
       - id: undeclared-bbox-runtime-refusal
-        entity: site
+        recordType: site
         accessProfile: directory-reader
         claims: {principal: synthetic-reader, scopes: [sites.read]}
         request:
@@ -823,7 +662,7 @@ journeys:
   - id: list-shape
     steps:
       - id: list-bbox
-        entity: site
+        recordType: site
         accessProfile: map-reader
         claims: {principal: synthetic-reader, scopes: [sites.read]}
         request:
@@ -845,7 +684,7 @@ journeys:
   - id: path-shape
     steps:
       - id: path-bbox
-        entity: site
+        recordType: site
         accessProfile: map-reader
         claims: {principal: synthetic-reader, scopes: [sites.read]}
         request:
@@ -926,284 +765,13 @@ fn compiled_fixture_without_writable_note() -> registry_breg::CompiledRegistry {
         .expect("fixture project without a writable note compiles in Production")
 }
 
-fn compiled_contact_request_fixture() -> registry_breg::CompiledRegistry {
-    use registry_breg::compiler::compile_project_with_assets;
-    use registry_breg::contract::ModuleAssetSource;
-    use std::{collections::BTreeSet, fs, path::PathBuf};
-
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/acceptance/publicschema-household-change-requests");
-    let mut project = parse_project_yaml(&fs::read(root.join("registry.yaml")).unwrap()).unwrap();
-    project.entities[0].change_request.as_mut().unwrap().effects[2].id =
-        Some("household-contact".to_owned());
-    // Keep a complete applier so the project remains valid while proving that
-    // another profile cannot borrow its grant to capture a created record.
-    let mut limited_applier = project
-        .access_profiles
-        .iter()
-        .find(|profile| profile.id == "household-contact-applier")
-        .unwrap()
-        .clone();
-    limited_applier.id = "household-contact-limited-applier".to_owned();
-    limited_applier.permissions.entities[0]
-        .apply_targets
-        .retain(|target| target.entity != "person");
-    project.access_profiles.push(limited_applier);
-
-    let mut modules = Vec::new();
-    let mut assets = Vec::new();
-    for locked in &project.modules {
-        let module_root = root.join("modules").join(&locked.id);
-        let module =
-            parse_module_yaml(&fs::read(module_root.join("module.yaml")).unwrap()).unwrap();
-        let paths = module
-            .entities
-            .iter()
-            .flat_map(|entity| &entity.derived)
-            .chain(
-                module
-                    .extend_entities
-                    .iter()
-                    .flat_map(|entity| &entity.derived),
-            )
-            .map(|derived| derived.sql.clone())
-            .collect::<BTreeSet<_>>();
-        for path in paths {
-            assets.push(ModuleAssetSource {
-                module: Some(module.id.clone()),
-                bytes: fs::read(module_root.join(&path)).unwrap(),
-                path,
-            });
-        }
-        modules.push(module);
-    }
-    compile_project_with_assets(&project, &modules, &assets, CompileProfile::Production)
-        .expect("contact request fixture and limited applier compile")
-}
-
-const CONTACT_REQUEST_CAPTURE_JOURNEY: &str = r#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
-kind: BRegJourneys
-journeys:
-  - id: contact-request-captures
-    steps:
-      - id: create-request
-        entity: register-household-contact-request
-        accessProfile: household-contact-submitter
-        claims: {principal: submitter, scopes: [registry:household-contact:submit], purpose: household-contact-registration}
-        request:
-          type: create
-          data:
-            household: 11111111-1111-1111-1111-111111111111
-            person-code: person-001
-            legal-name: Ana Ortega
-            family-name: Ortega
-            person-sex: female
-            residency-status: usual-resident
-            relationship: head
-            valid-from: "2026-01-01"
-            reason: verified
-        expect: {outcome: success, status: 201}
-        capture: contact-request
-      - id: get-before-apply
-        entity: register-household-contact-request
-        accessProfile: household-contact-applier
-        claims: {principal: applier, scopes: [registry:household-contact:apply], purpose: household-contact-apply}
-        request: {type: get, recordCapture: contact-request}
-        expect: {outcome: success, status: 200}
-        capture: before-apply
-      - id: apply-request
-        entity: register-household-contact-request
-        accessProfile: household-contact-applier
-        claims: {principal: applier, scopes: [registry:household-contact:apply], purpose: household-contact-apply}
-        request:
-          type: apply-request
-          recordCapture: before-apply
-          etagCapture: before-apply
-          proposalVersionCapture: before-apply
-          effectDigestCapture: before-apply
-        expect: {outcome: success, status: 200}
-        captureResults: {person: registered-person, membership: registered-membership}
-      - id: get-created-person
-        entity: person
-        accessProfile: household-operator
-        claims: {principal: operator, scopes: [registry:household:operate], purpose: household-administration}
-        request: {type: get, recordCapture: registered-person}
-        expect: {outcome: success, status: 200, fields: {person-code: person-001}}
-      - id: get-created-membership
-        entity: group-membership
-        accessProfile: household-operator
-        claims: {principal: operator, scopes: [registry:household:operate], purpose: household-administration}
-        request: {type: get, recordCapture: registered-membership}
-        expect: {outcome: success, status: 200, fields: {relationship: head}}
-"#;
-
-#[test]
-fn fixture_tooling_apply_request_captures_created_effects_as_typed_aliases() {
-    let registry = compiled_contact_request_fixture();
-    let suite = validate_fixture_journeys(CONTACT_REQUEST_CAPTURE_JOURNEY.as_bytes(), &registry)
-        .expect("apply captures both create effects and downstream gets use their entity types");
-    assert_eq!(suite.journey_ids(), ["contact-request-captures"]);
-
-    let without_result_captures = CONTACT_REQUEST_CAPTURE_JOURNEY
-        .split("      - id: get-created-person")
-        .next()
-        .unwrap()
-        .replace(
-            "        captureResults: {person: registered-person, membership: registered-membership}\n",
-            "",
-        );
-    let (before_apply_expectation, _) = without_result_captures
-        .rsplit_once("        expect: {outcome: success, status: 200}")
-        .unwrap();
-    let refused_apply = format!(
-        "{before_apply_expectation}        expect: {{outcome: refusal, status: 412, problemCode: precondition.failed}}\n"
-    );
-    validate_fixture_journeys(refused_apply.as_bytes(), &registry)
-        .expect("a refused apply is otherwise valid without result captures");
-
-    for (label, from, to, expected) in [
-        (
-            "patch effect",
-            "person: registered-person",
-            "household-contact: registered-person",
-            FixtureError::LogicalReferenceRefused,
-        ),
-        (
-            "unknown effect",
-            "person: registered-person",
-            "missing-effect: registered-person",
-            FixtureError::LogicalReferenceRefused,
-        ),
-        (
-            "another profile's apply grant",
-            "accessProfile: household-contact-applier",
-            "accessProfile: household-contact-limited-applier",
-            FixtureError::LogicalReferenceRefused,
-        ),
-        (
-            "duplicate result alias",
-            "membership: registered-membership",
-            "membership: registered-person",
-            FixtureError::DuplicateIdentifier,
-        ),
-        (
-            "existing record alias",
-            "person: registered-person",
-            "person: contact-request",
-            FixtureError::DuplicateIdentifier,
-        ),
-        (
-            "wrong downstream entity",
-            "recordCapture: registered-person",
-            "recordCapture: registered-membership",
-            FixtureError::LogicalReferenceRefused,
-        ),
-        (
-            "created alias has no write ETag",
-            "request: {type: get, recordCapture: registered-person}",
-            "request: {type: patch, recordCapture: registered-person, etagCapture: registered-person, changes: [{field: legal-name, value: Ana Garcia}]}",
-            FixtureError::LogicalReferenceRefused,
-        ),
-        (
-            "refused apply",
-            "expect: {outcome: success, status: 200}\n        captureResults:",
-            "expect: {outcome: refusal, status: 412, problemCode: precondition.failed}\n        captureResults:",
-            FixtureError::JourneyShapeRefused,
-        ),
-    ] {
-        let changed = CONTACT_REQUEST_CAPTURE_JOURNEY.replace(from, to);
-        let error = validate_fixture_journeys(changed.as_bytes(), &registry)
-            .expect_err(label);
-        assert_eq!(underlying_fixture_error(&error), &expected, "{label}: {error:?}");
-    }
-}
-
-#[test]
-fn fixture_tooling_capture_results_refuses_other_request_lifecycle_steps() {
-    let registry = compiled_contact_request_fixture();
-    let base = CONTACT_REQUEST_CAPTURE_JOURNEY
-        .split("      - id: apply-request")
-        .next()
-        .unwrap();
-    for (operation, profile, scope, purpose, extra) in [
-        ("submit-request", "submitter", "submit", "registration", ""),
-        (
-            "revise-request",
-            "submitter",
-            "submit",
-            "registration",
-            ", rebase: true",
-        ),
-        ("cancel-request", "submitter", "submit", "registration", ""),
-    ] {
-        let step = format!(
-            "      - id: lifecycle-capture\n        entity: register-household-contact-request\n        accessProfile: household-contact-{profile}\n        claims: {{principal: {profile}, scopes: [registry:household-contact:{scope}], purpose: household-contact-{purpose}}}\n        request: {{type: {operation}, recordCapture: before-apply, etagCapture: before-apply{extra}}}\n        expect: {{outcome: success, status: 200}}\n"
-        );
-        let without_capture = format!("{base}{step}");
-        validate_fixture_journeys(without_capture.as_bytes(), &registry)
-            .unwrap_or_else(|error| panic!("{operation} is otherwise valid: {error:?}"));
-        let with_capture =
-            format!("{without_capture}        captureResults: {{person: registered-person}}\n");
-        let error = validate_fixture_journeys(with_capture.as_bytes(), &registry).unwrap_err();
-        assert_eq!(
-            underlying_fixture_error(&error),
-            &FixtureError::JourneyShapeRefused,
-            "{operation}: {error:?}"
-        );
-    }
-}
-
-fn compiled_request_fixture() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(
-        br#"{
-          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
-          "kind":"BRegProject",
-          "project":{"id":"fixture-request-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","required":true,"maximumLength":64,"classification":"public"}]
-          },{
-            "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"public",
-            "fields":[
-              {"id":"target","type":"reference","target":"target","required":true,"classification":"public"},
-              {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"public"}
-            ],
-            "changeRequest":{
-              "effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"value"}}}],
-              "review":{"type":"required","authority":"casework-main","policyId":"correction-review"},
-              "onApproved":{"mode":"manual"}
-            }
-          }],
-          "accessProfiles":[{
-            "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"correction-request","operations":["create","submit-request","revise-request","cancel-request"],"readableFields":["target","value"],"writableFields":["target","value"],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"correction-request","operations":["get","list"],"readableFields":["target","value"],
-              "rowBoundaries": "unrestricted"
-            }]}
-          },{
-            "id":"applier","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-              "entity":"correction-request","operations":["apply-request"],"readableFields":["target"],
-              "applyTargets":[{"entity":"target","rowBoundaries":"unrestricted"}],
-              "rowBoundaries": "unrestricted"
-            }]}
-          }]
-        }"#,
-    )
-    .expect("request fixture source parses");
-    compile_project(&project, &[], CompileProfile::Authoring).expect("request fixture compiles")
-}
-
 fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"fixture-crud-aliases","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
@@ -1214,8 +782,8 @@ fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
           }],
           "accessProfiles":[{
             "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"person","operations":["create","get","list","patch"],
+            "permissions":{"records":[{
+              "recordType":"person","operations":["create","get","list","patch"],
               "readableFields":["jurisdiction","person-code","legal-name"],
               "writableFields":["jurisdiction","person-code","legal-name"],
               "filterableFields":["jurisdiction","person-code"],
@@ -1232,11 +800,11 @@ fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
 
 fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"fixture-immediate-actions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"restricted"},
@@ -1259,7 +827,7 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
             ]
           }],
-          "actions":[{
+          "actions":[{"execution":{"mode":"immediate"},
             "id":"register-household-contact",
             "inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
@@ -1267,19 +835,19 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
               {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
               {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
-            "effects":[
-              {"id":"person","target":{"entity":"person"},"operation":"create",
-                "set":{"jurisdiction":{"fromField":"jurisdiction"},"person-code":{"fromField":"person-code"},"legal-name":{"fromField":"legal-name"}}},
-              {"id":"membership","target":{"entity":"group-membership"},"operation":"create",
-                "set":{"jurisdiction":{"fromField":"jurisdiction"},"person":{"fromEffect":"person"},"household":{"fromField":"household"}}},
-              {"id":"household","target":{"fromField":"household"},"operation":"patch",
+            "plan":{"type":"fixed","effects":[
+              {"id":"person","target":{"recordType":"person"},"operation":"create",
+                "set":{"jurisdiction":{"fromInput":"jurisdiction"},"person-code":{"fromInput":"person-code"},"legal-name":{"fromInput":"legal-name"}}},
+              {"id":"membership","target":{"recordType":"group-membership"},"operation":"create",
+                "set":{"jurisdiction":{"fromInput":"jurisdiction"},"person":{"fromEffect":"person"},"household":{"fromInput":"household"}}},
+              {"id":"household","target":{"fromInput":"household"},"operation":"patch",
                 "set":{"contact-person":{"fromEffect":"person"}}}
-            ]
+            ]}
           }],
           "accessProfiles":[{
             "id":"household-seed","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"household","operations":["create","get"],"readableFields":["jurisdiction","household-code","contact-person"],
+            "permissions":{"records":[{
+              "recordType":"household","operations":["create","get"],"readableFields":["jurisdiction","household-code","contact-person"],
               "writableFields":["jurisdiction","household-code"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
           },{
@@ -1288,16 +856,16 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
             "permissions":{"actions":[{
               "action":"register-household-contact","operations":["invoke"],
               "targets":[
-                {"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
-                {"entity":"person","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
-                {"entity":"group-membership","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}
+                {"recordType":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
+                {"recordType":"person","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
+                {"recordType":"group-membership","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}
               ],
               "results":["person","household"]
             }]}
           },{
             "id":"person-reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"person","operations":["get"],"readableFields":["jurisdiction","person-code","legal-name"],
+            "permissions":{"records":[{
+              "recordType":"person","operations":["get"],"readableFields":["jurisdiction","person-code","legal-name"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]}
           }]
@@ -1346,12 +914,12 @@ fn underlying_fixture_error(error: &FixtureError) -> &FixtureError {
 
 fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"spatial-fixture","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "package":{"sourceRevision":"spatial-fixture-source"},
-          "entities":[{
+          "recordTypes":[{
             "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
             "fields":[
               {"id":"code","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -1360,13 +928,13 @@ fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
             "geojson":{"geometryField":"location"}
           }],
           "accessProfiles":[
-            {"id":"map-reader","default":true,"principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"entities":[{
-              "entity":"site","operations":["get","list"],"readableFields":["code","location"],
+            {"id":"map-reader","default":true,"principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"records":[{
+              "recordType":"site","operations":["get","list"],"readableFields":["code","location"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
               "rowBoundaries": "unrestricted"
             }]}},
-            {"id":"directory-reader","principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"entities":[{
-              "entity":"site","operations":["list"],"readableFields":["code"],
+            {"id":"directory-reader","principalClaim":"sub","requiredScopes":["sites.read"],"permissions":{"records":[{
+              "recordType":"site","operations":["list"],"readableFields":["code"],
               "rowBoundaries": "unrestricted"
             }]}}
           ]
@@ -1383,8 +951,8 @@ fn fixture_journey_reader_reports_every_unknown_removed_and_anchored_key_with_it
 
     let two_unknown = source
         .replacen(
-            "        entity: widget\n",
-            "        entity: widget\n        entityName: canary-one\n",
+            "        recordType: widget\n",
+            "        recordType: widget\n        entityName: canary-one\n",
             1,
         )
         .replacen(
@@ -1484,11 +1052,11 @@ fn fixture_journey_refusals_name_the_document_path_the_journey_and_the_bound() {
         "the refusal names the member and the members the grammar accepts: {human}"
     );
 
-    let wrong_type = source.replacen("entity: widget", "entity: [widget]", 1);
+    let wrong_type = source.replacen("recordType: widget", "recordType: [widget]", 1);
     let error = validate_fixture_journeys(wrong_type.as_bytes(), &registry).unwrap_err();
     assert_eq!(
         document_diagnostics(&error),
-        [("config.expected-string", "/journeys/0/steps/0/entity")]
+        [("config.expected-string", "/journeys/0/steps/0/recordType")]
     );
     assert!(
         !format!("{error:?}").contains("widget"),
@@ -1629,7 +1197,7 @@ journeys:
 #[test]
 fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contract() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/acceptance/person-registration-rhai");
+        .join("tests/fixtures/native-models/products/breg/acceptance/person-registration-rhai");
     let mut project =
         parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
     project
@@ -1643,18 +1211,12 @@ fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contrac
         .unwrap()
         .pattern = Some(".*".to_owned());
     let assets = project
-        .actions
+        .functions
         .iter()
-        .filter_map(|action| {
-            action
-                .handler
-                .as_ref()
-                .and_then(|handler| handler.script().map(str::to_owned))
-                .map(|script| registry_breg::contract::ModuleAssetSource {
-                    module: None,
-                    path: script.clone(),
-                    bytes: std::fs::read(root.join(&script)).unwrap(),
-                })
+        .map(|function| registry_breg::contract::ModuleAssetSource {
+            module: None,
+            path: function.source.clone(),
+            bytes: std::fs::read(root.join(&function.source)).unwrap(),
         })
         .collect::<Vec<_>>();
     let registry = registry_breg::compiler::compile_project_with_assets(
@@ -1705,21 +1267,4 @@ fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contrac
     ] {
         assert!(validate_fixture_journeys(changed.as_bytes(), &registry).is_err());
     }
-}
-
-#[test]
-fn attachment_profile_projection_is_valid_without_permitting_fixture_scalar_input() {
-    let project = parse_project_json(include_bytes!(
-        "../../../products/breg/acceptance/request-attachments/registry.yaml"
-    ))
-    .unwrap();
-    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    let bytes =
-        include_bytes!("../../../products/breg/acceptance/request-attachments/tests/journeys.yaml");
-    let suite = validate_fixture_journeys(bytes, &registry).unwrap();
-    assert_eq!(suite.journey_ids(), ["attachment-draft-authoring"]);
-    let mut forged: serde_json::Value = serde_json::from_slice(bytes).unwrap();
-    forged["journeys"][0]["steps"][1]["request"]["data"]["supporting-file"] =
-        serde_json::json!({"sha256": "forged"});
-    assert!(validate_fixture_journeys(&serde_json::to_vec(&forged).unwrap(), &registry).is_err());
 }

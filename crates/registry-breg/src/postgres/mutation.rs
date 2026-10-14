@@ -8,7 +8,7 @@ mod proposal;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::api::{
@@ -16,7 +16,7 @@ use crate::api::{
     BatchMutationInput, ConditionalMutationInput, CreateMutationInput, HeldReadResponse,
     ImmediateActionInput, RowBoundaryOperator as ApiRowBoundaryOperator, VerifiedRowBoundary,
 };
-use crate::audit::{record_http_refusal_audit, HttpRefusalAudit, RegistryAudit};
+use crate::audit::{HttpRefusalAudit, RegistryAudit, record_http_refusal_audit};
 use crate::correlation::RequestCorrelation;
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::ingestion_store::{self, IngestionAttemptOutcome, IngestionRunStatus};
@@ -24,15 +24,15 @@ use crate::model::CompiledRegistry;
 #[cfg(feature = "postgres-test")]
 use crate::mutation::MutationFaultPoint;
 use crate::mutation::{
-    valid_strong_etag, BatchMutationItem, BatchMutationRequest, IngestionChunkBinding,
-    MutationBody, MutationCoordinator, MutationError, MutationOutcome, MutationPlan,
-    MutationRequest, PatchOperation,
+    BatchMutationItem, BatchMutationRequest, IngestionChunkBinding, MutationBody,
+    MutationCoordinator, MutationError, MutationOutcome, MutationPlan, MutationRequest,
+    PatchOperation, valid_strong_etag,
 };
 
 use super::cancellation::QueryCancellationGuard;
 use super::{
-    begin_record_transaction, ActionClaimContext, ClaimContext, ExpectedRegistryIdentity,
-    RegistryLockKey, RowBoundaryContext, RuntimePool,
+    ActionClaimContext, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
+    RowBoundaryContext, RuntimePool, begin_record_transaction,
 };
 
 const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -48,6 +48,8 @@ pub struct PostgresRecordMutationService {
     audit: RegistryAudit,
     field_encryption: Option<Arc<crate::field_encryption::FieldEncryptionService>>,
     action_timeout: Duration,
+    #[cfg(feature = "postgres-test")]
+    automatic_proposal_lease_for_test: Option<Duration>,
     evidence_timeout: Duration,
     evidence_evaluator: Option<Arc<crate::action_evidence::ActionEvidenceEvaluator>>,
     review_result_source: Option<Arc<dyn crate::review_store::ReviewResultSource>>,
@@ -233,13 +235,20 @@ impl PostgresRecordMutationService {
             .actions
             .iter()
             .find(|action| action.id == input.action_id)
-            .is_some_and(|action| !action.evidence.is_empty());
+            .is_some_and(|action| {
+                !action.evidence.is_empty() || !action.commit_evidence.is_empty()
+            });
         let deadline = started
             + if is_evidence {
                 self.evidence_timeout.min(self.action_timeout)
             } else {
                 self.action_timeout
             };
+        if let Some(binding) = claims.task_grant() {
+            tokio::time::timeout_at(deadline, self.coordinator.check_task_authority(binding))
+                .await
+                .map_err(|_| MutationError::Unavailable)??;
+        }
         if is_evidence {
             return tokio::time::timeout_at(
                 deadline,
@@ -286,10 +295,6 @@ impl PostgresRecordMutationService {
         fault: crate::mutation::FaultControl,
         deadline: tokio::time::Instant,
     ) -> Result<MutationOutcome, MutationError> {
-        let evaluator = self
-            .evidence_evaluator
-            .as_ref()
-            .ok_or(MutationError::Unavailable)?;
         let route_id = input.route_id;
         let correlation = input.correlation;
         let prepared = {
@@ -316,15 +321,43 @@ impl PostgresRecordMutationService {
                 Err(receipt) => return Ok(receipt),
             }
         }; // Drop the entire pooled connection before evaluation or acquisition.
-        let frozen = evaluator
-            .evaluate(
-                prepared.action.clone(),
-                prepared.inputs.clone(),
-                deadline.into_std(),
-            )
-            .await;
+        let mut frozen = match self.evidence_evaluator.as_ref() {
+            Some(evaluator) if prepared.action.handler.is_some() => {
+                evaluator
+                    .evaluate(
+                        prepared.action.clone(),
+                        prepared.inputs.clone(),
+                        deadline.into_std(),
+                    )
+                    .await
+            }
+            Some(_) => crate::action_evidence::FrozenEvidenceEvaluation {
+                outcome: Ok(crate::action_handler::ActionHandlerOutcome::Effects(
+                    prepared.action.effects.clone(),
+                )),
+                acquisitions: Vec::new(),
+            },
+            None => crate::action_evidence::FrozenEvidenceEvaluation {
+                outcome: Err(MutationError::Unavailable),
+                acquisitions: Vec::new(),
+            },
+        };
+        if frozen.outcome.is_ok() && !prepared.commit_requests.is_empty() {
+            if let Some(evaluator) = self.evidence_evaluator.as_ref() {
+                match evaluator
+                    .acquire_preconditions(prepared.commit_requests.clone(), deadline.into_std())
+                    .await
+                {
+                    Ok(mut acquisitions) => frozen.acquisitions.append(&mut acquisitions),
+                    Err(error) => frozen.outcome = Err(error),
+                }
+            }
+        }
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
+        }
+        if let Some(binding) = claims.task_grant() {
+            self.coordinator.check_task_authority(binding).await?;
         }
         let client = self
             .pool
@@ -359,6 +392,9 @@ impl PostgresRecordMutationService {
     ) -> Result<HeldReadResponse, MutationError> {
         let claims = strict_action_context(input.context, input.action_id)?;
         let target_authority = strict_action_target_authority(input.context)?;
+        if let Some(binding) = claims.task_grant() {
+            self.coordinator.check_task_authority(binding).await?;
+        }
         let client = self
             .pool
             .get()
@@ -388,382 +424,6 @@ impl PostgresRecordMutationService {
         }
     }
 
-    pub async fn request_action(
-        &self,
-        input: crate::api::RequestActionInput<'_>,
-    ) -> Result<MutationOutcome, MutationError> {
-        let claims = strict_claim_context(&self.registry, input.context, input.entity_id)?;
-        let is_evidence_apply = matches!(input.action, crate::api::RequestActionBody::Apply { .. })
-            && self
-                .registry
-                .entities()
-                .get(input.entity_id)
-                .and_then(|entity| entity.change_request.as_ref())
-                .is_some_and(|plan| !plan.application.preconditions.evidence.is_empty());
-        let is_reviewed_apply = matches!(input.action, crate::api::RequestActionBody::Apply { .. })
-            && self
-                .registry
-                .entities()
-                .get(input.entity_id)
-                .and_then(|entity| entity.change_request.as_ref())
-                .is_some_and(|plan| {
-                    matches!(
-                        plan.review,
-                        crate::model::CompiledChangeRequestReview::Required(_)
-                    )
-                });
-        if is_reviewed_apply {
-            return self
-                .request_reviewed_apply(input, &claims, is_evidence_apply)
-                .await;
-        }
-        if is_evidence_apply {
-            return self
-                .request_evidence_apply(input, &claims, None, None)
-                .await;
-        }
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|_| MutationError::Unavailable)?;
-        let fault = match self.fault {
-            #[cfg(feature = "postgres-test")]
-            MutationFaultControl::At(point) => crate::mutation::FaultControl::At(point),
-            _ => crate::mutation::FaultControl::Disabled,
-        };
-        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
-        match tokio::time::timeout(
-            REQUEST_ACTION_TIMEOUT,
-            self.coordinator.execute_request_action(
-                guard.client(),
-                &self.registry,
-                input,
-                &claims,
-                fault,
-                None,
-                None,
-                false,
-            ),
-        )
-        .await
-        {
-            Ok(result) => {
-                guard.disarm();
-                result
-            }
-            Err(_) => {
-                guard.cancel_and_discard().await;
-                Err(MutationError::Unavailable)
-            }
-        }
-    }
-
-    async fn request_evidence_apply(
-        &self,
-        input: crate::api::RequestActionInput<'_>,
-        claims: &ClaimContext,
-        review_evidence: Option<&crate::review_integration::AcceptedReviewEvidence>,
-        attempt: Option<registry_platform_audit::AuditRequest>,
-    ) -> Result<MutationOutcome, MutationError> {
-        // The request's attempt, held until the action answers it: the
-        // reviewed apply that routes here has already recorded it, and the
-        // preflight records it otherwise.
-        let mut attempt = attempt;
-        let evaluator = self
-            .evidence_evaluator
-            .as_ref()
-            .ok_or(MutationError::Unavailable)?;
-        let deadline =
-            tokio::time::Instant::now() + self.evidence_timeout.min(REQUEST_ACTION_TIMEOUT);
-        let fault = match self.fault {
-            #[cfg(feature = "postgres-test")]
-            MutationFaultControl::At(point) => crate::mutation::FaultControl::At(point),
-            _ => crate::mutation::FaultControl::Disabled,
-        };
-        let preflight = {
-            let client = tokio::time::timeout_at(deadline, self.pool.get())
-                .await
-                .map_err(|_| MutationError::Unavailable)?
-                .map_err(|_| MutationError::Unavailable)?;
-            let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
-            let result = tokio::time::timeout_at(deadline, async {
-                let result = self
-                    .coordinator
-                    .preflight_request_evidence_apply(
-                        guard.client(),
-                        &self.registry,
-                        &input,
-                        claims,
-                        deadline,
-                        &mut attempt,
-                    )
-                    .await;
-                if result.is_err() && tokio::time::Instant::now() < deadline {
-                    self.coordinator
-                        .record_request_boundary_refusal(&self.registry, &input, claims)
-                        .await?;
-                }
-                result
-            })
-            .await;
-            match result {
-                Ok(result) => {
-                    guard.disarm();
-                    result?
-                }
-                Err(_) => {
-                    guard.cancel_and_discard().await;
-                    return Err(MutationError::Unavailable);
-                }
-            }
-        }; // The complete pool checkout is dropped before remote Evidence I/O.
-        let acquisitions = match preflight {
-            crate::mutation::RequestEvidencePreflight::Receipt => None,
-            crate::mutation::RequestEvidencePreflight::Acquire(requests) => Some(
-                evaluator
-                    .acquire_preconditions(requests, deadline.into_std())
-                    .await,
-            ),
-        };
-        if tokio::time::Instant::now() >= deadline {
-            return Err(MutationError::Unavailable);
-        }
-        let client = tokio::time::timeout_at(deadline, self.pool.get())
-            .await
-            .map_err(|_| MutationError::Unavailable)?
-            .map_err(|_| MutationError::Unavailable)?;
-        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
-        // A concurrent committed receipt takes priority over a failed helper.
-        let frozen = acquisitions
-            .as_ref()
-            .and_then(|result| result.as_ref().ok());
-        let result = match tokio::time::timeout_at(
-            deadline,
-            self.coordinator.execute_request_action(
-                guard.client(),
-                &self.registry,
-                input,
-                claims,
-                fault,
-                review_evidence,
-                frozen.map(Vec::as_slice),
-                true,
-            ),
-        )
-        .await
-        {
-            Ok(result) => {
-                guard.disarm();
-                result
-            }
-            Err(_) => {
-                guard.cancel_and_discard().await;
-                return Err(MutationError::Unavailable);
-            }
-        };
-        match (result, acquisitions) {
-            (Ok(outcome), _) => Ok(outcome),
-            (
-                Err(MutationError::PreconditionFailed | MutationError::Conflict),
-                Some(Err(acquisition_error)),
-            ) => Err(acquisition_error),
-            (Err(error), _) => Err(error),
-        }
-    }
-
-    async fn request_reviewed_apply(
-        &self,
-        input: crate::api::RequestActionInput<'_>,
-        claims: &ClaimContext,
-        needs_action_evidence: bool,
-    ) -> Result<MutationOutcome, MutationError> {
-        let deadline = tokio::time::Instant::now() + REQUEST_ACTION_TIMEOUT;
-        let fault = match self.fault {
-            #[cfg(feature = "postgres-test")]
-            MutationFaultControl::At(point) => crate::mutation::FaultControl::At(point),
-            _ => crate::mutation::FaultControl::Disabled,
-        };
-        // The attempt precedes the receipt preflight's reads, the review
-        // authority, and the action transaction, and is held across them.
-        let attempt = tokio::time::timeout_at(
-            deadline,
-            self.coordinator
-                .begin_request_action_audit(&self.registry, &input, claims),
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)??;
-        let receipt_preflight = {
-            let client = self
-                .pool
-                .get()
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
-            let result = tokio::time::timeout_at(
-                deadline,
-                self.coordinator.preflight_request_action_receipt(
-                    guard.client(),
-                    &self.registry,
-                    &input,
-                    claims,
-                ),
-            )
-            .await;
-            match result {
-                Ok(Ok(preflight)) => {
-                    guard.disarm();
-                    preflight
-                }
-                Ok(Err(error)) => {
-                    guard.disarm();
-                    tokio::time::timeout_at(
-                        deadline,
-                        self.coordinator.record_request_boundary_refusal(
-                            &self.registry,
-                            &input,
-                            claims,
-                        ),
-                    )
-                    .await
-                    .map_err(|_| MutationError::Unavailable)??;
-                    return Err(error);
-                }
-                Err(_) => {
-                    guard.cancel_and_discard().await;
-                    return Err(MutationError::Unavailable);
-                }
-            }
-        };
-        let proposal_authority = match receipt_preflight {
-            crate::mutation::RequestReceiptPreflight::Continue { proposal_authority } => {
-                proposal_authority
-            }
-            crate::mutation::RequestReceiptPreflight::Receipt => {
-                let client = self
-                    .pool
-                    .get()
-                    .await
-                    .map_err(|_| MutationError::Unavailable)?;
-                let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
-                let result = tokio::time::timeout_at(
-                    deadline,
-                    self.coordinator.execute_request_action(
-                        guard.client(),
-                        &self.registry,
-                        input,
-                        claims,
-                        fault,
-                        None,
-                        None,
-                        true,
-                    ),
-                )
-                .await;
-                return match result {
-                    Ok(result) => {
-                        guard.disarm();
-                        result
-                    }
-                    Err(_) => {
-                        guard.cancel_and_discard().await;
-                        Err(MutationError::Unavailable)
-                    }
-                };
-            }
-        };
-        let crate::api::RequestActionBody::Apply {
-            proposal_version,
-            ref effect_digest,
-            ..
-        } = input.action
-        else {
-            return Err(MutationError::InvalidRequest);
-        };
-        let request_id =
-            uuid::Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
-        let (authority, accepted) = {
-            let client = self
-                .pool
-                .get()
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            let (authority, accepted) = crate::review_store::load_accepted_binding(
-                &**client,
-                input.entity_id,
-                request_id,
-                i64::from(proposal_version),
-                effect_digest,
-            )
-            .await?;
-            (authority, accepted)
-        };
-        // A guard acquisition is a protected disclosure too. Check both the
-        // current actor and the authority frozen at submission before the
-        // review authority is contacted.
-        let task_authority = async {
-            if let Some(grant) = claims.task_grant() {
-                self.coordinator.check_task_authority(grant).await?;
-            }
-            if let Some(grant) = proposal_authority.as_deref() {
-                self.coordinator.check_task_authority(grant).await?;
-            }
-            Ok::<(), MutationError>(())
-        }
-        .await;
-        if let Err(error) = task_authority {
-            // The refusal answers the held attempt, the same as a refused
-            // evidence-apply preflight.
-            tokio::time::timeout_at(
-                deadline,
-                self.coordinator
-                    .record_request_boundary_refusal(&self.registry, &input, claims),
-            )
-            .await
-            .map_err(|_| MutationError::Unavailable)??;
-            return Err(error);
-        }
-        let source = self
-            .review_result_source
-            .as_ref()
-            .ok_or(MutationError::Unavailable)?;
-        let review_evidence = source.approved_evidence(&authority, &accepted).await?;
-        if needs_action_evidence {
-            return self
-                .request_evidence_apply(input, claims, Some(&review_evidence), Some(attempt))
-                .await;
-        }
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|_| MutationError::Unavailable)?;
-        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
-        let result = tokio::time::timeout_at(
-            deadline,
-            self.coordinator.execute_request_action(
-                guard.client(),
-                &self.registry,
-                input,
-                claims,
-                fault,
-                Some(&review_evidence),
-                None,
-                true,
-            ),
-        )
-        .await;
-        match result {
-            Ok(result) => {
-                guard.disarm();
-                result
-            }
-            Err(_) => {
-                guard.cancel_and_discard().await;
-                Err(MutationError::Unavailable)
-            }
-        }
-    }
     /// `instance_id` is the runtime file's `identity.instanceId`, which the
     /// event source of every captured envelope names.
     #[must_use]
@@ -818,6 +478,8 @@ impl PostgresRecordMutationService {
             audit,
             field_encryption: None,
             action_timeout: REQUEST_ACTION_TIMEOUT,
+            #[cfg(feature = "postgres-test")]
+            automatic_proposal_lease_for_test: None,
             evidence_timeout: REQUEST_ACTION_TIMEOUT,
             evidence_evaluator: None,
             review_result_source: None,
@@ -830,6 +492,13 @@ impl PostgresRecordMutationService {
     #[doc(hidden)]
     pub fn with_action_timeout_for_test(mut self, timeout: Duration) -> Self {
         self.action_timeout = timeout;
+        self
+    }
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    pub fn with_automatic_proposal_lease_for_test(mut self, lease: Duration) -> Self {
+        assert!(!lease.is_zero());
+        self.automatic_proposal_lease_for_test = Some(lease);
         self
     }
 
@@ -860,25 +529,6 @@ impl PostgresRecordMutationService {
         record_http_refusal_audit(&self.audit, &self.expected, event)
             .await
             .map_err(MutationError::from)
-    }
-
-    pub(crate) async fn record_attachment_refusal(
-        &self,
-        event: HttpRefusalAudit<'_>,
-        slot_id: &str,
-    ) -> Result<(), MutationError> {
-        #[cfg(feature = "postgres-test")]
-        if matches!(self.fault, MutationFaultControl::RefusalAudit) {
-            return Err(MutationError::Unavailable);
-        }
-        crate::audit::record_attachment_http_refusal_audit(
-            &self.audit,
-            &self.expected,
-            event,
-            slot_id,
-        )
-        .await
-        .map_err(MutationError::from)
     }
 
     pub(crate) async fn record_action_refusal<'a>(
@@ -925,15 +575,6 @@ impl PostgresRecordMutationService {
         patch: Vec<PatchOperation>,
     ) -> Result<MutationOutcome, MutationError> {
         self.conditional_mutation(input, MutationBody::Patch(patch))
-            .await
-    }
-
-    pub async fn attachment(
-        &self,
-        input: ConditionalMutationInput<'_>,
-        attachment: crate::attachment::AttachmentMutation,
-    ) -> Result<MutationOutcome, MutationError> {
-        self.conditional_mutation(input, MutationBody::Attachment(attachment))
             .await
     }
 
@@ -2419,12 +2060,6 @@ impl PostgresRecordMutationService {
             .map_err(|_| MutationError::Unavailable)?;
         let claims = strict_claim_context(&self.registry, input.context, input.entity_id)?;
         let plan = MutationPlan::from_compiled(&self.registry, input.route_id)?;
-        let plan = match &body {
-            MutationBody::Attachment(attachment) => {
-                plan.attachment(&attachment.slot_id, attachment.bytes.is_none())?
-            }
-            _ => plan,
-        };
         self.execute_request(
             &mut client,
             MutationRequest {
@@ -2512,7 +2147,6 @@ fn strict_claim_context(
     )
     .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
     .and_then(|claims| claims.with_human_identity(context.human_identity().cloned()))
-    .and_then(|claims| claims.with_api_submitter_targets(registry, context))
     .and_then(|claims| claims.with_recipients(context.recipients().clone()))
     .and_then(|claims| match context.task_grant() {
         Some(grant) => claims.with_task_grant(grant.clone()),
@@ -2536,6 +2170,10 @@ fn strict_action_context(
         context.result_effects().clone(),
     )
     .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
+    .and_then(|claims| match context.task_grant() {
+        Some(binding) => claims.with_task_grant(binding.clone()),
+        None => Ok(claims),
+    })
     .map_err(|_| MutationError::InvalidRequest)
 }
 
@@ -2625,7 +2263,7 @@ fn receipt_json(
 #[cfg(test)]
 mod ingestion_context_tests {
     use super::*;
-    use crate::compiler::{compile_project, CompileProfile};
+    use crate::compiler::{CompileProfile, compile_project};
     use crate::contract::parse_project_json;
     use crate::task_grant::TaskGrantBinding;
 
@@ -2633,15 +2271,15 @@ mod ingestion_context_tests {
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
       "kind":"BRegProject",
       "project":{"id":"run-context-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
+      "datasets":[{"id":"test-dataset"}],"recordTypes":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
         "fields":[{"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}]
       }],
       "accessProfiles":[{
         "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["review"],
-        "permissions":{"entities":[{
-          "entity":"entry","operations":["get"],
+        "permissions":{"records":[{
+          "recordType":"entry","operations":["get"],
           "readableFields":["tenant"],
           "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
         }]}

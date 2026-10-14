@@ -1,31 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Bounded operator controls for change-request upgrade safety and retention.
+//! Bounded operator controls for Proposal activation safety and retention.
 
-use std::collections::{BTreeMap, BTreeSet};
+#[path = "proposal_retention/activation.rs"]
+mod activation;
+pub use activation::{
+    ProposalActivationCompatibilityInventory, prepare_proposal_activation_compatibility,
+};
+pub(crate) use activation::{
+    install_activation_compatibility, submission_is_compatible,
+    verify_activation_compatibility_freshness,
+};
+
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
 use registry_platform_audit::{AuditEntry, AuditProfile};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use crate::audit::{terminal_entry, RegistryAudit, TerminalAudit, TerminalAuditOutcome};
+use crate::audit::{RegistryAudit, TerminalAudit, TerminalAuditOutcome, terminal_entry};
 use crate::correlation::RequestCorrelation;
-use crate::history_commit::{
-    allocate_revision_commit, CommitAllocation, HistoryCommitError, RevisionCommitMember,
-};
-use crate::history_context::CommitOrigin;
-use crate::history_maintenance::{lock_registry, HistoryMaintenanceError};
+use crate::history_maintenance::{HistoryMaintenanceError, lock_registry};
 use crate::model::{
-    CompiledChangeRequestRetentionMode, CompiledEntity, CompiledRegistry, HttpMethod,
+    CompiledActionExecution, CompiledProposalRetentionMode, CompiledRegistry, HttpMethod,
 };
 use crate::package::PackageError;
 use crate::postgres::{
-    verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
+    ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
+    SqlIdentifier, verify_catalog_identity_for_catalog, verify_migration_role,
 };
 use crate::runtime_config::load_runtime_config;
 
@@ -36,18 +42,20 @@ pub const ATTACHMENT_CLEANUP_AUDIT_SCHEMA: &str = "breg-attachment-cleanup-audit
 // current actions and the remaining request metadata.
 const MAX_RETAINED_HISTORY_BYTES: usize = 1_048_576;
 pub const MAX_PROPOSAL_RETENTION_OPERATOR_PAGE_SIZE: u16 = 100;
-const RETENTION_OPERATION_ID: &str = "records.request.retention.erase";
-const RETENTION_REFERENCE: &str = "request-retention-erasure";
+const RETENTION_OPERATION_ID: &str = "proposals.retention.erase";
+const RETENTION_REFERENCE: &str = "proposal-retention-erasure";
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum RequestRetentionError {
-    #[error("active request proposals require explicit rebase or cancellation")]
-    ActiveProposalRequiresRebase,
-    #[error("request detail is still pinned by an active proposal")]
+pub enum ProposalRetentionError {
+    #[error("active Proposals require explicit rebase or cancellation")]
+    ActiveProposalRecoveryUnavailable,
+    #[error("Proposal detail is still pinned by an active submission")]
     ActiveDetailPinned,
-    #[error("request retention policy does not permit operator erasure")]
+    #[error("Proposal retention policy does not permit operator erasure")]
     RetainMode,
-    #[error("attachment storage or verification binding differs from the registry pin; restore the original configuration")]
+    #[error(
+        "attachment storage or verification binding differs from the registry pin; restore the original configuration"
+    )]
     AttachmentStorageBindingMismatch,
     #[error("another session held the exclusive migration lock past the lock timeout")]
     MigrationLockHeld,
@@ -56,60 +64,62 @@ pub enum RequestRetentionError {
     /// not secrets, so the refusal names them.
     #[error("{0}")]
     PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
-    #[error("request retention state is unavailable")]
+    #[error("Proposal retention state is unavailable")]
     Unavailable,
     /// The erasure committed, but the audit destination refused the entry
     /// recording it. The erased detail is gone; restore the destination,
     /// then reconcile the erasure against the database before relying on
     /// the audit journal for it.
-    #[error("the request detail erasure committed but its audit entry was not recorded; restore the audit destination")]
+    #[error(
+        "the Proposal detail erasure committed but its audit entry was not recorded; restore the audit destination"
+    )]
     ErasureUnaudited,
 }
 
-pub type Result<T> = std::result::Result<T, RequestRetentionError>;
+pub type Result<T> = std::result::Result<T, ProposalRetentionError>;
 
 #[derive(Clone, Debug)]
-pub struct RequestDetailErasureScope<'a> {
+pub struct ProposalDetailErasureScope<'a> {
     pub action_id: &'a str,
     pub proposal_id: Uuid,
-    pub proposal_version: i64,
+    pub submission_version: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RetainedHistoryQuery<'a> {
     pub action_id: &'a str,
     pub proposal_id: Uuid,
-    pub after_proposal_version: Option<i64>,
+    pub after_submission_version: Option<i64>,
     pub limit: u16,
     pub authorized_target_entities: &'a BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RetainedRequestHistoryPage {
-    pub proposals: Vec<RetainedRequestProposal>,
-    pub next_after_proposal_version: Option<i64>,
+pub struct RetainedProposalHistoryPage {
+    pub proposals: Vec<RetainedProposalProposal>,
+    pub next_after_submission_version: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RetainedRequestProposal {
+pub struct RetainedProposalProposal {
     pub action_id: String,
     pub proposal_id: String,
-    pub proposal_version: i64,
-    pub request_state: String,
+    pub submission_version: i64,
+    pub proposal_state: String,
     pub current: bool,
     pub contract_fingerprint: String,
     pub effect_digest: String,
     pub detail_erased: bool,
     pub application_id: Option<String>,
     pub result_link_count: u16,
-    pub result_links: Vec<RetainedRequestResultLink>,
+    pub result_links: Vec<RetainedProposalResultLink>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RetainedRequestResultLink {
+pub struct RetainedProposalResultLink {
     pub target_entity_id: String,
     pub target_record_id: String,
     pub target_revision: i64,
@@ -117,7 +127,7 @@ pub struct RetainedRequestResultLink {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RequestDetailErasure {
+pub struct ProposalDetailErasure {
     pub proposal_snapshots: u64,
     pub target_snapshots: u64,
     pub review_submission_requests: u64,
@@ -125,26 +135,24 @@ pub struct RequestDetailErasure {
     pub review_result_payloads: u64,
     pub application_reasons: u64,
     pub idempotency_results: u64,
-    pub request_revision_snapshots: u64,
-    pub outbox_payloads: u64,
-    pub current_intake_rows: u64,
+    pub draft_inputs: u64,
     pub attachment_references: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RequestRetentionListPage {
-    pub requests: Vec<RequestRetentionListItem>,
+pub struct ProposalRetentionListPage {
+    pub proposals: Vec<ProposalRetentionListItem>,
     pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RequestRetentionListItem {
+pub struct ProposalRetentionListItem {
     pub action_id: String,
     pub proposal_id: String,
-    pub proposal_version: i64,
-    pub request_state: String,
+    pub submission_version: i64,
+    pub proposal_state: String,
     pub current: bool,
     pub retention_mode: &'static str,
     pub pinned: bool,
@@ -156,27 +164,27 @@ pub struct RequestRetentionListItem {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RequestRetentionDryRun {
+pub struct ProposalRetentionDryRun {
     pub action_id: String,
     pub proposal_id: String,
-    pub proposal_version: i64,
-    pub request_state: String,
+    pub submission_version: i64,
+    pub proposal_state: String,
     pub retention_mode: &'static str,
     pub pinned: bool,
     pub eligible_for_erasure: bool,
     pub detail_erased: bool,
-    pub erasure: RequestDetailErasure,
+    pub erasure: ProposalDetailErasure,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RequestRetentionErase {
+pub struct ProposalRetentionErase {
     pub action_id: String,
     pub proposal_id: String,
-    pub proposal_version: i64,
-    pub request_state: String,
+    pub submission_version: i64,
+    pub proposal_state: String,
     pub retention_mode: &'static str,
-    pub erasure: RequestDetailErasure,
+    pub erasure: ProposalDetailErasure,
     /// Registry-wide external blobs still awaiting confirmed physical deletion.
     pub pending_external_deletions: u64,
     /// Confirmed absence observations retained for future delayed-write rechecks.
@@ -196,7 +204,7 @@ pub struct AttachmentCleanup {
 /// Construction closes the runtime configuration, package, active database
 /// identity, managed catalog, migration role, Registry lock, and audit profile
 /// before any retention operation can run. SQL remains product-owned here.
-pub struct RequestRetentionOperatorService {
+pub struct ProposalRetentionOperatorService {
     registry: CompiledRegistry,
     expected: ExpectedRegistryIdentity,
     expected_catalog: ExpectedManagedCatalog,
@@ -211,28 +219,28 @@ pub struct RequestRetentionOperatorService {
     verification_policy: String,
 }
 
-impl RequestRetentionOperatorService {
+impl ProposalRetentionOperatorService {
     pub async fn from_runtime_config(path: &Path) -> Result<Self> {
         if !path.is_absolute() {
-            return Err(RequestRetentionError::Unavailable);
+            return Err(ProposalRetentionError::Unavailable);
         }
-        let config = load_runtime_config(path).map_err(|_| RequestRetentionError::Unavailable)?;
+        let config = load_runtime_config(path).map_err(|_| ProposalRetentionError::Unavailable)?;
         let package = config.load_active_package().map_err(|error| match error {
             PackageError::ExpectedDigestMismatch(mismatch) => {
-                RequestRetentionError::PackagePinMismatch(mismatch)
+                ProposalRetentionError::PackagePinMismatch(mismatch)
             }
-            _ => RequestRetentionError::Unavailable,
+            _ => ProposalRetentionError::Unavailable,
         })?;
         let runtime_connection = config
             .runtime_database_connection_config()
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let pool = runtime_connection
             .build_pool()
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let mut client = pool
             .get()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let startup = crate::startup::prepare_loaded_startup(
             package,
             config.identity().database_id(),
@@ -241,21 +249,21 @@ impl RequestRetentionOperatorService {
             config.database().roles().runtime(),
         )
         .await
-        .map_err(|_| RequestRetentionError::Unavailable)?;
+        .map_err(|_| ProposalRetentionError::Unavailable)?;
         drop(client);
         let migration_connection = config
             .migration_database_connection_config()
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let audit = RegistryAudit::open_companion(&config)
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let attachment_storage = config
             .activate_attachment_storage(startup.package().registry().registry_id())
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let verification_policy = config
             .activate_attachment_verification()
-            .map_err(|_| RequestRetentionError::AttachmentStorageBindingMismatch)?
+            .map_err(|_| ProposalRetentionError::AttachmentStorageBindingMismatch)?
             .binding_digest();
         Ok(Self {
             verification_policy,
@@ -324,54 +332,54 @@ impl RequestRetentionOperatorService {
         action_id: Option<&str>,
         after_cursor: Option<&str>,
         limit: u16,
-    ) -> Result<RequestRetentionListPage> {
+    ) -> Result<ProposalRetentionListPage> {
         if limit == 0 || limit > MAX_PROPOSAL_RETENTION_OPERATOR_PAGE_SIZE {
-            return Err(RequestRetentionError::Unavailable);
+            return Err(ProposalRetentionError::Unavailable);
         }
         if let Some(entity_id) = action_id {
-            self.request_plan(entity_id)?;
+            self.proposal_policy(entity_id)?;
         }
         let after = after_cursor.map(parse_retention_cursor).transpose()?;
         let pool = self
             .migration_connection
             .build_pool()
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let mut client = pool
             .get()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let transaction = self.begin_verified_transaction(&mut client).await?;
         let page_limit = i64::from(limit) + 1;
         let rows = transaction
             .query(
                 "SELECT s.action_id, s.proposal_id, s.state,
-                        s.proposal_version, s.detail_erased_at IS NOT NULL,
-                        p.proposal_version, p.contract_fingerprint, p.effect_digest,
+                        s.submission_version, s.detail_erased_at IS NOT NULL,
+                        p.submission_version, p.contract_fingerprint, p.effect_digest,
                         p.erased_at IS NOT NULL
                    FROM registry_internal.registry_proposal_state s
-                   LEFT JOIN registry_internal.registry_proposal_proposals p
+                   LEFT JOIN registry_internal.registry_proposal_submissions p
                      ON p.action_id = s.action_id
                     AND p.proposal_id = s.proposal_id
                   WHERE ($1::text IS NULL OR s.action_id = $1::text)
                     AND (
                         $2::text IS NULL
-                        OR (s.action_id, s.proposal_id, COALESCE(p.proposal_version, s.proposal_version))
+                        OR (s.action_id, s.proposal_id, COALESCE(p.submission_version, s.submission_version))
                            > ($2::text, $3::uuid, $4::bigint)
                     )
                   ORDER BY s.action_id, s.proposal_id,
-                           COALESCE(p.proposal_version, s.proposal_version)
+                           COALESCE(p.submission_version, s.submission_version)
                   LIMIT $5::bigint",
                 &[
                     &action_id,
                     &after.as_ref().map(|cursor| cursor.action_id.as_str()),
                     &after.as_ref().map(|cursor| cursor.proposal_id),
-                    &after.as_ref().map(|cursor| cursor.proposal_version),
+                    &after.as_ref().map(|cursor| cursor.submission_version),
                     &page_limit,
                 ],
             )
             .await
             .map_err(map_retention_error)?;
-        let mut requests = Vec::with_capacity(rows.len().min(usize::from(limit)));
+        let mut proposals = Vec::with_capacity(rows.len().min(usize::from(limit)));
         let mut next_cursor = None;
         let mut last_returned_cursor = None;
         for (index, row) in rows.into_iter().enumerate() {
@@ -380,33 +388,42 @@ impl RequestRetentionOperatorService {
             let state: String = row.get(2);
             let current_version: i64 = row.get(3);
             let current_detail_erased: bool = row.get(4);
-            let proposal_version = row.get::<_, Option<i64>>(5).unwrap_or(current_version);
+            let submission_version = row.get::<_, Option<i64>>(5).unwrap_or(current_version);
             if index >= usize::from(limit) {
                 next_cursor = last_returned_cursor;
                 break;
             }
             let Some(plan) = self
                 .registry
-                .entities()
-                .get(&entity_id)
-                .and_then(|entity| entity.change_request.as_ref())
+                .actions()
+                .actions
+                .iter()
+                .find(|action| action.id == entity_id)
+                .and_then(|action| match &action.execution {
+                    CompiledActionExecution::Proposal { proposal } => Some(proposal),
+                    _ => None,
+                })
             else {
                 continue;
             };
-            let current = current_version == proposal_version;
+            let current = current_version == submission_version;
             let pinned = detail_is_pinned(current, &state);
             let detail_erased = row.get::<_, bool>(8) || current_detail_erased;
-            last_returned_cursor = Some(retention_cursor(&entity_id, proposal_id, proposal_version));
-            requests.push(RequestRetentionListItem {
+            last_returned_cursor = Some(retention_cursor(
+                &entity_id,
+                proposal_id,
+                submission_version,
+            ));
+            proposals.push(ProposalRetentionListItem {
                 action_id: entity_id,
                 proposal_id: proposal_id.to_string(),
-                proposal_version,
-                request_state: state,
+                submission_version,
+                proposal_state: state,
                 current,
-                retention_mode: retention_mode_name(plan.retention_mode),
+                retention_mode: retention_mode_name(plan.retention),
                 pinned,
-                eligible_for_erasure: plan.retention_mode
-                    == CompiledChangeRequestRetentionMode::OperatorErase
+                eligible_for_erasure: plan.retention
+                    == CompiledProposalRetentionMode::OperatorErase
                     && !pinned,
                 detail_erased,
                 contract_fingerprint: row.get(6),
@@ -416,41 +433,40 @@ impl RequestRetentionOperatorService {
         transaction
             .commit()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
-        Ok(RequestRetentionListPage {
-            requests,
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
+        Ok(ProposalRetentionListPage {
+            proposals,
             next_cursor,
         })
     }
 
     pub async fn dry_run(
         &self,
-        scope: RequestDetailErasureScope<'_>,
-    ) -> Result<RequestRetentionDryRun> {
-        self.request_plan(scope.action_id)?;
+        scope: ProposalDetailErasureScope<'_>,
+    ) -> Result<ProposalRetentionDryRun> {
+        self.proposal_policy(scope.action_id)?;
         let pool = self
             .migration_connection
             .build_pool()
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let mut client = pool
             .get()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let transaction = self.begin_verified_transaction(&mut client).await?;
         let plan = load_erasure_plan(&transaction, &self.registry, scope.clone(), false).await?;
         transaction
             .commit()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
-        Ok(RequestRetentionDryRun {
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
+        Ok(ProposalRetentionDryRun {
             action_id: scope.action_id.to_owned(),
             proposal_id: scope.proposal_id.to_string(),
-            proposal_version: scope.proposal_version,
-            request_state: plan.current_state,
-            retention_mode: retention_mode_name(plan.retention_mode),
+            submission_version: scope.submission_version,
+            proposal_state: plan.current_state,
+            retention_mode: retention_mode_name(plan.retention),
             pinned: plan.pinned,
-            eligible_for_erasure: plan.retention_mode
-                == CompiledChangeRequestRetentionMode::OperatorErase
+            eligible_for_erasure: plan.retention == CompiledProposalRetentionMode::OperatorErase
                 && !plan.pinned,
             detail_erased: plan.detail_erased,
             erasure: plan.erasure,
@@ -459,17 +475,17 @@ impl RequestRetentionOperatorService {
 
     pub async fn erase(
         &self,
-        scope: RequestDetailErasureScope<'_>,
-    ) -> Result<RequestRetentionErase> {
-        self.request_plan(scope.action_id)?;
+        scope: ProposalDetailErasureScope<'_>,
+    ) -> Result<ProposalRetentionErase> {
+        self.proposal_policy(scope.action_id)?;
         let pool = self
             .migration_connection
             .build_pool()
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let mut client = pool
             .get()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         // The request entry is accepted before the erasure transaction opens,
         // so an audit outage erases nothing; the response shares its
         // correlation. An erasure that ends without one writes the
@@ -487,7 +503,7 @@ impl RequestRetentionOperatorService {
             .audit
             .begin(request_entry, unfinished)
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let erased = self
             .erase_in_transaction(&mut client, scope.clone(), correlation)
             .await;
@@ -511,7 +527,7 @@ impl RequestRetentionOperatorService {
                                 "the unacknowledged erasure's response audit entry was not recorded"
                             );
                         }
-                        return Err(RequestRetentionError::Unavailable);
+                        return Err(ProposalRetentionError::Unavailable);
                     }
                 }
             }
@@ -521,7 +537,7 @@ impl RequestRetentionOperatorService {
                 // failure.
                 let outcome = if matches!(
                     error,
-                    RequestRetentionError::Unavailable | RequestRetentionError::MigrationLockHeld
+                    ProposalRetentionError::Unavailable | ProposalRetentionError::MigrationLockHeld
                 ) {
                     "failed"
                 } else {
@@ -541,15 +557,15 @@ impl RequestRetentionOperatorService {
         attempt
             .respond(entry.record().clone())
             .await
-            .map_err(|_| RequestRetentionError::ErasureUnaudited)?;
+            .map_err(|_| ProposalRetentionError::ErasureUnaudited)?;
         let (pending_external_deletions, external_deletion_tombstones) =
             self.retry_external_deletions(&mut client).await?;
-        Ok(RequestRetentionErase {
+        Ok(ProposalRetentionErase {
             action_id: scope.action_id.to_owned(),
             proposal_id: scope.proposal_id.to_string(),
-            proposal_version: scope.proposal_version,
-            request_state: plan.current_state,
-            retention_mode: retention_mode_name(plan.retention_mode),
+            submission_version: scope.submission_version,
+            proposal_state: plan.current_state,
+            retention_mode: retention_mode_name(plan.retention),
             erasure,
             pending_external_deletions,
             external_deletion_tombstones,
@@ -562,7 +578,7 @@ impl RequestRetentionOperatorService {
     async fn erasure_committed(
         &self,
         pool: &crate::postgres::RuntimePool,
-        scope: RequestDetailErasureScope<'_>,
+        scope: ProposalDetailErasureScope<'_>,
     ) -> Option<bool> {
         let mut client = pool.get().await.ok()?;
         let transaction = self.begin_verified_transaction(&mut client).await.ok()?;
@@ -580,35 +596,18 @@ impl RequestRetentionOperatorService {
     async fn erase_in_transaction(
         &self,
         client: &mut deadpool_postgres::Client,
-        scope: RequestDetailErasureScope<'_>,
+        scope: ProposalDetailErasureScope<'_>,
         correlation: RequestCorrelation,
-    ) -> Result<(RequestErasurePlan, RequestDetailErasure, AuditEntry, bool)> {
+    ) -> Result<(ProposalErasurePlan, ProposalDetailErasure, AuditEntry, bool)> {
         let transaction = self.begin_verified_transaction(client).await?;
         let plan = load_erasure_plan(&transaction, &self.registry, scope.clone(), true).await?;
-        let (erasure, current_revision) =
-            erase_request_detail_in_transaction(&transaction, &self.registry, scope.clone(), &plan)
-                .await?;
-        if let Some(current_revision) = &current_revision {
-            let members = [RevisionCommitMember {
-                entity_id: current_revision.entity_id.as_str(),
-                record_id: current_revision.record_id,
-                record_revision: current_revision.record_revision,
-            }];
-            allocate_revision_commit(
-                &transaction,
-                CommitAllocation {
-                    package_revision: &self.expected.activation_id,
-                    origin: CommitOrigin::Migration {
-                        system_origin: "breg-request-retention-erasure-v1",
-                        migration_reference: Some(RETENTION_OPERATION_ID),
-                    },
-                    change_context: None,
-                    members: &members,
-                },
-            )
-            .await
-            .map_err(map_history_commit_error)?;
-        }
+        let erasure = erase_proposal_detail_in_transaction(
+            &transaction,
+            &self.registry,
+            scope.clone(),
+            &plan,
+        )
+        .await?;
         let entry = retention_terminal_entry(
             self.audit.profile(),
             &self.expected,
@@ -626,11 +625,11 @@ impl RequestRetentionOperatorService {
         let pool = self
             .migration_connection
             .build_pool()
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let mut client = pool
             .get()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let correlation = Uuid::new_v4().to_string();
         // The verified transaction proves this process may act on the
         // managed catalog before the request entry is written; it holds no
@@ -657,7 +656,7 @@ impl RequestRetentionOperatorService {
                 record("terminal", "unfinished"),
             )
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let (pending_external_deletions, external_deletion_tombstones) = match self
             .retry_external_deletions(&mut client)
             .await
@@ -682,7 +681,7 @@ impl RequestRetentionOperatorService {
         attempt
             .respond(completed)
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         Ok(result)
     }
 
@@ -708,7 +707,7 @@ impl RequestRetentionOperatorService {
         transaction
             .commit()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         for row in candidates {
             if tokio::time::Instant::now() >= deadline {
                 break;
@@ -741,7 +740,7 @@ impl RequestRetentionOperatorService {
         transaction
             .commit()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         Ok((pending, tombstones))
     }
 
@@ -755,7 +754,7 @@ impl RequestRetentionOperatorService {
         let transaction = self.begin_verified_transaction(client).await?;
         crate::attachment_store::lock_hash(&transaction, hash)
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let eligible = transaction
             .query_opt(
                 "SELECT 1 FROM registry_internal.registry_attachment_blobs b
@@ -777,7 +776,7 @@ impl RequestRetentionOperatorService {
                 // attempts commit as pending, successful ones confirm absence.
                 crate::attachment_store::fail_external_delete(&transaction, hash, backend)
                     .await
-                    .map_err(|_| RequestRetentionError::Unavailable)?;
+                    .map_err(|_| ProposalRetentionError::Unavailable)?;
                 // Fifteen seconds per object also leaves room for durable error
                 // recording within the invocation's shared thirty-second budget.
                 let budget = deadline
@@ -789,14 +788,14 @@ impl RequestRetentionOperatorService {
                 ) {
                     crate::attachment_store::finish_external_delete(&transaction, hash, backend)
                         .await
-                        .map_err(|_| RequestRetentionError::Unavailable)?;
+                        .map_err(|_| ProposalRetentionError::Unavailable)?;
                 }
             }
         }
         transaction
             .commit()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         Ok(())
     }
 
@@ -804,10 +803,10 @@ impl RequestRetentionOperatorService {
     pub(crate) async fn migration_client(&self) -> Result<deadpool_postgres::Client> {
         self.migration_connection
             .build_pool()
-            .map_err(|_| RequestRetentionError::Unavailable)?
+            .map_err(|_| ProposalRetentionError::Unavailable)?
             .get()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)
+            .map_err(|_| ProposalRetentionError::Unavailable)
     }
 
     pub(crate) fn audit(&self) -> &RegistryAudit {
@@ -818,13 +817,18 @@ impl RequestRetentionOperatorService {
         &self.expected.activation_id
     }
 
-    pub(crate) fn request_plan(&self, action_id: &str) -> Result<()> {
+    pub(crate) fn proposal_policy(&self, action_id: &str) -> Result<()> {
         self.registry
-            .entities()
-            .get(action_id)
-            .and_then(|entity| entity.change_request.as_ref())
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == action_id)
+            .and_then(|action| match &action.execution {
+                CompiledActionExecution::Proposal { proposal } => Some(proposal),
+                _ => None,
+            })
             .map(|_| ())
-            .ok_or(RequestRetentionError::Unavailable)
+            .ok_or(ProposalRetentionError::Unavailable)
     }
 
     pub(crate) async fn begin_verified_transaction<'a>(
@@ -834,20 +838,20 @@ impl RequestRetentionOperatorService {
         let pg_client: &mut tokio_postgres::Client = client;
         verify_migration_role(pg_client, &self.migration_role)
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         let transaction = pg_client
             .transaction()
             .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
         set_local_timeout(&transaction, "lock_timeout", self.lock_timeout).await?;
         set_local_timeout(&transaction, "statement_timeout", self.statement_timeout).await?;
         lock_registry(&transaction, self.lock_key)
             .await
             .map_err(|error| match error {
                 HistoryMaintenanceError::MigrationLockHeld => {
-                    RequestRetentionError::MigrationLockHeld
+                    ProposalRetentionError::MigrationLockHeld
                 }
-                _ => RequestRetentionError::Unavailable,
+                _ => ProposalRetentionError::Unavailable,
             })?;
         verify_catalog_identity_for_catalog(
             &transaction,
@@ -857,7 +861,7 @@ impl RequestRetentionOperatorService {
             &self.runtime_role,
         )
         .await
-        .map_err(|_| RequestRetentionError::Unavailable)?;
+        .map_err(|_| ProposalRetentionError::Unavailable)?;
         transaction
             .execute(
                 "SELECT pg_catalog.set_config('registry.active_package_revision', $1, true)",
@@ -873,9 +877,9 @@ impl RequestRetentionOperatorService {
         .await
         .map_err(|error| match error {
             crate::mutation::MutationError::Conflict => {
-                RequestRetentionError::AttachmentStorageBindingMismatch
+                ProposalRetentionError::AttachmentStorageBindingMismatch
             }
-            _ => RequestRetentionError::Unavailable,
+            _ => ProposalRetentionError::Unavailable,
         })?;
         Ok(transaction)
     }
@@ -887,72 +891,97 @@ pub async fn guard_successor_activation(
     client: &impl GenericClient,
     candidate: &CompiledRegistry,
 ) -> Result<()> {
-    if !request_tables_exist(client).await? {
+    if !proposal_tables_exist(client).await? {
         return Ok(());
     }
-    let fingerprints = candidate
-        .entities()
-        .values()
-        .filter_map(|entity| {
-            entity
-                .change_request
-                .as_ref()
-                .map(|plan| (entity.id.clone(), plan.contract_fingerprint.clone()))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let entity_ids = fingerprints.keys().cloned().collect::<Vec<_>>();
-    let contract_fingerprints = fingerprints.values().cloned().collect::<Vec<_>>();
-    let incompatible = client
-        .query_opt(
-            "WITH candidate(action_id, contract_fingerprint) AS (
-                 SELECT * FROM unnest($1::text[], $2::text[])
-             )
-             SELECT 1
-               FROM registry_internal.registry_proposal_state s
-               LEFT JOIN registry_internal.registry_proposal_proposals p
-                 ON p.action_id = s.action_id
-                AND p.proposal_id = s.proposal_id
-                AND p.proposal_version = s.proposal_version
-               LEFT JOIN candidate c
-                 ON c.action_id = s.action_id
-              WHERE s.state = 'submitted'
-                AND (
-                    p.proposal_id IS NULL
-                    OR p.snapshot IS NULL
-                    OR c.contract_fingerprint IS NULL
-                    OR c.contract_fingerprint <> p.contract_fingerprint
-                )
-              LIMIT 1",
-            &[&entity_ids, &contract_fingerprints],
+    let rows = client
+        .query(
+            "SELECT DISTINCT action_id FROM registry_internal.registry_proposal_state
+        WHERE state IN ('draft','submitted')",
+            &[],
         )
         .await
         .map_err(map_retention_error)?;
-    if incompatible.is_some() {
-        return Err(RequestRetentionError::ActiveProposalRequiresRebase);
+    for row in rows {
+        let id: String = row.get(0);
+        let action = candidate
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == id)
+            .ok_or(ProposalRetentionError::ActiveProposalRecoveryUnavailable)?;
+        let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+            return Err(ProposalRetentionError::ActiveProposalRecoveryUnavailable);
+        };
+        if !proposal.permissions.iter().any(|grant| {
+            grant
+                .operations
+                .contains(&crate::model::ProposalOperation::Get)
+        }) || !proposal.permissions.iter().any(|grant| {
+            grant
+                .operations
+                .contains(&crate::model::ProposalOperation::Cancel)
+        }) {
+            return Err(ProposalRetentionError::ActiveProposalRecoveryUnavailable);
+        }
     }
     Ok(())
 }
 
-/// Erase payload detail for exactly one request proposal version while keeping
+/// Call only inside the successful activation transaction. Rehearsals and
+/// refused activation perform the pure guard above without changing work.
+pub(crate) async fn mark_incompatible_proposals(
+    client: &impl GenericClient,
+    candidate: &CompiledRegistry,
+    candidate_digest: &str,
+    activation_id: &str,
+) -> Result<()> {
+    if !proposal_tables_exist(client).await? {
+        return Ok(());
+    }
+    let activation =
+        Uuid::parse_str(activation_id).map_err(|_| ProposalRetentionError::Unavailable)?;
+    for action in &candidate.actions().actions {
+        if !action.execution.is_proposal() {
+            continue;
+        }
+        client.execute("UPDATE registry_internal.registry_proposal_state
+            SET blocked_reason=CASE WHEN action_revision=$2 OR (state='submitted' AND EXISTS (
+                SELECT 1 FROM registry_internal.registry_proposal_activation_compatibility c
+                JOIN registry_internal.registry_proposal_submissions p USING(action_id,proposal_id,submission_version)
+                WHERE c.action_id=registry_proposal_state.action_id AND c.proposal_id=registry_proposal_state.proposal_id
+                  AND c.submission_version=registry_proposal_state.submission_version
+                  AND c.frozen_action_revision=registry_proposal_state.action_revision
+                  AND c.current_action_revision=$2 AND c.candidate_package_digest=$3 AND c.activation_id=$4
+                  AND c.effect_digest=p.snapshot->>'effectDigest' AND p.erased_at IS NULL))
+                THEN NULL ELSE 'package-changed' END,
+                updated_at=transaction_timestamp()
+            WHERE action_id=$1 AND state IN ('draft','submitted')",
+            &[&action.id,&action.definition_revision,&candidate_digest,&activation]).await.map_err(map_retention_error)?;
+    }
+    Ok(())
+}
+
+/// Erase payload detail for exactly one Proposal version while keeping
 /// protected provenance needed by target revision links.
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
-pub async fn erase_request_detail(
+pub async fn erase_proposal_detail(
     client: &mut tokio_postgres::Client,
     registry: &CompiledRegistry,
-    scope: RequestDetailErasureScope<'_>,
-) -> Result<RequestDetailErasure> {
+    scope: ProposalDetailErasureScope<'_>,
+) -> Result<ProposalDetailErasure> {
     let transaction = client
         .transaction()
         .await
-        .map_err(|_| RequestRetentionError::Unavailable)?;
+        .map_err(|_| ProposalRetentionError::Unavailable)?;
     let plan = load_erasure_plan(&transaction, registry, scope.clone(), true).await?;
-    let (erasure, _) =
-        erase_request_detail_in_transaction(&transaction, registry, scope, &plan).await?;
+    let erasure =
+        erase_proposal_detail_in_transaction(&transaction, registry, scope, &plan).await?;
     transaction
         .commit()
         .await
-        .map_err(|_| RequestRetentionError::Unavailable)?;
+        .map_err(|_| ProposalRetentionError::Unavailable)?;
     Ok(erasure)
 }
 
@@ -961,53 +990,53 @@ pub async fn erase_request_detail(
 pub async fn load_retained_history(
     client: &impl GenericClient,
     query: RetainedHistoryQuery<'_>,
-) -> Result<RetainedRequestHistoryPage> {
+) -> Result<RetainedProposalHistoryPage> {
     if query.action_id.is_empty()
         || query.limit == 0
         || query.limit > MAX_RETAINED_HISTORY_PAGE_SIZE
         || query
-            .after_proposal_version
+            .after_submission_version
             .is_some_and(|version| version < 1)
     {
-        return Err(RequestRetentionError::Unavailable);
+        return Err(ProposalRetentionError::Unavailable);
     }
     let page_limit = i64::from(query.limit) + 1;
     let rows = client
         .query(
             "WITH proposals AS (
-                SELECT s.state, s.proposal_version AS current_version, p.proposal_version,
+                SELECT s.state, s.submission_version AS current_version, p.submission_version,
                        p.contract_fingerprint, p.effect_digest, p.erased_at IS NOT NULL AS erased,
                        a.application_id
                   FROM registry_internal.registry_proposal_state s
-                  JOIN registry_internal.registry_proposal_proposals p
+                  JOIN registry_internal.registry_proposal_submissions p
                     ON p.action_id = s.action_id AND p.proposal_id = s.proposal_id
                   LEFT JOIN registry_internal.registry_proposal_applications a
                     ON a.action_id = p.action_id AND a.proposal_id = p.proposal_id
-                   AND a.proposal_version = p.proposal_version
+                   AND a.submission_version = p.submission_version
                  WHERE s.action_id = $1 AND s.proposal_id = $2
-                   AND ($3::bigint IS NULL OR p.proposal_version > $3::bigint)
-                 ORDER BY p.proposal_version LIMIT $4::bigint
+                   AND ($3::bigint IS NULL OR p.submission_version > $3::bigint)
+                 ORDER BY p.submission_version LIMIT $4::bigint
              )
-             SELECT p.* FROM proposals p ORDER BY p.proposal_version",
+             SELECT p.* FROM proposals p ORDER BY p.submission_version",
             &[
                 &query.action_id,
                 &query.proposal_id,
-                &query.after_proposal_version,
+                &query.after_submission_version,
                 &page_limit,
             ],
         )
         .await
         .map_err(map_retention_error)?;
-    let mut history: Vec<RetainedRequestProposal> =
+    let mut history: Vec<RetainedProposalProposal> =
         Vec::with_capacity(rows.len().min(usize::from(query.limit)));
-    let mut next_after_proposal_version = None;
+    let mut next_after_submission_version = None;
     let mut page_bytes = 64;
     for row in rows {
-        let proposal = RetainedRequestProposal {
+        let proposal = RetainedProposalProposal {
             action_id: query.action_id.to_owned(),
             proposal_id: query.proposal_id.to_string(),
-            proposal_version: row.get(2),
-            request_state: row.get(0),
+            submission_version: row.get(2),
+            proposal_state: row.get(0),
             current: row.get::<_, i64>(1) == row.get::<_, i64>(2),
             contract_fingerprint: row.get(3),
             effect_digest: row.get(4),
@@ -1017,7 +1046,7 @@ pub async fn load_retained_history(
             result_links: Vec::new(),
         };
         let proposal_bytes = serde_json::to_vec(&proposal)
-            .map_err(|_| RequestRetentionError::Unavailable)?
+            .map_err(|_| ProposalRetentionError::Unavailable)?
             .len();
         if history.len() == usize::from(query.limit)
             || page_bytes + proposal_bytes > MAX_RETAINED_HISTORY_BYTES
@@ -1025,82 +1054,84 @@ pub async fn load_retained_history(
             // An exclusive cursor is the last returned version, never the
             // first omitted one. Refuse a single oversized proposal explicitly
             // rather than return an empty page that cannot make progress.
-            next_after_proposal_version = Some(
+            next_after_submission_version = Some(
                 history
                     .last()
-                    .ok_or(RequestRetentionError::Unavailable)?
-                    .proposal_version,
+                    .ok_or(ProposalRetentionError::Unavailable)?
+                    .submission_version,
             );
             break;
         }
         page_bytes += proposal_bytes;
         history.push(proposal);
     }
-    let mut page = RetainedRequestHistoryPage {
+    let mut page = RetainedProposalHistoryPage {
         proposals: history,
-        next_after_proposal_version,
+        next_after_submission_version,
     };
     // Recheck actual serialized bytes after the batch read in case concurrent
     // application state changed a proposal since its size was inspected.
     while serde_json::to_vec(&page)
-        .map_err(|_| RequestRetentionError::Unavailable)?
+        .map_err(|_| ProposalRetentionError::Unavailable)?
         .len()
         > MAX_RETAINED_HISTORY_BYTES
     {
         if page.proposals.len() <= 1 {
-            return Err(RequestRetentionError::Unavailable);
+            return Err(ProposalRetentionError::Unavailable);
         }
         page.proposals.pop();
-        page.next_after_proposal_version = page
+        page.next_after_submission_version = page
             .proposals
             .last()
-            .map(|proposal| proposal.proposal_version);
+            .map(|proposal| proposal.submission_version);
     }
     Ok(page)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct RequestErasurePlan {
+struct ProposalErasurePlan {
     current_state: String,
-    retention_mode: CompiledChangeRequestRetentionMode,
+    retention: CompiledProposalRetentionMode,
     pinned: bool,
     detail_erased: bool,
-    erase_current_intake: bool,
-    erasure: RequestDetailErasure,
+    erase_draft_input: bool,
+    erasure: ProposalDetailErasure,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RetentionCursor {
     action_id: String,
     proposal_id: Uuid,
-    proposal_version: i64,
+    submission_version: i64,
 }
 
 async fn load_erasure_plan(
     transaction: &tokio_postgres::Transaction<'_>,
     registry: &CompiledRegistry,
-    scope: RequestDetailErasureScope<'_>,
+    scope: ProposalDetailErasureScope<'_>,
     enforce_operator_erase: bool,
-) -> Result<RequestErasurePlan> {
-    if scope.action_id.is_empty() || scope.proposal_version <= 0 {
-        return Err(RequestRetentionError::Unavailable);
+) -> Result<ProposalErasurePlan> {
+    if scope.action_id.is_empty() || scope.submission_version <= 0 {
+        return Err(ProposalRetentionError::Unavailable);
     }
-    let request_entity = registry
-        .entities()
-        .get(scope.action_id)
-        .ok_or(RequestRetentionError::Unavailable)?;
-    let request_plan = request_entity
-        .change_request
-        .as_ref()
-        .ok_or(RequestRetentionError::Unavailable)?;
+    let proposal_policy = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == scope.action_id)
+        .and_then(|action| match &action.execution {
+            CompiledActionExecution::Proposal { proposal } => Some(proposal),
+            _ => None,
+        })
+        .ok_or(ProposalRetentionError::Unavailable)?;
     if enforce_operator_erase
-        && request_plan.retention_mode != CompiledChangeRequestRetentionMode::OperatorErase
+        && proposal_policy.retention != CompiledProposalRetentionMode::OperatorErase
     {
-        return Err(RequestRetentionError::RetainMode);
+        return Err(ProposalRetentionError::RetainMode);
     }
     let state = transaction
         .query_opt(
-            "SELECT state, proposal_version, detail_erased_at
+            "SELECT state, submission_version, detail_erased_at
                FROM registry_internal.registry_proposal_state
               WHERE action_id = $1 AND proposal_id = $2
               FOR UPDATE",
@@ -1108,27 +1139,27 @@ async fn load_erasure_plan(
         )
         .await
         .map_err(map_retention_error)?
-        .ok_or(RequestRetentionError::Unavailable)?;
+        .ok_or(ProposalRetentionError::Unavailable)?;
     let current_state: String = state.get(0);
     let current_version: i64 = state.get(1);
     let current_detail_already_erased = state.get::<_, Option<std::time::SystemTime>>(2).is_some();
-    let current_detail = current_version == scope.proposal_version;
+    let current_detail = current_version == scope.submission_version;
     let pinned = detail_is_pinned(current_detail, &current_state);
     if enforce_operator_erase && pinned {
-        return Err(RequestRetentionError::ActiveDetailPinned);
+        return Err(ProposalRetentionError::ActiveDetailPinned);
     }
     let proposal = transaction
         .query_opt(
             "SELECT snapshot IS NULL, erased_at IS NOT NULL
-               FROM registry_internal.registry_proposal_proposals
+               FROM registry_internal.registry_proposal_submissions
               WHERE action_id = $1
                 AND proposal_id = $2
-                AND proposal_version = $3
+                AND submission_version = $3
               FOR UPDATE",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
-                &scope.proposal_version,
+                &scope.submission_version,
             ],
         )
         .await
@@ -1139,42 +1170,42 @@ async fn load_erasure_plan(
     let erasure_target_exists =
         proposal_exists || cancelled_current_detail || inspectable_pinned_current_detail;
     if !erasure_target_exists {
-        return Err(RequestRetentionError::Unavailable);
+        return Err(ProposalRetentionError::Unavailable);
     }
-    let erase_current_intake = current_detail
+    let erase_draft_input = current_detail
         && matches!(current_state.as_str(), "cancelled" | "applied")
         && !current_detail_already_erased;
-    let erasure = count_request_detail_erasure(transaction, scope, erase_current_intake).await?;
+    let erasure = count_request_detail_erasure(transaction, scope, erase_draft_input).await?;
     let proposal_erased = proposal
         .as_ref()
         .is_some_and(|row| row.get::<_, bool>(0) || row.get::<_, bool>(1));
-    Ok(RequestErasurePlan {
+    Ok(ProposalErasurePlan {
         current_state,
-        retention_mode: request_plan.retention_mode,
+        retention: proposal_policy.retention,
         pinned,
         detail_erased: current_detail_already_erased || proposal_erased,
-        erase_current_intake,
+        erase_draft_input,
         erasure,
     })
 }
 
 async fn count_request_detail_erasure(
     transaction: &tokio_postgres::Transaction<'_>,
-    scope: RequestDetailErasureScope<'_>,
-    erase_current_intake: bool,
-) -> Result<RequestDetailErasure> {
+    scope: ProposalDetailErasureScope<'_>,
+    erase_draft_input: bool,
+) -> Result<ProposalDetailErasure> {
     let row = transaction
         .query_one(
             "SELECT
-                (SELECT count(*) FROM registry_internal.registry_proposal_proposals
+                (SELECT count(*) FROM registry_internal.registry_proposal_submissions
                   WHERE action_id = $1
                     AND proposal_id = $2
-                    AND proposal_version = $3
+                    AND submission_version = $3
                     AND snapshot IS NOT NULL),
                 (SELECT count(*) FROM registry_internal.registry_proposal_targets
                   WHERE action_id = $1
                     AND proposal_id = $2
-                    AND proposal_version = $3
+                    AND submission_version = $3
                     AND (base_snapshot IS NOT NULL OR after_snapshot IS NOT NULL)),
                 (SELECT count(*) FROM registry_internal.registry_idempotency
                   WHERE key_reference IN (
@@ -1182,50 +1213,20 @@ async fn count_request_detail_erasure(
                           FROM registry_internal.registry_proposal_idempotency_links
                          WHERE action_id = $1
                            AND proposal_id = $2
-                           AND proposal_version = $3
+                           AND submission_version = $3
                     )
                     AND response_body IS NOT NULL),
-                (SELECT count(*) FROM registry_internal.registry_revisions r
-                   JOIN registry_internal.registry_proposal_revision_links l
-                     ON l.entity_id = r.entity_id
-                    AND l.record_id = r.record_id
-                    AND l.record_revision = r.record_revision
-                  WHERE l.action_id = $1
-                    AND l.proposal_id = $2
-                    AND l.proposal_version = $3
-                    AND l.entity_id = $1
-                    AND l.record_id = $2
-                    AND l.link_kind IN
-                        ('request_create','request_patch','request-lifecycle','request_batch')
-                    AND r.snapshot IS NOT NULL),
-                (SELECT count(*) FROM registry_internal.registry_outbox o
-                   JOIN registry_internal.registry_revisions r
-                     ON o.entity_id = r.entity_id
-                    AND o.record_reference = r.record_reference
-                    AND o.record_revision = r.record_revision
-                   JOIN registry_internal.registry_proposal_revision_links l
-                     ON l.entity_id = r.entity_id
-                    AND l.record_id = r.record_id
-                    AND l.record_revision = r.record_revision
-                  WHERE l.action_id = $1
-                    AND l.proposal_id = $2
-                    AND l.proposal_version = $3
-                    AND l.entity_id = $1
-                    AND l.record_id = $2
-                    AND l.link_kind IN
-                        ('request_create','request_patch','request-lifecycle','request_batch')
-                    AND o.payload IS NOT NULL),
                 (SELECT count(*) FROM registry_internal.registry_proposal_applications
                   WHERE action_id = $1
                     AND proposal_id = $2
-                    AND proposal_version = $3
+                    AND submission_version = $3
                     AND reason IS NOT NULL),
                 (SELECT count(*) FROM registry_internal.registry_proposal_attachments
-                  WHERE action_id=$1 AND proposal_id=$2 AND proposal_version=$3
+                  WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                     AND erased_at IS NULL),
                 (SELECT count(*)
                    FROM registry_internal.registry_proposal_review_submissions s
-                  WHERE s.action_id=$1 AND s.proposal_id=$2 AND s.proposal_version=$3
+                  WHERE s.action_id=$1 AND s.proposal_id=$2 AND s.submission_version=$3
                     AND s.create_request <> '{}'::jsonb
                     AND (s.state IN ('cancelled','failed') OR (
                         s.state='accepted' AND EXISTS (
@@ -1233,12 +1234,12 @@ async fn count_request_detail_erasure(
                               FROM registry_internal.registry_proposal_review_results r
                              WHERE r.action_id=s.action_id
                                AND r.proposal_id=s.proposal_id
-                               AND r.proposal_version=s.proposal_version
+                               AND r.submission_version=s.submission_version
                         )
                     ))),
                 (SELECT count(*)
                    FROM registry_internal.registry_proposal_review_submissions s
-                  WHERE s.action_id=$1 AND s.proposal_id=$2 AND s.proposal_version=$3
+                  WHERE s.action_id=$1 AND s.proposal_id=$2 AND s.submission_version=$3
                     AND s.accepted_binding IS NOT NULL
                     AND s.accepted_binding <> '{}'::jsonb
                     AND (s.state IN ('cancelled','failed') OR (
@@ -1247,73 +1248,66 @@ async fn count_request_detail_erasure(
                               FROM registry_internal.registry_proposal_review_results r
                              WHERE r.action_id=s.action_id
                                AND r.proposal_id=s.proposal_id
-                               AND r.proposal_version=s.proposal_version
+                               AND r.submission_version=s.submission_version
                         )
                     ))),
                 (SELECT count(*) FROM registry_internal.registry_proposal_review_results
-                  WHERE action_id=$1 AND proposal_id=$2 AND proposal_version=$3
+                  WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                     AND result <> '{}'::jsonb)",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
-                &scope.proposal_version,
+                &scope.submission_version,
             ],
         )
         .await
         .map_err(map_retention_error)?;
-    Ok(RequestDetailErasure {
+    Ok(ProposalDetailErasure {
         proposal_snapshots: count_to_u64(row.get(0))?,
         target_snapshots: count_to_u64(row.get(1))?,
         idempotency_results: count_to_u64(row.get(2))?,
-        request_revision_snapshots: count_to_u64(row.get(3))?,
-        outbox_payloads: count_to_u64(row.get(4))?,
-        application_reasons: count_to_u64(row.get(5))?,
-        current_intake_rows: u64::from(erase_current_intake),
-        attachment_references: count_to_u64(row.get(6))?,
-        review_submission_requests: count_to_u64(row.get(7))?,
-        review_accepted_bindings: count_to_u64(row.get(8))?,
-        review_result_payloads: count_to_u64(row.get(9))?,
+        application_reasons: count_to_u64(row.get(3))?,
+        draft_inputs: u64::from(erase_draft_input),
+        attachment_references: count_to_u64(row.get(4))?,
+        review_submission_requests: count_to_u64(row.get(5))?,
+        review_accepted_bindings: count_to_u64(row.get(6))?,
+        review_result_payloads: count_to_u64(row.get(7))?,
     })
 }
 
-async fn erase_request_detail_in_transaction(
+async fn erase_proposal_detail_in_transaction(
     transaction: &tokio_postgres::Transaction<'_>,
     registry: &CompiledRegistry,
-    scope: RequestDetailErasureScope<'_>,
-    plan: &RequestErasurePlan,
-) -> Result<(RequestDetailErasure, Option<ErasedCurrentRevision>)> {
-    let request_entity = registry
-        .entities()
-        .get(scope.action_id)
-        .filter(|entity| entity.change_request.is_some())
-        .ok_or(RequestRetentionError::Unavailable)?;
-
+    scope: ProposalDetailErasureScope<'_>,
+    plan: &ProposalErasurePlan,
+) -> Result<ProposalDetailErasure> {
+    let _ = registry;
     // Task selectors are proposal detail and must disappear in the same
     // maintenance transaction as the frozen proposal payload.
     transaction
         .execute(
             "DELETE FROM registry_internal.registry_proposal_task_authority
-         WHERE action_id = $1 AND proposal_id = $2 AND proposal_version = $3",
+         WHERE action_id = $1 AND proposal_id = $2 AND submission_version = $3",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
-                &scope.proposal_version,
+                &scope.submission_version,
             ],
         )
         .await
         .map_err(map_retention_error)?;
     let proposal_snapshots = transaction
         .execute(
-            "UPDATE registry_internal.registry_proposal_proposals
+            "UPDATE registry_internal.registry_proposal_submissions
                 SET snapshot = NULL, erased_at = transaction_timestamp()
               WHERE action_id = $1
                 AND proposal_id = $2
-                AND proposal_version = $3
+                AND submission_version = $3
                 AND snapshot IS NOT NULL",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
-                &scope.proposal_version,
+                &scope.submission_version,
             ],
         )
         .await
@@ -1326,12 +1320,12 @@ async fn erase_request_detail_in_transaction(
                     erased_at = transaction_timestamp()
               WHERE action_id = $1
                 AND proposal_id = $2
-                AND proposal_version = $3
+                AND submission_version = $3
                 AND (base_snapshot IS NOT NULL OR after_snapshot IS NOT NULL)",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
-                &scope.proposal_version,
+                &scope.submission_version,
             ],
         )
         .await
@@ -1346,7 +1340,7 @@ async fn erase_request_detail_in_transaction(
                 SET create_request = '{}'::jsonb
               WHERE s.action_id = $1
                 AND s.proposal_id = $2
-                AND s.proposal_version = $3
+                AND s.submission_version = $3
                 AND s.create_request <> '{}'::jsonb
                 AND (s.state IN ('cancelled','failed') OR (
                     s.state='accepted' AND EXISTS (
@@ -1354,13 +1348,13 @@ async fn erase_request_detail_in_transaction(
                           FROM registry_internal.registry_proposal_review_results r
                          WHERE r.action_id=s.action_id
                            AND r.proposal_id=s.proposal_id
-                           AND r.proposal_version=s.proposal_version
+                           AND r.submission_version=s.submission_version
                     )
                 ))",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
-                &scope.proposal_version,
+                &scope.submission_version,
             ],
         )
         .await
@@ -1371,7 +1365,7 @@ async fn erase_request_detail_in_transaction(
                 SET accepted_binding = '{}'::jsonb
               WHERE s.action_id = $1
                 AND s.proposal_id = $2
-                AND s.proposal_version = $3
+                AND s.submission_version = $3
                 AND s.accepted_binding IS NOT NULL
                 AND s.accepted_binding <> '{}'::jsonb
                 AND (s.state IN ('cancelled','failed') OR (
@@ -1380,13 +1374,13 @@ async fn erase_request_detail_in_transaction(
                           FROM registry_internal.registry_proposal_review_results r
                          WHERE r.action_id=s.action_id
                            AND r.proposal_id=s.proposal_id
-                           AND r.proposal_version=s.proposal_version
+                           AND r.submission_version=s.submission_version
                     )
                 ))",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
-                &scope.proposal_version,
+                &scope.submission_version,
             ],
         )
         .await
@@ -1397,12 +1391,12 @@ async fn erase_request_detail_in_transaction(
                 SET result = '{}'::jsonb
               WHERE action_id = $1
                 AND proposal_id = $2
-                AND proposal_version = $3
+                AND submission_version = $3
                 AND result <> '{}'::jsonb",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
-                &scope.proposal_version,
+                &scope.submission_version,
             ],
         )
         .await
@@ -1413,12 +1407,12 @@ async fn erase_request_detail_in_transaction(
                 SET reason = NULL
               WHERE action_id = $1
                 AND proposal_id = $2
-                AND proposal_version = $3
+                AND submission_version = $3
                 AND reason IS NOT NULL",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
-                &scope.proposal_version,
+                &scope.submission_version,
             ],
         )
         .await
@@ -1433,89 +1427,40 @@ async fn erase_request_detail_in_transaction(
                       FROM registry_internal.registry_proposal_idempotency_links
                      WHERE action_id = $1
                        AND proposal_id = $2
-                       AND proposal_version = $3
+                       AND submission_version = $3
                 )
                 AND response_body IS NOT NULL",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
-                &scope.proposal_version,
+                &scope.submission_version,
             ],
         )
         .await
         .map_err(map_retention_error)?;
-    let outbox_payloads = transaction
-        .execute(
-            "UPDATE registry_internal.registry_outbox o
-                SET payload = NULL
-               FROM registry_internal.registry_revisions r
-               JOIN registry_internal.registry_proposal_revision_links l
-                 ON l.entity_id = r.entity_id
-                AND l.record_id = r.record_id
-                AND l.record_revision = r.record_revision
-              WHERE o.entity_id = r.entity_id
-                AND o.record_reference = r.record_reference
-                AND o.record_revision = r.record_revision
-                AND l.action_id = $1
-                AND l.proposal_id = $2
-                AND l.proposal_version = $3
-                AND l.entity_id = $1
-                AND l.record_id = $2
-                AND l.link_kind IN
-                    ('request_create','request_patch','request-lifecycle','request_batch')
-                AND o.payload IS NOT NULL",
-            &[
-                &scope.action_id,
-                &scope.proposal_id,
-                &scope.proposal_version,
-            ],
-        )
-        .await
-        .map_err(map_retention_error)?;
-    let request_revision_snapshots = transaction
-        .execute(
-            "UPDATE registry_internal.registry_revisions r
-                SET snapshot = NULL,
-                    erased_at = transaction_timestamp()
-               FROM registry_internal.registry_proposal_revision_links l
-              WHERE r.entity_id = l.entity_id
-                AND r.record_id = l.record_id
-                AND r.record_revision = l.record_revision
-                AND l.action_id = $1
-                AND l.proposal_id = $2
-                AND l.proposal_version = $3
-                AND l.entity_id = $1
-                AND l.record_id = $2
-                AND l.link_kind IN
-                    ('request_create','request_patch','request-lifecycle','request_batch')
-                AND r.snapshot IS NOT NULL",
-            &[
-                &scope.action_id,
-                &scope.proposal_id,
-                &scope.proposal_version,
-            ],
-        )
-        .await
-        .map_err(map_retention_error)?;
-    let current_revision = if plan.erase_current_intake {
-        set_request_table_force_row_security(transaction, request_entity, false).await?;
-        let revision =
-            erase_current_intake_row(transaction, request_entity, scope.proposal_id).await?;
-        set_request_table_force_row_security(transaction, request_entity, true).await?;
-        revision
+    let draft_inputs = if plan.erase_draft_input {
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_proposal_state
+            SET input=NULL,action_title=NULL,
+                detail_erased_at=transaction_timestamp(),updated_at=transaction_timestamp()
+            WHERE action_id=$1 AND proposal_id=$2 AND detail_erased_at IS NULL",
+                &[&scope.action_id, &scope.proposal_id],
+            )
+            .await
+            .map_err(map_retention_error)?
     } else {
-        None
+        0
     };
     let attachment_references = crate::attachment_store::erase(
         transaction,
         scope.action_id,
         scope.proposal_id,
-        scope.proposal_version,
+        scope.submission_version,
     )
     .await
-    .map_err(|_| RequestRetentionError::Unavailable)?;
-    let current_intake_rows = u64::from(current_revision.is_some());
-    let erasure = RequestDetailErasure {
+    .map_err(|_| ProposalRetentionError::Unavailable)?;
+    let erasure = ProposalDetailErasure {
         proposal_snapshots,
         target_snapshots,
         review_submission_requests,
@@ -1523,33 +1468,13 @@ async fn erase_request_detail_in_transaction(
         review_result_payloads,
         application_reasons,
         idempotency_results,
-        request_revision_snapshots,
-        outbox_payloads,
-        current_intake_rows,
+        draft_inputs,
         attachment_references,
     };
     if erasure != plan.erasure {
-        return Err(RequestRetentionError::Unavailable);
+        return Err(ProposalRetentionError::Unavailable);
     }
-    Ok((erasure, current_revision))
-}
-
-async fn set_request_table_force_row_security(
-    transaction: &tokio_postgres::Transaction<'_>,
-    entity: &CompiledEntity,
-    forced: bool,
-) -> Result<()> {
-    let table = SqlIdentifier::parse(&entity.physical_table)
-        .map_err(|_| RequestRetentionError::Unavailable)?;
-    let action = if forced { "FORCE" } else { "NO FORCE" };
-    transaction
-        .batch_execute(&format!(
-            "ALTER TABLE registry_data.{} {action} ROW LEVEL SECURITY",
-            table.quoted()
-        ))
-        .await
-        .map_err(map_retention_error)?;
-    Ok(())
+    Ok(erasure)
 }
 
 /// Build the `response` entry for one request-detail erasure. The caller
@@ -1557,7 +1482,7 @@ async fn set_request_table_force_row_security(
 fn retention_record_reference(
     profile: &AuditProfile,
     expected: &ExpectedRegistryIdentity,
-    scope: &RequestDetailErasureScope<'_>,
+    scope: &ProposalDetailErasureScope<'_>,
 ) -> Result<String> {
     profile
         .key_hasher()
@@ -1566,7 +1491,7 @@ fn retention_record_reference(
             &expected.activation_id,
             &scope.proposal_id.to_string(),
         )
-        .map_err(|_| RequestRetentionError::Unavailable)
+        .map_err(|_| ProposalRetentionError::Unavailable)
 }
 
 /// The `request` entry of one request-detail erasure. It names only what the
@@ -1575,22 +1500,22 @@ fn retention_record_reference(
 fn retention_request_entry(
     profile: &AuditProfile,
     expected: &ExpectedRegistryIdentity,
-    scope: RequestDetailErasureScope<'_>,
+    scope: ProposalDetailErasureScope<'_>,
     correlation: &RequestCorrelation,
 ) -> Result<AuditEntry> {
     if !crate::audit::profile_is_keyed(profile) {
-        return Err(RequestRetentionError::Unavailable);
+        return Err(ProposalRetentionError::Unavailable);
     }
     let record_reference = retention_record_reference(profile, expected, &scope)?;
     Ok(AuditEntry::request(
         crate::audit::AUDIT_SCHEMA,
-        correlation.proposal_id().to_string(),
+        correlation.request_id().to_string(),
         serde_json::json!({
             "phase": "attempt",
             "method": "DELETE",
             "operationId": RETENTION_OPERATION_ID,
             "entityId": scope.action_id,
-            "requestId": correlation.proposal_id().to_string(),
+            "requestId": correlation.request_id().to_string(),
             "traceId": correlation.trace_id().as_str(),
             "packageRevision": expected.activation_id,
             "selectedAccessProfile": "operator",
@@ -1615,8 +1540,8 @@ fn retention_outcome_record(request: &AuditEntry, outcome: &str) -> Value {
 fn retention_terminal_entry(
     profile: &AuditProfile,
     expected: &ExpectedRegistryIdentity,
-    scope: RequestDetailErasureScope<'_>,
-    erasure: RequestDetailErasure,
+    scope: ProposalDetailErasureScope<'_>,
+    erasure: ProposalDetailErasure,
     correlation: RequestCorrelation,
 ) -> Result<AuditEntry> {
     let record_reference = retention_record_reference(profile, expected, &scope)?;
@@ -1628,11 +1553,9 @@ fn retention_terminal_entry(
         .and_then(|count| count.checked_add(erasure.review_result_payloads))
         .and_then(|count| count.checked_add(erasure.application_reasons))
         .and_then(|count| count.checked_add(erasure.idempotency_results))
-        .and_then(|count| count.checked_add(erasure.request_revision_snapshots))
-        .and_then(|count| count.checked_add(erasure.outbox_payloads))
-        .and_then(|count| count.checked_add(erasure.current_intake_rows))
+        .and_then(|count| count.checked_add(erasure.draft_inputs))
         .and_then(|count| count.checked_add(erasure.attachment_references))
-        .ok_or(RequestRetentionError::Unavailable)?;
+        .ok_or(ProposalRetentionError::Unavailable)?;
     terminal_entry(
         profile,
         TerminalAudit {
@@ -1647,15 +1570,15 @@ fn retention_terminal_entry(
             purpose_present: false,
             principal_reference: None,
             record_reference: Some(record_reference),
-            record_revision: Some(scope.proposal_version),
+            record_revision: Some(scope.submission_version),
             result_count: Some(
-                usize::try_from(count).map_err(|_| RequestRetentionError::Unavailable)?,
+                usize::try_from(count).map_err(|_| ProposalRetentionError::Unavailable)?,
             ),
             field_set_reference: Some(RETENTION_REFERENCE.to_owned()),
             correlation,
         },
     )
-    .map_err(|_| RequestRetentionError::Unavailable)
+    .map_err(|_| ProposalRetentionError::Unavailable)
 }
 
 async fn set_local_timeout(
@@ -1665,7 +1588,7 @@ async fn set_local_timeout(
 ) -> Result<()> {
     let milliseconds = value.as_millis();
     if milliseconds == 0 || milliseconds > 3_600_000 {
-        return Err(RequestRetentionError::Unavailable);
+        return Err(ProposalRetentionError::Unavailable);
     }
     transaction
         .execute(
@@ -1681,180 +1604,46 @@ fn detail_is_pinned(current_detail: bool, state: &str) -> bool {
     current_detail && matches!(state, "draft" | "submitted")
 }
 
-fn retention_mode_name(mode: CompiledChangeRequestRetentionMode) -> &'static str {
+fn retention_mode_name(mode: CompiledProposalRetentionMode) -> &'static str {
     match mode {
-        CompiledChangeRequestRetentionMode::Retain => "retain",
-        CompiledChangeRequestRetentionMode::OperatorErase => "operator-erase",
+        CompiledProposalRetentionMode::Retain => "retain",
+        CompiledProposalRetentionMode::OperatorErase => "operator-erase",
     }
 }
 
 fn parse_retention_cursor(value: &str) -> Result<RetentionCursor> {
     let mut parts = value.split(':');
-    let action_id = parts.next().ok_or(RequestRetentionError::Unavailable)?;
-    let proposal_id = parts.next().ok_or(RequestRetentionError::Unavailable)?;
-    let proposal_version = parts.next().ok_or(RequestRetentionError::Unavailable)?;
+    let action_id = parts.next().ok_or(ProposalRetentionError::Unavailable)?;
+    let proposal_id = parts.next().ok_or(ProposalRetentionError::Unavailable)?;
+    let submission_version = parts.next().ok_or(ProposalRetentionError::Unavailable)?;
     if parts.next().is_some() || action_id.is_empty() {
-        return Err(RequestRetentionError::Unavailable);
+        return Err(ProposalRetentionError::Unavailable);
     }
     Ok(RetentionCursor {
         action_id: action_id.to_owned(),
-        proposal_id: Uuid::parse_str(proposal_id).map_err(|_| RequestRetentionError::Unavailable)?,
-        proposal_version: proposal_version
+        proposal_id: Uuid::parse_str(proposal_id)
+            .map_err(|_| ProposalRetentionError::Unavailable)?,
+        submission_version: submission_version
             .parse::<i64>()
             .ok()
             .filter(|version| *version > 0)
-            .ok_or(RequestRetentionError::Unavailable)?,
+            .ok_or(ProposalRetentionError::Unavailable)?,
     })
 }
 
-fn retention_cursor(action_id: &str, proposal_id: Uuid, proposal_version: i64) -> String {
-    format!("{action_id}:{proposal_id}:{proposal_version}")
+fn retention_cursor(action_id: &str, proposal_id: Uuid, submission_version: i64) -> String {
+    format!("{action_id}:{proposal_id}:{submission_version}")
 }
 
 fn count_to_u64(value: i64) -> Result<u64> {
-    u64::try_from(value).map_err(|_| RequestRetentionError::Unavailable)
+    u64::try_from(value).map_err(|_| ProposalRetentionError::Unavailable)
 }
 
-async fn erase_current_intake_row(
-    transaction: &tokio_postgres::Transaction<'_>,
-    entity: &CompiledEntity,
-    proposal_id: Uuid,
-) -> Result<Option<ErasedCurrentRevision>> {
-    let table = SqlIdentifier::parse(&entity.physical_table)
-        .map_err(|_| RequestRetentionError::Unavailable)?;
-    let retained_fields = request_row_boundary_fields(entity);
-    let null_assignments = entity
-        .fields
-        .values()
-        .filter(|field| !retained_fields.contains(&field.id))
-        .map(|field| {
-            let column = SqlIdentifier::parse(&field.physical_name)
-                .map_err(|_| RequestRetentionError::Unavailable)?;
-            Ok(format!("{} = NULL", column.quoted()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let current = transaction
-        .query_opt(
-            &format!(
-                "SELECT record_revision FROM registry_data.{}
-                  WHERE record_id = $1::text::uuid
-                  FOR UPDATE",
-                table.quoted()
-            ),
-            &[&proposal_id.to_string()],
-        )
-        .await
-        .map_err(map_retention_error)?
-        .ok_or(RequestRetentionError::Unavailable)?;
-    let previous_revision: i64 = current.get(0);
-    let next_revision = previous_revision
-        .checked_add(1)
-        .ok_or(RequestRetentionError::Unavailable)?;
-    let field_assignment_sql = if null_assignments.is_empty() {
-        String::new()
-    } else {
-        format!(", {}", null_assignments.join(", "))
-    };
-    let changed = transaction
-        .execute(
-            &format!(
-                "UPDATE registry_data.{}
-                    SET record_revision = record_revision + 1,
-                        record_lifecycle = 'tombstoned',
-                        active_package_revision = DEFAULT,
-                        updated_at = transaction_timestamp()
-                        {}
-                  WHERE record_id = $1
-                    AND record_revision = $2",
-                table.quoted(),
-                field_assignment_sql
-            ),
-            &[&proposal_id, &previous_revision],
-        )
-        .await
-        .map_err(map_retention_error)?;
-    if changed != 1 {
-        return Err(RequestRetentionError::Unavailable);
-    }
-    transaction
-        .execute(
-            "INSERT INTO registry_internal.registry_revisions
-                 (entity_id, record_id, record_reference, record_revision,
-                  predecessor_revision, record_lifecycle, package_revision, operation_id,
-                  mutation_kind, principal_reference, request_reference, snapshot, erased_at)
-             VALUES ($1, $2, $3, $4, $5, 'tombstoned',
-                     NULLIF(current_setting('registry.active_package_revision', true), ''),
-                     $6, 'tombstone', $7, $8, NULL, transaction_timestamp())",
-            &[
-                &entity.id,
-                &proposal_id,
-                &RETENTION_REFERENCE,
-                &next_revision,
-                &Some(previous_revision),
-                &RETENTION_OPERATION_ID,
-                &RETENTION_REFERENCE,
-                &RETENTION_REFERENCE,
-            ],
-        )
-        .await
-        .map_err(map_retention_error)?;
-    transaction
-        .execute(
-            "UPDATE registry_internal.registry_proposal_state
-                SET detail_erased_at = transaction_timestamp(),
-                    updated_at = transaction_timestamp()
-              WHERE action_id = $1
-                AND proposal_id = $2
-                AND detail_erased_at IS NULL",
-            &[&entity.id, &proposal_id],
-        )
-        .await
-        .map_err(map_retention_error)?;
-    crate::proposal_store::erase_authored_intake_fields(transaction, &entity.id, proposal_id)
-        .await
-        .map_err(|_| RequestRetentionError::Unavailable)?;
-    Ok(Some(ErasedCurrentRevision {
-        entity_id: entity.id.clone(),
-        record_id: proposal_id,
-        record_revision: next_revision,
-    }))
-}
-
-struct ErasedCurrentRevision {
-    entity_id: String,
-    record_id: Uuid,
-    record_revision: i64,
-}
-
-fn request_row_boundary_fields(entity: &CompiledEntity) -> BTreeSet<String> {
-    let mut fields = entity
-        .access_profiles
-        .values()
-        .flat_map(|profile| {
-            profile
-                .row_boundaries
-                .iter()
-                .map(|boundary| boundary.field.clone())
-        })
-        .collect::<BTreeSet<_>>();
-    if let Some(request) = &entity.change_request {
-        for grant in &request.presence_permissions {
-            fields.extend(
-                grant
-                    .request_row_boundaries
-                    .iter()
-                    .map(|boundary| boundary.field.clone()),
-            );
-        }
-    }
-    fields
-}
-
-async fn request_tables_exist(client: &impl GenericClient) -> Result<bool> {
+async fn proposal_tables_exist(client: &impl GenericClient) -> Result<bool> {
     let row = client
         .query_one(
             "SELECT to_regclass('registry_internal.registry_proposal_state') IS NOT NULL
-                AND to_regclass('registry_internal.registry_proposal_proposals') IS NOT NULL",
+                AND to_regclass('registry_internal.registry_proposal_submissions') IS NOT NULL",
             &[],
         )
         .await
@@ -1862,10 +1651,6 @@ async fn request_tables_exist(client: &impl GenericClient) -> Result<bool> {
     Ok(row.get(0))
 }
 
-fn map_retention_error(_error: tokio_postgres::Error) -> RequestRetentionError {
-    RequestRetentionError::Unavailable
-}
-
-fn map_history_commit_error(_error: HistoryCommitError) -> RequestRetentionError {
-    RequestRetentionError::Unavailable
+fn map_retention_error(_error: tokio_postgres::Error) -> ProposalRetentionError {
+    ProposalRetentionError::Unavailable
 }

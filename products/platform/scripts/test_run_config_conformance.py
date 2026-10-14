@@ -821,6 +821,29 @@ class ReportTest(unittest.TestCase):
             )
 
 
+    def test_native_breg_editor_association_pins_kind_version_and_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "registry.yaml"
+            schema = root / "schema.json"
+            version = "id.registrystack.org/formats/breg/project/v1alpha1"
+            schema_id = "https://example.test/breg.schema.json"
+            definition = {"$id": schema_id, "properties": {"kind": {"const": "BRegProject"}, "apiVersion": {"const": version}}}
+            schema.write_text(json.dumps(definition), encoding="utf-8")
+            source.write_text(f"apiVersion: {version}\nkind: BRegProject\n", encoding="utf-8")
+            check = lambda: runner.native_kind_schema_problems(source, "registry.yaml", "BRegProject", str(schema), schema_id)
+            self.assertEqual(check(), [])
+            for key in ["kind", "apiVersion"]:
+                body = {"kind": "BRegProject", "apiVersion": version}
+                body[key] = "wrong"
+                source.write_text(yaml.safe_dump(body), encoding="utf-8")
+                self.assertEqual(check(), [f"init's {key} does not select the registered native schema"])
+            source.write_text(f"apiVersion: {version}\nkind: BRegProject\n", encoding="utf-8")
+            definition["$id"] = "https://example.test/other.schema.json"
+            schema.write_text(json.dumps(definition), encoding="utf-8")
+            self.assertEqual(check(), ["the registered schema does not declare its registered identifier"])
+
+
 class PlanTest(unittest.TestCase):
     def case(self, **changes):
         value = {

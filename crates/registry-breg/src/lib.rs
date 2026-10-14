@@ -21,6 +21,9 @@ pub mod action_evidence_client;
 #[cfg(feature = "runtime")]
 pub mod action_evidence_config;
 pub mod action_evidence_contracts;
+#[cfg(test)]
+#[path = "tests/action_evidence_fixture.rs"]
+pub(crate) mod action_evidence_fixture;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod action_evidence_maintenance;
 pub mod action_evidence_validation;
@@ -44,6 +47,10 @@ pub mod audit;
 pub mod auth;
 #[cfg(feature = "runtime")]
 pub mod cli;
+#[cfg(feature = "runtime")]
+pub(crate) mod commit_evidence;
+#[cfg(any(feature = "runtime", test))]
+pub(crate) mod commit_guard;
 pub mod compiler;
 pub mod consent;
 pub mod contract;
@@ -109,7 +116,6 @@ pub mod migration_plan;
 #[cfg(feature = "runtime")]
 pub mod migration_reconcile;
 pub mod model;
-pub mod plan;
 #[cfg(feature = "runtime")]
 pub mod mutation;
 #[cfg(feature = "runtime")]
@@ -117,14 +123,11 @@ pub mod outbox;
 #[cfg(feature = "runtime")]
 pub mod package;
 pub mod physical_names;
+pub mod plan;
 #[cfg(feature = "runtime")]
 pub mod postgres;
 pub mod problem;
 pub mod problem_location;
-pub mod query;
-#[cfg(feature = "runtime")]
-pub(crate) mod query_binding;
-pub mod record_profile;
 #[cfg(feature = "runtime")]
 pub mod proposal_events;
 #[cfg(feature = "runtime")]
@@ -134,6 +137,10 @@ pub mod proposal_retention;
 #[cfg(feature = "runtime")]
 mod proposal_store;
 pub mod proposal_workflow;
+pub mod query;
+#[cfg(feature = "runtime")]
+pub(crate) mod query_binding;
+pub mod record_profile;
 pub mod review_integration;
 #[cfg(feature = "runtime")]
 pub mod review_recovery;
@@ -168,10 +175,10 @@ pub mod webhook;
 pub use artifacts::{GeneratedArtifact, GeneratedArtifacts};
 #[cfg(feature = "runtime")]
 pub use cli::command;
-pub use compiler::{compile_project, compile_project_with_assets, CompileProfile};
+pub use compiler::{CompileProfile, compile_project, compile_project_with_assets};
 pub use contract::{
-    parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, RegistryModule,
-    RegistryProject,
+    RegistryModule, RegistryProject, parse_module_json, parse_module_yaml, parse_project_json,
+    parse_project_yaml,
 };
 pub use diagnostics::{CompileFailure, Diagnostic, DiagnosticSeverity};
 pub use model::CompiledRegistry;

@@ -9,8 +9,8 @@ mod pilot_acceptance_harness;
 mod postgres_harness;
 
 use axum::http::{Method, StatusCode};
-use pilot_acceptance_harness::{response_bytes, response_json, PilotHarness};
-use serde_json::{json, Value};
+use pilot_acceptance_harness::{PilotHarness, response_bytes, response_json};
+use serde_json::{Value, json};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_mutations_use_only_governed_api_field_names() {

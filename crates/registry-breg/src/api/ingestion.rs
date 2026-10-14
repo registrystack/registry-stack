@@ -915,7 +915,6 @@ fn parse_list_query(raw: Option<&str>) -> Result<IngestionListQuery, QueryParseE
                     strict_query::ReadQueryOptions::default(),
                 ),
             },
-            request_history_after_proposal_version: None,
             historical: None,
         },
         status,

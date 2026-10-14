@@ -45,7 +45,8 @@ fn scratch() -> TestProject {
 
 #[test]
 fn every_registered_tool_example_checks_without_a_diagnostic() {
-    let project = repository("products/breg/acceptance/asset-site-placement");
+    let project =
+        repository("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement");
     for example in [
         "products/breg/examples/formats/schema-test-receipt.json",
         "products/breg/examples/formats/credentials.yaml",
@@ -57,7 +58,7 @@ fn every_registered_tool_example_checks_without_a_diagnostic() {
         "products/breg/examples/formats/retire-legacy-field-binding.json",
         "crates/registry-linkml/publicschema/starters/household.yaml",
         "products/breg/acceptance/facility/dev-clients.yaml",
-        "products/breg/starters/seed-lots/core/examples/scenarios.json",
+        "crates/registry-bregctl/tests/fixtures/retained-native/example-catalog/examples/scenarios.json",
         "products/breg/examples/formats/dev-session/.breg/dev/state.json",
         "products/breg/examples/formats/dev-session/.breg/dev/source-prepared-source.json",
         "products/breg/examples/formats/dev-session/.breg/dev/source-transition.json",
@@ -69,7 +70,7 @@ fn every_registered_tool_example_checks_without_a_diagnostic() {
         assert_eq!(report["ok"], true, "{example}");
     }
 
-    let journeys = repository("products/breg/acceptance/asset-site-placement/tests/journeys.yaml");
+    let journeys = repository("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement/tests/journeys.yaml");
     let output = bregctl(&[
         "check",
         path(&project),
@@ -86,7 +87,7 @@ fn every_registered_tool_example_checks_without_a_diagnostic() {
 
 #[test]
 fn a_warning_passes_unless_warnings_are_denied_in_both_output_forms() {
-    let journeys = repository("products/breg/acceptance/asset-site-placement/tests/journeys.yaml");
+    let journeys = repository("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement/tests/journeys.yaml");
 
     let output = check_file(&journeys, &["--format", "json"]);
     let report = json_report(&output);
@@ -156,7 +157,7 @@ fn a_refusal_is_positioned_and_named_in_both_output_forms() {
 
     // A file of another product's kind is refused by the shared reader.
     let output = check_file(
-        &repository("products/breg/acceptance/asset-site-placement/registry.yaml"),
+        &repository("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement/registry.yaml"),
         &["--format", "json"],
     );
     let report = json_report(&output);
@@ -166,7 +167,7 @@ fn a_refusal_is_positioned_and_named_in_both_output_forms() {
 
 #[test]
 fn usage_errors_exit_two_and_an_unreadable_file_exits_three() {
-    let journeys = repository("products/breg/acceptance/asset-site-placement/tests/journeys.yaml");
+    let journeys = repository("crates/registry-bregctl/tests/fixtures/retained-native/asset-site-placement/tests/journeys.yaml");
     for arguments in [
         vec![
             "check",
@@ -337,12 +338,29 @@ fn an_expression_is_refused_in_a_file_read_as_written_and_kept_in_a_written_one(
     assert_eq!(report["diagnostics"], json!([]));
 }
 
-/// A project `bregctl init` wrote, in a scratch directory removed on drop.
-fn initialized() -> (TestProject, PathBuf) {
+/// An explicit native project with journeys and local clients for reader checks.
+fn generic_fixture() -> (TestProject, PathBuf) {
     let scratch = scratch();
     let project = scratch.path().join("project");
-    let output = bregctl(&["init", path(&project)]);
-    assert!(output.status.success(), "{output:?}");
+    fs::create_dir_all(project.join("modules/record-notes")).unwrap();
+    fs::create_dir(project.join("tests")).unwrap();
+    let module =
+        include_bytes!("../fixtures/retained-native/generic/modules/record-notes/module.yaml");
+    let parsed = parse_module_yaml(module).unwrap();
+    let source = include_str!("../fixtures/retained-native/generic/registry.yaml")
+        .replace("<module-digest>", &module_digest_with_assets(&parsed, &[]));
+    fs::write(project.join("registry.yaml"), source).unwrap();
+    fs::write(project.join("modules/record-notes/module.yaml"), module).unwrap();
+    fs::write(
+        project.join("dev-clients.yaml"),
+        include_bytes!("../fixtures/retained-native/generic/dev-clients.yaml"),
+    )
+    .unwrap();
+    fs::write(
+        project.join("tests/journeys.yaml"),
+        include_bytes!("../fixtures/retained-native/generic/tests/journeys.yaml"),
+    )
+    .unwrap();
     (scratch, project)
 }
 
@@ -362,7 +380,7 @@ fn diagnostics_about(report: &Value, file: &Path) -> Vec<Value> {
 /// reports about it.
 #[test]
 fn a_project_check_reads_the_journeys_and_the_development_clients_it_holds() {
-    let (_scratch, project) = initialized();
+    let (_scratch, project) = generic_fixture();
     let output = bregctl(&["check", path(&project)]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let human = String::from_utf8_lossy(&output.stdout);
@@ -408,7 +426,7 @@ fn a_project_check_reads_the_journeys_and_the_development_clients_it_holds() {
 /// it.
 #[test]
 fn a_project_check_resolves_the_journeys_against_the_project() {
-    let (_scratch, project) = initialized();
+    let (_scratch, project) = generic_fixture();
     let file = project.join("tests/journeys.yaml");
     let written = fs::read_to_string(&file).unwrap();
     let edited = written.replacen(
@@ -448,7 +466,7 @@ fn a_project_check_resolves_the_journeys_against_the_project() {
 /// file that is not YAML is left alone.
 #[test]
 fn a_project_check_reads_every_yaml_file_under_tests() {
-    let (_scratch, project) = initialized();
+    let (_scratch, project) = generic_fixture();
     let journeys = fs::read_to_string(project.join("tests/journeys.yaml")).unwrap();
     fs::write(project.join("tests/README.md"), "Notes.\n").unwrap();
     fs::write(project.join("tests/more-journeys.yml"), &journeys).unwrap();
@@ -490,7 +508,7 @@ fn a_project_check_reads_every_yaml_file_under_tests() {
 /// the journeys beside it.
 #[test]
 fn a_project_check_reads_the_journeys_of_a_project_it_refuses() {
-    let (_scratch, project) = initialized();
+    let (_scratch, project) = generic_fixture();
     for relative in ["registry.yaml", "tests/journeys.yaml"] {
         let file = project.join(relative);
         let written = fs::read_to_string(&file).unwrap();
@@ -511,7 +529,7 @@ fn a_project_check_reads_the_journeys_of_a_project_it_refuses() {
 /// warning, and a `tests` that cannot be listed is an error.
 #[test]
 fn a_project_check_names_what_it_does_not_read_under_tests() {
-    let (_scratch, project) = initialized();
+    let (_scratch, project) = generic_fixture();
     let nested = project.join("tests/more");
     fs::create_dir(&nested).unwrap();
     fs::copy(project.join("tests/journeys.yaml"), nested.join("j.yaml")).unwrap();

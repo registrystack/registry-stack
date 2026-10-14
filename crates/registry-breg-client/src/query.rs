@@ -35,8 +35,6 @@ const INVALID_COLLECTION_BINDING: &str =
 const INVALID_SELECTOR: &str = "the Base Registry Engine lookup selector is invalid";
 const INVALID_SKIPTOKEN: &str = "the Base Registry Engine continuation token is invalid";
 const INVALID_BBOX: &str = "the Base Registry Engine bounding box is invalid";
-const INVALID_REQUEST_HISTORY_CURSOR: &str =
-    "the Base Registry Engine request history proposal version must be positive";
 
 /// A value-free reason that a Base Registry Engine request cannot be constructed.
 ///
@@ -98,7 +96,6 @@ pub struct BRegRecordOptions {
     select: Vec<String>,
     access_profile: Option<String>,
     format: BRegRecordFormat,
-    request_history_after_proposal_version: Option<u32>,
 }
 
 impl BRegRecordOptions {
@@ -128,21 +125,6 @@ impl BRegRecordOptions {
         self
     }
 
-    /// Continue the retained proposal history returned with a change-request GET.
-    ///
-    /// This option is valid only for [`crate::BaseRegistryClient::get_record`].
-    /// Collection and lookup methods refuse it before acquiring a token.
-    pub fn request_history_after_proposal_version(
-        mut self,
-        value: u32,
-    ) -> Result<Self, BRegRequestError> {
-        if value == 0 {
-            return Err(BRegRequestError::new(INVALID_REQUEST_HISTORY_CURSOR));
-        }
-        self.request_history_after_proposal_version = Some(value);
-        Ok(self)
-    }
-
     #[must_use]
     pub(crate) const fn format_value(&self) -> BRegRecordFormat {
         self.format
@@ -164,21 +146,6 @@ impl BRegRecordOptions {
 
     pub(crate) fn append_get_query(&self, pairs: &mut Vec<(String, String)>) {
         self.append_query(pairs);
-        if let Some(value) = self.request_history_after_proposal_version {
-            pairs.push((
-                "requestHistoryAfterProposalVersion".into(),
-                value.to_string(),
-            ));
-        }
-    }
-
-    pub(crate) fn ensure_collection_compatible(&self) -> Result<(), BRegRequestError> {
-        if self.request_history_after_proposal_version.is_some() {
-            return Err(BRegRequestError::new(
-                "a Base Registry Engine request history cursor is valid only for a record GET",
-            ));
-        }
-        Ok(())
     }
 }
 
@@ -189,10 +156,6 @@ impl fmt::Debug for BRegRecordOptions {
             .field("selected_field_count", &self.select.len())
             .field("access_profile_present", &self.access_profile.is_some())
             .field("format", &self.format)
-            .field(
-                "request_history_cursor_present",
-                &self.request_history_after_proposal_version.is_some(),
-            )
             .finish()
     }
 }
@@ -328,7 +291,6 @@ impl BRegListRequest {
     }
 
     pub(crate) fn query_pairs(&self) -> Result<Vec<(String, String)>, BRegRequestError> {
-        self.options.ensure_collection_compatible()?;
         let mut pairs = Vec::new();
         self.options.append_query(&mut pairs);
         if let Some(value) = &self.filter {
@@ -436,7 +398,6 @@ impl BRegLookupRequest {
     }
 
     pub(crate) fn query_pairs(&self) -> Result<Vec<(String, String)>, BRegRequestError> {
-        self.options.ensure_collection_compatible()?;
         let mut pairs = Vec::new();
         self.options.append_query(&mut pairs);
         ensure_query_bound(&pairs)?;
@@ -1170,26 +1131,6 @@ mod tests {
         }
         assert!(BRegBoundingBox::new("1".repeat(257), "0", "1", "1").is_err());
         assert!(BRegBoundingBox::new("0", "0", "0", "0").is_ok());
-    }
-
-    #[test]
-    fn proposal_history_cursor_is_get_only_and_positive() {
-        assert!(BRegRecordOptions::default()
-            .request_history_after_proposal_version(0)
-            .is_err());
-        let options = BRegRecordOptions::default()
-            .request_history_after_proposal_version(u32::MAX)
-            .unwrap();
-        let mut pairs = Vec::new();
-        options.append_get_query(&mut pairs);
-        assert_eq!(
-            breg_encoded_query(&pairs),
-            "requestHistoryAfterProposalVersion=4294967295"
-        );
-        assert!(BRegListRequest::default()
-            .options(options)
-            .query_pairs()
-            .is_err());
     }
 
     #[test]

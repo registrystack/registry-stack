@@ -14,11 +14,10 @@ use registry_breg_client::{
     ingestion_chunk_digest, ingestion_prefix_digest, BRegActionInvocationRequest, BRegBatchBuilder,
     BRegBatchError, BRegBatchOperation, BRegCreateRequest, BRegDirectWrite, BRegEtag,
     BRegIdempotencyKey, BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest,
-    BRegIngestionRunStatus,  BRegMetadataErrorKind,
-    BRegMetadataSelectionErrorKind, BRegPatchRequest, BRegPlanRefusal, BRegProblemCode,
-    BRegProblemFieldPath, BRegProtocolFailure, BRegRecordFormat, BRegRecordOptions,
-    BRegRefusalCode, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
-    BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+    BRegIngestionRunStatus, BRegMetadataErrorKind, BRegMetadataSelectionErrorKind,
+    BRegPatchRequest, BRegPlanRefusal, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure,
+    BRegRecordFormat, BRegRefusalCode, BaseRegistryClient, BaseRegistryClientConfig,
+    BaseRegistryClientError, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
     REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
 use registry_platform_httputil::client::{
@@ -34,11 +33,7 @@ const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-
 const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
 const OTHER_RECORD_ID: &str = "00000000-0000-4000-8000-000000000002";
 const SERVER_ETAG: &str = "\"breg-record-000000000001\"";
-const ACTION_ETAG: &str =
-    "\"breg-action-hmac-sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"";
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const EFFECT_DIGEST: &str =
-    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const PROFILE_LINK: &str = "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </tenant/base/v1/schemas/company>; rel=\"describedby\"";
 // A package declares its own refusal catalogue, so both the code and the label
 // stand in for one declared entry rather than for fixed client-side text.
@@ -450,14 +445,6 @@ fn mutation_response(
     response
 }
 
-
-
-
-
-
-
-
-
 fn create_request() -> BRegCreateRequest {
     BRegCreateRequest::new(Map::from_iter([(
         "legalName".to_owned(),
@@ -709,8 +696,6 @@ async fn metadata_selected_create_and_patch_use_the_exact_http_contract() {
     }
 }
 
-
-
 #[derive(Clone, Copy, Debug)]
 enum DirectResponseCase {
     MissingEtag,
@@ -847,11 +832,6 @@ async fn direct_write_success_headers_and_status_fail_closed() {
     }
 }
 
-
-
-
-
-
 #[tokio::test]
 async fn mutation_records_and_action_receipts_are_validated_against_the_selected_operation() {
     for body in [
@@ -940,7 +920,6 @@ async fn mutation_records_and_action_receipts_are_validated_against_the_selected
             ..
         }
     ));
-
 }
 
 #[tokio::test]
@@ -1880,11 +1859,6 @@ async fn a_create_answered_with_a_5xx_is_resent_byte_identically_under_the_same_
     assert_eq!(first.body, second.body);
 }
 
-/// A failed handler is rolled back before commit and fails the same way on a
-/// resend, so the action is not resent; a failed Evidence dependency may
-/// follow a transient source failure, so it is.
-
-
 /// Three unknown outcomes in a row: the first send and both default resends.
 fn unavailable_sends() -> impl Iterator<Item = MockResponse> {
     std::iter::repeat_with(|| problem_response(BRegProblemCode::ServiceUnavailable))
@@ -1990,7 +1964,7 @@ async fn an_action_invocation_with_an_unknown_outcome_is_resent_byte_identically
     let mut metadata = metadata_fixture();
     metadata["actions"] = json!([{
         "id": "register-company", "route": "/v1/actions/register-company",
-        "conditionRoute": null, "contractFingerprint": REVISION,
+        "conditionRoute": null,
         "apiName": "registerCompany", "revision": REVISION, "display": {}, "execution": {"mode":"immediate"},
         "inputMode": "fixed", "maximumInputStringBytes": null,
         "inputs": [{"id": "legal-name", "apiName": "legalName", "fieldType": {
@@ -2317,10 +2291,6 @@ async fn prepared_create_roundtrip_reuses_exact_request_and_refuses_changed_bind
     assert!(!format!("{tampered:?}").contains("canary"));
     assert!(BRegPreparedCreate::from_slice(b"{\"version\":1,\"version\":1}").is_err());
 }
-
-
-
-
 
 #[tokio::test]
 async fn record_revisions_uses_bounded_native_route_and_refuses_invalid_selectors_before_io() {

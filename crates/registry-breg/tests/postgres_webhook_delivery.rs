@@ -12,21 +12,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use hmac::{Hmac, KeyInit, Mac};
 use postgres_harness::TestDatabase;
-use rcgen::{generate_simple_self_signed, CertifiedKey};
+use rcgen::{CertifiedKey, generate_simple_self_signed};
 use registry_breg::audit::WEBHOOK_AUDIT_SCHEMA;
-use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_json, ModuleAssetSource};
+use registry_breg::compiler::{CompileProfile, compile_project, compile_project_with_assets};
+use registry_breg::contract::{ModuleAssetSource, parse_project_json};
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::hook_handler::HookHandlerRegistry;
 use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
-    ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity,
+    RowBoundaryContext, initialize_compiled_registry_state_for_test, install_compiled_schema,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::webhook::{
@@ -36,15 +36,15 @@ use registry_breg::webhook::{
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_hooks::MAX_OUTPUT_BYTES;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{oneshot, Mutex, Notify};
-use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
-use tokio_rustls::rustls::ServerConfig;
+use tokio::sync::{Mutex, Notify, oneshot};
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use uuid::Uuid;
 
 const PACKAGE_REVISION: &str =
@@ -73,8 +73,8 @@ fn hook_handlers(compiled: &CompiledRegistry, package_revision: &str) -> Arc<Hoo
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_bound_audited_and_confined(
-) {
+async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_bound_audited_and_confined()
+ {
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::WARN)
         .with_test_writer()
@@ -2694,11 +2694,11 @@ fn independent_signature(fields: IndependentSignatureFields<'_>) -> String {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -2717,8 +2717,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"case","operations":["create","get","list"],
+            "permissions":{"records":[{
+              "recordType":"case","operations":["create","get","list"],
               "readableFields":["jurisdiction","label","restricted_note"],
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -2735,11 +2735,11 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 /// reviewed local script instead of an operator destination.
 fn local_hook_compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
-        br#"{
+        br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "recordTypes":[{
             "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
             "fields":[
               {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
@@ -2759,8 +2759,8 @@ fn local_hook_compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":{"entities":[{
-              "entity":"case","operations":["create","get","list"],
+            "permissions":{"records":[{
+              "recordType":"case","operations":["create","get","list"],
               "readableFields":["jurisdiction","label","restricted_note"],
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]

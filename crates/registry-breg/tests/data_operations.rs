@@ -4,16 +4,16 @@ use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
-use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project};
 use registry_breg::contract::parse_project_json;
 use registry_breg::data::{
-    execute_export_page, DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan,
-    DataHttpResponse, DataImportCheckpoint, DataImportOperation, DataImportPlan,
-    EXPORT_CHECKPOINT_API_VERSION, EXPORT_CHECKPOINT_KIND, IMPORT_CHECKPOINT_API_VERSION,
-    IMPORT_CHECKPOINT_KIND, MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
+    DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan, DataHttpResponse,
+    DataImportCheckpoint, DataImportOperation, DataImportPlan, EXPORT_CHECKPOINT_API_VERSION,
+    EXPORT_CHECKPOINT_KIND, IMPORT_CHECKPOINT_API_VERSION, IMPORT_CHECKPOINT_KIND,
+    MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES, execute_export_page,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const ENTITY: &str = "entity-canary-9f31";
@@ -29,11 +29,11 @@ const WIDE_DATASET: &str = "wide-dataset";
 const COMPILED_MAXIMUM_PAGE_SIZE: usize = 100;
 
 fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "data-contract", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "entities": [{
+        "recordTypes": [{
             "id": ENTITY,
             "primaryDataset": "test-dataset",
             "route": "records",
@@ -53,8 +53,8 @@ fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
             "id": PROFILE,
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": ENTITY,
+            "permissions": {"records": [{
+                "recordType": ENTITY,
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["code", "count", "readonly"],
                 "writableFields": ["code", "count"],
@@ -96,11 +96,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// A registry whose exportable field is wide enough that one authorized page
 /// can fill the response bound.
 fn wide_export_registry() -> registry_breg::CompiledRegistry {
-    let source = json!({
+    let source = json!({"datasets":[{"id":WIDE_DATASET}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": WIDE_REGISTRY, "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "entities": [{
+        "recordTypes": [{
             "id": WIDE_ENTITY,
             "primaryDataset": WIDE_DATASET,
             "route": "wide-records",
@@ -114,8 +114,8 @@ fn wide_export_registry() -> registry_breg::CompiledRegistry {
             "id": PROFILE,
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": WIDE_ENTITY,
+            "permissions": {"records": [{
+                "recordType": WIDE_ENTITY,
                 "operations": ["list"],
                 "readableFields": ["payload"],
                 "writableFields": [],
@@ -171,19 +171,19 @@ fn data_export_requires_explicit_profile_permission() {
     );
 
     let base = |operations: Value, readable: Value| {
-        json!({
+        json!({"datasets":[{"id": "test-dataset"}],
             "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
             "kind": "BRegProject",
             "project": {"id": "export-contract", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-            "entities": [{
+            "recordTypes": [{
                 "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create-only",
                 "fields": [{"id": "code", "type": "string", "maximumLength": 16,
                             "classification": "internal"}]
             }],
             "accessProfiles": [{
                 "id": PROFILE, "principalClaim": "principal", "requiredScopes": "unrestricted",
-                "permissions": {"entities": [{
-                    "rowBoundaries": "unrestricted", "entity": ENTITY,
+                "permissions": {"records": [{
+                    "rowBoundaries": "unrestricted", "recordType": ENTITY,
                     "operations": operations, "readableFields": readable,
                     "allowDataExport": true
                 }]}
@@ -195,9 +195,11 @@ fn data_export_requires_explicit_profile_permission() {
         base(json!(["list"]), json!([])),
     ] {
         let diagnostics = compile_source(invalid).expect_err("invalid export authority is refused");
-        assert!(diagnostics
-            .iter()
-            .any(|code| code == "breg.access-profile.data-export-invalid"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|code| code == "breg.access-profile.data-export-invalid")
+        );
     }
 
     let explicit = compiled(true);
@@ -207,16 +209,16 @@ fn data_export_requires_explicit_profile_permission() {
     assert_eq!(plan.entity_id(), ENTITY);
     assert_eq!(plan.profile_id(), PROFILE);
 
-    let project_profile = json!({
+    let project_profile = json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "project-export", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "accessProfiles": [{
             "id": "project-exporter", "principalClaim": "principal", "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{"entity": ENTITY, "operations": ["list"],
+            "permissions": {"records": [{"recordType": ENTITY, "operations": ["list"],
                         "readableFields": ["code"], "allowDataExport": true, "rowBoundaries": "unrestricted"}]}
         }],
-        "entities": [{
+        "recordTypes": [{
             "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create-only",
             "fields": [{"id": "code", "type": "string", "maximumLength": 16,
                         "classification": "internal"}]
@@ -337,15 +339,15 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
         "field bounds are checked before HTTP body bounds"
     );
     let oversized_valid_field_registry = {
-        let source = json!({
+        let source = json!({"datasets":[{"id": "test-dataset"}],
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
             "project":{"id":"oversize", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-            "entities":[{"id":ENTITY,"primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
+            "recordTypes":[{"id":ENTITY,"primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "batch":{"maximumItems":2,"maximumBytes":100},
                 "fields":[{"id":"code","type":"text","maximumLength":1000,"required":true,
                            "classification":"internal"}]}],
-            "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-                    "entity":ENTITY,
+            "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                    "recordType":ENTITY,
                     "operations":["create","batch"],"readableFields":["code"],
                     "writableFields":["code"], "rowBoundaries": "unrestricted"}]}}]
         });
@@ -372,11 +374,11 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
 
 #[test]
 fn data_lifecycle_uses_exact_compiled_api_names() {
-    let registry = compile_source(json!({
+    let registry = compile_source(json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": "data-logical-names", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
-        "entities": [{
+        "recordTypes": [{
             "id": ENTITY,
             "primaryDataset": "test-dataset",
             "route": "records",
@@ -396,8 +398,8 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
             "id": PROFILE,
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
-            "permissions": {"entities": [{
-                "entity": ENTITY,
+            "permissions": {"records": [{
+                "recordType": ENTITY,
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["record-code"],
                 "writableFields": ["record-code"],

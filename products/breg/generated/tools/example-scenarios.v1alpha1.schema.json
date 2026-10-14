@@ -10,8 +10,6 @@
         "create",
         "invoke",
         "get",
-        "submit",
-        "apply",
         "history"
       ],
       "type": "string"
@@ -58,9 +56,6 @@
         "client": {
           "$ref": "#/$defs/LocalId"
         },
-        "entity": {
-          "$ref": "#/$defs/LocalId"
-        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -73,6 +68,9 @@
         "record": {
           "$ref": "#/$defs/LocalId"
         },
+        "recordType": {
+          "$ref": "#/$defs/LocalId"
+        },
         "result": {
           "$ref": "#/$defs/LocalId"
         }
@@ -80,7 +78,7 @@
       "required": [
         "id",
         "operation",
-        "entity",
+        "recordType",
         "client",
         "accessProfile"
       ],

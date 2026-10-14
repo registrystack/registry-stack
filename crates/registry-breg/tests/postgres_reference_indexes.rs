@@ -16,32 +16,33 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
+use registry_breg::CompiledRegistry;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims, router,
 };
-use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::migration::{
-    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest,
+    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, apply_verified_package,
 };
 use registry_breg::package::{
-    compiled_registry_change_set_from_baseline, load_package, prepare_package,
     CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
     PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile, VerifiedPackage,
+    PackageSourceFile, VerifiedPackage, compiled_registry_change_set_from_baseline, load_package,
+    prepare_package,
 };
 use registry_breg::postgres::{
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresKernelError,
+    PostgresRecordReadService, RegistryLockKey, SuccessorMigrationRehearsal,
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
-    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    PostgresKernelError, PostgresRecordReadService, RegistryLockKey, SuccessorMigrationRehearsal,
+    verify_catalog_identity_for_catalog,
 };
-use registry_breg::startup::{prepare_startup, StartupError};
-use registry_breg::CompiledRegistry;
+use registry_breg::startup::{StartupError, prepare_startup};
 use registry_platform_audit::AuditProfile;
 use serde_json::Value;
 use tower::Service as _;
@@ -505,7 +506,7 @@ fn compile_registry() -> CompiledRegistry {
         .expect("test Registry compiles")
 }
 
-const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[
+const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[
   {"id":"site","primaryDataset":"reference-index-registry","route":"sites","mutationMode":"mutable","classification":"internal",
    "fields":[{"id":"name","type":"string","maximumLength":40,"required":true,"classification":"internal"}]},
   {"id":"asset","primaryDataset":"reference-index-registry","route":"assets","mutationMode":"mutable","classification":"internal",
@@ -518,7 +519,7 @@ const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/modul
 
 fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"reference-index-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://reference-index.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://reference-index.example.test","title":"Reference Index Registry","publisher":{{"id":"reference-index-registry-authority","name":"Reference Index Publisher"}}}},"publicService":{{"id":"reference-index-registry-service","title":"Reference Index Registry"}},"datasets":[{{"id":"reference-index-registry","title":"Reference Index Dataset","owner":"Reference Index Publisher","status":"active"}}],"dataServices":[{{"id":"reference-index-registry-data-service","title":"Reference Index Registry","endpointUrl":"https://reference-index.example.test","servesDatasets":["reference-index-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"datasets":[{{"id": "reference-index-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"reference-index-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://reference-index.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://reference-index.example.test","title":"Reference Index Registry","publisher":{{"id":"reference-index-registry-authority","name":"Reference Index Publisher"}}}},"publicService":{{"id":"reference-index-registry-service","title":"Reference Index Registry"}},"datasets":[{{"id":"reference-index-registry","title":"Reference Index Dataset","owner":"Reference Index Publisher","status":"active"}}],"dataServices":[{{"id":"reference-index-registry-data-service","title":"Reference Index Registry","endpointUrl":"https://reference-index.example.test","servesDatasets":["reference-index-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }

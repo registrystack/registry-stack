@@ -13,7 +13,7 @@ use std::fmt;
 
 use registry_platform_audit::AuditEntry;
 use registry_platform_canonical_json::parse_json_strict;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
@@ -1609,7 +1609,7 @@ mod tests {
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
           "project":{"id":"bindings-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
+          "datasets":[{"id":"test-dataset"}],"recordTypes":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
             "fields":[
               {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
@@ -1619,8 +1619,8 @@ mod tests {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["review"],
-            "permissions":{"entities":[{
-              "entity":"entry","operations":["create"],
+            "permissions":{"records":[{
+              "recordType":"entry","operations":["create"],
               "readableFields":["tenant","serial-code"],
               "writableFields":["tenant","serial-code"],
               "rowBoundaries":"unrestricted"
@@ -1741,15 +1741,15 @@ mod tests {
               "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
               "kind":"BRegProject",
               "project":{{"id":"bindings-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
+              "datasets":[{{"id":"test-dataset"}}],"recordTypes":[{{
                 "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
                 "fields":[{fields}]
               }}],
               "accessProfiles":[{{
                 "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["review"],
-                "permissions":{{"entities":[{{
-                  "entity":"entry","operations":["create"],
+                "permissions":{{"records":[{{
+                  "recordType":"entry","operations":["create"],
                   "readableFields":[{readable}],
                   "writableFields":[{readable}],
                   "rowBoundaries":"unrestricted"

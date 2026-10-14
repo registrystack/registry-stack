@@ -1,6 +1,6 @@
+use crate::*;
 use serde_json::{json, Value};
 use uuid::Uuid;
-use crate::*;
 
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -117,10 +117,6 @@ fn fixture() -> Value {
         "actions": [{"id": "future-action", "openShape": {"retained": true}}]
     })
 }
-
-
-
-
 
 fn parse(value: &Value) -> BRegMetadata {
     BRegMetadata::from_slice(&serde_json::to_vec(value).unwrap())
@@ -458,8 +454,6 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
 /// readable on the entity and on each of its operations, as a conforming
 /// runtime publishes it.
 
-
-
 #[test]
 fn duplicate_json_members_are_refused_at_every_depth() {
     let duplicate_root = format!(
@@ -557,8 +551,6 @@ fn execution_selection_requires_exact_source_and_profile_binding() {
         BRegMetadataSelectionErrorKind::ProfileMismatch
     );
 }
-
-
 
 #[test]
 fn malformed_bindings_and_cross_field_references_fail_closed() {
@@ -1034,6 +1026,50 @@ fn complete_descriptive_metadata_is_retained_and_spatial_is_optional() {
 }
 
 #[test]
+fn get_only_proposal_metadata_promotes_get_without_list_or_start() {
+    let mut value = fixture();
+    value["proposals"] = json!({"method":"GET","path":"/v1/proposals","accessProfiles":[],
+        "get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["reviewer"]}});
+    value["actions"] = json!([{
+        "id":"correct-address","apiName":"correctAddress","revision":REVISION,
+        "display":{"label":"Correct address"},"execution":{"mode":"proposal"},
+        "inputMode":"fixed","inputs":[{"id":"address","apiName":"addressLine",
+            "label":"New address line","description":"Postal address","schema":{"type":"string","maxLength":100},
+            "fieldType":{"type":"string","minimumLength":0,"maximumLength":100},
+            "required":true,"nullable":false,"classification":"internal"}],
+        "referenceInputs":[],"requiredConditionKeys":[],"resultEffects":[],
+        "access":{"selectedProfile":"reviewer"},"routes":{},
+        "bounds":{"maximumTargets":4,"maximumFieldMutations":8,"maximumSnapshotBytes":1024}
+    }]);
+    let metadata = parse(&value);
+    assert!(metadata.select_proposal_get("reviewer").is_ok());
+    assert!(metadata.select_proposal_get("author").is_err());
+    assert!(metadata.select_proposals("reviewer").is_err());
+    let action = &metadata.actions()[0];
+    assert_eq!(action.invoke_path(), None);
+    assert_eq!(action.inputs()[0].label(), "New address line");
+    assert_eq!(action.inputs()[0].description(), Some("Postal address"));
+    assert_eq!(action.inputs()[0].schema().unwrap()["maxLength"], 100);
+    assert!(metadata
+        .select_action("correct-address", "reviewer")
+        .is_err());
+    value["actions"][0]["execution"]["mode"] = json!("immediate");
+    assert!(BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    for (member, invalid) in [
+        ("method", "POST"),
+        ("path", "/v1/proposals/{id}"),
+        ("path", "https://other.example/v1/proposals/{proposal_id}"),
+    ] {
+        let mut invalid_metadata = fixture();
+        invalid_metadata["proposals"] = value["proposals"].clone();
+        invalid_metadata["proposals"]["get"][member] = json!(invalid);
+        assert!(parse(&invalid_metadata)
+            .select_proposal_get("reviewer")
+            .is_err());
+    }
+}
+
+#[test]
 fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
     let mut value = fixture();
     let tombstone = operation(
@@ -1078,7 +1114,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         ]);
     value["actions"] = json!([{
         "id": "register-company", "route": "/v1/actions/register-company",
-        "conditionRoute": null, "contractFingerprint": REVISION,
+        "conditionRoute": null,
         "apiName": "registerCompany", "revision": REVISION, "display": {}, "execution": {"mode":"immediate"},
         "inputMode": "fixed", "maximumInputStringBytes": null,
         "inputs": [{"id": "legal-name", "apiName": "legalName", "fieldType": {
@@ -1281,5 +1317,3 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         BRegMetadataSelectionErrorKind::ContractMismatch
     );
 }
-
-

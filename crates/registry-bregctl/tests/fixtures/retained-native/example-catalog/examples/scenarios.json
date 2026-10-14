@@ -1,0 +1,105 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1",
+  "kind": "BRegExampleScenarios",
+  "scenarios": [
+    {
+      "id": "starter-data",
+      "description": "Create synthetic records and typed relationships through ordinary authorized writes.",
+      "input": "examples/inputs/starter-data.json",
+      "steps": [
+        {
+          "id": "department",
+          "operation": "create",
+          "client": "editor",
+          "accessProfile": "directory-editor",
+          "input": "department",
+          "capture": "department",
+          "recordType": "contact"
+        },
+        {
+          "id": "river",
+          "operation": "create",
+          "client": "editor",
+          "accessProfile": "directory-editor",
+          "input": "river",
+          "capture": "river",
+          "recordType": "contact"
+        },
+        {
+          "id": "hill",
+          "operation": "create",
+          "client": "editor",
+          "accessProfile": "directory-editor",
+          "input": "hill",
+          "capture": "hill",
+          "recordType": "contact"
+        },
+        {
+          "id": "river-link",
+          "operation": "create",
+          "client": "editor",
+          "accessProfile": "directory-editor",
+          "input": "river-link",
+          "capture": "river-link",
+          "recordType": "contact-link"
+        },
+        {
+          "id": "hill-link",
+          "operation": "create",
+          "client": "editor",
+          "accessProfile": "directory-editor",
+          "input": "hill-link",
+          "capture": "hill-link",
+          "recordType": "contact-link"
+        }
+      ]
+    },
+    {
+      "id": "first-record",
+      "description": "Create an independent record without loading samples. Edit its input before starting.",
+      "input": "examples/inputs/first-record.json",
+      "steps": [
+        {
+          "id": "create",
+          "operation": "create",
+          "client": "editor",
+          "accessProfile": "directory-editor",
+          "input": "record",
+          "capture": "first-record",
+          "recordType": "contact"
+        },
+        {
+          "id": "get",
+          "operation": "get",
+          "client": "editor",
+          "accessProfile": "directory-editor",
+          "record": "first-record",
+          "recordType": "contact"
+        }
+      ]
+    },
+    {
+      "id": "observe-created",
+      "description": "Read an existing configured record and inspect its history.",
+      "input": "examples/inputs/first-record.json",
+      "steps": [
+        {
+          "id": "get",
+          "operation": "get",
+          "recordType": "contact",
+          "client": "editor",
+          "accessProfile": "directory-editor",
+          "record": "first-record"
+        },
+        {
+          "id": "history",
+          "operation": "history",
+          "recordType": "contact",
+          "client": "editor",
+          "accessProfile": "directory-editor",
+          "record": "first-record"
+        }
+      ]
+    }
+  ]
+}

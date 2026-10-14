@@ -22,8 +22,8 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Instant;
 
 use registry_platform_script::wasm::{
-    Backend, Budgets, EpochTicker, Executor, InvokeError, PreparedModule, TickerSpawnError,
-    DEFAULT_INTERVAL,
+    Backend, Budgets, DEFAULT_INTERVAL, EpochTicker, Executor, InvokeError, PreparedModule,
+    TickerSpawnError,
 };
 use serde_json::{Map as JsonMap, Value};
 
@@ -48,8 +48,7 @@ const WASM_MAXIMUM_OUTCOME_BYTES: usize = 1024 * 1024;
 /// document by the action's snapshot ceiling, and the request envelope only
 /// wraps that document, so the ceiling is the snapshot ceiling plus wrapper
 /// margin: a request must never be refused for a document admission accepted.
-const WASM_MAXIMUM_REQUEST_BYTES: usize =
-    crate::plan::MAX_PLAN_SNAPSHOT_BYTES as usize + 1024;
+const WASM_MAXIMUM_REQUEST_BYTES: usize = crate::plan::MAX_PLAN_SNAPSHOT_BYTES as usize + 1024;
 
 /// The epoch-deadline tick cap. Deadlines are seconds in practice; the cap
 /// keeps the engine's tick arithmetic honest if a caller ever passes a

@@ -8,18 +8,18 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project_with_assets};
 use registry_breg::contract::{
     Classification, ConstraintSource, FieldTypeSource, ModuleAssetSource, MutationMode, Operation,
     RegistryModule, RegistryProject, UniqueWhenPredicate, ValidTimeRole,
 };
 use registry_breg::fixtures::validate_fixture_journeys;
 use registry_breg::generated_ddl::DdlStatementKind;
-use registry_breg::model::{CompiledChangeRequestReview, CompiledEntity, CompiledRegistry};
+use registry_breg::model::{CompiledEntity, CompiledRegistry};
 
 fn fixture_root(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/acceptance")
+        .join("tests/fixtures/native-models/products/breg/acceptance")
         .join(name)
 }
 
@@ -133,44 +133,6 @@ fn operations_for(compiled: &CompiledRegistry, entity_id: &str) -> Vec<Operation
 }
 
 #[test]
-fn asset_placement_change_request_fixture_compiles_site_correction_plan() {
-    let compiled = compile_fixture("asset-site-placement-change-requests");
-    assert_eq!(
-        compiled.registry_id(),
-        "asset-site-placement-change-requests"
-    );
-    assert_eq!(compiled.entities().len(), 5);
-
-    let placement = entity(&compiled, "asset-placement");
-    assert_eq!(
-        placement.change_control.as_ref().map(|control| {
-            control
-                .required_for
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>()
-        }),
-        Some(BTreeSet::from([Operation::Patch]))
-    );
-
-    let request = entity(&compiled, "placement-correction-request");
-    let request_plan = request
-        .change_request
-        .as_ref()
-        .expect("asset placement correction request compiles to a request plan");
-    assert_eq!(request_plan.effects.len(), 1);
-    let CompiledChangeRequestReview::Required(review) = &request_plan.review else {
-        panic!("asset placement correction requires external review");
-    };
-    assert_eq!(review.authority, "casework");
-    assert_eq!(review.policy_id, "asset-placement-correction");
-    assert_eq!(
-        request_plan.target_entities,
-        ["asset-placement"].into_iter().map(str::to_owned).collect()
-    );
-}
-
-#[test]
 fn business_pilot_fixture_compiles_establishment_business_and_time_bounded_assignment() {
     let compiled = compile_fixture("business-establishments");
     assert_eq!(compiled.registry_id(), "business-establishments");
@@ -204,47 +166,6 @@ fn business_pilot_fixture_compiles_establishment_business_and_time_bounded_assig
 }
 
 #[test]
-fn household_change_request_fixture_compiles_contact_registration_plan() {
-    let compiled = compile_fixture("publicschema-household-change-requests");
-    assert_eq!(
-        compiled.registry_id(),
-        "publicschema-household-change-requests"
-    );
-    assert_eq!(compiled.entities().len(), 4);
-
-    let person = entity(&compiled, "person");
-    assert!(person.change_control.is_some());
-    assert!(person.fields.contains_key("residency-status"));
-    assert!(person.fields.contains_key("preferred-language"));
-
-    let household = entity(&compiled, "household");
-    assert!(household.change_control.is_some());
-    assert!(household.fields.contains_key("contact-person"));
-
-    let membership = entity(&compiled, "group-membership");
-    assert!(membership.change_control.is_some());
-
-    let request = entity(&compiled, "register-household-contact-request");
-    let request_plan = request
-        .change_request
-        .as_ref()
-        .expect("household contact request compiles to a request plan");
-    assert_eq!(request_plan.effects.len(), 3);
-    let CompiledChangeRequestReview::Required(review) = &request_plan.review else {
-        panic!("household contact registration requires external review");
-    };
-    assert_eq!(review.authority, "casework");
-    assert_eq!(review.policy_id, "household-contact-registration");
-    assert_eq!(
-        request_plan.target_entities,
-        ["group-membership", "household", "person"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    );
-}
-
-#[test]
 fn business_pilot_fixture_journeys_preflight_against_the_exact_compiled_registry() {
     let compiled = compile_fixture("business-establishments");
     let journeys = fs::read(fixture_root("business-establishments").join("tests/journeys.yaml"))
@@ -274,48 +195,16 @@ fn business_pilot_fixture_journeys_preflight_against_the_exact_compiled_registry
 }
 
 #[test]
-fn change_request_pilot_fixture_journeys_preflight_against_their_exact_registries() {
-    for fixture in [
-        "asset-site-placement-change-requests",
-        "publicschema-household-change-requests",
-    ] {
-        let compiled = compile_fixture(fixture);
-        let journeys = fs::read(fixture_root(fixture).join("tests/journeys.yaml"))
-            .expect("committed change request journeys are readable");
-        if let Err(error) = validate_fixture_journeys(&journeys, &compiled) {
-            let document: serde_json::Value = serde_norway::from_slice(&journeys)
-                .expect("journey YAML has a generic value shape");
-            let steps = document["journeys"][0]["steps"]
-                .as_array()
-                .expect("journey steps are an array");
-            for length in 1..=steps.len() {
-                let mut prefix = document.clone();
-                prefix["journeys"][0]["steps"]
-                    .as_array_mut()
-                    .expect("journey steps remain an array")
-                    .truncate(length);
-                let source = serde_norway::to_string(&prefix).expect("journey prefix serializes");
-                if let Err(prefix_error) = validate_fixture_journeys(source.as_bytes(), &compiled) {
-                    let step = steps[length - 1]["id"].as_str().unwrap_or("unknown");
-                    panic!(
-                        "{fixture} journey first fails at step {step}: {prefix_error:?}; full error: {error:?}"
-                    );
-                }
-            }
-            panic!("{fixture} journey validation failed after every prefix passed: {error:?}");
-        }
-    }
-}
-
-#[test]
 fn inspection_pilot_fixture_compiles_protected_observations_and_create_only_permit() {
     let compiled = compile_fixture("inspection");
     assert_eq!(compiled.registry_id(), "inspection");
     assert_eq!(compiled.entities().len(), 4);
-    assert!(compiled
-        .entities()
-        .values()
-        .all(|entity| entity.classification == Classification::Restricted));
+    assert!(
+        compiled
+            .entities()
+            .values()
+            .all(|entity| entity.classification == Classification::Restricted)
+    );
 
     let observation = entity(&compiled, "inspection-observation");
     assert!(observation.constraints.values().any(|constraint| {
@@ -330,9 +219,11 @@ fn inspection_pilot_fixture_compiles_protected_observations_and_create_only_perm
         )
     }));
 
-    assert!(entity(&compiled, "public-authority")
-        .fields
-        .contains_key("jurisdiction"));
+    assert!(
+        entity(&compiled, "public-authority")
+            .fields
+            .contains_key("jurisdiction")
+    );
     let permit = entity(&compiled, "permit");
     assert!(permit.fields.contains_key("issuing-authority"));
     assert_eq!(permit.mutation_mode, MutationMode::CreateOnly);
@@ -428,10 +319,12 @@ fn business_pilot_fixture_compiles_composite_identifiers_temporal_appointments_a
         .access_profiles
         .get("public-register")
         .expect("public profile compiled");
-    assert!(public_entity
-        .required_scopes
-        .iter()
-        .eq(["business:public.read"]));
+    assert!(
+        public_entity
+            .required_scopes
+            .iter()
+            .eq(["business:public.read"])
+    );
     assert!(public_entity.readable_fields.contains("legal-name"));
     assert!(!public_entity.readable_fields.contains("protected-contact"));
     assert!(!public_entity.readable_fields.contains("internal-case-note"));
@@ -440,9 +333,11 @@ fn business_pilot_fixture_compiles_composite_identifiers_temporal_appointments_a
         .access_profiles
         .get("business-registrar")
         .expect("registrar profile compiled");
-    assert!(registrar_entity
-        .readable_fields
-        .contains("protected-contact"));
+    assert!(
+        registrar_entity
+            .readable_fields
+            .contains("protected-contact")
+    );
 
     let filing = entity(&compiled, "filing");
     assert_eq!(filing.mutation_mode, MutationMode::CreateOnly);
@@ -480,17 +375,23 @@ fn business_pilot_fixture_compiles_composite_identifiers_temporal_appointments_a
         .access_profiles
         .get("public-register")
         .expect("appointment public profile compiled");
-    assert!(public_appointment
-        .required_purposes
-        .iter()
-        .eq(["public-register"]));
-    assert!(public_appointment
-        .filterable_fields
-        .contains("effective-from"));
+    assert!(
+        public_appointment
+            .required_purposes
+            .iter()
+            .eq(["public-register"])
+    );
+    assert!(
+        public_appointment
+            .filterable_fields
+            .contains("effective-from")
+    );
     assert!(!public_appointment.readable_fields.contains("officer-code"));
-    assert!(!public_appointment
-        .readable_fields
-        .contains("protected-officer-id"));
+    assert!(
+        !public_appointment
+            .readable_fields
+            .contains("protected-officer-id")
+    );
 
     let get_access = compiled
         .access()

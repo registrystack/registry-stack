@@ -1,0 +1,13 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1",
+  "kind": "BRegExampleScenarios",
+  "scenarios": [{
+    "id": "contact",
+    "description": "Create and read one synthetic directory contact.",
+    "input": "examples/inputs/contact.json",
+    "steps": [
+      {"id":"create-contact","operation":"create","recordType":"contact","client":"editor","accessProfile":"directory-editor","input":"contact","capture":"contact"},
+      {"id":"read-contact","operation":"get","recordType":"contact","client":"editor","accessProfile":"directory-editor","record":"contact"}
+    ]
+  }]
+}

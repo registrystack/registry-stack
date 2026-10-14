@@ -9,27 +9,27 @@ mod postgres_harness;
 mod support;
 
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use postgres_harness::TestDatabase;
 use registry_breg::{
     api::{
-        router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
-        VerifiedClaimValue, VerifiedRequestClaims,
+        HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+        VerifiedRequestClaims, router,
     },
-    compiler::{compile_project, CompileProfile},
+    compiler::{CompileProfile, compile_project},
     contract::parse_project_json,
     cursor::CursorCodec,
     mutation::MutationFaultPoint,
     postgres::{
-        initialize_compiled_registry_state_for_test, install_compiled_schema,
         ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-        RegistryLockKey, RegistryStateTestIdentity,
+        RegistryLockKey, RegistryStateTestIdentity, initialize_compiled_registry_state_for_test,
+        install_compiled_schema,
     },
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -198,11 +198,12 @@ async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receip
             "vocabulary":"status", "values":["active","inactive"], "required":true,
             "classification":"restricted"
         }));
-    source["actions"][0]["requires"][0]
+    source["actions"][0]["commitGuards"]["targets"][0]
         .as_object_mut()
         .unwrap()
         .remove("equals");
-    source["actions"][0]["requires"][0]["equalsInput"] = json!("expected-status");
+    source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] =
+        json!("expected-status");
     let (database, registry, identity) = setup_with_project(source).await;
     let app = app(&database, registry.clone(), identity, None);
     let accepted = invoke_with_input(
@@ -240,7 +241,7 @@ async fn action_effect_fields_are_authorized_under_a_locale_collation() {
     // set whatever the database collation is.
     let mut source = support::project();
     for (field, api_name) in [("award-number", "awardNumber"), ("awarded-by", "awardedBy")] {
-        source["entities"][1]["fields"]
+        source["recordTypes"][1]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({
@@ -254,7 +255,7 @@ async fn action_effect_fields_are_authorized_under_a_locale_collation() {
                 "id": field, "apiName": api_name, "type": "string", "maximumLength": 32,
                 "required": true, "classification": "restricted"
             }));
-        source["actions"][0]["effects"][0]["set"][field] = json!({"fromField": field});
+        source["actions"][0]["plan"]["effects"][0]["set"][field] = json!({"fromInput": field});
     }
     let database = TestDatabase::create_with_locale(8, "en_US.utf8").await;
     let locale_ordered = database
@@ -302,7 +303,11 @@ async fn action_effect_fields_are_authorized_under_a_locale_collation() {
 
 fn status_sql(registry: &registry_breg::CompiledRegistry) -> String {
     let parent = &registry.entities()["parent"];
-    format!("UPDATE registry_data.{} SET {} = $1, record_revision = record_revision + 1 WHERE record_id = $2", q(&parent.physical_table), q(&parent.fields["status"].physical_name))
+    format!(
+        "UPDATE registry_data.{} SET {} = $1, record_revision = record_revision + 1 WHERE record_id = $2",
+        q(&parent.physical_table),
+        q(&parent.fields["status"].physical_name)
+    )
 }
 
 async fn counts(database: &TestDatabase, registry: &registry_breg::CompiledRegistry) -> Vec<i64> {
@@ -375,10 +380,12 @@ async fn action_requirements_hold_reference_lock_against_concurrent_inactivation
     transaction.commit().await.unwrap();
     let refused = pending.await.unwrap();
     assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
-    assert!(counts(&database, &registry)
-        .await
-        .iter()
-        .all(|count| *count == 0));
+    assert!(
+        counts(&database, &registry)
+            .await
+            .iter()
+            .all(|count| *count == 0)
+    );
     database
         .admin
         .execute(
@@ -434,10 +441,12 @@ async fn action_requirements_hold_reference_lock_against_concurrent_inactivation
     assert_eq!(accepted.0, StatusCode::OK, "{}", accepted.1);
     assert_eq!(write.await.unwrap().unwrap(), 1);
     writer_task.abort();
-    assert!(counts(&database, &registry)
-        .await
-        .iter()
-        .all(|count| *count == 1));
+    assert!(
+        counts(&database, &registry)
+            .await
+            .iter()
+            .all(|count| *count == 1)
+    );
     database.cleanup().await;
 }
 
@@ -467,10 +476,12 @@ async fn action_requirements_preserve_fault_rollback() {
     );
     let refused = invoke(app, "fault", ID).await;
     assert!(!refused.0.is_success());
-    assert!(counts(&database, &registry)
-        .await
-        .iter()
-        .all(|count| *count == 0));
+    assert!(
+        counts(&database, &registry)
+            .await
+            .iter()
+            .all(|count| *count == 0)
+    );
     database.cleanup().await;
 }
 

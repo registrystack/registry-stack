@@ -66,7 +66,10 @@ async fn replay_authorizes_only_disclosed_result_subset_after_hidden_results_cha
         vec!["household".to_owned()],
         "shadow profile receives only its granted nonempty result subset"
     );
-    assert_eq!(first.body["results"]["household"]["entity"], "household");
+    assert_eq!(
+        first.body["results"]["household"]["recordType"],
+        "household"
+    );
     assert_eq!(first.body["results"]["household"]["recordId"], HOUSEHOLD_ID);
     assert!(first.body["results"].get("person").is_none());
     assert!(first.body["results"].get("membership").is_none());
@@ -566,7 +569,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://immediate-action-review.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "lock-record",
             "primaryDataset": "test-dataset",
             "route": "lock-records",
@@ -588,6 +591,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
         }],
         "actions": [{
             "id": "cross-link-lock-record",
+            "execution":{"mode":"immediate"},
             "inputs": [{
                 "id": "target",
                 "apiName": "targetReference",
@@ -603,12 +607,12 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
                 "required": true,
                 "classification": "restricted"
             }],
-            "effects": [{
+            "plan":{"type":"fixed","effects": [{
                 "id": "link-write",
-                "target": {"fromField": "target"},
+                "target": {"fromInput": "target"},
                 "operation": "patch",
-                "set": {"linked-record": {"fromField": "link"}}
-            }]
+                "set": {"linked-record": {"fromInput": "link"}}
+            }]}
         }],
         "accessProfiles": [{
             "id": "lock-order-runner",
@@ -620,7 +624,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
                 "action": "cross-link-lock-record",
                 "operations": ["invoke"],
                 "targets": [{
-                    "entity": "lock-record",
+                    "recordType": "lock-record",
                     "rowBoundaries": [{
                         "field": "jurisdiction",
                         "claim": "jurisdiction",
@@ -837,7 +841,7 @@ async fn await_lock_order_response(
 
 fn assert_lock_order_result(body: &Value, expected_id: &str) {
     assert_eq!(body["action"], "cross-link-lock-record");
-    assert_eq!(body["results"]["link-write"]["entity"], "lock-record");
+    assert_eq!(body["results"]["link-write"]["recordType"], "lock-record");
     assert_eq!(body["results"]["link-write"]["recordId"], expected_id);
     assert_eq!(body["results"]["link-write"]["revision"], 2);
 }
@@ -943,10 +947,10 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
         .map(|index| {
             let field = wide_flag_id(index);
             let mut set = serde_json::Map::new();
-            set.insert(field.clone(), json!({"fromField": field}));
+            set.insert(field.clone(), json!({"fromInput": field}));
             json!({
                 "id": wide_effect_id(index),
-                "target": {"fromField": "record"},
+                "target": {"fromInput": "record"},
                 "operation": "patch",
                 "set": set
             })
@@ -964,7 +968,7 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
             "defaultLanguage": "en",
             "canonicalBaseIri": "https://immediate-action-review.example.test"
         },
-        "entities": [{
+        "recordTypes": [{
             "id": "wide-record",
             "primaryDataset": "test-dataset",
             "route": "wide-records",
@@ -973,8 +977,9 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
         }],
         "actions": [{
             "id": "patch-wide-flags",
+            "execution":{"mode":"immediate"},
             "inputs": action_inputs,
-            "effects": effects
+            "plan":{"type":"fixed","effects":effects}
         }],
         "accessProfiles": [{
             "id": "wide-action-runner",
@@ -986,7 +991,7 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
                 "action": "patch-wide-flags",
                 "operations": ["invoke"],
                 "targets": [{
-                    "entity": "wide-record",
+                    "recordType": "wide-record",
                     "rowBoundaries": [{
                         "field": "jurisdiction",
                         "claim": "jurisdiction",
@@ -1050,7 +1055,7 @@ fn assert_wide_results_share_one_record_revision(body: &Value) {
     for index in 1..=WIDE_EFFECT_COUNT {
         let effect = wide_effect_id(index);
         let result = results.get(&effect).expect("wide effect has result");
-        assert_eq!(result["entity"], "wide-record");
+        assert_eq!(result["recordType"], "wide-record");
         assert_eq!(result["recordId"], WIDE_RECORD_ID);
         let current = result["revision"].as_i64().expect("result revision");
         assert_eq!(current, 2);

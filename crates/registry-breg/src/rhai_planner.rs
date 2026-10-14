@@ -2,10 +2,10 @@
 //! Bounded Rhai kernel shared by Action plans and callbacks. The platform owns
 //! execution mechanics; BReg owns inputs and plan validation.
 
-use std::time::Instant;
 use registry_platform_script::rhai as platform;
-use rhai::{Array, Dynamic, Engine, EvalAltResult, ImmutableString, Map, Position, AST};
+use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, ImmutableString, Map, Position};
 use serde_json::Value;
+use std::time::Instant;
 
 pub const MAXIMUM_OPERATIONS: u64 = 100_000;
 pub const MAXIMUM_CALL_DEPTH: usize = 32;
@@ -79,24 +79,12 @@ impl PlanError {
     /// unavailable detail every other timeout carries.
     pub const fn problem_detail(self) -> &'static str {
         match self {
-            Self::Source => {
-                "The Action plan was refused: action.plan.source."
-            }
-            Self::Entrypoint => {
-                "The Action plan was refused: action.plan.entrypoint."
-            }
-            Self::Execution => {
-                "The Action plan was refused: action.plan.execution."
-            }
-            Self::Result => {
-                "The Action plan was refused: action.plan.result."
-            }
-            Self::Ceiling => {
-                "The Action plan was refused: action.plan.ceiling."
-            }
-            Self::Resource => {
-                "The Action plan was refused: action.plan.resource."
-            }
+            Self::Source => "The Action plan was refused: action.plan.source.",
+            Self::Entrypoint => "The Action plan was refused: action.plan.entrypoint.",
+            Self::Execution => "The Action plan was refused: action.plan.execution.",
+            Self::Result => "The Action plan was refused: action.plan.result.",
+            Self::Ceiling => "The Action plan was refused: action.plan.ceiling.",
+            Self::Resource => "The Action plan was refused: action.plan.resource.",
             Self::Deadline => "The Registry mutation service is unavailable.",
         }
     }
@@ -110,14 +98,9 @@ impl std::fmt::Display for PlanError {
 
 impl std::error::Error for PlanError {}
 
-pub(crate) fn compile_entrypoint(
-    source: &str,
-    entrypoint: &str,
-) -> Result<AST, PlanError> {
+pub(crate) fn compile_entrypoint(source: &str, entrypoint: &str) -> Result<AST, PlanError> {
     compile_entrypoint_detailed(source, entrypoint).map_err(|error| match error {
-        EntrypointCompileError::SourceBound | EntrypointCompileError::Parse(_) => {
-            PlanError::Source
-        }
+        EntrypointCompileError::SourceBound | EntrypointCompileError::Parse(_) => PlanError::Source,
         EntrypointCompileError::Entrypoint => PlanError::Entrypoint,
     })
 }
@@ -159,7 +142,8 @@ pub(crate) fn function_engine(
         limits: platform::RhaiLimits {
             operations: limits.maximum_operations.min(MAXIMUM_OPERATIONS),
             call_levels: usize::from(limits.maximum_call_depth).min(MAXIMUM_CALL_DEPTH),
-            expression_depth: usize::from(limits.maximum_expression_depth).min(MAXIMUM_EXPRESSION_DEPTH),
+            expression_depth: usize::from(limits.maximum_expression_depth)
+                .min(MAXIMUM_EXPRESSION_DEPTH),
             modules: 0,
             string_bytes: (limits.maximum_string_bytes as usize).min(MAXIMUM_STRING_BYTES),
             array_items: usize::from(limits.maximum_array_items).min(MAXIMUM_ARRAY_ITEMS),
@@ -197,10 +181,7 @@ fn join_strings(
     Ok(joined.into())
 }
 
-pub(crate) fn json_to_dynamic(
-    value: &Value,
-    depth: usize,
-) -> Result<Dynamic, PlanError> {
+pub(crate) fn json_to_dynamic(value: &Value, depth: usize) -> Result<Dynamic, PlanError> {
     if depth > MAXIMUM_VALUE_DEPTH {
         return Err(PlanError::Resource);
     }
@@ -232,4 +213,3 @@ pub(crate) fn json_to_dynamic(
         _ => Err(PlanError::Resource),
     }
 }
-

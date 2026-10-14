@@ -17,28 +17,28 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
 use postgres_harness::TestDatabase;
+use registry_breg::CompiledRegistry;
 use registry_breg::api::{
-    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
+    HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims, router,
 };
-use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
+use registry_breg::compiler::{CompileProfile, compile_project, module_digest};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::migration::{
-    apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest,
+    ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+    ApplyVerifiedPackageRequest, apply_verified_package,
 };
 use registry_breg::package::{
-    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
+    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
+    PackageSourceFile, load_package, prepare_package,
 };
 use registry_breg::postgres::{
-    install_compiled_schema, managed_schema_fingerprint, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, PostgresRecordReadService, RegistryLockKey,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordReadService, RegistryLockKey,
+    install_compiled_schema, managed_schema_fingerprint,
 };
-use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use serde_json::Value;
 use tower::Service as _;
@@ -314,7 +314,7 @@ fn compile_registry() -> CompiledRegistry {
         .expect("test Registry compiles")
 }
 
-const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[
+const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[
   {"id":"asset","primaryDataset":"list-page-plan-registry","route":"assets","mutationMode":"mutable","classification":"internal",
    "fields":[{"id":"kind","type":"string","maximumLength":16,"required":true,"classification":"internal"},
              {"id":"code","type":"string","maximumLength":24,"required":true,"classification":"internal"},
@@ -327,7 +327,7 @@ const MODULE: &[u8] = br#"{"apiVersion":"id.registrystack.org/formats/breg/modul
 
 fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"list-page-plan-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://list-page-plan.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://list-page-plan.example.test","title":"List Page Plan Registry","publisher":{{"id":"list-page-plan-registry-authority","name":"List Page Plan Publisher"}}}},"publicService":{{"id":"list-page-plan-registry-service","title":"List Page Plan Registry"}},"datasets":[{{"id":"list-page-plan-registry","title":"List Page Plan Dataset","owner":"List Page Plan Publisher","status":"active"}}],"dataServices":[{{"id":"list-page-plan-registry-data-service","title":"List Page Plan Registry","endpointUrl":"https://list-page-plan.example.test","servesDatasets":["list-page-plan-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"datasets":[{{"id": "list-page-plan-registry"}}],"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"list-page-plan-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://list-page-plan.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://list-page-plan.example.test","title":"List Page Plan Registry","publisher":{{"id":"list-page-plan-registry-authority","name":"List Page Plan Publisher"}}}},"publicService":{{"id":"list-page-plan-registry-service","title":"List Page Plan Registry"}},"datasets":[{{"id":"list-page-plan-registry","title":"List Page Plan Dataset","owner":"List Page Plan Publisher","status":"active"}}],"dataServices":[{{"id":"list-page-plan-registry-data-service","title":"List Page Plan Registry","endpointUrl":"https://list-page-plan.example.test","servesDatasets":["list-page-plan-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }

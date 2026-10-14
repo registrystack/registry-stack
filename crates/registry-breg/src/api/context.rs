@@ -3,8 +3,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::contract::Operation;
-use crate::model::HttpMethod;
 use crate::task_grant::TaskGrantBinding;
 use registry_platform_oidc::{ActorKind, GrantClaims};
 use serde_json::Value;
@@ -342,9 +340,6 @@ pub struct AuthorizedRequestContext {
     forwarded_access_attribution: Option<crate::subject_access_log::ForwardedAccessAttribution>,
     selected_profile: String,
     row_boundaries: Vec<VerifiedRowBoundary>,
-    request_actions: Vec<VerifiedRequestAction>,
-    request_presence: Vec<VerifiedRequestPresence>,
-    submitter_targets: BTreeMap<String, Vec<VerifiedRowBoundary>>,
     task_grant: Option<TaskGrantBinding>,
     grant_audit: Option<crate::audit::GrantAuditContext>,
     human_identity: Option<registry_review_client::HumanIdentity>,
@@ -365,9 +360,6 @@ impl AuthorizedRequestContext {
             forwarded_access_attribution: None,
             selected_profile,
             row_boundaries,
-            request_actions: Vec::new(),
-            request_presence: Vec::new(),
-            submitter_targets: BTreeMap::new(),
             task_grant: None,
             grant_audit: None,
             human_identity: None,
@@ -384,14 +376,6 @@ impl AuthorizedRequestContext {
 
     pub(crate) fn recipients(&self) -> &BTreeSet<String> {
         &self.recipients
-    }
-
-    pub(crate) fn with_submitter_targets(
-        mut self,
-        targets: BTreeMap<String, Vec<VerifiedRowBoundary>>,
-    ) -> Self {
-        self.submitter_targets = targets;
-        self
     }
 
     pub(crate) fn with_grant_audit(mut self, claims: &VerifiedRequestClaims) -> Self {
@@ -436,20 +420,6 @@ impl AuthorizedRequestContext {
         self.task_grant.as_ref()
     }
 
-    pub(crate) fn submitter_targets(&self) -> &BTreeMap<String, Vec<VerifiedRowBoundary>> {
-        &self.submitter_targets
-    }
-
-    pub(crate) fn with_request_visibility(
-        mut self,
-        request_actions: Vec<VerifiedRequestAction>,
-        request_presence: Vec<VerifiedRequestPresence>,
-    ) -> Self {
-        self.request_actions = request_actions;
-        self.request_presence = request_presence;
-        self
-    }
-
     #[must_use]
     pub fn principal(&self) -> Option<&str> {
         self.principal.as_deref()
@@ -469,16 +439,6 @@ impl AuthorizedRequestContext {
     pub fn row_boundaries(&self) -> &[VerifiedRowBoundary] {
         &self.row_boundaries
     }
-
-    #[must_use]
-    pub fn request_actions(&self) -> &[VerifiedRequestAction] {
-        &self.request_actions
-    }
-
-    #[must_use]
-    pub fn request_presence(&self) -> &[VerifiedRequestPresence] {
-        &self.request_presence
-    }
 }
 
 impl fmt::Debug for AuthorizedRequestContext {
@@ -489,8 +449,6 @@ impl fmt::Debug for AuthorizedRequestContext {
             .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
             .field("selected_profile", &self.selected_profile)
             .field("row_boundaries", &self.row_boundaries)
-            .field("request_action_count", &self.request_actions.len())
-            .field("request_presence_count", &self.request_presence.len())
             .field(
                 "task_grant",
                 &self.task_grant.as_ref().map(|_| "<redacted>"),
@@ -513,6 +471,7 @@ pub struct AuthorizedActionContext {
     target_authority: BTreeMap<String, Vec<VerifiedRowBoundary>>,
     result_effects: BTreeSet<String>,
     grant_audit: Option<crate::audit::GrantAuditContext>,
+    task_grant: Option<TaskGrantBinding>,
 }
 
 impl AuthorizedActionContext {
@@ -532,6 +491,7 @@ impl AuthorizedActionContext {
             target_authority,
             result_effects,
             grant_audit: None,
+            task_grant: None,
         }
     }
 
@@ -541,6 +501,15 @@ impl AuthorizedActionContext {
     }
     pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
         self.grant_audit.as_ref()
+    }
+
+    pub(crate) fn with_task_grant(mut self, grant: Option<TaskGrantBinding>) -> Self {
+        self.task_grant = grant;
+        self
+    }
+
+    pub(crate) fn task_grant(&self) -> Option<&TaskGrantBinding> {
+        self.task_grant.as_ref()
     }
 
     #[must_use]
@@ -584,191 +553,6 @@ impl fmt::Debug for AuthorizedActionContext {
             .field("selected_profile", &self.selected_profile)
             .field("target_authority", &self.target_authority)
             .field("result_effects", &self.result_effects)
-            .finish()
-    }
-}
-
-#[derive(Clone, Eq, PartialEq)]
-pub struct VerifiedRequestAction {
-    route_id: String,
-    method: HttpMethod,
-    path: String,
-    operation: Operation,
-    response_fields: BTreeSet<String>,
-    target_authority: Vec<VerifiedRequestTargetAuthority>,
-    attachment_request_authority: Option<VerifiedRequestTargetAuthority>,
-}
-
-pub(crate) struct VerifiedRequestActionAuthority {
-    target: Vec<VerifiedRequestTargetAuthority>,
-    attachment_request: Option<VerifiedRequestTargetAuthority>,
-}
-
-impl VerifiedRequestActionAuthority {
-    pub(crate) const fn new(target: Vec<VerifiedRequestTargetAuthority>) -> Self {
-        Self {
-            target,
-            attachment_request: None,
-        }
-    }
-    pub(crate) fn with_attachment_request_authority(
-        mut self,
-        authority: Option<VerifiedRequestTargetAuthority>,
-    ) -> Self {
-        self.attachment_request = authority;
-        self
-    }
-}
-
-impl VerifiedRequestAction {
-    pub(crate) fn new(
-        route_id: String,
-        method: HttpMethod,
-        path: String,
-        operation: Operation,
-        response_fields: BTreeSet<String>,
-        authority: VerifiedRequestActionAuthority,
-    ) -> Self {
-        Self {
-            route_id,
-            method,
-            path,
-            operation,
-            response_fields,
-            target_authority: authority.target,
-            attachment_request_authority: authority.attachment_request,
-        }
-    }
-
-    #[must_use]
-    pub fn route_id(&self) -> &str {
-        &self.route_id
-    }
-
-    #[must_use]
-    pub fn method(&self) -> HttpMethod {
-        self.method
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &str {
-        &self.path
-    }
-
-    #[must_use]
-    pub fn operation(&self) -> Operation {
-        self.operation
-    }
-
-    #[must_use]
-    pub fn response_fields(&self) -> &BTreeSet<String> {
-        &self.response_fields
-    }
-
-    #[must_use]
-    pub fn target_authority(&self) -> &[VerifiedRequestTargetAuthority] {
-        &self.target_authority
-    }
-
-    pub(crate) fn attachment_request_authority(&self) -> Option<&VerifiedRequestTargetAuthority> {
-        self.attachment_request_authority.as_ref()
-    }
-}
-
-impl fmt::Debug for VerifiedRequestAction {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("VerifiedRequestAction")
-            .field("route_id", &self.route_id)
-            .field("method", &self.method)
-            .field("operation", &self.operation)
-            .field("response_fields", &self.response_fields)
-            .field("target_authority_count", &self.target_authority.len())
-            .finish()
-    }
-}
-
-#[derive(Clone, Eq, PartialEq)]
-pub struct VerifiedRequestTargetAuthority {
-    target_entity_id: String,
-    readable_fields: BTreeSet<String>,
-    row_boundaries: Vec<VerifiedRowBoundary>,
-}
-
-impl VerifiedRequestTargetAuthority {
-    pub(crate) fn new(
-        target_entity_id: String,
-        readable_fields: BTreeSet<String>,
-        row_boundaries: Vec<VerifiedRowBoundary>,
-    ) -> Self {
-        Self {
-            target_entity_id,
-            readable_fields,
-            row_boundaries,
-        }
-    }
-
-    #[must_use]
-    pub fn target_entity_id(&self) -> &str {
-        &self.target_entity_id
-    }
-
-    #[must_use]
-    pub fn readable_fields(&self) -> &BTreeSet<String> {
-        &self.readable_fields
-    }
-
-    #[must_use]
-    pub fn row_boundaries(&self) -> &[VerifiedRowBoundary] {
-        &self.row_boundaries
-    }
-}
-
-impl fmt::Debug for VerifiedRequestTargetAuthority {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("VerifiedRequestTargetAuthority")
-            .field("target_entity_id", &self.target_entity_id)
-            .field("readable_fields", &self.readable_fields)
-            .field("row_boundary_count", &self.row_boundaries.len())
-            .finish()
-    }
-}
-
-#[derive(Clone, Eq, PartialEq)]
-pub struct VerifiedRequestPresence {
-    request_entity_id: String,
-    request_row_boundaries: Vec<VerifiedRowBoundary>,
-}
-
-impl VerifiedRequestPresence {
-    pub(crate) fn new(
-        request_entity_id: String,
-        request_row_boundaries: Vec<VerifiedRowBoundary>,
-    ) -> Self {
-        Self {
-            request_entity_id,
-            request_row_boundaries,
-        }
-    }
-
-    #[must_use]
-    pub fn request_entity_id(&self) -> &str {
-        &self.request_entity_id
-    }
-
-    #[must_use]
-    pub fn request_row_boundaries(&self) -> &[VerifiedRowBoundary] {
-        &self.request_row_boundaries
-    }
-}
-
-impl fmt::Debug for VerifiedRequestPresence {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("VerifiedRequestPresence")
-            .field("request_entity_id", &self.request_entity_id)
-            .field("row_boundary_count", &self.request_row_boundaries.len())
             .finish()
     }
 }

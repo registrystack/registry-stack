@@ -75,6 +75,24 @@ class CapabilityInventoryTests(unittest.TestCase):
             errors,
         )
 
+    def test_native_proposal_queries_require_the_real_public_methods(self):
+        inventory, rust, node, python = self.query_binding_inputs()
+        without_list = node.replace("listProposals(collection:", "retiredListProposals(collection:")
+        errors = CHECK.check_query_option_bindings(inventory, rust, without_list, python)
+        self.assertIn("action: missing node query-option declaration BaseRegistryClient.listProposals.queryJson", errors)
+        self.assertNotIn("requestHistoryAfterProposalVersion", inventory["queryOptions"])
+        self.assertNotIn("proposalVersion", inventory["queryOptions"])
+
+    def test_attachment_version_uses_the_promoted_proposal_not_a_caller_version(self):
+        inventory, rust, node, python = self.query_binding_inputs()
+        binding = inventory["queryOptionBindings"]["submissionVersion"]
+        self.assertEqual(binding["rust"], ["BaseRegistryClient.download_proposal_attachment.proposal"])
+        without_proposal = node.replace("downloadProposalAttachment(proposal:", "downloadProposalAttachment(unbound:")
+        self.assertIn(
+            "submissionVersion: missing node query-option declaration BaseRegistryClient.downloadProposalAttachment.proposal",
+            CHECK.check_query_option_bindings(inventory, rust, without_proposal, python),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

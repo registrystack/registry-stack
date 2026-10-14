@@ -127,8 +127,13 @@ impl Harness {
         registry.add_address(CITIZEN_A, ADDRESS_A, "1 Harbour Road");
         registry.add_address(CITIZEN_B, ADDRESS_B, "4 Mill Street");
         let exchanges = Arc::new(AtomicUsize::new(0));
+        let granted_endpoint = crate::mock_registry::grant_exchange(
+            authorization.token_endpoint(),
+            registry.grant_issuer(),
+        )
+        .await;
         let token_endpoint =
-            counting_token_endpoint(authorization.token_endpoint(), Arc::clone(&exchanges)).await;
+            counting_token_endpoint(granted_endpoint, Arc::clone(&exchanges)).await;
 
         let directory = tempfile::tempdir().expect("temporary directory");
         let root = directory
@@ -346,11 +351,10 @@ service:
   description: Correct the postal address the registry holds for you.
   disclosure: The assistant you use will see your current address and the correction you request.
   details:
-    entity: person-address
+    recordType: person-address
   application:
-    entity: address-correction-request
-    targetField: address
-    ownerField: owner
+    action: correct-address
+    targetInput: address
   reviewBaseUrl: {review}
 audit:
   hashKeyRef: secret:file/audit-key

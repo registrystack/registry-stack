@@ -2,10 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha4.schema.json",
   "title": "LifecycleExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain lifecycle`, which reports the request lifecycle the engine enforces. This kind is pinned in full, identifiers and positions included: the request machine does not vary by project, so its own id, its four states with every fact derived from the edge list pinned to the value that derivation must produce, its six edges, and its twenty-one enforcement layers, each with the exact event list it runs for, are all constrained here by position and unconditionally, and a rename, a reordering, or a dropped entry fails the contract test rather than passing it. `LifecycleDescription` in `registry-breg` exists to be this payload rather than to model anything the engine computes, so a change to its fields is a deliberate change to this contract and not the incidental drift that makes a compiled-model passthrough opaque. `lifecycle` is the one subject that takes no PROJECT: the lifecycle is engine behaviour and does not vary by project, so the report carries no `revision`.",
+  "description": "The native engine-owned Proposal lifecycle, pinned independently of project source.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "lifecycles"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "lifecycles"
+  ],
   "properties": {
     "apiVersion": {
       "const": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4"
@@ -14,733 +18,171 @@
       "const": "BRegLifecycleExplanation"
     },
     "lifecycles": {
-      "type": "array",
-      "description": "One entry per state machine reported. `bregctl` reports exactly one, the request lifecycle, and this contract pins that rather than describing it: the array carries exactly one entry and that entry is the request machine. The `LifecycleDescription` shape it is built from is shared with `caseworkctl lifecycle`, a top-level command rather than an `explain` subject, which reports two machines under Casework's own contracts; this schema is `bregctl`'s alone and constrains only what `bregctl` emits.",
-      "minItems": 1,
-      "maxItems": 1,
-      "items": {
-        "unevaluatedProperties": false,
-        "allOf": [
-          {
-            "$ref": "#/$defs/lifecycle"
-          },
-          {
-            "$ref": "#/$defs/requestLifecyclePin"
-          }
-        ]
-      }
-    }
-  },
-  "$defs": {
-    "LocalId": {
-      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
-      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-      "type": "string"
-    },
-    "requestLifecyclePin": {
-      "$comment": "Applied unconditionally to the single entry `bregctl explain lifecycle` emits, never behind an `if` on the value being pinned: a condition keyed on `id` goes false the moment the machine is renamed, so the rename the constraint exists to reject would fall through to the generic shape and validate. Every list is pinned with `prefixItems` and `items: false` rather than an enum over its vocabulary: an enum admits the same names in a different order, or one entry duplicated in place of another, and each of those is a different machine reported under the same names. The request lifecycle is engine behaviour rather than project configuration, so its id, its states, its edges, and the order of its enforcement layers are wire contract in the same way the field names are, and changing any of them is a breaking change for every consumer that must fail here rather than merely update a Rust unit test alongside the change. The pin and each pinned entry are closed objects; a member the pin leaves free, such as a transition's `guard`, is declared `true` here and typed by its `$defs` shape.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "states", "transitions", "enforcement"],
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId",
-          "const": "request"
-        },
-        "label": true,
-        "states": {
-          "prefixItems": [
+      "const": [
+        {
+          "enforcement": [
             {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "draft"
-                },
-                "initial": { "const": true },
-                "terminal": { "const": false },
-                "unreachable": { "const": false },
-                "incomingTransitions": { "const": 2 },
-                "outgoingTransitions": { "const": 2 }
-              }
+              "description": "The selected access profile must explicitly authorize the Proposal operation. Verified caller claims, task grants, ownership restrictions, target boundaries, and disclosure remain independent checks.",
+              "events": [
+                "edit",
+                "submit",
+                "revise",
+                "rebase",
+                "retry",
+                "cancel",
+                "apply"
+              ],
+              "id": "caller-authority"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "submitted"
-                },
-                "initial": { "const": false },
-                "terminal": { "const": false },
-                "unreachable": { "const": false },
-                "incomingTransitions": { "const": 1 },
-                "outgoingTransitions": { "const": 4 }
-              }
+              "description": "A promoted transition carries the current Proposal revision and caller-bound If-Match condition. A stale condition requires rediscovery; availability is a hint and does not authorize execution.",
+              "events": [
+                "edit",
+                "submit",
+                "revise",
+                "rebase",
+                "retry",
+                "cancel",
+                "apply"
+              ],
+              "id": "optimistic-concurrency"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "cancelled"
-                },
-                "initial": { "const": false },
-                "terminal": { "const": true },
-                "unreachable": { "const": false },
-                "incomingTransitions": { "const": 2 },
-                "outgoingTransitions": { "const": 0 }
-              }
+              "description": "A retained authorized receipt can recover an uncertain outcome only for the original method, path, body, condition, and idempotency key. Recovery does not generate a different attempt or reacquire external guards for a committed application.",
+              "events": [
+                "edit",
+                "submit",
+                "revise",
+                "rebase",
+                "retry",
+                "cancel",
+                "apply"
+              ],
+              "id": "exact-receipt-recovery"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "applied"
-                },
-                "initial": { "const": false },
-                "terminal": { "const": true },
-                "unreachable": { "const": false },
-                "incomingTransitions": { "const": 1 },
-                "outgoingTransitions": { "const": 0 }
-              }
+              "description": "Submission validates the typed Action input and runs the shared bounded plan evaluator. Function execution and external Evidence acquisition hold no database transaction or row lock. The controller rechecks the observed revision before freezing the submission.",
+              "events": [
+                "submit"
+              ],
+              "id": "plan-preparation"
+            },
+            {
+              "description": "Rebase explicitly selects the active Action definition and requires both the current Rebase grant and active Start authority. An incompatible activation never silently changes a frozen submission.",
+              "events": [
+                "rebase"
+              ],
+              "id": "explicit-contract-rebase"
+            },
+            {
+              "description": "Application revalidates the frozen Action revision, submission version, effect digest, current caller or restricted executor authority, and any required current approval and Evidence. Manual and automatic execution use the same application boundary.",
+              "events": [
+                "apply"
+              ],
+              "id": "application-authorization"
+            },
+            {
+              "description": "The writer locks authorized current targets, enforces commit guards and PostgreSQL row policies, then commits the ordered effects, Record history, and exact application receipt atomically. A failed precondition produces no partial Record mutation.",
+              "events": [
+                "apply"
+              ],
+              "id": "atomic-commit"
             }
           ],
-          "items": false,
-          "minItems": 4
-        },
-        "transitions": {
-          "prefixItems": [
+          "id": "proposal",
+          "label": "Proposal lifecycle",
+          "states": [
             {
-              "additionalProperties": false,
-              "properties": {
-                "guard": true,
-                "from": {
-                  "const": "draft"
-                },
-                "event": {
-                  "const": "submit"
-                },
-                "to": {
-                  "const": "submitted"
-                }
-              }
+              "id": "draft",
+              "incomingTransitions": 4,
+              "initial": true,
+              "outgoingTransitions": 4,
+              "terminal": false,
+              "unreachable": false
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "guard": true,
-                "from": {
-                  "const": "submitted"
-                },
-                "event": {
-                  "const": "revise"
-                },
-                "to": {
-                  "const": "draft"
-                }
-              }
+              "id": "submitted",
+              "incomingTransitions": 2,
+              "initial": false,
+              "outgoingTransitions": 5,
+              "terminal": false,
+              "unreachable": false
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "guard": true,
-                "from": {
-                  "const": "submitted"
-                },
-                "event": {
-                  "const": "rebase"
-                },
-                "to": {
-                  "const": "draft"
-                }
-              }
+              "id": "cancelled",
+              "incomingTransitions": 2,
+              "initial": false,
+              "outgoingTransitions": 0,
+              "terminal": true,
+              "unreachable": false
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "guard": true,
-                "from": {
-                  "const": "draft"
-                },
-                "event": {
-                  "const": "cancel"
-                },
-                "to": {
-                  "const": "cancelled"
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "guard": true,
-                "from": {
-                  "const": "submitted"
-                },
-                "event": {
-                  "const": "cancel"
-                },
-                "to": {
-                  "const": "cancelled"
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "guard": true,
-                "from": {
-                  "const": "submitted"
-                },
-                "event": {
-                  "const": "apply"
-                },
-                "to": {
-                  "const": "applied"
-                }
-              }
+              "id": "applied",
+              "incomingTransitions": 1,
+              "initial": false,
+              "outgoingTransitions": 0,
+              "terminal": true,
+              "unreachable": false
             }
           ],
-          "items": false,
-          "minItems": 6
-        },
-        "enforcement": {
-          "prefixItems": [
+          "transitions": [
             {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "caller-authentication"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" },
-                    { "const": "cancel" },
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 5
-                }
-              }
+              "event": "edit",
+              "from": "draft",
+              "guard": "The Proposal is draft; replace validated Action input and advance its lifecycle revision.",
+              "to": "draft"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "route-admission"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" },
-                    { "const": "cancel" },
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 5
-                }
-              }
+              "event": "submit",
+              "from": "draft",
+              "guard": "The Proposal is draft and this submission version has not been frozen; accept the prepared plan and freeze its digest.",
+              "to": "submitted"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "review-evidence-load"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 1
-                }
-              }
+              "event": "rebase",
+              "from": "draft",
+              "guard": "The Proposal is draft; explicitly bind the active Action definition and preserve the current submission version.",
+              "to": "draft"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "apply-evidence-acquisition"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 1
-                }
-              }
+              "event": "cancel",
+              "from": "draft",
+              "guard": "The Proposal is draft or submitted; cancel without applying its effects.",
+              "to": "cancelled"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "apply-preflight"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 1
-                }
-              }
+              "event": "revise",
+              "from": "submitted",
+              "guard": "The Proposal is submitted; open a new draft submission version without modifying the frozen prior submission.",
+              "to": "draft"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "request-header-lookup"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" },
-                    { "const": "cancel" },
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 5
-                }
-              }
+              "event": "rebase",
+              "from": "submitted",
+              "guard": "The Proposal is submitted; open a new draft version explicitly bound to the active Action definition.",
+              "to": "draft"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "submit-preparation"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" }
-                  ],
-                  "items": false,
-                  "minItems": 1
-                }
-              }
+              "event": "retry",
+              "from": "submitted",
+              "guard": "The Proposal remains submitted; schedule another eligible review or application attempt without changing the frozen plan.",
+              "to": "submitted"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "idempotency-replay"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" },
-                    { "const": "cancel" },
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 5
-                }
-              }
+              "event": "cancel",
+              "from": "submitted",
+              "guard": "The Proposal is draft or submitted; cancel without applying its effects.",
+              "to": "cancelled"
             },
             {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "row-visibility"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" },
-                    { "const": "cancel" },
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 5
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "submitter-targets"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" }
-                  ],
-                  "items": false,
-                  "minItems": 3
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "applied-recovery"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 1
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "action-etag"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" },
-                    { "const": "cancel" },
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 5
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "request-ownership"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" },
-                    { "const": "cancel" }
-                  ],
-                  "items": false,
-                  "minItems": 4
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "task-grant"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" },
-                    { "const": "cancel" },
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 5
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "review-outcome"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "revise" },
-                    { "const": "rebase" }
-                  ],
-                  "items": false,
-                  "minItems": 2
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "submit-commit-preconditions"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" }
-                  ],
-                  "items": false,
-                  "minItems": 1
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "apply-target-authorization"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 1
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "apply-preconditions"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 1
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "apply-target-persistence"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 1
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "workflow-transition"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" },
-                    { "const": "cancel" },
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 5
-                }
-              }
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "description": true,
-                "id": {
-                  "$ref": "#/$defs/LocalId",
-                  "const": "persist-policy"
-                },
-                "events": {
-                  "prefixItems": [
-                    { "const": "submit" },
-                    { "const": "revise" },
-                    { "const": "rebase" },
-                    { "const": "cancel" },
-                    { "const": "apply" }
-                  ],
-                  "items": false,
-                  "minItems": 5
-                }
-              }
+              "event": "apply",
+              "from": "submitted",
+              "guard": "The submission version, displayed digest, frozen Action contract, authorized targets, commit guards, and required approval match the application attempt.",
+              "to": "applied"
             }
-          ],
-          "items": false,
-          "minItems": 21
+          ]
         }
-      }
-    },
-    "lifecycle": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "label", "states", "transitions", "enforcement"],
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId",
-          "description": "Stable identifier for the machine, for example `request`."
-        },
-        "label": {
-          "type": "string",
-          "description": "One line naming the machine for a reader."
-        },
-        "states": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/state"
-          }
-        },
-        "transitions": {
-          "type": "array",
-          "description": "Every edge, in declaration order. An array rather than a map keyed by state, because two distinct transitions may share a `from` and a `to` (the request lifecycle's `revise` and `rebase` both run `submitted` to `draft`) and because a transition may be a self-transition. Keying by state pair would silently drop one of a colliding pair and render a self-transition as a no-op.",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/transition"
-          }
-        },
-        "enforcement": {
-          "type": "array",
-          "description": "Every place the runtime can refuse an event, in the order the runtime runs them, with the workflow transition placed where it sits among them. A layer is a named refusal point, not an enumeration of the checks made there: the report says that a request-ownership layer runs before the transition for four of the five events, not the predicate it evaluates. Reported once per machine rather than restated on each edge, because a per-edge sentence can only be an incomplete copy of this list.",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/enforcementLayer"
-          }
-        }
-      }
-    },
-    "enforcementLayer": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "description", "events"],
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId",
-          "description": "Stable identifier for the layer, for example `action-etag`."
-        },
-        "description": {
-          "type": "string",
-          "minLength": 1,
-          "description": "What the layer refuses and where it runs, in prose. Names the layer; it does not reproduce its predicate."
-        },
-        "events": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "items": {
-            "type": "string"
-          },
-          "description": "The events this layer runs for. An event absent from the list passes the layer without being checked there."
-        }
-      }
-    },
-    "state": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "initial",
-        "terminal",
-        "unreachable",
-        "incomingTransitions",
-        "outgoingTransitions"
-      ],
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId",
-          "description": "The state's stored spelling, the same value a persisted row and the generated OpenAPI enums carry."
-        },
-        "initial": {
-          "type": "boolean",
-          "description": "True when a record can be created directly in this state. A machine may have more than one: Casework's occurrence machine creates a record in whichever state the first authoritative observation reports. `initial` says nothing about whether transitions also enter the state, so an initial state may report zero incoming transitions without being unreachable, or a non-zero count when it is reachable both ways."
-        },
-        "terminal": {
-          "type": "boolean",
-          "description": "True when no transition leaves this state."
-        },
-        "unreachable": {
-          "type": "boolean",
-          "description": "True when no transition enters this state and it is not an initial state, so nothing the engine does can put a record here. Reported separately from `terminal` because the two are independent: a state the engine stores and whose guards would accept an outgoing transition can still have no way in."
-        },
-        "incomingTransitions": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991,
-          "description": "Count of transitions whose `to` is this state, self-transitions included."
-        },
-        "outgoingTransitions": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991,
-          "description": "Count of transitions whose `from` is this state, self-transitions included."
-        }
-      }
-    },
-    "transition": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["from", "event", "to", "guard"],
-      "properties": {
-        "from": {
-          "type": "string",
-          "description": "Source state id."
-        },
-        "event": {
-          "type": "string",
-          "description": "The operation that runs the transition. Load-bearing identity, not decoration: it is what distinguishes two edges sharing a `from` and a `to`."
-        },
-        "to": {
-          "type": "string",
-          "description": "Target state id. Equal to `from` for a self-transition."
-        },
-        "guard": {
-          "type": "string",
-          "description": "What the state machine itself checks before it runs this transition, and nothing the runtime checks around that call: the layers in `enforcement` are the rest. Prose, not a machine-evaluable expression: the guards are procedural code, so this names them rather than reproducing them. Selected by event, and by path where one event is raised on more than one path with different checks, so two edges carry the same text only when the same checks really run for both.",
-          "minLength": 1
-        }
-      }
+      ]
     }
   }
 }

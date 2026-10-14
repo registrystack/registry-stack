@@ -2,11 +2,10 @@
 
 use registry_breg::contract::{
     AccessProfileSource, AccessRequirementsSource, ActionPermissionSource,
-    ActionTargetPermissionSource, ApplyTargetPermissionSource, EntityPermissionSource,
-    RequestPresencePermissionSource,
+    ActionTargetPermissionSource, EntityPermissionSource, ProposalTargetPermissionSource,
 };
 use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// An authored grant states its row reach: `unrestricted`, or at least one
 /// boundary. Nothing written, `null`, and an empty list are all refused.
@@ -41,18 +40,17 @@ fn carries_compiled_rows<T: DeserializeOwned>(mut value: Value) {
 #[test]
 fn every_row_bearing_grant_requires_an_explicit_declaration() {
     requires_explicit_rows::<EntityPermissionSource>(json!({
-        "entity":"record", "operations":["get"]
+        "recordType":"record", "operations":["get"]
     }));
-    requires_explicit_rows::<ActionTargetPermissionSource>(json!({"entity":"record"}));
-    carries_compiled_rows::<ApplyTargetPermissionSource>(json!({"entity":"record"}));
-    carries_compiled_rows::<RequestPresencePermissionSource>(json!({"requestType":"correction"}));
+    requires_explicit_rows::<ActionTargetPermissionSource>(json!({"recordType":"record"}));
+    requires_explicit_rows::<ProposalTargetPermissionSource>(json!({"recordType":"record"}));
 }
 
 #[test]
 fn invocation_and_mandatory_requirements_do_not_invent_row_grants() {
     let mut invocation = json!({
         "action":"register", "operations":["invoke"],
-        "targets":[{"entity":"record", "rowBoundaries":"unrestricted"}]
+        "targets":[{"recordType":"record", "rowBoundaries":"unrestricted"}]
     });
     let action: ActionPermissionSource = serde_json::from_value(invocation.clone())
         .expect("invocation declares rows only at its targets");
@@ -74,7 +72,7 @@ fn membership_preserves_explicit_row_declarations_and_round_trips() {
         "activeField":"active"
     }]);
     let mut grant = json!({
-        "entity":"record", "operations":["get"], "membershipBoundaries": boundaries
+        "recordType":"record", "operations":["get"], "membershipBoundaries": boundaries
     });
     requires_explicit_rows::<EntityPermissionSource>(grant.clone());
     grant["rowBoundaries"] = json!("unrestricted");

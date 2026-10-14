@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::compiler::{AUTHORING_API_VERSION, AUTHORING_KIND};
-use crate::contract::{RegistryModule, RegistryProject, MODULE_API_VERSION, MODULE_KIND};
+use crate::contract::{MODULE_API_VERSION, MODULE_KIND, RegistryModule, RegistryProject};
 #[cfg(feature = "runtime")]
 use crate::runtime_config::runtime_config_schema;
 
@@ -14,7 +14,7 @@ const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
 pub const REGISTRY_PROJECT_SCHEMA_FILE: &str = "registry-project.schema.json";
 pub const REGISTRY_PROJECT_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/breg/project/project.v2alpha1.schema.json";
+    "https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json";
 pub const REGISTRY_MODULE_SCHEMA_FILE: &str = "registry-module.schema.json";
 pub const REGISTRY_MODULE_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json";
@@ -237,14 +237,14 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        documents, MODULE_API_VERSION, MODULE_KIND, REGISTRY_MODULE_SCHEMA_FILE,
-        REGISTRY_MODULE_SCHEMA_ID, REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_PROJECT_SCHEMA_ID,
+        MODULE_API_VERSION, MODULE_KIND, REGISTRY_MODULE_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_ID,
+        REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_PROJECT_SCHEMA_ID, documents,
     };
     #[cfg(feature = "runtime")]
-    use super::{runtime_documents, RUNTIME_CONFIG_SCHEMA_FILE, RUNTIME_CONFIG_SCHEMA_ID};
+    use super::{RUNTIME_CONFIG_SCHEMA_FILE, RUNTIME_CONFIG_SCHEMA_ID, runtime_documents};
     #[cfg(feature = "runtime")]
     use crate::runtime_config::{
-        parse_runtime_config, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
+        RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND, parse_runtime_config,
     };
 
     const ACCEPTANCE_PROJECTS: &[&str] = &[
@@ -908,8 +908,8 @@ mod tests {
         });
         assert!(schema.is_valid(&instance));
 
-        instance["accessProfiles"][0]["permissions"]["entities"][0]["spatialQueries"]["bbox"]
-            ["geometryField"] = Value::String("location".to_owned());
+        instance["accessProfiles"][0]["permissions"]["entities"][0]["spatialQueries"]["bbox"]["geometryField"] =
+            Value::String("location".to_owned());
         assert!(!schema.is_valid(&instance));
     }
 
@@ -1196,9 +1196,11 @@ mod tests {
         let value: Value =
             serde_json::from_str(&runtime_schema_document()).expect("the schema is JSON");
         assert!(value.pointer("/$defs/RawEventDestinationConfig").is_some());
-        assert!(value
-            .pointer("/$defs/RawEventDestinationConfigSchema")
-            .is_none());
+        assert!(
+            value
+                .pointer("/$defs/RawEventDestinationConfigSchema")
+                .is_none()
+        );
     }
 
     #[cfg(feature = "runtime")]

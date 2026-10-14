@@ -185,10 +185,9 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         parts.outbound,
         ContractSpec {
             access_profile: config.registry.access_profile.to_string(),
-            details_entity: config.service.details.entity.to_string(),
-            application_entity: config.service.application.entity.to_string(),
-            target_field: config.service.application.target_field.to_string(),
-            owner_field: config.service.application.owner_field.to_string(),
+            details_record_type: config.service.details.record_type.to_string(),
+            action: config.service.application.action.to_string(),
+            target_input: config.service.application.target_input.to_string(),
         },
         ServiceDescription {
             name: config.service.name.as_str().to_owned(),

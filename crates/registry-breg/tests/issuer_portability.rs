@@ -15,12 +15,12 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use jsonwebtoken::Algorithm;
 use registry_breg::api::{
-    authenticated_router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError,
-    ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture,
+    HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError, ReadinessProbe,
+    RecordReadRequest, RecordReadService, ServiceFuture, authenticated_router,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
-use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
+use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_yaml};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use serde::Deserialize;
 use serde_json::json;

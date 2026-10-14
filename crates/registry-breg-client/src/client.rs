@@ -37,14 +37,6 @@ const MAXIMUM_ENGINE_VERSION_BYTES: usize = 64;
 const X_CONTENT_TYPE_OPTIONS: reqwest::header::HeaderName =
     reqwest::header::HeaderName::from_static("x-content-type-options");
 
-/// Which slot route one attachment exchange uses.
-#[derive(Clone, Copy)]
-enum BRegAttachmentRoute {
-    Download,
-    Upload,
-    Remove,
-}
-
 /// One explicitly initiated exchange with one Base Registry Engine deployment.
 pub struct BaseRegistryClient {
     config: BaseRegistryClientConfig,
@@ -732,9 +724,6 @@ impl BaseRegistryClient {
                 "the Base Registry Engine revision must be a positive signed 64-bit integer",
             ));
         }
-        options
-            .ensure_collection_compatible()
-            .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
         let mut pairs = Vec::new();
         options.append_query(&mut pairs);
         crate::query::ensure_query_bound(&pairs)
@@ -891,93 +880,6 @@ impl BaseRegistryClient {
         .await
     }
 
-    /// Replace one governed attachment slot with exact bytes.
-    ///
-    /// The upload is refused locally when the slot cannot accept it, so a
-    /// refused upload never leaves the process. An upload whose outcome is
-    /// unknown is resent identically under the same idempotency key, at most
-    /// as many times as the configured mutation retry count.
-    pub async fn upload_attachment(
-        &self,
-        slot: &BRegAttachmentSlot,
-        record_identifier: Uuid,
-        etag: &BRegEtag,
-        upload: &BRegAttachmentUpload,
-        idempotency_key: &BRegIdempotencyKey,
-        format: BRegRecordFormat,
-    ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
-        self.validate_attachment_slot(slot, BRegAttachmentRoute::Upload)?;
-        if !upload.matches_slot(slot) {
-            return Err(BaseRegistryClientError::invalid_request(
-                "the Base Registry Engine attachment upload was prepared for another slot",
-            ));
-        }
-        let url = self.attachment_url(slot, record_identifier, None)?;
-        let builder = self
-            .transport
-            .http
-            .request(Method::PATCH, url)
-            .header(ACCEPT, format.media_type())
-            .header(CONTENT_TYPE, upload.content_type())
-            .header("idempotency-key", idempotency_key.as_str())
-            .header(IF_MATCH, etag.as_str())
-            .body(upload.as_bytes().to_vec());
-        self.attachment_mutation(builder, slot, record_identifier, format)
-            .await
-    }
-
-    /// Read the exact bytes held in one governed attachment slot for one
-    /// proposal version.
-    ///
-    /// The engine releases stored content only while the slot's verification
-    /// status permits it, and the returned bytes are bounded by both the slot
-    /// capacity and this client's configured response bound.
-    pub async fn download_attachment(
-        &self,
-        slot: &BRegAttachmentSlot,
-        record_identifier: Uuid,
-        proposal_version: u32,
-    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
-        self.validate_attachment_slot(slot, BRegAttachmentRoute::Download)?;
-        if proposal_version == 0 {
-            return Err(BaseRegistryClientError::invalid_request(
-                "the Base Registry Engine attachment proposal version must be positive",
-            ));
-        }
-        let url = self.attachment_url(slot, record_identifier, Some(proposal_version))?;
-        // The engine never negotiates a binary read: it answers with the exact
-        // stored content type. Send the header explicitly rather than leaving
-        // it to the HTTP library's default.
-        let mut builder = self.transport.http.get(url).header(ACCEPT, ANY_MEDIA_TYPE);
-        builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send(builder).await?;
-        self.attachment_wire(response, slot).await
-    }
-
-    /// Empty one governed attachment slot. A removal whose outcome is unknown
-    /// is resent identically under the same idempotency key, at most as many
-    /// times as the configured mutation retry count.
-    pub async fn delete_attachment(
-        &self,
-        slot: &BRegAttachmentSlot,
-        record_identifier: Uuid,
-        etag: &BRegEtag,
-        idempotency_key: &BRegIdempotencyKey,
-        format: BRegRecordFormat,
-    ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
-        self.validate_attachment_slot(slot, BRegAttachmentRoute::Remove)?;
-        let url = self.attachment_url(slot, record_identifier, None)?;
-        let builder = self
-            .transport
-            .http
-            .request(Method::DELETE, url)
-            .header(ACCEPT, format.media_type())
-            .header("idempotency-key", idempotency_key.as_str())
-            .header(IF_MATCH, etag.as_str());
-        self.attachment_mutation(builder, slot, record_identifier, format)
-            .await
-    }
-
     pub(crate) fn validate_create_binding(
         &self,
         operation: &BRegCreateBinding,
@@ -1002,86 +904,10 @@ impl BaseRegistryClient {
             })
     }
 
-    fn validate_attachment_slot(
-        &self,
-        slot: &BRegAttachmentSlot,
-        route: BRegAttachmentRoute,
-    ) -> Result<(), BaseRegistryClientError> {
-        if !slot.matches_source(&self.source_binding()) {
-            return Err(BaseRegistryClientError::invalid_request(
-                "the Base Registry Engine attachment slot belongs to another client source",
-            ));
-        }
-        let advertised = match route {
-            BRegAttachmentRoute::Download => slot.can_download(),
-            BRegAttachmentRoute::Upload => slot.can_upload(),
-            BRegAttachmentRoute::Remove => slot.can_remove(),
-        };
-        if !advertised {
-            return Err(BaseRegistryClientError::invalid_request(
-                "the Base Registry Engine attachment slot does not advertise this route",
-            ));
-        }
-        Ok(())
-    }
-
-    fn attachment_url(
-        &self,
-        slot: &BRegAttachmentSlot,
-        record_identifier: Uuid,
-        proposal_version: Option<u32>,
-    ) -> Result<reqwest::Url, BaseRegistryClientError> {
-        let path = slot.path_for_record(record_identifier);
-        let segments = fixed_operation_segments(&path)?;
-        let mut pairs = Vec::with_capacity(2);
-        if let Some(version) = proposal_version {
-            pairs.push(("proposalVersion".to_owned(), version.to_string()));
-        }
-        pairs.extend(access_profile_query(Some(slot.access_profile()))?);
-        self.url_with_query(&segments, &pairs)
-    }
-
-    async fn attachment_mutation(
-        &self,
-        builder: reqwest::RequestBuilder,
-        slot: &BRegAttachmentSlot,
-        record_identifier: Uuid,
-        format: BRegRecordFormat,
-    ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
-        self.send_keyed(builder, move |response| async move {
-            let wire = self
-                .mutation_wire(
-                    response,
-                    StatusCode::OK,
-                    format.media_type(),
-                    LocationExpectation::Forbidden,
-                )
-                .await?;
-            let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
-            validate_mutation_record(
-                &complete,
-                StatusCode::OK,
-                slot.registry_identifier(),
-                slot.dataset_identifier(),
-                slot.record_type_identifier(),
-            )?;
-            if complete.value.data.record_identifier != record_identifier.to_string() {
-                return Err(body_failure(
-                    StatusCode::OK.as_u16(),
-                    complete.metadata.trace_id().clone(),
-                ));
-            }
-            Ok(complete)
-        })
-        .await
-    }
-
-    /// A binary read carries neither a record representation nor a validator:
-    /// it is a governed byte stream with its own narrower cache policy.
-    async fn attachment_wire(
+    async fn attachment_wire_limit(
         &self,
         response: Response,
-        slot: &BRegAttachmentSlot,
+        maximum_bytes: u64,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
         let status = response.status();
         if status != StatusCode::OK {
@@ -1149,7 +975,10 @@ impl BaseRegistryClient {
                 Some(trace_id),
             ));
         }
-        let body = self.transport.read(response, slot.maximum_bytes()).await?;
+        let body = self
+            .transport
+            .read(response, maximum_bytes.min(self.config.max_response_bytes))
+            .await?;
         Ok(BRegComplete {
             value: BRegRawDocument::new(media_type, body),
             metadata: BRegResponseMetadata::new(trace_id, None),
@@ -1402,64 +1231,213 @@ impl BaseRegistryClient {
         self.send_keyed(builder, decode).await
     }
 
+    pub(crate) async fn proposal_attachment_exchange(
+        &self,
+        link: &BRegProposalLink,
+        body: Option<Vec<u8>>,
+        content_type: Option<&str>,
+        key: Option<&BRegIdempotencyKey>,
+        maximum_bytes: u64,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        let (path, version) = link
+            .path()
+            .split_once('?')
+            .map_or((link.path(), None), |(path, query)| {
+                (path, query.strip_prefix("submissionVersion="))
+            });
+        let segments = fixed_operation_segments(path)?;
+        let mut pairs = access_profile_query(Some(link.access_profile()))?;
+        if let Some(version) = version {
+            pairs.push(("submissionVersion".to_owned(), version.to_owned()));
+        }
+        let url = self.url_with_query(&segments, &pairs)?;
+        let method = match link.method() {
+            "GET" => Method::GET,
+            "PATCH" => Method::PATCH,
+            "DELETE" => Method::DELETE,
+            _ => {
+                return Err(BaseRegistryClientError::invalid_request(
+                    "invalid Proposal attachment operation",
+                ));
+            }
+        };
+        let mut builder = self.transport.http.request(method, url).header(
+            ACCEPT,
+            if link.method() == "GET" {
+                ANY_MEDIA_TYPE
+            } else {
+                APPLICATION_JSON
+            },
+        );
+        if let Some(etag) = link.if_match() {
+            builder = builder.header(IF_MATCH, etag);
+        }
+        if let Some(media) = content_type {
+            builder = builder.header(CONTENT_TYPE, media);
+        }
+        if let Some(bytes) = body {
+            builder = builder.body(bytes);
+        }
+        if let Some(key) = key {
+            self.send_keyed(
+                builder.header("idempotency-key", key.as_str()),
+                move |response| async move {
+                    let wire = self.proposal_wire(response).await?;
+                    Ok(BRegComplete {
+                        value: BRegRawDocument::new(wire.media_type, wire.body),
+                        metadata: wire.metadata,
+                    })
+                },
+            )
+            .await
+        } else {
+            let builder = self.authorize(builder, Credential::Optional).await?;
+            self.attachment_wire_limit(self.transport.send(builder).await?, maximum_bytes)
+                .await
+        }
+    }
+
     pub(crate) async fn proposal_exchange(
-        &self, link: &BRegProposalLink, body: Option<Vec<u8>>, key: Option<&BRegIdempotencyKey>,
+        &self,
+        link: &BRegProposalLink,
+        body: Option<Vec<u8>>,
+        key: Option<&BRegIdempotencyKey>,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
         let segments = fixed_operation_segments(link.path())?;
         let pairs = access_profile_query(Some(link.access_profile()))?;
         let url = self.url_with_query(&segments, &pairs)?;
-        let mut builder = self.transport.http.request(if link.method() == "POST" { Method::POST } else { Method::GET }, url)
+        let mut builder = self
+            .transport
+            .http
+            .request(
+                if link.method() == "POST" {
+                    Method::POST
+                } else {
+                    Method::GET
+                },
+                url,
+            )
             .header(ACCEPT, APPLICATION_JSON);
-        if let Some(body) = body { builder = builder.header(CONTENT_TYPE, APPLICATION_JSON).body(body); }
-        if let Some(etag) = link.if_match() { builder = builder.header(IF_MATCH, etag); }
+        if let Some(body) = body {
+            builder = builder.header(CONTENT_TYPE, APPLICATION_JSON).body(body);
+        }
+        if let Some(etag) = link.if_match() {
+            builder = builder.header(IF_MATCH, etag);
+        }
         let decode = move |response: Response| async move {
             let wire = self.proposal_wire(response).await?;
-            crate::strict_json::from_slice(&wire.body).map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
-            Ok(BRegComplete { value: BRegRawDocument::new(wire.media_type, wire.body), metadata: wire.metadata })
+            crate::strict_json::from_slice(&wire.body)
+                .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+            Ok(BRegComplete {
+                value: BRegRawDocument::new(wire.media_type, wire.body),
+                metadata: wire.metadata,
+            })
         };
-        if let Some(key) = key { self.send_keyed(builder.header("idempotency-key", key.as_str()), decode).await }
-        else { let builder = self.authorize(builder, Credential::Optional).await?; decode(self.transport.send(builder).await?).await }
+        if let Some(key) = key {
+            self.send_keyed(builder.header("idempotency-key", key.as_str()), decode)
+                .await
+        } else {
+            let builder = self.authorize(builder, Credential::Optional).await?;
+            decode(self.transport.send(builder).await?).await
+        }
     }
 
-    pub(crate) async fn proposal_list_exchange(&self, path: &str, pairs: &[(String, String)]) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+    pub(crate) async fn proposal_list_exchange(
+        &self,
+        path: &str,
+        pairs: &[(String, String)],
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
         let segments = fixed_operation_segments(path)?;
         let url = self.url_with_query(&segments, pairs)?;
-        let builder = self.authorize(self.transport.http.get(url).header(ACCEPT, APPLICATION_JSON), Credential::Optional).await?;
-        let wire = self.proposal_wire(self.transport.send(builder).await?).await?;
-        Ok(BRegComplete { value: BRegRawDocument::new(wire.media_type, wire.body), metadata: wire.metadata })
+        let builder = self
+            .authorize(
+                self.transport
+                    .http
+                    .get(url)
+                    .header(ACCEPT, APPLICATION_JSON),
+                Credential::Optional,
+            )
+            .await?;
+        let wire = self
+            .proposal_wire(self.transport.send(builder).await?)
+            .await?;
+        Ok(BRegComplete {
+            value: BRegRawDocument::new(wire.media_type, wire.body),
+            metadata: wire.metadata,
+        })
     }
 
-    pub(crate) async fn execute_action_start(&self, path: &str, profile: &str, body: Vec<u8>, key: &BRegIdempotencyKey) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+    pub(crate) async fn execute_action_start(
+        &self,
+        path: &str,
+        profile: &str,
+        body: Vec<u8>,
+        key: &BRegIdempotencyKey,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
         let segments = fixed_operation_segments(path)?;
         let pairs = access_profile_query(Some(profile))?;
         let url = self.url_with_query(&segments, &pairs)?;
-        let builder = self.transport.http.post(url).header(ACCEPT, APPLICATION_JSON)
-            .header(CONTENT_TYPE, APPLICATION_JSON).header("idempotency-key", key.as_str()).body(body);
+        let builder = self
+            .transport
+            .http
+            .post(url)
+            .header(ACCEPT, APPLICATION_JSON)
+            .header(CONTENT_TYPE, APPLICATION_JSON)
+            .header("idempotency-key", key.as_str())
+            .body(body);
         self.send_keyed(builder, move |response| async move {
             let wire = self.proposal_wire(response).await?;
-            Ok(BRegComplete { value: BRegRawDocument::new(wire.media_type, wire.body), metadata: wire.metadata })
-        }).await
+            Ok(BRegComplete {
+                value: BRegRawDocument::new(wire.media_type, wire.body),
+                metadata: wire.metadata,
+            })
+        })
+        .await
     }
 
     async fn proposal_wire(&self, response: Response) -> Result<BRegWire, BaseRegistryClientError> {
         let status = response.status();
-        if !status.is_success() { return Err(breg_problem(response, &self.transport).await); }
+        if !status.is_success() {
+            return Err(breg_problem(response, &self.transport).await);
+        }
         if !matches!(status, StatusCode::OK | StatusCode::CREATED) {
-            return Err(BaseRegistryClientError::protocol(status.as_u16(), BRegProtocolFailure::Status, breg_trace_id(status, response.headers()).ok()));
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::Status,
+                breg_trace_id(status, response.headers()).ok(),
+            ));
         }
         let headers = response.headers().clone();
         let trace = breg_trace_id(status, &headers)?;
         validate_mutation_cache_headers(status, &headers, &trace)?;
         if !exact_media_type(&headers, APPLICATION_JSON) {
-            return Err(BaseRegistryClientError::protocol(status.as_u16(), BRegProtocolFailure::MediaType, Some(trace)));
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::MediaType,
+                Some(trace),
+            ));
         }
         let etag = breg_response_etag(status, &headers, &trace)?;
         if breg_response_link(status, &headers, &trace)?.is_some() {
-            return Err(BaseRegistryClientError::protocol(status.as_u16(), BRegProtocolFailure::ProfileLink, Some(trace)));
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::ProfileLink,
+                Some(trace),
+            ));
         }
-        let body = self.transport.read(response, self.config.max_response_bytes).await?;
-        crate::strict_json::from_slice(&body).map_err(|_| body_failure(status.as_u16(), trace.clone()))?;
-        Ok(BRegWire { body, metadata: BRegResponseMetadata::new(trace, etag), media_type: APPLICATION_JSON.to_owned(), link: None, status: status.as_u16() })
+        let body = self
+            .transport
+            .read(response, self.config.max_response_bytes)
+            .await?;
+        crate::strict_json::from_slice(&body)
+            .map_err(|_| body_failure(status.as_u16(), trace.clone()))?;
+        Ok(BRegWire {
+            body,
+            metadata: BRegResponseMetadata::new(trace, etag),
+            media_type: APPLICATION_JSON.to_owned(),
+            link: None,
+            status: status.as_u16(),
+        })
     }
 
     /// GET one fixed ingestion-run JSON document without retry or link
@@ -1982,7 +1960,6 @@ impl BaseRegistryClient {
             status: status.as_u16(),
         })
     }
-
 }
 
 struct PerCallToken(BearerToken);
@@ -2230,8 +2207,16 @@ fn decode_registry_record(
     })
 }
 
-fn validate_breg_records(records: &[RegistryRecord], _entity_type_identifier: &str, status: u16, trace_id: &TraceId) -> Result<(), BaseRegistryClientError> {
-    if records.iter().any(|record| !canonical_uuid(&record.record_identifier) || !canonical_positive_revision(&record.revision_identifier)) {
+fn validate_breg_records(
+    records: &[RegistryRecord],
+    _entity_type_identifier: &str,
+    status: u16,
+    trace_id: &TraceId,
+) -> Result<(), BaseRegistryClientError> {
+    if records.iter().any(|record| {
+        !canonical_uuid(&record.record_identifier)
+            || !canonical_positive_revision(&record.revision_identifier)
+    }) {
         return Err(body_failure(status, trace_id.clone()));
     }
     Ok(())

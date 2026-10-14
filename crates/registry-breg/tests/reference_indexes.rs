@@ -6,17 +6,17 @@
 #[path = "support/consent_fixture.rs"]
 mod consent_fixture;
 
-use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
-use serde_json::{json, Value};
+use registry_breg::{CompileProfile, CompiledRegistry, compile_project, parse_project_json};
+use serde_json::{Value, json};
 
 const UNINDEXED_FILTER: &str = "breg.entity.list-unindexed-filter";
 const UNINDEXED_SORT: &str = "breg.entity.list-unindexed-sort";
 
 fn source() -> Value {
-    json!({
+    json!({"datasets":[{"id": "test-dataset"}],
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
         "project":{"id":"reference-index-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://reference-index.example.test"},
-        "entities":[
+        "recordTypes":[
           {"id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"internal",
            "fields":[{"id":"name","type":"string","maximumLength":80,"classification":"internal"}]},
           {"id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable","classification":"internal",
@@ -24,7 +24,7 @@ fn source() -> Value {
                      {"id":"owner","type":"reference","target":"site","classification":"internal"},
                      {"id":"code","type":"string","maximumLength":8,"classification":"internal"}]}],
         "accessProfiles":[{"id":"reader","principalClaim":"registry_principal","requiredScopes":["asset:read"],
-          "permissions":{"entities":[{"entity":"asset","operations":["get","list"],
+          "permissions":{"records":[{"recordType":"asset","operations":["get","list"],
             "readableFields":["site","owner","code"],"filterableFields":[],"sortableFields":[],
             "rowBoundaries":[{"field":"code","claim":"codes","operator":"in"}]}]}}]
     })
@@ -41,7 +41,7 @@ fn compile(value: &Value, profile: CompileProfile) -> CompiledRegistry {
 }
 
 fn asset_mut(value: &mut Value) -> &mut Value {
-    &mut value["entities"][1]
+    &mut value["recordTypes"][1]
 }
 
 fn statement_sql<'a>(registry: &'a CompiledRegistry, id: &str) -> Option<&'a str> {
@@ -114,7 +114,7 @@ fn reference_index_names_stay_within_the_postgres_identifier_limit() {
     let mut value = source();
     let long_entity = "a".repeat(60);
     let long_field = "b".repeat(60);
-    value["entities"]
+    value["recordTypes"]
         .as_array_mut()
         .expect("entities")
         .push(json!({"id":long_entity,"primaryDataset":"test-dataset","route":"long-entities","mutationMode":"mutable","classification":"internal",
@@ -136,15 +136,19 @@ fn a_leading_index_or_whole_table_unique_constraint_replaces_the_reference_index
     let asset = &registry.entities()["asset"];
     assert!(!asset.indexes.contains_key("reference:site"));
     assert!(!asset.indexes.contains_key("reference:owner"));
-    assert!(!registry.physical_names().entities["asset"]
-        .indexes
-        .keys()
-        .any(|member| member.starts_with("reference:")));
-    assert!(!registry
-        .ddl()
-        .statements
-        .iter()
-        .any(|statement| statement.id.starts_with("entity.asset.index.reference:")));
+    assert!(
+        !registry.physical_names().entities["asset"]
+            .indexes
+            .keys()
+            .any(|member| member.starts_with("reference:"))
+    );
+    assert!(
+        !registry
+            .ddl()
+            .statements
+            .iter()
+            .any(|statement| statement.id.starts_with("entity.asset.index.reference:"))
+    );
     // The foreign keys themselves are unchanged.
     assert!(statement_sql(&registry, "entity.asset.field.site.reference").is_some());
     assert!(statement_sql(&registry, "entity.asset.field.owner.reference").is_some());
@@ -165,7 +169,7 @@ fn trailing_or_partial_coverage_keeps_the_reference_index() {
 #[test]
 fn unindexed_list_filters_and_sorts_are_authoring_findings_at_the_declaring_field() {
     let mut value = source();
-    let permission = &mut value["accessProfiles"][0]["permissions"]["entities"][0];
+    let permission = &mut value["accessProfiles"][0]["permissions"]["records"][0];
     permission["filterableFields"] = json!(["site", "code"]);
     permission["sortableFields"] = json!(["owner", "code"]);
 
@@ -175,12 +179,12 @@ fn unindexed_list_filters_and_sorts_are_authoring_findings_at_the_declaring_fiel
         vec![
             (
                 UNINDEXED_FILTER.to_owned(),
-                "entities[id=asset].accessProfiles[id=reader].filterableFields[field=code]"
+                "recordTypes[id=asset].accessProfiles[id=reader].filterableFields[field=code]"
                     .to_owned()
             ),
             (
                 UNINDEXED_SORT.to_owned(),
-                "entities[id=asset].accessProfiles[id=reader].sortableFields[field=code]"
+                "recordTypes[id=asset].accessProfiles[id=reader].sortableFields[field=code]"
                     .to_owned()
             ),
         ]
@@ -191,7 +195,7 @@ fn unindexed_list_filters_and_sorts_are_authoring_findings_at_the_declaring_fiel
         .find(|finding| finding.code == UNINDEXED_FILTER)
         .expect("filter finding");
     assert!(
-        finding.message.contains("entities[].indexes"),
+        finding.message.contains("recordTypes[].indexes"),
         "{}",
         finding.message
     );
@@ -217,7 +221,7 @@ fn an_active_lifecycle_partial_unique_serves_the_list_finding_on_an_ordinary_ent
     let mut value = source();
     asset_mut(&mut value)["constraints"] = json!([{"type":"unique","id":"active-code",
         "fields":["code","site"],"when":[{"type":"active-lifecycle"}]}]);
-    let permission = &mut value["accessProfiles"][0]["permissions"]["entities"][0];
+    let permission = &mut value["accessProfiles"][0]["permissions"]["records"][0];
     permission["filterableFields"] = json!(["code"]);
     permission["sortableFields"] = json!(["code"]);
 
@@ -234,7 +238,7 @@ fn a_field_predicate_unique_constraint_still_reports_the_list_finding() {
         .push(json!({"id":"flag","type":"boolean","classification":"internal"}));
     asset_mut(&mut value)["constraints"] = json!([{"type":"unique","id":"flagged-code",
         "fields":["code","site"],"when":[{"type":"field-equals","field":"flag","value":true}]}]);
-    let permission = &mut value["accessProfiles"][0]["permissions"]["entities"][0];
+    let permission = &mut value["accessProfiles"][0]["permissions"]["records"][0];
     permission["readableFields"] = json!(["site", "owner", "code", "flag"]);
     permission["filterableFields"] = json!(["code"]);
     permission["sortableFields"] = json!(["code"]);
@@ -245,12 +249,12 @@ fn a_field_predicate_unique_constraint_still_reports_the_list_finding() {
         vec![
             (
                 UNINDEXED_FILTER.to_owned(),
-                "entities[id=asset].accessProfiles[id=reader].filterableFields[field=code]"
+                "recordTypes[id=asset].accessProfiles[id=reader].filterableFields[field=code]"
                     .to_owned()
             ),
             (
                 UNINDEXED_SORT.to_owned(),
-                "entities[id=asset].accessProfiles[id=reader].sortableFields[field=code]"
+                "recordTypes[id=asset].accessProfiles[id=reader].sortableFields[field=code]"
                     .to_owned()
             ),
         ],
@@ -260,88 +264,20 @@ fn a_field_predicate_unique_constraint_still_reports_the_list_finding() {
 }
 
 #[test]
-fn a_change_requests_active_lifecycle_unique_still_reports_the_list_finding() {
-    // A change-request entity's Get select policy also admits tombstoned
-    // rows (see `request_get_lifecycle_expression`), so its partial unique
-    // index cannot be assumed to serve every list read path.
-    let value = json!({
-        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
-        "project":{"id":"change-request-index-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://change-request-index.example.test"},
-        "entities":[
-          {"id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only","classification":"internal",
-           "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]},
-          {"id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
-           "changeControl":{"requiredFor":["patch"]},
-           "fields":[{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
-                     {"id":"label","type":"string","maximumLength":64,"classification":"internal"}]},
-          {"id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable","classification":"internal",
-           "fields":[{"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
-                     {"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"},
-                     {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"},
-                     {"id":"code","type":"string","maximumLength":8,"required":true,"classification":"internal"}],
-           "constraints":[{"type":"unique","id":"active-code","fields":["code"],
-             "when":[{"type":"active-lifecycle"}]}],
-           "changeRequest":{
-             "effects":[{"target":{"fromField":"placement"},"operation":"patch",
-               "set":{"site":{"fromField":"proposed-site"}},"clear":["label"]}],
-             "review":{"type":"required","authority":"casework-main","policyId":"placement-correction"},
-             "onApproved":{"mode":"manual"}
-           }}
-        ],
-        "accessProfiles":[{
-          "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-            "rowBoundaries": "unrestricted", "entity":"placement-correction-request",
-            "operations":["get","list","submit-request"],
-            "readableFields":["placement","proposed-site","reason","code"],
-            "filterableFields":["code"],"sortableFields":["code"]
-          }]}
-        },{
-          "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
-            "rowBoundaries": "unrestricted", "entity":"placement-correction-request","operations":["get","apply-request"],
-            "readableFields":["placement"],
-            "applyTargets":[{"entity":"placement","rowBoundaries":"unrestricted"}]
-          }]}
-        }]
-    });
-    let registry = compile(&value, CompileProfile::Authoring);
-    let findings = index_findings(&registry)
-        .into_iter()
-        .filter(|(_, path)| path.starts_with("entities[id=placement-correction-request]"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        findings,
-        vec![
-            (
-                UNINDEXED_FILTER.to_owned(),
-                "entities[id=placement-correction-request].accessProfiles[id=request-reviewer].filterableFields[field=code]"
-                    .to_owned()
-            ),
-            (
-                UNINDEXED_SORT.to_owned(),
-                "entities[id=placement-correction-request].accessProfiles[id=request-reviewer].sortableFields[field=code]"
-                    .to_owned()
-            ),
-        ],
-        "a change request's Get policy admits tombstoned rows, so the active-lifecycle \
-         partial index does not serve the list finding"
-    );
-}
-
-#[test]
 fn unindexed_read_path_filters_and_sorts_point_at_the_read_path_grant() {
     let mut value = source();
-    value["entities"][0]["readPaths"] =
+    value["recordTypes"][0]["readPaths"] =
         json!([{"id":"assets","through":"placement","to":"asset","route":"placed-assets"}]);
-    value["entities"]
+    value["recordTypes"]
         .as_array_mut()
         .expect("entities")
         .push(json!({"id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"site","type":"reference","target":"site","classification":"internal"},
                       {"id":"asset","type":"reference","target":"asset","classification":"internal"}]}));
-    value["accessProfiles"][0]["permissions"]["entities"]
+    value["accessProfiles"][0]["permissions"]["records"]
         .as_array_mut()
         .expect("permissions")
-        .push(json!({"entity":"site","operations":["get","list"],"readableFields":["name"],
+        .push(json!({"recordType":"site","operations":["get","list"],"readableFields":["name"],
             "rowBoundaries":[{"field":"name","claim":"names","operator":"in"}],
             "readPaths":[{"path":"assets","readableFields":["code","site"],"filterableFields":["code"],"sortableFields":["site"]}]}));
     let registry = compile(&value, CompileProfile::Authoring);
@@ -349,7 +285,7 @@ fn unindexed_read_path_filters_and_sorts_point_at_the_read_path_grant() {
         index_findings(&registry),
         vec![(
             UNINDEXED_FILTER.to_owned(),
-            "entities[id=site].accessProfiles[id=reader].readPaths[path=assets].filterableFields[field=code]"
+            "recordTypes[id=site].accessProfiles[id=reader].readPaths[path=assets].filterableFields[field=code]"
                 .to_owned()
         )]
     );
@@ -368,7 +304,7 @@ fn a_temporal_exclusion_scope_serves_equality_filters_but_not_sorts() {
     asset["temporal"] = json!({"startField":"valid-from","endField":"valid-to"});
     asset["constraints"] = json!([{"type":"temporal-non-overlap","id":"one-code-at-a-time",
         "scopeFields":["code","owner"],"startField":"valid-from","endField":"valid-to"}]);
-    let permission = &mut value["accessProfiles"][0]["permissions"]["entities"][0];
+    let permission = &mut value["accessProfiles"][0]["permissions"]["records"][0];
     permission["readableFields"] = json!(["site", "owner", "code", "valid-from", "valid-to"]);
     permission["filterableFields"] = json!(["code", "owner", "valid-from"]);
     permission["sortableFields"] = json!(["code"]);
@@ -379,12 +315,12 @@ fn a_temporal_exclusion_scope_serves_equality_filters_but_not_sorts() {
         vec![
             (
                 UNINDEXED_FILTER.to_owned(),
-                "entities[id=asset].accessProfiles[id=reader].filterableFields[field=valid-from]"
+                "recordTypes[id=asset].accessProfiles[id=reader].filterableFields[field=valid-from]"
                     .to_owned()
             ),
             (
                 UNINDEXED_SORT.to_owned(),
-                "entities[id=asset].accessProfiles[id=reader].sortableFields[field=code]"
+                "recordTypes[id=asset].accessProfiles[id=reader].sortableFields[field=code]"
                     .to_owned()
             ),
         ],
@@ -400,8 +336,8 @@ fn a_temporal_exclusion_scope_serves_equality_filters_but_not_sorts() {
 #[test]
 fn production_compiles_carry_no_index_findings() {
     let mut value = source();
-    value["accessProfiles"][0]["permissions"]["entities"][0]["filterableFields"] = json!(["code"]);
-    value["accessProfiles"][0]["permissions"]["entities"][0]["sortableFields"] = json!(["code"]);
+    value["accessProfiles"][0]["permissions"]["records"][0]["filterableFields"] = json!(["code"]);
+    value["accessProfiles"][0]["permissions"]["records"][0]["sortableFields"] = json!(["code"]);
     assert!(!index_findings(&compile(&value, CompileProfile::Authoring)).is_empty());
     value["package"] = json!({"sourceRevision":"reference-index-source"});
     assert!(index_findings(&compile(&value, CompileProfile::Production)).is_empty());
@@ -410,8 +346,8 @@ fn production_compiles_carry_no_index_findings() {
 #[test]
 fn a_consent_records_scope_column_leads_the_consent_key_index() {
     let mut value = consent_fixture::source();
-    let permission = &mut value["accessProfiles"][1]["permissions"]["entities"][0];
-    assert_eq!(permission["entity"], json!("consent-decision"));
+    let permission = &mut value["accessProfiles"][1]["permissions"]["records"][0];
+    assert_eq!(permission["recordType"], json!("consent-decision"));
     permission["filterableFields"] = json!(["scope", "purpose"]);
     permission["sortableFields"] = json!(["scope"]);
 
@@ -421,13 +357,13 @@ fn a_consent_records_scope_column_leads_the_consent_key_index() {
     // test only asserts on the scope/purpose behavior it sets up.
     let consent_findings = index_findings(&registry)
         .into_iter()
-        .filter(|(_, path)| path.starts_with("entities[id=consent-decision]"))
+        .filter(|(_, path)| path.starts_with("recordTypes[id=consent-decision]"))
         .collect::<Vec<_>>();
     assert_eq!(
         consent_findings,
         vec![(
             UNINDEXED_FILTER.to_owned(),
-            "entities[id=consent-decision].accessProfiles[id=recipient-feed].filterableFields[field=purpose]"
+            "recordTypes[id=consent-decision].accessProfiles[id=recipient-feed].filterableFields[field=purpose]"
                 .to_owned()
         )],
         "the compiler's consent key index leads with scope, so only the \
@@ -438,8 +374,8 @@ fn a_consent_records_scope_column_leads_the_consent_key_index() {
 #[cfg(feature = "runtime")]
 mod migration {
     use registry_breg::package::{
-        compiled_registry_change_set, compiled_registry_change_set_from_baseline,
         CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
+        compiled_registry_change_set, compiled_registry_change_set_from_baseline,
     };
 
     use super::*;
@@ -530,12 +466,16 @@ mod migration {
                 "entity.site.source-view",
             ]
         );
-        assert!(plan.statements[..2]
-            .iter()
-            .all(|statement| statement.sql.starts_with("CREATE INDEX \"breg_ri_asset_")));
-        assert!(plan.statements[2..].iter().all(|statement| statement
-            .sql
-            .starts_with("CREATE OR REPLACE VIEW registry_source.")));
+        assert!(
+            plan.statements[..2]
+                .iter()
+                .all(|statement| statement.sql.starts_with("CREATE INDEX \"breg_ri_asset_"))
+        );
+        assert!(plan.statements[2..].iter().all(|statement| {
+            statement
+                .sql
+                .starts_with("CREATE OR REPLACE VIEW registry_source.")
+        }));
     }
 
     #[test]

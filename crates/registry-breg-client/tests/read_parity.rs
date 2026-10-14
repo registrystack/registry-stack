@@ -9,8 +9,8 @@ use axum::routing::any;
 use axum::Router;
 use registry_breg_client::{
     BRegAsOfListRequest, BRegBoundingBox, BRegGeoJsonListRequest, BRegGeoJsonOptions,
-    BRegListRequest, BRegRecordOptions, BRegRelationshipListRequest, BRegSnapshotListRequest,
-    BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError, TransportKind,
+    BRegRecordOptions, BRegRelationshipListRequest, BRegSnapshotListRequest, BaseRegistryClient,
+    BaseRegistryClientConfig, BaseRegistryClientError, TransportKind,
 };
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use serde_json::{json, Value};
@@ -265,13 +265,6 @@ async fn geojson_uses_the_configured_response_body_bound() {
 async fn invalid_operation_specific_inputs_fail_before_token_or_io() {
     let provider = Arc::new(CountingToken(AtomicUsize::new(0)));
     let (client, captured) = client(provider.clone()).await;
-    let get_only = BRegRecordOptions::default()
-        .request_history_after_proposal_version(1)
-        .unwrap();
-    assert!(client
-        .list_records("companies", &BRegListRequest::default().options(get_only))
-        .await
-        .is_err());
     assert!(client
         .get_record_revision("companies", RECORD_ID, 0, &BRegRecordOptions::default())
         .await
@@ -335,9 +328,7 @@ async fn read_routes_retain_operation_representation_and_snapshot_identity() {
         .get_record_revision("companies", RECORD_ID, 1, &BRegRecordOptions::default())
         .await
         .unwrap();
-    let get_options = BRegRecordOptions::default()
-        .request_history_after_proposal_version(u32::MAX)
-        .unwrap();
+    let get_options = BRegRecordOptions::default();
     client
         .get_record("companies", RECORD_ID, &get_options)
         .await
@@ -357,5 +348,5 @@ async fn read_routes_retain_operation_representation_and_snapshot_identity() {
         .any(|value| value.contains("/companies:snapshot?$skiptoken=next")));
     assert!(captured
         .iter()
-        .any(|value| value.contains("requestHistoryAfterProposalVersion=4294967295")));
+        .any(|value| value.ends_with(&format!("/companies/{RECORD_ID}"))));
 }
