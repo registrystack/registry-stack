@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from unittest.mock import patch as roster_patch
+
 import hashlib
 import importlib.util
 import json
@@ -204,6 +206,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         inventory += ("messaging", "messagingctl")
     if REGISTRY_RELEASE.release_roster.render_in_release(version_tuple):
         inventory += ("registry-render",)
+    if REGISTRY_RELEASE.release_roster.coordinator_in_release(version_tuple):
+        inventory += ("coordinator", "coordinatorctl")
     if version_tuple >= (0, 39, 0):
         inventory = tuple(name for name in inventory if not name.startswith("relay"))
     data = {
@@ -479,6 +483,10 @@ version = "1.1.0"
                 "crates/registry-scheduling-client-node",
                 "@registrystack/scheduling-client-native",
             ),
+            (
+                "crates/registry-coordinator-client-node",
+                "@registrystack/coordinator-client-native",
+            ),
         ):
             client_root = self.root / relative_root
             write_json(
@@ -570,6 +578,11 @@ version = "1.1.0"
                 "crates/registry-scheduling-client-py",
                 "registry-scheduling-client-native",
                 "scheduling-client-sdk",
+            ),
+            (
+                "crates/registry-coordinator-client-py",
+                "registry-coordinator-client-native",
+                "coordinator-client-sdk",
             ),
         ):
             client_root = self.root / relative_root
@@ -699,6 +712,24 @@ class RegistryReleasePlanTest(unittest.TestCase):
             owner.artifact_inventory_errors("0.38.0", current["artifacts"]),
         )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    def test_coordinator_artifacts_join_only_the_v0_42_manifest_inventory(self) -> None:
+        owner = _load_registry_release()
+        historical = manifest("0.40.0", "beta-fixture", "v0.40.0", "candidate")
+        current = manifest("0.42.0", "beta-fixture", "v0.42.0", "candidate")
+        for name in ("coordinator", "coordinatorctl"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, historical["artifacts"])
+                self.assertIn(name, current["artifacts"])
+        self.assertEqual(
+            [],
+            owner.artifact_inventory_errors("0.40.0", historical["artifacts"]),
+        )
+        self.assertEqual(
+            [],
+            owner.artifact_inventory_errors("0.42.0", current["artifacts"]),
+        )
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -752,6 +783,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
             result.stderr,
         )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_prepare_emits_stable_json_plan_without_mutating_repo(self) -> None:
         before = self.repo.snapshot()
         result = self.prepare()
@@ -831,6 +863,9 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "crates/registry-scheduling-client-node/package.json",
             "crates/registry-scheduling-client-node/index.js",
             "crates/registry-scheduling-client-py/pyproject.toml",
+            "crates/registry-coordinator-client-node/package.json",
+            "crates/registry-coordinator-client-node/index.js",
+            "crates/registry-coordinator-client-py/pyproject.toml",
             "crates/registry-breg-client-py/pyproject.toml",
             "products/breg/wasm-handler-sdk/Cargo.lock",
             "products/evidence/fuzz/Cargo.lock",

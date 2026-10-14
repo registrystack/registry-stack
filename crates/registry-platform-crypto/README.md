@@ -24,6 +24,12 @@ Crypto primitives shared by registry services.
   length, and a constant-time byte comparison for shared secrets such as URL
   tokens.
 
+`sealed_value` protects bounded product-owned durable values with AES-256-GCM,
+HKDF-SHA256 domain separation, caller-supplied context and key versions. It
+reuses the field encryption envelope mechanism; the BReg Version 1 field
+contract and bounds remain unchanged. Consumers own key custody, retention,
+rotation, and the database/run/purpose identity authenticated with each value.
+
 ## Typical Use
 
 ```rust

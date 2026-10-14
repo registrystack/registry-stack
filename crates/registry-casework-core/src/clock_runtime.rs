@@ -4,9 +4,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{HolidaySetDocument, SubjectRef};
+use crate::{HolidaySetDocument, SubjectBinding};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ClockRuntimeState {
     Running,
@@ -18,10 +19,11 @@ pub enum ClockRuntimeState {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClockOccurrenceView {
     pub clock_occurrence_id: Uuid,
-    pub subject: SubjectRef,
+    pub subject: SubjectBinding,
     pub clock_id: String,
     pub state: ClockRuntimeState,
     pub policy_digest: String,
@@ -49,6 +51,7 @@ pub struct ClockOccurrenceView {
 /// The next unapplied effect authored by the pinned clock policy. Runtime
 /// verification retry times and source timing inputs are deliberately absent.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ClockNextEffect {
     Reminder {
@@ -65,51 +68,10 @@ pub enum ClockNextEffect {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HolidaySetRevisionInput {
     pub document: HolidaySetDocument,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ClockRecomputeRequest {
-    pub clock_id: String,
-    pub holiday_set: String,
-    pub holiday_revision: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ClockRecomputeChange {
-    pub clock_occurrence_id: Uuid,
-    pub item_id: Uuid,
-    pub expected_calculation_generation: i64,
-    pub old_due_at: DateTime<Utc>,
-    pub proposed_due_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ClockRecomputePreview {
-    pub preview_id: Uuid,
-    pub clock_id: String,
-    pub holiday_set: String,
-    pub holiday_revision: u64,
-    pub expires_at: DateTime<Utc>,
-    pub changes: Vec<ClockRecomputeChange>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ClockRecomputeApplyRequest {
-    pub preview_id: Uuid,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ClockRecomputeResult {
-    pub preview_id: Uuid,
-    pub applied_occurrences: Vec<Uuid>,
 }
 
 #[cfg(test)]
@@ -125,10 +87,12 @@ mod tests {
             .with_timezone(&Utc);
         let view = ClockOccurrenceView {
             clock_occurrence_id: Uuid::nil(),
-            subject: SubjectRef {
-                source_id: "source-a".to_owned(),
-                kind: "request".to_owned(),
+            subject: SubjectBinding {
+                source: "source-a".to_owned(),
+                subject_type: "request".to_owned(),
                 id: "subject-a".to_owned(),
+                version: "1".into(),
+                digest: crate::ContentDigest::for_bytes(b"subject"),
             },
             clock_id: "review-clock".to_owned(),
             state: ClockRuntimeState::VerificationPending,

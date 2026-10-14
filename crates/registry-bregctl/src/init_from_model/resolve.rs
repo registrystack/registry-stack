@@ -831,7 +831,7 @@ fn field_kind(
                     return Err(format!(
                         "more than one selected entity fits `{name}`; name one with `target`: {}",
                         names(several.iter().map(|entry| entry.id.as_str()))
-                    ))
+                    ));
                 }
             }
         }

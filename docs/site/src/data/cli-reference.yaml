@@ -4,5 +4,8 @@
 # date of that review; a version-only release bump leaves this record alone.
 # Starlight excludes the pages while this record is a draft, because the
 # generator emits `draft: true`.
+# New binary trees listed in unreviewed_binaries stay draft and out of the
+# published index until human review.
 status: current
 last_reviewed: 2026-10-13
+unreviewed_binaries: [coordinator, coordinatorctl]

@@ -25,7 +25,9 @@ pub(super) fn run(args: ExportClientArgs) -> Result<Value> {
     let parent = project.join(".breg");
     let root = parent.join("dev");
     if !root.exists() {
-        bail!("no retained local development session exists; check the project path or first run bregctl dev");
+        bail!(
+            "no retained local development session exists; check the project path or first run bregctl dev"
+        );
     }
     private::check(&parent, true)?;
     let _lock = private::lock(&parent.join("dev.lock"))?;
@@ -127,12 +129,16 @@ impl Output {
             let metadata = file.metadata()?;
             private::check_metadata(&metadata, false)?;
             if !matches!(metadata.mode() & 0o7777, 0o400 | 0o600) {
-                bail!("existing credential outputs require mode 0400 or 0600; correct their permissions or choose fresh output paths; existing files were preserved");
+                bail!(
+                    "existing credential outputs require mode 0400 or 0600; correct their permissions or choose fresh output paths; existing files were preserved"
+                );
             }
             let mut existing = Zeroizing::new(Vec::new());
             (&mut file).take(MAX_BYTES + 1).read_to_end(&mut existing)?;
             if existing.as_slice() != bytes {
-                bail!("credential output conflicts with the retained pair; choose fresh output paths and update the consuming target; existing files were preserved");
+                bail!(
+                    "credential output conflicts with the retained pair; choose fresh output paths and update the consuming target; existing files were preserved"
+                );
             }
         }
         Ok(Self { entry, exists })

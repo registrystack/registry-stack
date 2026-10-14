@@ -1,7 +1,7 @@
 # Registry Casework product
 
 This directory owns the Casework product contract, generated API description,
-checkpoint examples, and product-local verification scripts. Read the workspace
+canonical examples, and product-local verification scripts. Read the workspace
 `AGENTS.md`, this file, and `README.md` before changing the product.
 
 - Treat `generated/registry-casework.openapi.json` as generated output. Change
@@ -12,8 +12,14 @@ checkpoint examples, and product-local verification scripts. Read the workspace
 - Preserve the source-neutral boundary: the core and generic client do not
   depend on a source product, and BReg packages do not depend on Casework. Run
   `scripts/check_dependency_direction.py` after dependency changes.
-- PostgreSQL verification requires the ten disposable database URL variables
-  named in `README.md`, four of which reset `public` and must each own their
-  database. Never point any of them at retained operator data.
-- Keep authored examples and the checkpoint demo small. Do not add later-wave
-  clocks, automation, or a second source to close a documentation obligation.
+- Use explicitly disposable PostgreSQL databases. Current review, activation,
+  and assignment suites accept `CASEWORK_REVIEW_TEST_DATABASE_URL`,
+  `CASEWORK_ACTIVATION_TEST_DATABASE_URL`, and
+  `CASEWORK_ASSIGNMENT_TEST_DATABASE_URL`; fixtures isolate themselves in
+  unique schemas. The native BReg journey also uses `BREG_TEST_DATABASE_URL`.
+  The separate `caseworkctl` split-role session test uses
+  `CASEWORK_TEST_DATABASE_URL`.
+  Never point test URLs at retained operator data.
+- Keep the submitted and current-source examples small and executable. Preserve
+  exact policy and provider bindings, reviewer disclosure, independent producer
+  apply authority, and meaningful review and staffing proof when editing them.

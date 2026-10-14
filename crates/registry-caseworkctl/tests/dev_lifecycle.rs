@@ -21,10 +21,17 @@
 //! release gate. This is real HTTP/native-facade proof, not installed tarball
 //! or wheel proof.
 
+use registry_stack_client::casework::{
+    submission_digest, BearerToken, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
+    ContentDigest, ReviewContext, ReviewCreateRequest, ReviewResultResponse, SubjectBinding,
+};
+#[path = "../../registry-casework/src/task_grants/dev_session_logs.rs"]
+mod dev_session_logs;
+
 use serde_json::{json, Value};
 use std::{
     env, fs,
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -324,13 +331,29 @@ impl Session {
     /// The machine-readable report of one successful command, with the refusal
     /// it printed on failure. A report never carries a key or a token.
     fn report(&self, args: &[&str], output: Output) -> Value {
+        if !output.status.success() {
+            eprintln!(
+                "{}",
+                dev_session_logs::diagnostics(&self.project.join(".casework/dev"))
+            );
+        }
         assert!(
             output.status.success(),
             "caseworkctl {args:?} refused: stdout={} stderr={}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        serde_json::from_slice(&output.stdout).expect("a JSON report")
+        let report: Value = serde_json::from_slice(&output.stdout).expect("a JSON report");
+        assert_eq!(
+            report["apiVersion"],
+            "id.registrystack.org/formats/casework/report/v1alpha1"
+        );
+        assert_eq!(report["kind"], "CaseworkReport");
+        assert_eq!(report["status"], "complete");
+        assert_eq!(report["diagnostics"], json!([]));
+        assert_eq!(report["ok"], true);
+        report["data"].as_object().expect("typed command data");
+        report["data"].clone()
     }
 
     fn success(&self, args: &[&str]) -> Value {
@@ -354,7 +377,7 @@ impl Session {
             "--casework-bin",
             self.casework_bin.to_str().expect("a UTF-8 casework path"),
         ]);
-        assert_eq!(report["status"], "ready", "{report:#}");
+        assert_eq!(report["state"], "ready", "{report:#}");
         assert_eq!(
             report["caseworkUrl"],
             format!("http://127.0.0.1:{casework_port}")
@@ -535,40 +558,82 @@ fn http(
 
 /// Create one submitted-context review as the admitted producer.
 fn create_review_request(session: &Session, report: &Value, reference: &str) -> Value {
-    let token = session.token(report, "requester");
-    let (status, body) = http(
-        "POST",
-        &format!(
-            "{}/v1/review-requests",
-            report["caseworkUrl"].as_str().expect("a Casework URL")
-        ),
-        Some(&token),
-        &[
-            ("registry-casework-profile", "requester"),
-            ("idempotency-key", reference),
-        ],
-        Some(json!({
-            "kind": "decision",
-            "subject": {
-                "source": "standalone",
-                "type": "batch",
-                "id": reference,
-                "version": "1",
-                "digest": format!("sha256:{:064x}", 1)
-            },
-            "requesterReference": reference,
-            "context": {
-                "strategy": "submitted",
-                "snapshot": {
-                    "summary": "Confirm the prepared synthetic batch",
-                    "reference": reference
-                }
-            }
-        })),
-    );
-    assert_eq!(status, 201, "{body:#}");
-    assert!(body["requestId"].is_string(), "{body:#}");
-    body
+    let token = BearerToken::new(session.token(report, "requester")).expect("a bounded bearer");
+    // The issuer identity is rewritten before startup. Compile its actual dependency
+    // closure, then prove the served discovery contract has that exact identity.
+    let project = registry_casework_core::CaseworkProject::from_slice(
+        &fs::read(session.project.join("casework.yaml")).expect("the served authored policy"),
+    )
+    .expect("canonical project");
+    let expected = project
+        .compile_policy("decision")
+        .expect("compiled producer policy")
+        .binding();
+    let request = ReviewCreateRequest {
+        policy: expected.clone(),
+        subject: SubjectBinding {
+            source: "standalone".into(),
+            subject_type: "batch".into(),
+            id: reference.into(),
+            version: "1".into(),
+            digest: ContentDigest::for_bytes(reference.as_bytes()),
+        },
+        requester_reference: reference.into(),
+        initiator: None,
+        context: ReviewContext::Submitted {
+            snapshot: json!({"summary":"Confirm the prepared synthetic batch","reference":reference}),
+        },
+        result_constraints: None,
+    };
+    let producer = project
+        .trusted_producers
+        .iter()
+        .find(|producer| producer.profile == "requester")
+        .expect("the admitted producer");
+    let digest = submission_digest(&producer.id, &request.subject.source, &request)
+        .expect("exact canonical submission");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let client = CaseworkClient::new(
+            CaseworkClientConfig::new(report["caseworkUrl"].as_str().unwrap().parse().unwrap())
+                .with_max_mutation_retries(0),
+        )
+        .expect("public Rust client");
+        let auth = || CaseworkAuth::new(&token, "requester");
+        let discovered = client
+            .review_policy(auth(), "decision")
+            .await
+            .expect("authenticated policy discovery")
+            .value;
+        assert_eq!(discovered.binding(), expected);
+        let first = client
+            .create_or_recover_review_request(auth(), reference, &request, &digest)
+            .await
+            .expect("Rust producer admission")
+            .value;
+        let recovered = client
+            .create_or_recover_review_request(auth(), reference, &request, &digest)
+            .await
+            .expect("same-key exact recovery")
+            .value;
+        assert_eq!(
+            recovered, first,
+            "a lost response never creates a second review"
+        );
+        assert_eq!(recovered.policy, expected);
+        assert_eq!(recovered.submission_digest, digest);
+        assert!(matches!(
+            client
+                .review_result(auth(), &recovered)
+                .await
+                .expect("authenticated pending result"),
+            ReviewResultResponse::Pending { .. }
+        ));
+        serde_json::to_value(recovered).unwrap()
+    })
 }
 
 /// Every unified review task the Staff client sees in the seeded team's queue.
@@ -608,12 +673,20 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     // What the tutorial reader runs first. `init` writes the local clients the
     // first start registers, so nothing else has to be authored.
     let created = session.success(&["init", project, "--template", "standalone-decision"]);
+    assert_eq!(created["created"], project, "{created:#}");
+    assert_eq!(created["template"], "standalone-decision");
     assert!(
-        created["created"]
-            .as_array()
-            .expect("a created list")
-            .contains(&json!("dev-clients.yaml")),
-        "{created:#}"
+        session.project.join("dev-clients.yaml").is_file(),
+        "init supplies the clients needed by the first dev start"
+    );
+    assert_eq!(
+        fs::metadata(session.project.join(".casework"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o077,
+        0,
+        "init creates the owner-only parent that dev needs for credentials"
     );
     // This test deliberately selects collision-free ports instead of the
     // template's default local issuer port. Keep the governed producer
@@ -623,9 +696,9 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
         &fs::read(&policy_path).expect("the initialized policy is readable"),
     )
     .expect("the initialized policy is valid YAML");
-    policy["reviewProducers"][0]["issuer"] =
+    policy["trustedProducers"][0]["issuer"] =
         format!("http://127.0.0.1:{}", session.ports[1]).into();
-    policy["reviewProducers"][0]["subject"] =
+    policy["trustedProducers"][0]["subject"] =
         registry_thunderid_tooling::local::agent_id("casework-local", "requester").into();
     fs::write(
         &policy_path,
@@ -655,9 +728,9 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
         .as_str()
         .expect("an operator config");
     let planned = session.success(&["plan", "--runtime-config", operator_config]);
-    assert_eq!(planned["changesPending"], false, "{planned:#}");
+    assert_eq!(planned["plan"]["changesPending"], false, "{planned:#}");
     let status = session.success(&["status", "--runtime-config", operator_config]);
-    assert_eq!(status["roleMode"], "single", "{status:#}");
+    assert_eq!(status["activation"]["roleMode"], "single", "{status:#}");
     assert_eq!(
         status["singleRoleStatement"],
         registry_casework::SINGLE_ROLE_STATEMENT,
@@ -673,18 +746,19 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
             .as_str()
             .expect("an operator config"),
     ]);
-    assert_eq!(doctor["checks"]["directory"], "ready", "{doctor:#}");
-    assert_eq!(doctor["checks"]["secretFiles"], "ready", "{doctor:#}");
-    assert_eq!(doctor["checks"]["reconciliation"], "ready", "{doctor:#}");
-    assert_eq!(doctor["checks"]["audit"], "ready", "{doctor:#}");
-    assert_eq!(doctor["checks"]["pinnedWork"], "ready", "{doctor:#}");
-    assert_eq!(doctor["pinnedWork"]["conflicts"], json!([]), "{doctor:#}");
+    for check in ["configuration", "package", "database", "audit"] {
+        assert_eq!(doctor["checks"][check], "ready", "{doctor:#}");
+    }
+    assert_eq!(doctor["activation"]["refusals"], json!([]), "{doctor:#}");
+    assert_eq!(doctor["activation"]["changesPending"], false, "{doctor:#}");
 
     // The runtime serves the package the start built from the authored
     // project, verified at startup exactly as a deployed package is.
     let package = fs::canonicalize(session.project.join(".casework/dev/package"))
         .expect("the start built a session package");
-    assert_eq!(doctor["packageRoot"], json!(package), "{doctor:#}");
+    let served = registry_casework::RuntimeConfig::load(Path::new(operator_config))
+        .expect("verified operator configuration");
+    assert_eq!(fs::canonicalize(served.package.root).unwrap(), package);
     let sums = fs::read(package.join("SHA256SUMS")).expect("the session package has SHA256SUMS");
     assert_eq!(
         doctor["packageDigest"],
@@ -743,7 +817,7 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     // A stopped session keeps its records: the same item is in the same inbox
     // after a restart, on the same retained ports. Complete it only after that
     // restart so both the pending and terminal forms cross a process boundary.
-    assert_eq!(session.stop(&[])["status"], "stopped");
+    assert_eq!(session.stop(&[])["state"], "stopped");
     let second = session.start();
     let completed = session.native.python(&json!({
         "baseUrl": second["caseworkUrl"],
@@ -768,7 +842,7 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
 
     // Terminal results are retained by the same session too. A newly started
     // runtime serves the producer's exact result and does not resurrect work.
-    assert_eq!(session.stop(&[])["status"], "stopped");
+    assert_eq!(session.stop(&[])["state"], "stopped");
     let terminal_restart = session.start();
     assert!(inbox(&session, &terminal_restart).is_empty());
     let retained_result = session.native.node(&json!({
@@ -792,7 +866,7 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     assert_eq!(receipt["policy"], accepted["policy"]);
 
     // Removal discards them: the same project starts empty and serves again.
-    assert_eq!(session.stop(&["--remove"])["status"], "stopped");
+    assert_eq!(session.stop(&["--remove"])["state"], "stopped");
     let third = session.start();
     assert_eq!(third["directory"]["teams"], 1, "{third:#}");
     assert!(inbox(&session, &third).is_empty());

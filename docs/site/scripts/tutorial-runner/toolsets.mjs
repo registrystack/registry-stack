@@ -127,7 +127,7 @@ function productToolset({
           if (error instanceof ToolsetError) throw new ToolsetError(`building ${label} failed: ${error.message}`);
           throw error;
         }
-        paths = binaries.map(([name]) => join(targetDir, profile, name));
+        paths = binaries.map(([name, , output = name]) => join(targetDir, profile, output));
       }
       binaries.forEach(([, variable], i) => checkBinary(variable, paths[i]));
       await serveBinaries(binDir, binaries.map(([name], i) => [name, paths[i]]), libraryDir);
@@ -211,6 +211,65 @@ const casework = productToolset({
     ['bregctl', '.breg/dev/state.json'],
   ],
 });
+
+// Registry Coordinator's reviewed-notice journey composes the three product
+// runtimes it actually calls. Its example-owned session helper owns teardown;
+// the ordinary product-session sweep remains as an idempotent fallback when a
+// reader interrupts startup before the helper records readiness.
+const coordinatorProduct = productToolset({
+  label: 'coordinator, BReg, Casework, and Messaging',
+  commands: /(^|[^\w./=-])(coordinatorctl|coordinator|reviewed-notice-input)([^\w./-]|$)|products\/coordinator\/examples\/reviewed-notice\/session\.py/mu,
+  includes: ['breg', 'casework'],
+  binaries: [
+    ['coordinator', 'COORDINATOR_BIN'],
+    ['coordinatorctl', 'COORDINATORCTL_BIN'],
+    ['breg', 'BREG_BIN'],
+    ['bregctl', 'BREGCTL_BIN'],
+    ['casework', 'CASEWORK_BIN'],
+    ['caseworkctl', 'CASEWORKCTL_BIN'],
+    ['messaging', 'MESSAGING_BIN'],
+    ['messagingctl', 'MESSAGINGCTL_BIN'],
+    ['reviewed-notice-input', 'REVIEWED_NOTICE_INPUT_BIN', 'examples/reviewed-notice-input'],
+  ],
+  cargoArgs: [
+    '-p', 'registry-coordinator', '--example', 'reviewed-notice-input',
+    '-p', 'registry-breg', '--features', 'registry-breg/runtime', '-p', 'registry-bregctl',
+    '-p', 'registry-casework', '-p', 'registry-caseworkctl',
+    '-p', 'registry-messaging', '-p', 'registry-messagingctl',
+  ],
+  profileVariable: 'COORDINATOR_TUTORIAL_CARGO_PROFILE',
+  targetName: 'coordinator-tutorial-source',
+  sessions: [
+    ['caseworkctl', '.casework/dev/state.json'],
+    ['bregctl', '.breg/dev/state.json'],
+  ],
+});
+
+const coordinator = {
+  ...coordinatorProduct,
+
+  async prepare(context) {
+    await coordinatorProduct.prepare(context);
+    return { COORDINATOR_TUTORIAL_BIN_DIR: context.binDir };
+  },
+
+  async teardown(context) {
+    let helperStopped = true;
+    const state = join(context.readerDir, 'tutorial-work', 'reviewed-notice', 'session.json');
+    if (existsSync(state)) {
+      const helper = join(context.readerDir, 'products', 'coordinator', 'examples', 'reviewed-notice', 'session.py');
+      const stop = spawnSync('python3', [helper, 'stop', '--session-dir', dirname(state)], { encoding: 'utf8' });
+      if (stop.status !== 0) {
+        console.error(`could not stop the reviewed-notice session:\n${stop.stdout}${stop.stderr}`);
+        helperStopped = false;
+      } else {
+        console.log('stopped the reviewed-notice tutorial session');
+      }
+    }
+    const productSessionsStopped = await coordinatorProduct.teardown(context);
+    return helperStopped && productSessionsStopped;
+  },
+};
 
 // Registry Discovery: discovery and discoveryctl. A page serves the index
 // from a background fence, which the runner stops itself, so there is no
@@ -343,4 +402,4 @@ const none = {
   },
 };
 
-export const TOOLSETS = { breg, casework, discovery, evidence, none };
+export const TOOLSETS = { breg, casework, coordinator, discovery, evidence, none };

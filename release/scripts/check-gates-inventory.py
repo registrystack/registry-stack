@@ -372,6 +372,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "registry-messaging-client-node registry-scheduling-client-node",
     ),
     (
+        "Coordinator Python client binding coverage",
+        "registry-scheduling-client-py registry-coordinator-client-py",
+    ),
+    (
+        "Coordinator Node client binding coverage",
+        "registry-scheduling-client-node registry-coordinator-client-node",
+    ),
+    (
         "Scheduling contract path filter",
         "scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}",
     ),
@@ -484,6 +492,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Messaging product script tests",
         "python3 -m unittest discover -s products/messaging/scripts -p 'test_*.py'",
+    ),
+    (
+        "Coordinator dependency-direction guard",
+        "run: python3 products/coordinator/scripts/check_dependency_direction.py",
+    ),
+    (
+        "Coordinator dependency gate tests",
+        "run: python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'",
     ),
     (
         "Messaging security contract validation",
@@ -1134,6 +1150,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             '    "casework",\n',
             '    "scheduling",\n',
             '    "messaging",\n',
+            '    "coordinator",\n',
             '    "relay",\n',
             "if package in PUBLIC_PACKAGES:",
             "if package not in CANDIDATE_PACKAGES:",

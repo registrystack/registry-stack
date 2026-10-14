@@ -161,6 +161,7 @@ const AUTHORED_SOURCE_REDERIVATION_MAX_BYTES: u64 = 1024 * 1024;
 const MAX_DERIVED_SQL_ASSET_BYTES: u64 = 256 * 1024;
 const MAX_PLANNER_TEST_REQUEST_BYTES: u64 = 64 * 1024;
 const PLANNER_TEST_DEADLINE: Duration = Duration::from_secs(1);
+const UNRECOGNIZED_DATABASE_RECOVERY: &str = "the database does not match this BReg release's catalog and activation ledger; verify the binary, package and database pairing, or restore a verified backup. Retired registry models require a new database. Nothing was changed";
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Parser)]
@@ -2961,12 +2962,14 @@ fn evidence_retention_failure(error: registry_breg::mutation::MutationError) -> 
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::RetryAfterMigrationLockReleases,
         ),
-        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => package_pin_failure(
-            command,
-            "evidence-retention.package.refused",
-            "package",
-            &mismatch,
-        ),
+        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => {
+            package_pin_failure(
+                command,
+                "evidence-retention.package.refused",
+                "package",
+                &mismatch,
+            )
+        }
         _ => source_failure(
             command,
             diagnostic(
@@ -2993,12 +2996,14 @@ fn idempotency_retention_failure(error: registry_breg::mutation::MutationError) 
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::RetryAfterMigrationLockReleases,
         ),
-        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => package_pin_failure(
-            command,
-            "idempotency-retention.package.refused",
-            "package",
-            &mismatch,
-        ),
+        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => {
+            package_pin_failure(
+                command,
+                "idempotency-retention.package.refused",
+                "package",
+                &mismatch,
+            )
+        }
         _ => source_failure(
             command,
             diagnostic(
@@ -3023,7 +3028,7 @@ fn proposal_retention_failure(
                 "proposal-retention.package.refused",
                 "package",
                 &mismatch,
-            )
+            );
         }
         ProposalRetentionCliError::MigrationLockHeld => (
             "proposal-retention.in-progress",
@@ -3200,7 +3205,7 @@ fn import_authority_failure(
                 "import-authority.package.refused",
                 "package",
                 &mismatch,
-            )
+            );
         }
         ImportAuthorityCliError::Authority(ImportAuthorityError::MigrationLockHeld) => (
             diagnostic(
@@ -4312,7 +4317,7 @@ fn unavailable_webhook_event(compiled: &CompiledRegistry) -> FailureReport {
 fn webhook_lifecycle_failure(command: &'static str, error: WebhookLifecycleError) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
         WebhookLifecycleError::PackagePinMismatch(mismatch) => {
-            return package_pin_failure(command, "webhook.package.refused", "package", &mismatch)
+            return package_pin_failure(command, "webhook.package.refused", "package", &mismatch);
         }
         WebhookLifecycleError::Event => (
             "webhook.sample.event-refused",
@@ -4694,14 +4699,18 @@ fn data_lifecycle_failure(
             DiagnosticArtifact::DataCheckpoint,
             SuggestedAction::VerifyDataCheckpoint,
         ),
-        DataLifecycleError::ImportRunBlocked(Some(BRegIngestionBlockedReason::ActivePackageChanged)) => (
+        DataLifecycleError::ImportRunBlocked(Some(
+            BRegIngestionBlockedReason::ActivePackageChanged,
+        )) => (
             format!("{prefix}.ingestion-run.blocked"),
             "ingestionRun",
             "the ingestion run is blocked because the active package changed; the run stays inspectable, and a new import under the active package needs a fresh checkpoint path",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::VerifyDataCheckpoint,
         ),
-        DataLifecycleError::ImportRunBlocked(Some(BRegIngestionBlockedReason::ImportAuthorityClosed)) => (
+        DataLifecycleError::ImportRunBlocked(Some(
+            BRegIngestionBlockedReason::ImportAuthorityClosed,
+        )) => (
             format!("{prefix}.ingestion-run.import-authority-closed"),
             "ingestionRun",
             "the ingestion run is blocked because its import authority closed, expired, or has too little volume left for the next chunk; the committed chunks stay, and the remaining items need a new authority (bregctl import-authority list, then open) and a fresh checkpoint path",
@@ -4715,14 +4724,18 @@ fn data_lifecycle_failure(
             DiagnosticArtifact::DataOperation,
             SuggestedAction::VerifyDataCheckpoint,
         ),
-        DataLifecycleError::IngestionRunPrecondition { through_import: true } => (
+        DataLifecycleError::IngestionRunPrecondition {
+            through_import: true,
+        } => (
             format!("{prefix}.ingestion-run.import-authority-required"),
             "ingestionRun",
             "the ingestion run was refused because no open import authority admits it: none is open for the entity, it names another profile, it expired, it has too little volume left, or it lists other input digests than the one the run announces; check bregctl import-authority list and open one that covers this input",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::CorrectDataBinding,
         ),
-        DataLifecycleError::IngestionRunPrecondition { through_import: false } => (
+        DataLifecycleError::IngestionRunPrecondition {
+            through_import: false,
+        } => (
             format!("{prefix}.ingestion-run.precondition-failed"),
             "ingestionRun",
             "the ingestion run was refused on a failed precondition",
@@ -5398,14 +5411,18 @@ fn status_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             DiagnosticArtifact::PackageActivation,
             SuggestedAction::VerifyMigrationAuthority,
         ),
-        ApplyLifecycleError::Apply(registry_breg::migration::MigrationError::UnrecognizedDatabase) => (
+        ApplyLifecycleError::Apply(
+            registry_breg::migration::MigrationError::UnrecognizedDatabase,
+        ) => (
             "status.database.unrecognized",
             "database",
-            "the database holds registry state this release does not recognise, such as state written by a release older than its immediate predecessor: a release reads only the state its predecessor wrote, so upgrade one release at a time",
+            UNRECOGNIZED_DATABASE_RECOVERY,
             DiagnosticArtifact::PackageActivation,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
-        ApplyLifecycleError::Apply(registry_breg::migration::MigrationError::DatabaseUnavailable) => (
+        ApplyLifecycleError::Apply(
+            registry_breg::migration::MigrationError::DatabaseUnavailable,
+        ) => (
             "status.database.unavailable",
             "database",
             "the migration database could not be reached: check database.migrationUrlRef and that the database accepts the migration role, then run `bregctl status` again",
@@ -5598,8 +5615,11 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                 ok: false,
                 command: "test",
                 diagnostics: vec![tool_diagnostic(
-                    diagnostic("breg.field.pattern-syntax-invalid", &format!("recordTypes[{entity_id}].fields[{field_id}].pattern"),
-                        "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test"),
+                    diagnostic(
+                        "breg.field.pattern-syntax-invalid",
+                        &format!("recordTypes[{entity_id}].fields[{field_id}].pattern"),
+                        "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test",
+                    ),
                     DiagnosticArtifact::SchemaTestCandidate,
                     SuggestedAction::CorrectSchemaTestCandidate,
                 )],
@@ -6178,7 +6198,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             registry_breg::migration::MigrationError::UnrecognizedDatabase => (
                 "apply.database.unrecognized",
                 "database",
-                "the database holds registry state this release does not recognise, such as state written by a release older than its immediate predecessor: a release reads only the state its predecessor wrote, so upgrade one release at a time. Nothing was changed",
+                UNRECOGNIZED_DATABASE_RECOVERY,
                 DiagnosticArtifact::PackageActivation,
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
@@ -6680,7 +6700,7 @@ fn active_registry_failure(
         ActiveRegistryError::Unrecognized => (
             "unrecognized",
             "database",
-            "the database holds registry state this release does not recognise, such as state written by a release older than its immediate predecessor; a release reads only the state its predecessor wrote, so upgrade one release at a time",
+            UNRECOGNIZED_DATABASE_RECOVERY,
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
@@ -7929,7 +7949,7 @@ fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories,
             return Ok(ModuleDirectories {
                 directory: None,
                 names: Vec::new(),
-            })
+            });
         }
         Err(SafePathError::Unavailable) => return Err(unreadable()),
         Err(error) => {
@@ -7939,7 +7959,7 @@ fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories,
                 "project",
                 "the project directory is not available",
                 "the project directory must be a directory and must not be a symbolic link",
-            ))
+            ));
         }
     };
     let mut names = Vec::new();
@@ -8779,7 +8799,9 @@ impl ArtifactSelector {
                     || path.starts_with("generated/review-context-schemas/")
             }
             ArtifactSelector::Actions => {
-                path == "compiled/actions.json" || path.starts_with("generated/action-schemas/")
+                path == "generated/action-contracts.json"
+                    || path == "generated/action-contracts.schema.json"
+                    || path.starts_with("generated/action-schemas/")
             }
             ArtifactSelector::Manifest => path.starts_with("generated/manifest/"),
             ArtifactSelector::Metadata => path == "generated/metadata/registry.json",
@@ -11224,10 +11246,18 @@ fn write_plan_success(
             .and_then(|()| writeln!(stdout))
     } else {
         let lead = match report.activation {
-            PlanActivation::Initial => "Planned the first activation on this registry; nothing was changed. Run `bregctl apply --initial --package DIR` to activate it.",
-            PlanActivation::Successor => "Planned a successor activation over the active package; nothing was changed. Run `bregctl apply --package DIR` to activate it.",
-            PlanActivation::RoleChange => "Planned activating the active package again with the configured database roles; nothing was changed. Run `bregctl apply --package DIR` to activate it.",
-            PlanActivation::None => "The database already runs this package with the configured database roles; there is nothing to apply.",
+            PlanActivation::Initial => {
+                "Planned the first activation on this registry; nothing was changed. Run `bregctl apply --initial --package DIR` to activate it."
+            }
+            PlanActivation::Successor => {
+                "Planned a successor activation over the active package; nothing was changed. Run `bregctl apply --package DIR` to activate it."
+            }
+            PlanActivation::RoleChange => {
+                "Planned activating the active package again with the configured database roles; nothing was changed. Run `bregctl apply --package DIR` to activate it."
+            }
+            PlanActivation::None => {
+                "The database already runs this package with the configured database roles; there is nothing to apply."
+            }
         };
         let mut lines = report::Lines::new();
         lines.lead(lead);
@@ -12691,7 +12721,13 @@ mod tests {
                         document["refusalCode"] = json!(reason);
                     }
                     let body = serde_json::to_string(&document).unwrap();
-                    format!("HTTP/1.1 {} {}\r\nContent-Type: application/problem+json\r\nCache-Control: no-store\r\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",code.status(),title,body.len(),body)
+                    format!(
+                        "HTTP/1.1 {} {}\r\nContent-Type: application/problem+json\r\nCache-Control: no-store\r\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        code.status(),
+                        title,
+                        body.len(),
+                        body
+                    )
                 } else {
                     "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 7\r\nConnection: close\r\n\r\ninvalid".to_owned()
                 };
@@ -13330,11 +13366,13 @@ mod tests {
             assert_eq!(action["plan"]["function"]["abi"], "registry.action-plan/v1");
             let evidence = action["dependencies"]["evidence"].as_array().unwrap();
             assert_eq!(evidence.len(), 2);
-            assert!(evidence.iter().all(|binding| binding["contractFingerprint"]
-                .as_str()
-                .unwrap()
-                .starts_with("sha256:")
-                && binding["provider"] == "farmer-registry"));
+            assert!(evidence.iter().all(|binding| {
+                binding["contractFingerprint"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("sha256:")
+                    && binding["provider"] == "farmer-registry"
+            }));
             assert!(action["plan"]["function"]["scriptSource"].is_null());
             assert!(action["revision"].as_str().unwrap().starts_with("sha256:"));
         }
@@ -14933,7 +14971,7 @@ fn apply_chain_refusals_name_the_operators_next_command() {
             ApplyLifecycleError::Apply(MigrationError::UnrecognizedDatabase),
             "apply.database.unrecognized",
             "database",
-            "upgrade one release at a time",
+            "verify the binary, package and database pairing",
         ),
         (
             ApplyLifecycleError::Apply(MigrationError::RuntimeWriteAuthority(

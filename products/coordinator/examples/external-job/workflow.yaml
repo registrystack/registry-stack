@@ -1,0 +1,112 @@
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: external-job
+  version: "1"
+
+types:
+  job-input:
+    type: object
+    additionalProperties: false
+    required: [jobId]
+    properties:
+      jobId: {type: string, minLength: 1, maxLength: 64}
+  job-response:
+    type: object
+    additionalProperties: false
+    required: [status, body]
+    properties:
+      status: {type: integer, const: 200}
+      body:
+        type: object
+        additionalProperties: false
+        required: [jobId, state]
+        properties:
+          jobId: {type: string, minLength: 1, maxLength: 64}
+          state: {type: string, enum: [queued, running, succeeded, failed]}
+  job-result:
+    type: object
+    additionalProperties: false
+    required: [jobId]
+    properties:
+      jobId: {type: string, minLength: 1, maxLength: 64}
+  job-observation:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [state]
+        properties:
+          state: {type: string, const: pending}
+      - type: object
+        additionalProperties: false
+        required: [state, result]
+        properties:
+          state: {type: string, const: complete}
+          result: {typeRef: job-result}
+      - type: object
+        additionalProperties: false
+        required: [state, code]
+        properties:
+          state: {type: string, const: refused}
+          code: {type: string, enum: [external-job-failed]}
+
+functions:
+  job-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: job_request
+    inputs:
+      request: {typeRef: job-input}
+    output: {operationInput: read-job}
+  job-observation:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: job_observation
+    inputs:
+      command: {operationInput: read-job}
+      response: {operationOutput: read-job}
+    output: {typeRef: job-observation}
+
+operations:
+  read-job:
+    uses: external.get/v1
+    connection: jobs
+    responseSchema: {typeRef: job-response}
+    completions:
+      terminal:
+        type: bounded-poll
+        interpret: job-observation
+        intervalSeconds: 30
+
+workflow:
+  input: {typeRef: job-input}
+  deadlineSeconds: 900
+  start: read
+  steps:
+    read:
+      title: Read this job's status
+      type: call
+      operation: read-job
+      input:
+        type: function
+        function: job-request
+        inputs:
+          request: {type: input}
+      next: await-terminal
+    await-terminal:
+      type: wait-for
+      completion: {step: read, name: terminal}
+      timeoutSeconds: 600
+      next: report-terminal
+      onTimeout: stopped-waiting
+    report-terminal:
+      type: finish
+      outcome: job-result
+      output: {type: step, step: await-terminal}
+    stopped-waiting:
+      type: finish
+      outcome: job-wait-expired
+  outcomes:
+    job-result:
+      completionOutput: {operation: read-job, name: terminal}
+    job-wait-expired: {type: "null"}

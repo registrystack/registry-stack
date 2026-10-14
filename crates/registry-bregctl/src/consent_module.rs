@@ -145,7 +145,7 @@ pub(crate) fn add_consent_module(
                         return Err(match plan.dataset_conflict_index {
                             Some(index) => dataset_conflict(index, failure),
                             None => failure,
-                        })
+                        });
                     }
                 }
             }

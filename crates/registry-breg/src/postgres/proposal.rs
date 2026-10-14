@@ -572,6 +572,8 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            // Keep the lifecycle, frozen submission, review and application
+            // projection coherent while current target authority is checked.
             let document = proposal_store::load_document(
                 guarded.transaction(),
                 id,

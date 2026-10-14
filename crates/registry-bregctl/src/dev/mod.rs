@@ -57,8 +57,7 @@ const MIGRATION_ROLE: &str = "breg_dev_migration";
 const RUNTIME_ROLE: &str = "breg_dev_runtime";
 // Pull the digest-identical Docker Official Images mirror. Public help keeps
 // the canonical upstream tag and digest, whose image identity is unchanged.
-const IMAGE: &str =
-    "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+const IMAGE: &str = "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const CANONICAL_IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const SPATIAL_IMAGE: &str =
@@ -564,7 +563,9 @@ fn clients_file(
             if generated.is_file() {
                 fs::canonicalize(&generated).context("clients file does not exist")
             } else {
-                bail!("first start needs local clients: add dev-clients.yaml to the project, as bregctl init does, or name a clients file with --clients-file")
+                bail!(
+                    "first start needs local clients: add dev-clients.yaml to the project, as bregctl init does, or name a clients file with --clients-file"
+                )
             }
         }
     }
@@ -674,7 +675,9 @@ fn borrowed_owner(state: &State) -> Result<Option<State>> {
             return Ok(Some(owner));
         }
     }
-    bail!("the retained issuer project is not the same ready owner session; start its BREG dev session first")
+    bail!(
+        "the retained issuer project is not the same ready owner session; start its BREG dev session first"
+    )
 }
 
 fn candidate_issuer_image(value: &str) -> std::result::Result<String, String> {
@@ -771,7 +774,7 @@ fn probe(port: u16, role: PortRole) -> Result<()> {
                     "checking whether the local {} can bind 127.0.0.1:{port}",
                     role.name()
                 )
-            })
+            });
         }
     }
     Ok(())
@@ -838,7 +841,9 @@ fn resolve_local_subject_markers(
                     .iter()
                     .any(|profile| profile.principal_claim != "sub")
             {
-                bail!("$localClientSubject is supported only as claims.principal for an authenticated sub access profile");
+                bail!(
+                    "$localClientSubject is supported only as claims.principal for an authenticated sub access profile"
+                );
             }
             let client = journey_client(clients, &journey_id, step_id, profile)?;
             step["claims"]["principal"] = json!(registry_thunderid_tooling::local::agent_id(
@@ -1229,7 +1234,9 @@ fn start(args: StartArgs) -> Result<Value> {
         read_state(&root)?
     };
     if state.sequence > 1 && state.container_id.is_none() {
-        bail!("the retained successor database was explicitly removed; a successor package cannot initialize empty records. Remove the project's .breg/dev directory, then run bregctl dev start to begin a fresh session");
+        bail!(
+            "the retained successor database was explicitly removed; a successor package cannot initialize empty records. Remove the project's .breg/dev directory, then run bregctl dev start to begin a fresh session"
+        );
     }
     let breg = executable("breg", args.breg_bin.as_deref())?;
     let docker = executable("docker", args.docker_bin.as_deref())?;
@@ -2210,7 +2217,9 @@ fn listed(docker: &Path, state: &State) -> Result<bool> {
 fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
     if !listed(docker, state)? {
         if state.container_id.is_some() {
-            bail!("retained database container is missing; restore its owned data or use a new project directory; no empty replacement was created");
+            bail!(
+                "retained database container is missing; restore its owned data or use a new project directory; no empty replacement was created"
+            );
         }
         return Ok(None);
     }
@@ -2388,7 +2397,10 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 &root.join("database").join(filename),
                 64,
             )?)?);
-            let statement=Zeroizing::new(format!("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='{role}') THEN CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '{}'; END IF; END $$;",password.as_str()));
+            let statement = Zeroizing::new(format!(
+                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='{role}') THEN CREATE ROLE {role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '{}'; END IF; END $$;",
+                password.as_str()
+            ));
             sql(
                 docker,
                 state,
@@ -2414,7 +2426,9 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                     None,
                 )?;
             }
-            let mut statements=format!("CREATE EXTENSION IF NOT EXISTS btree_gist; REVOKE ALL ON DATABASE {database} FROM PUBLIC; GRANT CONNECT ON DATABASE {database} TO {MIGRATION_ROLE},{RUNTIME_ROLE};");
+            let mut statements = format!(
+                "CREATE EXTENSION IF NOT EXISTS btree_gist; REVOKE ALL ON DATABASE {database} FROM PUBLIC; GRANT CONNECT ON DATABASE {database} TO {MIGRATION_ROLE},{RUNTIME_ROLE};"
+            );
             for schema in [
                 "registry_internal",
                 "registry_data",
@@ -2694,7 +2708,9 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         b"DROP DATABASE IF EXISTS breg_dev_test WITH (FORCE); CREATE DATABASE breg_dev_test;",
         None,
     )?;
-    let mut initialization=format!("CREATE EXTENSION btree_gist; REVOKE ALL ON DATABASE breg_dev_test FROM PUBLIC; GRANT CONNECT ON DATABASE breg_dev_test TO {MIGRATION_ROLE},{RUNTIME_ROLE};");
+    let mut initialization = format!(
+        "CREATE EXTENSION btree_gist; REVOKE ALL ON DATABASE breg_dev_test FROM PUBLIC; GRANT CONNECT ON DATABASE breg_dev_test TO {MIGRATION_ROLE},{RUNTIME_ROLE};"
+    );
     for schema in [
         "registry_internal",
         "registry_data",
@@ -3034,7 +3050,9 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
             Some(&key),
         )?;
         if status != 201 {
-            bail!("synthetic seed was refused; inspect the authored seed/profile and retained state. Earlier completed seeds will not repeat");
+            bail!(
+                "synthetic seed was refused; inspect the authored seed/profile and retained state. Earlier completed seeds will not repeat"
+            );
         }
         state.mark_seeded(&seed.id)?;
         state.save()?;
@@ -3241,7 +3259,9 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
         )
     })?;
     if !outcome.complete || outcome.committed_items != 1 {
-        bail!("synthetic import seed did not complete exactly one item; its authority and checkpoint were retained for a safe resume");
+        bail!(
+            "synthetic import seed did not complete exactly one item; its authority and checkpoint were retained for a safe resume"
+        );
     }
     crate::import_authority_lifecycle::close(&crate::import_authority_lifecycle::CloseArguments {
         runtime_config: &runtime_config,

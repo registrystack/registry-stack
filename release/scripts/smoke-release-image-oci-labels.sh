@@ -6,9 +6,9 @@ repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 checker="${script_dir}/check-release-image-oci-labels.py"
 image_builder="${script_dir}/build-release-image.sh"
 layout_comparator="${script_dir}/compare-release-image-layouts.py"
-images=(evidence evidence-oid4vci discovery registry-render breg breg-mcp breg-review casework scheduling messaging)
+images=(evidence evidence-oid4vci discovery registry-render breg breg-mcp breg-review casework scheduling messaging coordinator)
 # The stateful product images carry their operator tool beside the runtime.
-operator_tools=(bregctl caseworkctl schedulingctl messagingctl)
+operator_tools=(bregctl caseworkctl schedulingctl messagingctl coordinatorctl)
 sample_dockerfile="${repo_root}/release/docker/Dockerfile.evidence"
 
 source_label="https://github.com/registrystack/registry-stack"

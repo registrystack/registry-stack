@@ -1,14 +1,11 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Every committed Casework schema is reproduced by its generator, never
-# hand-edited. The drift tests compile only under each crate's schema
-# feature, which a default-feature test run leaves off, so this script is
-# the gate that runs them. It needs no database.
-repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
+#!/bin/sh
+set -eu
+# Derive every maintained contract from the owning Rust DTOs and compiler.
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 cd "$repo_root"
-
-export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-cargo test --locked --quiet -p registry-casework-core --features schema --lib schema::tests
-cargo test --locked --quiet -p registry-casework --features schema --lib schema::tests
-cargo test --locked --quiet -p registry-caseworkctl --features schema --lib schema::tests
+python3 products/casework/scripts/generate_openapi.py --check
+python3 products/casework/scripts/generate_cli_schemas.py --check
+cargo test --locked --offline -j2 -p registry-casework-core --features schema --lib schema::tests
+cargo test --locked --offline -j2 -p registry-casework --features schema --lib schema::tests
+cargo test --locked --offline -j2 -p registry-caseworkctl --features schema --lib schema::tests
+cargo test --locked --offline -j2 -p registry-caseworkctl --features schema --lib report::typed_report_tests

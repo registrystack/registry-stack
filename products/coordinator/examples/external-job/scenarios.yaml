@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+# Synthetic replies exercise the compiled model. HTTP authority and durability are tested separately.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: complete-after-pending
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    jobId: job-001
+  replies:
+    read:
+    - type: success
+      value:
+        status: 200
+        body:
+          jobId: job-001
+          state: queued
+  waits:
+    await-terminal:
+      type: observations
+      responses:
+      - status: 200
+        body:
+          jobId: job-001
+          state: running
+      - status: 200
+        body:
+          jobId: job-001
+          state: succeeded
+  expect:
+    path:
+    - read
+    - await-terminal
+    - report-terminal
+    state: completed
+    outcome:
+      type: named
+      value: job-result
+    output:
+      state: complete
+      result:
+        jobId: job-001
+- id: declared-job-failure
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    jobId: job-001
+  replies:
+    read:
+    - type: success
+      value:
+        status: 200
+        body:
+          jobId: job-001
+          state: queued
+  waits:
+    await-terminal:
+      type: observations
+      responses:
+      - status: 200
+        body:
+          jobId: job-001
+          state: failed
+  expect:
+    path:
+    - read
+    - await-terminal
+    - report-terminal
+    state: completed
+    outcome:
+      type: named
+      value: job-result
+    output:
+      state: refused
+      code: external-job-failed
+- id: timeout-stops-only-this-wait
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    jobId: job-001
+  replies:
+    read:
+    - type: success
+      value:
+        status: 200
+        body:
+          jobId: job-001
+          state: running
+  waits:
+    await-terminal:
+      type: timeout
+  expect:
+    path:
+    - read
+    - await-terminal
+    - stopped-waiting
+    state: completed
+    outcome:
+      type: named
+      value: job-wait-expired
+    output: null
+    workflowElapsedSeconds: 600
+- id: read-current-authority-refused
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    jobId: job-001
+  replies:
+    read:
+    - type: refused
+      code: credential-refused
+  expect:
+    path:
+    - read
+    state: refused
+    outcome:
+      type: none

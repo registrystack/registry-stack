@@ -1,406 +1,91 @@
 // SPDX-License-Identifier: Apache-2.0
-
-//! The Casework client, reached only through the facade.
-//!
-//! A caller who depends on this crate alone must be able to name every type a
-//! Casework method takes and returns. The signatures below are compiled, never
-//! run: a type the facade does not re-export cannot be named here, so the
-//! build fails rather than the caller's. The catalogue test then holds the
-//! re-export list level with the client's own public surface in both
-//! directions, so a name added to the client reaches the facade too.
-
+//! The Casework surface can be reached and named solely through the facade.
+use registry_stack_client::casework::*;
 use std::collections::BTreeSet;
-
-use registry_stack_client::casework::{
-    AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, AssignmentRequest, BearerToken,
-    BootstrapDirectoryRequest, CaseloadApplyRequest, CaseloadItemResult, CaseloadMoveRequest,
-    CaseloadPreviewPage, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth, CaseworkClient,
-    CaseworkClientConfig, CaseworkClientError, CaseworkComplete, ClockOccurrenceView,
-    ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
-    DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
-    DirectoryTargetsQuery, DirectoryTeamUpdateRequest, DraftResponse, HistoryPage, HoldingsPage,
-    HoldingsQuery, HolidaySetDocument, HolidaySetRevisionInput, ListWorkItemsQuery,
-    MutationResponse, NextWorkItemQuery, OwnReviewDecisionPage, OwnReviewDecisionQuery,
-    RecoverAttemptRequest, ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse,
-    ReviewCreateRequest, ReviewHistoryEntry, ReviewHistoryPage, ReviewKindPolicySnapshot,
-    ReviewNoteRequest, ReviewPageQuery, ReviewRequestAccepted, ReviewRequestView,
-    ReviewResultFeedPage, ReviewTaskContext, ReviewTaskDecisionRequest, ReviewTaskDraft,
-    ReviewTaskDraftInput, ReviewTaskPage, ReviewTaskQuery, ReviewerTask, SaveDraftRequest,
-    SubmissionDigest, SupervisoryReviewTaskPage, SupervisoryReviewTaskQuery, Uuid, WorkItem,
-    WorkItemHistoryQuery, WorkItemPage,
-};
-
-/// The client's public surface, read from the crate that publishes it.
 const CLIENT_SOURCE: &str = include_str!("../../registry-casework-client/src/lib.rs");
-
-/// The facade's own source, read to compare the two lists as written.
 const FACADE_SOURCE: &str = include_str!("../src/lib.rs");
-
-/// Every Casework method, with its parameter and return types named through
-/// the facade alone. Each call takes its own authentication, because one
-/// `CaseworkAuth` authenticates exactly one request.
-#[allow(clippy::too_many_arguments)]
+#[allow(dead_code, clippy::too_many_arguments)]
 async fn every_casework_method_names_its_types(
-    config: CaseworkClientConfig,
+    client: &CaseworkClient,
     token: &BearerToken,
     profile: &str,
-    item_id: Uuid,
-    attempt_id: Uuid,
+    task_id: Uuid,
+    request_id: Uuid,
     event_id: Uuid,
-    absence_id: Uuid,
-    team_id: &str,
-    holiday_set: &str,
-    holiday_revision_number: u64,
-    expected_revision: i64,
-    idempotency_key: &str,
-    action: &CaseworkAction,
-    review_create: &ReviewCreateRequest,
-    expected_submission_digest: &SubmissionDigest,
-    review_accepted: &ReviewRequestAccepted,
-    review_cancel: &ReviewCancelRequest,
-    review_note: &ReviewNoteRequest,
-    review_decision: &ReviewTaskDecisionRequest,
-    review_draft: &ReviewTaskDraftInput,
-    review_page: &ReviewPageQuery,
-    work_item_history_query: &WorkItemHistoryQuery,
-    review_task_query: &ReviewTaskQuery,
-    own_review_decision_query: &OwnReviewDecisionQuery,
-    supervisory_review_task_query: &SupervisoryReviewTaskQuery,
-    list_query: &ListWorkItemsQuery,
-    next_query: &NextWorkItemQuery,
-    draft: &SaveDraftRequest,
-    decision: &DecideRequest,
-    recovery: &RecoverAttemptRequest,
-    holdings_query: &HoldingsQuery,
-    targets_query: &DirectoryTargetsQuery,
-    bootstrap: &BootstrapDirectoryRequest,
-    absence: &AbsenceInput,
-    absences_query: &AbsencesQuery,
+    revision: i64,
+    key: &str,
+    admission: &ReviewCreateRequest,
+    digest: &SubmissionDigest,
+    accepted: &ReviewRequestAccepted,
+    cancel: &ReviewCancelRequest,
+    staffing: &ReviewStaffingQuery,
+    page: &ReviewPageQuery,
     assignment: &AssignmentRequest,
     delegation: &DelegateRequest,
-    caseload_move: &CaseloadMoveRequest,
-    caseload_preview: &CaseloadPreviewQuery,
-    caseload_apply: &CaseloadApplyRequest,
-    team_update: &DirectoryTeamUpdateRequest,
-    holiday_input: &HolidaySetRevisionInput,
-    recompute: &ClockRecomputeRequest,
-    recompute_apply: &ClockRecomputeApplyRequest,
+    draft: &ReviewTaskDraftInput,
+    decision: &ReviewTaskDecisionRequest,
+    move_request: &ReviewCaseloadMoveRequest,
+    move_apply: &ReviewCaseloadApplyRequest,
+    clock_request: &ReviewClockRecomputeRequest,
+    clock_apply: &ReviewClockRecomputeApplyRequest,
 ) -> Result<(), CaseworkClientError> {
-    let client: CaseworkClient = CaseworkClient::new(config)?;
-    let _: CaseworkComplete<Description> = client
-        .description(CaseworkAuth::new(token, profile))
-        .await?;
+    let auth = || CaseworkAuth::new(token, profile);
+    let _: CaseworkComplete<Description> = client.description(auth()).await?;
+    let _: CaseworkComplete<Vec<ReviewPolicyClosure>> = client.review_policies(auth()).await?;
+    let _: CaseworkComplete<ReviewPolicyClosure> = client.review_policy(auth(), "review").await?;
     let _: CaseworkComplete<ReviewRequestAccepted> = client
-        .create_or_recover_review_request(
-            CaseworkAuth::new(token, profile),
-            idempotency_key,
-            review_create,
-            expected_submission_digest,
-        )
+        .create_or_recover_review_request(auth(), key, admission, digest)
         .await?;
-    let _: CaseworkComplete<ReviewRequestView> = client
-        .review_request(CaseworkAuth::new(token, profile), item_id)
-        .await?;
-    let _ = client
-        .review_result(CaseworkAuth::new(token, profile), review_accepted)
-        .await?;
-    let _: CaseworkComplete<ReviewResultFeedPage> = client
-        .review_results(CaseworkAuth::new(token, profile), review_page)
-        .await?;
+    let _: CaseworkComplete<ReviewRequestView> = client.review_request(auth(), request_id).await?;
+    let _: ReviewResultResponse = client.review_result(auth(), accepted).await?;
+    let _: CaseworkComplete<ReviewResultFeedPage> = client.review_results(auth(), page).await?;
     let _: CaseworkComplete<ReviewCancelResponse> = client
-        .cancel_review_request(
-            CaseworkAuth::new(token, profile),
-            review_accepted,
-            idempotency_key,
-            review_cancel,
-        )
+        .cancel_review_request(auth(), accepted, key, cancel)
         .await?;
-    let _: CaseworkComplete<Vec<ReviewKindPolicySnapshot>> = client
-        .review_kinds(CaseworkAuth::new(token, profile))
+    let _: CaseworkComplete<ReviewTaskPage> = client.review_tasks(auth(), staffing).await?;
+    let _: CaseworkComplete<Option<ReviewTask>> = client.next_review_task(auth(), staffing).await?;
+    let _: CaseworkComplete<ReviewTaskPage> = client.review_task_holdings(auth(), staffing).await?;
+    let _: CaseworkComplete<ReviewTask> = client.review_task(auth(), task_id).await?;
+    let _: CaseworkComplete<ReviewTaskContext> =
+        client.review_task_context(auth(), task_id).await?;
+    let _: CaseworkComplete<ReviewTask> = client
+        .claim_review_task(auth(), task_id, revision, key)
         .await?;
-    let _: CaseworkComplete<ReviewKindPolicySnapshot> = client
-        .review_kind(CaseworkAuth::new(token, profile), "payment")
+    let _: CaseworkComplete<ReviewTask> = client
+        .release_review_task(auth(), task_id, revision, key)
         .await?;
-    let _: CaseworkComplete<ReviewTaskPage> = client
-        .review_tasks(CaseworkAuth::new(token, profile), review_task_query)
+    let _: CaseworkComplete<ReviewTask> = client
+        .assign_review_task(auth(), task_id, revision, key, assignment)
         .await?;
-    let _: CaseworkComplete<OwnReviewDecisionPage> = client
-        .own_review_decisions(CaseworkAuth::new(token, profile), own_review_decision_query)
+    let _: CaseworkComplete<ReviewTask> = client
+        .delegate_review_task(auth(), task_id, revision, key, delegation)
         .await?;
-    let _: CaseworkComplete<SupervisoryReviewTaskPage> = client
-        .supervisory_review_tasks(
-            CaseworkAuth::new(token, profile),
-            &SupervisoryReviewTaskQuery {
-                request_id: Some(item_id),
-                ..supervisory_review_task_query.clone()
-            },
-        )
-        .await?;
-    let _: CaseworkComplete<ReviewerTask> = client
-        .review_task(CaseworkAuth::new(token, profile), item_id)
-        .await?;
-    let _: CaseworkComplete<ReviewTaskContext> = client
-        .review_task_context(CaseworkAuth::new(token, profile), item_id)
-        .await?;
-    let _: CaseworkComplete<ReviewerTask> = client
-        .claim_review_task(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-        )
-        .await?;
-    let _: CaseworkComplete<ReviewerTask> = client
-        .release_review_task(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-        )
-        .await?;
-    let _: CaseworkComplete<ReviewerTask> = client
-        .assign_review_task(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-            assignment,
-        )
-        .await?;
-    let _: CaseworkComplete<ReviewerTask> = client
-        .delegate_review_task(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-            delegation,
-        )
-        .await?;
-    let _: CaseworkComplete<Option<ReviewTaskDraft>> = client
-        .review_task_draft(CaseworkAuth::new(token, profile), item_id)
-        .await?;
+    let _: CaseworkComplete<Option<ReviewTaskDraft>> =
+        client.review_task_draft(auth(), task_id).await?;
     let _: CaseworkComplete<ReviewTaskDraft> = client
-        .save_review_task_draft(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-            review_draft,
-        )
+        .save_review_task_draft(auth(), task_id, revision, key, draft)
         .await?;
     let _: CaseworkComplete<()> = client
-        .delete_review_task_draft(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-        )
+        .delete_review_task_draft(auth(), task_id, revision, key)
         .await?;
     let _: CaseworkComplete<()> = client
-        .decide_review_task(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-            review_decision,
-        )
+        .decide_review_task(auth(), task_id, revision, key, decision)
         .await?;
-    let _: CaseworkComplete<ReviewHistoryPage> = client
-        .review_history(CaseworkAuth::new(token, profile), item_id, review_page)
+    let _: CaseworkComplete<ReviewHistoryPage> =
+        client.review_history(auth(), request_id, page).await?;
+    let _: CaseworkComplete<Vec<ReviewClockOccurrence>> =
+        client.review_clocks(auth(), request_id).await?;
+    let _: CaseworkComplete<ReviewAccountabilityRecord> =
+        client.review_accountability(auth(), event_id).await?;
+    let _: CaseworkComplete<ReviewCaseloadPreview> =
+        client.preview_caseload_move(auth(), move_request).await?;
+    let _: CaseworkComplete<ReviewCaseloadResult> =
+        client.apply_caseload_move(auth(), key, move_apply).await?;
+    let _: CaseworkComplete<ReviewClockRecomputePreview> = client
+        .preview_clock_recompute(auth(), clock_request)
         .await?;
-    let _: CaseworkComplete<ReviewHistoryEntry> = client
-        .add_review_note(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            idempotency_key,
-            review_note,
-        )
-        .await?;
-    let _: CaseworkComplete<Vec<registry_casework_client::ReviewClockOccurrence>> = client
-        .review_clocks(CaseworkAuth::new(token, profile), item_id)
-        .await?;
-    let _: CaseworkComplete<ReviewAccountabilityRecord> = client
-        .review_accountability(CaseworkAuth::new(token, profile), event_id)
-        .await?;
-    let _: CaseworkComplete<WorkItemPage> = client
-        .list_work_items(CaseworkAuth::new(token, profile), list_query)
-        .await?;
-    let _: CaseworkComplete<WorkItemPage> = client
-        .next_work_item(CaseworkAuth::new(token, profile), next_query)
-        .await?;
-    let _: CaseworkComplete<WorkItem> = client
-        .get_work_item(CaseworkAuth::new(token, profile), item_id)
-        .await?;
-    let _: CaseworkComplete<MutationResponse> = client
-        .claim_work_item(CaseworkAuth::new(token, profile), action, idempotency_key)
-        .await?;
-    let _: CaseworkComplete<MutationResponse> = client
-        .release_work_item(CaseworkAuth::new(token, profile), action, idempotency_key)
-        .await?;
-    let _: CaseworkComplete<DraftResponse> = client
-        .get_draft(CaseworkAuth::new(token, profile), item_id)
-        .await?;
-    let _: CaseworkComplete<DraftResponse> = client
-        .save_draft(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-            draft,
-        )
-        .await?;
-    let _: CaseworkComplete<()> = client
-        .delete_draft(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-        )
-        .await?;
-    let _: CaseworkComplete<MutationResponse> = client
-        .decide_work_item(
-            CaseworkAuth::new(token, profile),
-            action,
-            idempotency_key,
-            decision,
-        )
-        .await?;
-    let _: CaseworkComplete<MutationResponse> = client
-        .recover_decision(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            attempt_id,
-            recovery,
-        )
-        .await?;
-    let _: CaseworkComplete<MutationResponse> = client
-        .recover_decision_by_key(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            idempotency_key,
-            recovery,
-        )
-        .await?;
-    let _: CaseworkComplete<HistoryPage> = client
-        .work_item_history(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            work_item_history_query,
-        )
-        .await?;
-    let _: CaseworkComplete<HoldingsPage> = client
-        .holdings(CaseworkAuth::new(token, profile), holdings_query)
-        .await?;
-    let _: CaseworkComplete<DirectoryResponse> =
-        client.directory(CaseworkAuth::new(token, profile)).await?;
-    let _: CaseworkComplete<DirectoryTargetPage> = client
-        .directory_targets(CaseworkAuth::new(token, profile), targets_query)
-        .await?;
-    let _: CaseworkComplete<DirectoryResponse> = client
-        .bootstrap_directory(
-            CaseworkAuth::new(token, profile),
-            expected_revision,
-            idempotency_key,
-            bootstrap,
-        )
-        .await?;
-    let _: CaseworkComplete<AbsenceList> =
-        client.absences(CaseworkAuth::new(token, profile)).await?;
-    let _: CaseworkComplete<AbsenceList> = client
-        .absences_page(CaseworkAuth::new(token, profile), absences_query)
-        .await?;
-    let _: CaseworkComplete<AbsenceRecord> = client
-        .create_absence(
-            CaseworkAuth::new(token, profile),
-            expected_revision,
-            idempotency_key,
-            absence,
-        )
-        .await?;
-    let _: CaseworkComplete<AbsenceRecord> = client
-        .update_absence(
-            CaseworkAuth::new(token, profile),
-            absence_id,
-            expected_revision,
-            idempotency_key,
-            absence,
-        )
-        .await?;
-    let _: CaseworkComplete<()> = client
-        .delete_absence(
-            CaseworkAuth::new(token, profile),
-            absence_id,
-            expected_revision,
-            idempotency_key,
-        )
-        .await?;
-    let _: CaseworkComplete<MutationResponse> = client
-        .assign_work_item(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-            assignment,
-        )
-        .await?;
-    let _: CaseworkComplete<MutationResponse> = client
-        .delegate_work_item(
-            CaseworkAuth::new(token, profile),
-            item_id,
-            expected_revision,
-            idempotency_key,
-            delegation,
-        )
-        .await?;
-    let _: CaseworkComplete<CaseloadPreviewPage> = client
-        .preview_caseload_move(
-            CaseworkAuth::new(token, profile),
-            caseload_move,
-            caseload_preview,
-        )
-        .await?;
-    let _: CaseworkComplete<Vec<CaseloadItemResult>> = client
-        .apply_caseload_move(
-            CaseworkAuth::new(token, profile),
-            idempotency_key,
-            caseload_apply,
-        )
-        .await?;
-    let _: CaseworkComplete<DirectoryResponse> = client
-        .update_directory_team(
-            CaseworkAuth::new(token, profile),
-            team_id,
-            expected_revision,
-            idempotency_key,
-            team_update,
-        )
-        .await?;
-    let _: CaseworkComplete<Vec<ClockOccurrenceView>> = client
-        .work_item_clocks(CaseworkAuth::new(token, profile), item_id)
-        .await?;
-    let _: CaseworkComplete<HolidaySetDocument> = client
-        .holiday_revision(
-            CaseworkAuth::new(token, profile),
-            holiday_set,
-            holiday_revision_number,
-        )
-        .await?;
-    let _: CaseworkComplete<HolidaySetDocument> = client
-        .create_holiday_revision(
-            CaseworkAuth::new(token, profile),
-            idempotency_key,
-            holiday_input,
-        )
-        .await?;
-    let _: CaseworkComplete<ClockRecomputePreview> = client
-        .preview_clock_recompute(CaseworkAuth::new(token, profile), recompute)
-        .await?;
-    let _: CaseworkComplete<ClockRecomputeResult> = client
-        .apply_clock_recompute(
-            CaseworkAuth::new(token, profile),
-            idempotency_key,
-            recompute_apply,
-        )
+    let _: CaseworkComplete<ReviewClockRecomputeResult> = client
+        .apply_clock_recompute(auth(), key, clock_apply)
         .await?;
     Ok(())
 }

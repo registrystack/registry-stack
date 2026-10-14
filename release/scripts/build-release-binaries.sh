@@ -122,6 +122,14 @@ evidence_oid4vci_image_in_release="$(python3 "${script_dir}/release_roster.py" \
 if [[ "${evidence_oid4vci_image_in_release}" == true ]]; then
   include_evidence_oid4vci_image=1
 fi
+# release_roster.py names the first release that ships Registry Coordinator;
+# until it does, no version builds or stages coordinator or coordinatorctl.
+include_coordinator=0
+coordinator_in_release="$(python3 "${script_dir}/release_roster.py" \
+  coordinator-in-release "${version}")"
+if [[ "${coordinator_in_release}" == true ]]; then
+  include_coordinator=1
+fi
 
 # Compile and link every product binary through Zig against the glibc stubs of
 # the release floor. The builder carries a much newer glibc, and without this
@@ -250,6 +258,17 @@ build_payload() {
       cp target/release/registry-render \
         "dist/bin/registry-render-${RELEASE_TAG}-linux-amd64"
       cp target/release/registry-render dist/image-bin/registry-render
+    fi
+
+    if [[ "${include_coordinator}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-coordinator --bin coordinator --bin coordinatorctl
+      cp target/release/coordinator \
+        "dist/bin/coordinator-${RELEASE_TAG}-linux-amd64"
+      cp target/release/coordinatorctl \
+        "dist/bin/coordinatorctl-${RELEASE_TAG}-linux-amd64"
+      cp target/release/coordinator dist/image-bin/coordinator
+      cp target/release/coordinatorctl dist/image-bin/coordinatorctl
     fi
 
     if [[ "${include_discovery}" -eq 1 ]]; then
@@ -471,6 +490,7 @@ docker run --rm \
   --env RELEASE_INCLUDE_OPERATOR_TOOLS="${include_operator_tools}" \
   --env RELEASE_INCLUDE_MESSAGING="${include_messaging}" \
   --env RELEASE_INCLUDE_RENDER="${include_render}" \
+  --env RELEASE_INCLUDE_COORDINATOR="${include_coordinator}" \
   --env RELEASE_INCLUDE_EVIDENCE_OID4VCI_IMAGE="${include_evidence_oid4vci_image}" \
   --env RELEASE_TAG="${tag}" \
   "${identity_env_args[@]}" \
@@ -576,6 +596,13 @@ if [[ "${group}" == all || "${group}" == core ]]; then
   if [[ "${include_render}" -eq 1 ]]; then
     bin_assets+=("registry-render-${tag}-linux-amd64")
     image_bin_binaries+=(registry-render)
+  fi
+  if [[ "${include_coordinator}" -eq 1 ]]; then
+    bin_assets+=(
+      "coordinator-${tag}-linux-amd64"
+      "coordinatorctl-${tag}-linux-amd64"
+    )
+    image_bin_binaries+=(coordinator coordinatorctl)
   fi
 fi
 

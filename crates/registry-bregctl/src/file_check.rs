@@ -404,7 +404,7 @@ fn journeys(input: &Input<'_>) -> Result<Vec<Diagnostic>, Failure> {
         match fixtures::validate_fixture_journeys(input.bytes, registry) {
             Ok(_) => Vec::new(),
             Err(fixtures::FixtureError::JourneyDocument(report)) => {
-                return Err(Failure::Refused(report))
+                return Err(Failure::Refused(report));
             }
             Err(error) => vec![journey_refusal(input.document, error)],
         },

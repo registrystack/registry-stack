@@ -285,6 +285,7 @@ impl UncertainPolicy {
 /// One template version, under `templates/<id>/<version>/`, as the wire
 /// contract names it.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TemplateReference {
     pub id: String,

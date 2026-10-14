@@ -13,6 +13,11 @@ from pathlib import Path
 # crate, directly or through any shared dependency.
 PRODUCT_PREFIXES = ("registry-breg", "registry-casework", "registry-evidence")
 
+# The Coordinator composes products through their public clients. It may use
+# the Scheduling client and core, never the runtime or adopter tooling, and no
+# scheduling crate may reach a Coordinator crate.
+COORDINATOR_PREFIX = "registry-coordinator"
+
 # The source-neutral scheduling crates: the model and evaluators, and the
 # caller-facing client. Their dependency closures must stay product-free and,
 # for the core, free of every other scheduling crate.
@@ -62,7 +67,7 @@ def product_violations(name: str, package_id: str, names: dict[str, str], edges:
         {
             names[item]
             for item in closure(package_id, edges)
-            if names[item].startswith(PRODUCT_PREFIXES)
+            if names[item].startswith((*PRODUCT_PREFIXES, COORDINATOR_PREFIX))
         }
     )
     if forbidden:
@@ -130,9 +135,11 @@ def violations(metadata: dict) -> list[str]:
             )
 
     # The unified client may compose the Scheduling client beside other
-    # products' clients, and may never reach the runtime or adopter tooling.
+    # products' clients, and the Coordinator may use it to reach Scheduling
+    # over its public contract. Neither may reach the runtime or adopter
+    # tooling.
     for package_id, package_name in sorted(names.items(), key=lambda item: item[1]):
-        if not package_name.startswith(UNIFIED_CLIENT_PREFIX):
+        if not package_name.startswith((UNIFIED_CLIENT_PREFIX, COORDINATOR_PREFIX)):
             continue
         forbidden = sorted(
             {

@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use zeroize::Zeroizing;
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegRecoveryHint {
@@ -17,6 +18,7 @@ pub enum BRegRecoveryHint {
     Terminal,
     ReceiptOnly,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegAvailabilityReason {
@@ -27,6 +29,7 @@ pub enum BRegAvailabilityReason {
     InvalidInput,
     AlreadyApplied,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegAvailability {
@@ -37,6 +40,7 @@ pub struct BRegAvailability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery: Option<BRegRecoveryHint>,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegProposalState {
@@ -46,6 +50,7 @@ pub enum BRegProposalState {
     Cancelled,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegProposalApplicationState {
@@ -55,12 +60,14 @@ pub enum BRegProposalApplicationState {
     Applied,
     Cancelled,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegProposalApplicationMode {
     Automatic,
     Manual,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegProposalApplicationReason {
@@ -70,6 +77,7 @@ pub enum BRegProposalApplicationReason {
     ApplicationRefused,
     AttemptsExhausted,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalAutomaticRetry {
@@ -79,6 +87,7 @@ pub struct BRegProposalAutomaticRetry {
 }
 /// Local application progress for the enclosing exact frozen submission.
 /// It neither follows a successor nor reconciles an unknown mutation command.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalApplicationStatus {
@@ -93,6 +102,7 @@ pub struct BRegProposalApplicationStatus {
 }
 
 /// Inert server-issued link. Only a client-bound Proposal promotes its use.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalLink {
@@ -132,6 +142,7 @@ impl fmt::Debug for BRegProposalLink {
 }
 
 /// Inert slot metadata disclosed on an authorized Proposal representation.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalAttachment {
@@ -144,6 +155,7 @@ pub struct BRegProposalAttachment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     value: Option<BRegProposalAttachmentValue>,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalAttachmentValue {
@@ -155,6 +167,7 @@ pub struct BRegProposalAttachmentValue {
     uploaded_at: Option<String>,
     verification_status: String,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalApplication {
@@ -163,6 +176,7 @@ pub struct BRegProposalApplication {
     pub effect_digest: String,
     pub result_links: Vec<BRegProposalResultReference>,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalResultReference {
@@ -170,6 +184,7 @@ pub struct BRegProposalResultReference {
     pub record_id: String,
     pub revision: u64,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewDocument {
@@ -189,6 +204,7 @@ pub struct BRegProposalReviewDocument {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<BRegProposalReviewResult>,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewSubject {
@@ -198,6 +214,7 @@ pub struct BRegProposalReviewSubject {
     pub version: String,
     pub digest: String,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewContext {
@@ -208,6 +225,7 @@ pub struct BRegProposalReviewContext {
     pub fields: Option<BTreeMap<String, Value>>,
 }
 /// Exact local interface exported by the governed producer, independent of a review policy pin.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewContextContract {
@@ -215,6 +233,7 @@ pub struct BRegProposalReviewContextContract {
     pub revision: String,
     pub schema_digest: String,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewPolicy {
@@ -222,6 +241,7 @@ pub struct BRegProposalReviewPolicy {
     pub version: String,
     pub digest: String,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewResult {
@@ -252,6 +272,7 @@ impl BRegProposalAttachment {
 }
 
 /// A Proposal is independently versioned and never decoded as a Record subtype.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposal {
@@ -578,6 +599,64 @@ pub struct BRegProposalGetBinding {
     profile: String,
     path: String,
 }
+/// Purpose-specific authority to read one Proposal review document by UUID.
+/// Constructed only from the caller-visible runtime metadata inventory.
+#[derive(Clone)]
+pub struct BRegProposalReviewBinding {
+    source: String,
+    profile: String,
+    action: String,
+    operation: &'static str,
+    suffix: &'static str,
+}
+impl BRegProposalReviewBinding {
+    pub(crate) fn from_metadata(
+        actions: &Value,
+        source: &str,
+        profile: &str,
+        action: &str,
+        status: bool,
+    ) -> Result<Self, BaseRegistryClientError> {
+        let operation = if status {
+            "get-review-status"
+        } else {
+            "get-review-context"
+        };
+        let suffix = if status {
+            "review-status"
+        } else {
+            "review-context"
+        };
+        if !identifier(profile)
+            || !identifier(action)
+            || !actions.as_array().is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry["actionId"].as_str() == Some(action)
+                        && entry["accessProfile"].as_str() == Some(profile)
+                        && entry["operations"].as_array().is_some_and(|operations| {
+                            operations
+                                .iter()
+                                .any(|value| value.as_str() == Some(operation))
+                        })
+                })
+            })
+        {
+            return Err(refusal());
+        }
+        Ok(Self {
+            source: source.to_owned(),
+            profile: profile.to_owned(),
+            action: action.to_owned(),
+            operation,
+            suffix,
+        })
+    }
+}
+impl fmt::Debug for BRegProposalReviewBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegProposalReviewBinding(<bound>)")
+    }
+}
 impl BRegProposalGetBinding {
     pub(crate) fn from_metadata(
         value: &Value,
@@ -716,12 +795,13 @@ impl fmt::Debug for BRegPreparedProposal {
     }
 }
 impl BaseRegistryClient {
-    /// Resolve a UUID through an advertised Get capability, without requiring List.
-    pub async fn get_proposal(
+    /// Read the native review endpoint using only its advertised purpose grant.
+    /// The caller need not hold the broader Proposal Get permission.
+    pub async fn read_proposal_review_by_id(
         &self,
-        binding: &BRegProposalGetBinding,
+        binding: &BRegProposalReviewBinding,
         id: &str,
-    ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
+    ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
         if binding.source != self.source_binding()
             || !Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
         {
@@ -729,21 +809,120 @@ impl BaseRegistryClient {
         }
         let link = BRegProposalLink {
             method: "GET".to_owned(),
-            path: binding.path.replace("{proposal_id}", id),
+            path: format!("/v1/proposals/{id}/{}", binding.suffix),
             access_profile: binding.profile.clone(),
-            operation: "get".to_owned(),
+            operation: binding.operation.to_owned(),
             if_match: None,
             availability: None,
         };
         let response = self.proposal_exchange(&link, None, None).await?;
-        let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
-        if proposal.id != id {
+        let value =
+            crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
+        let document: BRegProposalReviewDocument =
+            serde_json::from_value(value).map_err(|_| refusal())?;
+        let is_context = binding.operation == "get-review-context";
+        if document.id != id
+            || document.action_id != binding.action
+            || !digest(&document.action_revision)
+            || document.submission_version == 0
+            || document.revision == 0
+            || !digest(&document.effect_digest)
+            || document.subject.subject_type != "proposal"
+            || document.subject.id != id
+            || document.subject.version != document.submission_version.to_string()
+            || document.subject.digest != document.effect_digest
+            || document.subject.source.is_empty()
+            || document.subject.source.len() > 512
+            || document.context.reference.is_empty()
+            || document.context.reference.len() > 2048
+            || document.context.contract.as_ref().is_some_and(|contract| {
+                !contract.id.starts_with("urn:registry:breg:review-context:")
+                    || contract.id.len() > 2048
+                    || contract.id.chars().any(char::is_control)
+                    || !digest(&contract.revision)
+                    || !digest(&contract.schema_digest)
+            })
+            || document.authority.is_some() != document.policy.is_some()
+            || document.policy.as_ref().is_some_and(|policy| {
+                !digest(&policy.digest) || policy.id.is_empty() || policy.version.is_empty()
+            })
+            || document.result.as_ref().is_some_and(|result| {
+                !matches!(
+                    result.state.as_str(),
+                    "pending"
+                        | "approved"
+                        | "rejected"
+                        | "changes-requested"
+                        | "answered"
+                        | "cancelled"
+                        | "superseded"
+                        | "expired"
+                ) || result
+                    .result_id
+                    .as_deref()
+                    .is_some_and(|id| Uuid::parse_str(id).is_err())
+            })
+            || is_context
+                && (document.context.contract.is_none() || document.context.fields.is_none())
+            || !is_context && document.context.fields.is_some()
+        {
             return Err(refusal());
         }
         Ok(BRegComplete {
-            value: proposal.bind_profile(self.source_binding(), &binding.profile)?,
+            value: document,
             metadata: response.metadata,
         })
+    }
+
+    /// Resolve a UUID through an advertised Get capability, without requiring List.
+    pub async fn get_proposal(
+        &self,
+        binding: &BRegProposalGetBinding,
+        id: &str,
+    ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
+        self.get_proposal_observation(binding, id).await.outcome
+    }
+
+    /// Observe one authorized Proposal, preserving the receiver's scheduling
+    /// hint even when its response cannot supply a usable representation.
+    /// No retry or mutation is performed by this method.
+    pub async fn get_proposal_observation(
+        &self,
+        binding: &BRegProposalGetBinding,
+        id: &str,
+    ) -> BRegObservation<BRegProposal> {
+        let mut retry_after = BRegRetryAfter::Absent;
+        let outcome = async {
+            if binding.source != self.source_binding()
+                || !Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
+            {
+                return Err(refusal());
+            }
+            let link = BRegProposalLink {
+                method: "GET".to_owned(),
+                path: binding.path.replace("{proposal_id}", id),
+                access_profile: binding.profile.clone(),
+                operation: "get".to_owned(),
+                if_match: None,
+                availability: None,
+            };
+            let observation = self.proposal_observation_exchange(&link).await;
+            retry_after = observation.retry_after;
+            let response = observation.outcome?;
+            let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
+            if proposal.id != id {
+                return Err(refusal());
+            }
+            Ok(BRegComplete {
+                value: proposal.bind_profile(self.source_binding(), &binding.profile)?,
+                metadata: response.metadata,
+            })
+        }
+        .await;
+        BRegObservation {
+            outcome,
+            retry_after,
+        }
     }
     pub async fn read_proposal_review_status(
         &self,
@@ -1283,6 +1462,27 @@ mod tests {
             accepted.value.context.contract.unwrap().schema_digest,
             REVISION
         );
+        let actions = json!([{"actionId":"correct-address","accessProfile":"author","operations":["get-review-context"]}]);
+        let purpose = BRegProposalReviewBinding::from_metadata(
+            &actions,
+            &client.source_binding(),
+            "author",
+            "correct-address",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            client
+                .read_proposal_review_by_id(&purpose, ID)
+                .await
+                .unwrap()
+                .value
+                .context
+                .contract
+                .unwrap()
+                .schema_digest,
+            REVISION
+        );
         let mut refused = Vec::new();
         for field in ["id", "revision", "schemaDigest"] {
             let mut changed = valid.clone();
@@ -1328,6 +1528,10 @@ mod tests {
             *response.lock().unwrap() = changed;
             assert!(client
                 .read_proposal_review_context(&promoted)
+                .await
+                .is_err());
+            assert!(client
+                .read_proposal_review_by_id(&purpose, ID)
                 .await
                 .is_err());
         }
@@ -1535,6 +1739,75 @@ mod tests {
         }
     }
 
+    #[test]
+    fn purpose_bindings_require_the_exact_advertised_action_and_profile() {
+        let actions = json!([
+            {"actionId":"correct-address","accessProfile":"reviewer","operations":["get-review-context"]},
+            {"actionId":"correct-address","accessProfile":"status","operations":["get-review-status"]},
+        ]);
+        let source = "https://registry.example/";
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "reviewer",
+            "correct-address",
+            false
+        )
+        .is_ok());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "status",
+            "correct-address",
+            true
+        )
+        .is_ok());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "status",
+            "correct-address",
+            false
+        )
+        .is_err());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "reviewer",
+            "correct-address",
+            true
+        )
+        .is_err());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "reviewer",
+            "other-action",
+            false
+        )
+        .is_err());
+    }
+    #[tokio::test]
+    async fn direct_review_read_refuses_foreign_binding_and_noncanonical_id_before_io() {
+        let source = client("https://registry.example/");
+        let actions = json!([{"actionId":"correct-address","accessProfile":"reviewer","operations":["get-review-context"]}]);
+        let binding = BRegProposalReviewBinding::from_metadata(
+            &actions,
+            &source.source_binding(),
+            "reviewer",
+            "correct-address",
+            false,
+        )
+        .unwrap();
+        assert!(client("https://other.example/")
+            .read_proposal_review_by_id(&binding, ID)
+            .await
+            .is_err());
+        assert!(source
+            .read_proposal_review_by_id(&binding, "../other")
+            .await
+            .is_err());
+    }
     #[test]
     fn application_receipts_refuse_internal_actor_and_reason_projections() {
         let mut value = document();

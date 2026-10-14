@@ -46,6 +46,86 @@ fn rehearsal_token_provider_omits_empty_scopes_and_preserves_explicit_scopes() {
     );
 }
 
+#[test]
+fn dev_token_requests_each_clients_registered_resource_or_the_default() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let requests = thread::spawn(move || {
+        (0..2)
+            .map(|_| {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert!(read > 0, "token request ended before its headers");
+                    request.extend_from_slice(&chunk[..read]);
+                    if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                        break index + 4;
+                    }
+                };
+                let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(str::trim)
+                            .map(str::parse::<usize>)
+                    })
+                    .unwrap()
+                    .unwrap();
+                while request.len() < header_end + length {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert!(read > 0, "token request ended before its body");
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                let fields = url::form_urlencoded::parse(&request[header_end..header_end + length])
+                    .into_owned()
+                    .collect::<BTreeMap<_, _>>();
+                let body = br#"{"access_token":"e30.e30.signature","token_type":"Bearer","expires_in":300}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+                fields
+            })
+            .collect::<Vec<_>>()
+    });
+    let (_temp, mut state, mut clients, files) = fixture();
+    state.issuer_port = port;
+    let resource = "urn:example:messaging";
+    clients
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "source")
+        .unwrap()
+        .access_profiles
+        .clear();
+    clients.issuer.resources.push(config::IssuerResource {
+        audience: resource.into(),
+        scopes: vec!["registry:evidence:lookup".into()],
+    });
+    clients
+        .issuer
+        .client_resources
+        .insert("source".into(), resource.into());
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+
+    token_with_scopes(&state, "source", vec!["registry:evidence:lookup".into()]).unwrap();
+    token_with_scopes(&state, "operator", vec!["registry:generic:operate".into()]).unwrap();
+    let requests = requests.join().unwrap();
+    assert_eq!(requests[0]["resource"], resource);
+    assert_eq!(requests[0]["scope"], "registry:evidence:lookup");
+    assert_eq!(requests[1]["resource"], state.audience());
+    assert_eq!(requests[1]["scope"], "registry:generic:operate");
+}
+
 /// A session whose `source` client is registered for `resource` and whose
 /// `operator` client is not, with its issuer placed on a local listener.
 fn external_resource_session(resource: &str) -> (tempfile::TempDir, State, TcpListener) {
@@ -1636,7 +1716,9 @@ clients:
         .to_string()
         .contains("at most one default"));
 
-    let duplicate_binding = format!("{bytes}  - id: another-variant\n    accessProfiles: [operator]\n    scopes: [registry:records:write]\n    claims: {{registry_principal: operator}}\n    testBindings:\n      - {{journeyId: record-lifecycle, stepId: without-purpose-is-concealed}}\n");
+    let duplicate_binding = format!(
+        "{bytes}  - id: another-variant\n    accessProfiles: [operator]\n    scopes: [registry:records:write]\n    claims: {{registry_principal: operator}}\n    testBindings:\n      - {{journeyId: record-lifecycle, stepId: without-purpose-is-concealed}}\n"
+    );
     assert!(
         config::clients("dev-clients.yaml", duplicate_binding.as_bytes())
             .unwrap_err()
@@ -2675,8 +2757,7 @@ fn schema_test_refusal(message: &str) -> Vec<u8> {
 
 #[test]
 fn a_refused_native_command_names_its_first_failing_check_within_a_bound() {
-    let message =
-        "the fixture logical reference was refused: the request names a capture no earlier step declares";
+    let message = "the fixture logical reference was refused: the request names a capture no earlier step declares";
     let named =
         refused_check(&schema_test_refusal(message)).expect("the report names its first check");
     assert!(named.contains("test.step.failed"), "{named}");

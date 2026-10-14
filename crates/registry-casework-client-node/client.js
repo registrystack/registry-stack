@@ -13,7 +13,7 @@ class CaseworkClientError extends Error {
     this.name = 'CaseworkClientError';
     this.kind = envelope.kind;
     this.outcomeUnknown = envelope.outcomeUnknown === true;
-    for (const field of ['code', 'detail', 'status', 'traceId', 'originalAttemptId', 'validation', 'transportKind', 'protocolFailure']) {
+    for (const field of ['code', 'detail', 'status', 'traceId', 'validation', 'transportKind', 'protocolFailure']) {
       if (envelope[field] !== undefined && envelope[field] !== null) this[field] = envelope[field];
     }
   }
@@ -112,8 +112,8 @@ for (const [method, jsonIndexes] of [
   ['reviewResult', [2]],
   ['reviewResults', [2]],
   ['cancelReviewRequest', [2, 4]],
-  ['reviewKinds', []],
-  ['reviewKind', []],
+  ['reviewPolicies', []],
+  ['reviewPolicy', []],
   ['reviewTasks', [2]],
   ['ownReviewDecisions', [2]],
   ['supervisoryReviewTasks', [2]],
@@ -121,7 +121,7 @@ for (const [method, jsonIndexes] of [
   ['reviewTaskContext', []],
   ['previewReviewTaskTemplates', []],
   ['listReviewTaskGrants', []],
-  ['approveReviewTaskGrant', [6]],
+  ['approveReviewTaskGrant', [5]],
   ['revokeReviewTaskGrant', []],
   ['claimReviewTask', []],
   ['releaseReviewTask', []],
@@ -135,30 +135,14 @@ for (const [method, jsonIndexes] of [
   ['addReviewNote', [4]],
   ['reviewClocks', []],
   ['reviewAccountability', []],
-  ['listWorkItems', [3]],
-  ['nextWorkItem', [3]],
-  ['getWorkItem', []],
-  ['previewTaskTemplates', []],
-  ['listTaskGrants', []],
-  ['approveTaskGrant', [6]],
-  ['revokeTaskGrant', []],
   ['taskAssertion', []],
   ['taskGrantStatus', []],
-  ['claimWorkItem', [3]],
-  ['releaseWorkItem', [3]],
-  ['getDraft', []],
-  ['saveDraft', [6]],
-  ['deleteDraft', []],
-  ['decideWorkItem', [3, 5]],
-  ['recoverDecision', [5]],
-  ['recoverDecisionByKey', [5]],
-  ['workItemHistory', [4]],
-  ['holdings', [3]],
+  ['nextReviewTask', [2]],
+  ['reviewTaskHoldings', [2]],
   ['directory', []],
   ['directoryTargets', [2]],
   ['bootstrapDirectory', [4]],
   ['updateDirectoryTeam', [5]],
-  ['workItemClocks', []],
   ['holidayRevision', []],
   ['createHolidayRevision', [3]],
   ['previewClockRecompute', [2]],
@@ -167,9 +151,7 @@ for (const [method, jsonIndexes] of [
   ['createAbsence', [4]],
   ['updateAbsence', [5]],
   ['deleteAbsence', []],
-  ['assignWorkItem', [5]],
-  ['delegateWorkItem', [5]],
-  ['previewCaseloadMove', [2, 3]],
+  ['previewCaseloadMove', [2]],
   ['applyCaseloadMove', [3]],
 ]) {
   CaseworkClient.prototype[method] = function (...args) {

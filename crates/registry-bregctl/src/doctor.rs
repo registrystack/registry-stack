@@ -270,9 +270,9 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "eventDestinations",
             "the event destination bindings were refused",
         ),
-        StartupError::RetainedWebhookBindings { .. } => unreachable!(
-            "retained webhook binding diagnostics return before the generic mapping"
-        ),
+        StartupError::RetainedWebhookBindings { .. } => {
+            unreachable!("retained webhook binding diagnostics return before the generic mapping")
+        }
         StartupError::ReviewBindings => (
             "startup.review-bindings.refused",
             "reviewBindings",

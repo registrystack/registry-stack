@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use registry_casework_core::{CaseworkProject, SourceAdapter, TaskTemplate};
+use registry_casework_core::{CaseworkProject, ReviewContextProvider, TaskTemplate};
 use registry_platform_activation::{
     self as platform_activation, KnownTrigger, Layout, NewActivation, RoleObservation,
 };
@@ -26,8 +26,8 @@ use uuid::Uuid;
 use crate::audit::AuditOutcome;
 use crate::pinned_work::{compare_pinned_work, PinnedWorkVerdict, StrandedWork};
 use crate::store::{
-    migrate_in, pending_migration_refusals, pinned_work_inventory_in,
-    register_source_generation_in, MIGRATIONS, MIGRATION_LOCK_KEY, SUPPORTED_SCHEMA_VERSION,
+    migrate_in, pending_migration_refusals, pinned_work_inventory_in, MIGRATIONS,
+    MIGRATION_LOCK_KEY, SUPPORTED_SCHEMA_VERSION,
 };
 use crate::{PostgresStore, StoreError};
 
@@ -43,23 +43,11 @@ pub use registry_platform_activation::{
 /// The triggers the Casework migrations create, as table, trigger, and the
 /// function in the Casework schema it executes. Any other trigger on a
 /// Casework table is stray authority in a split-role deployment.
-const MIGRATION_TRIGGERS: [KnownTrigger; 3] = [
-    KnownTrigger {
-        relation: "casework_meta",
-        trigger: "casework_task_directory_changed",
-        function: "casework_task_directory_changed",
-    },
-    KnownTrigger {
-        relation: "casework_items",
-        trigger: "casework_task_item_changed",
-        function: "casework_task_item_changed",
-    },
-    KnownTrigger {
-        relation: "casework_review_tasks",
-        trigger: "casework_review_assignment_generation",
-        function: "casework_review_assignment_generation",
-    },
-];
+const MIGRATION_TRIGGERS: [KnownTrigger; 1] = [KnownTrigger {
+    relation: "casework_review_tasks",
+    trigger: "casework_review_assignment_generation",
+    function: "casework_review_assignment_generation",
+}];
 
 fn activation_layout() -> Layout {
     Layout::new(
@@ -96,7 +84,7 @@ const MAX_TASK_TEMPLATE_BYTES: usize = 65536;
 /// task templates a plan can read before migrating. A plan against an older
 /// schema reports its effects as not evaluated; apply evaluates them after
 /// migrating.
-const EFFECTS_SCHEMA_VERSION: i64 = 18;
+const EFFECTS_SCHEMA_VERSION: i64 = 1;
 
 /// The audit profile an operator's activation is recorded under.
 const OPERATOR_PROFILE: &str = "system:operator";
@@ -119,11 +107,9 @@ pub struct ActivationCandidate<'a> {
     pub database_id: &'a str,
     /// The verified package digest.
     pub package_digest: &'a str,
-    /// The configured `package.acknowledgeStrandedWork`.
-    pub acknowledged_stranded_work: Option<&'a str>,
     pub project: &'a CaseworkProject,
-    /// The source adapters built from the package and the runtime bindings.
-    pub adapters: &'a [&'a dyn SourceAdapter],
+    /// The read-only context providers built from the package and runtime bindings.
+    pub providers: &'a [&'a dyn ReviewContextProvider],
 }
 
 /// Operator-supplied references an activation records.
@@ -174,6 +160,7 @@ impl ApplyRequest {
 
 /// The pinned-work verdict an activation reaches.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct PinnedWorkEffect {
     /// `clear`, `acknowledged`, or `refused`.
@@ -181,27 +168,9 @@ pub struct PinnedWorkEffect {
     pub stranded: Vec<StrandedWork>,
 }
 
-/// What an activation does to one source's binding generation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum GenerationChange {
-    /// No state is recorded for this source; apply records the generation.
-    Registered,
-    /// The generation is already the recorded one.
-    Unchanged,
-    /// State is recorded under another generation; apply rebinds it.
-    Changed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceGenerationEffect {
-    pub source_id: String,
-    pub change: GenerationChange,
-}
-
 /// What an activation does to one task template version.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum TemplateChange {
     /// The version is stored for the first time and becomes active.
@@ -216,6 +185,7 @@ pub enum TemplateChange {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct TaskTemplateEffect {
     pub template_id: String,
@@ -225,28 +195,25 @@ pub struct TaskTemplateEffect {
 
 /// The Casework-specific effects of an activation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ActivationEffects {
     pub pinned_work: PinnedWorkEffect,
-    pub source_generations: Vec<SourceGenerationEffect>,
     pub task_templates: Vec<TaskTemplateEffect>,
 }
 
 impl ActivationEffects {
     fn changes_nothing(&self) -> bool {
-        self.source_generations
+        self.task_templates
             .iter()
-            .all(|source| source.change == GenerationChange::Unchanged)
-            && self
-                .task_templates
-                .iter()
-                .all(|template| template.change == TemplateChange::Retained)
+            .all(|t| t.change == TemplateChange::Retained)
     }
 }
 
 /// One reason an activation is refused, with the location the operator
 /// corrects and the next command.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ActivationRefusal {
     pub code: String,
@@ -303,6 +270,7 @@ pub fn database_id_mismatch_message() -> String {
 
 /// What `caseworkctl plan` reports. It is read in a read-only transaction.
 #[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ActivationPlan {
     pub active: Option<Activation>,
@@ -337,6 +305,7 @@ pub struct ActivationApplied {
 
 /// What `caseworkctl status` reports.
 #[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ActivationStatus {
     pub active: Option<Activation>,
@@ -603,23 +572,6 @@ impl PostgresStore {
             .await?
             .get(0))
     }
-
-    /// Whether `generation` is the recorded binding generation of
-    /// `source_id`.
-    pub async fn source_generation_registered(
-        &self,
-        source_id: &str,
-        generation: &str,
-    ) -> Result<bool, StoreError> {
-        let client = self.client().await?;
-        Ok(client
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_source_reconciliation_progress WHERE source_id=$1 AND binding_generation=$2)",
-                &[&source_id, &generation],
-            )
-            .await?
-            .get(0))
-    }
 }
 
 async fn apply_in(
@@ -694,14 +646,6 @@ async fn apply_in(
     let (effects, refusals) = evaluate_effects(transaction, candidate).await?;
     if !refusals.is_empty() {
         return Err(ActivationError::Refused(refusals));
-    }
-    for adapter in candidate.adapters {
-        register_source_generation_in(
-            transaction,
-            adapter.source_id(),
-            adapter.binding_generation(),
-        )
-        .await?;
     }
     crate::task_grants::activate_task_templates_in(
         transaction,
@@ -788,11 +732,7 @@ fn plan_kind(active: Option<&Activation>) -> PlanKind {
 /// or none for a failure that is not the operator's to correct.
 fn migration_refusal_code(error: &StoreError) -> Option<&'static str> {
     match error {
-        StoreError::SchemaNewer { .. } => Some("schema-newer"),
-        StoreError::HostedWorkWouldBeDropped { .. } => Some("hosted-work-would-be-dropped"),
-        StoreError::UnpublishedAuditWouldBeDropped { .. } => {
-            Some("unpublished-audit-would-be-dropped")
-        }
+        StoreError::RetiredSchema => Some("retired-schema"),
         _ => None,
     }
 }
@@ -911,14 +851,6 @@ fn empty_database_effects(
             verdict: "clear",
             stranded: Vec::new(),
         },
-        source_generations: candidate
-            .adapters
-            .iter()
-            .map(|adapter| SourceGenerationEffect {
-                source_id: adapter.source_id().to_owned(),
-                change: GenerationChange::Registered,
-            })
-            .collect(),
         task_templates,
     }
 }
@@ -931,59 +863,18 @@ async fn evaluate_effects(
 ) -> Result<(ActivationEffects, Vec<ActivationRefusal>), StoreError> {
     let mut refusals = Vec::new();
     let inventory = pinned_work_inventory_in(transaction).await?;
-    let stranded = compare_pinned_work(candidate.project, candidate.adapters, &inventory);
-    let verdict = match crate::pinned_work_verdict(
-        &stranded,
-        candidate.package_digest,
-        candidate.acknowledged_stranded_work,
-    ) {
+    let stranded = compare_pinned_work(candidate.project, candidate.providers, &inventory);
+    let verdict = match crate::pinned_work_verdict(&stranded, candidate.package_digest) {
         PinnedWorkVerdict::Clear => "clear",
-        PinnedWorkVerdict::Acknowledged => "acknowledged",
         PinnedWorkVerdict::Refused => {
             refusals.push(ActivationRefusal::new(
                 "stranded-work",
-                "runtime.yaml:/package/acknowledgeStrandedWork",
+                "casework.yaml:/reviewPolicies",
                 crate::stranded_work_refusal(&stranded, candidate.package_digest),
             ));
             "refused"
         }
     };
-    let mut source_generations = Vec::with_capacity(candidate.adapters.len());
-    for adapter in candidate.adapters {
-        let source_id = adapter.source_id();
-        let generation = adapter.binding_generation();
-        let row = transaction
-            .query_one(
-                "SELECT
-                   EXISTS(SELECT 1 FROM casework_attempts a JOIN casework_items i ON i.item_id=a.item_id JOIN casework_subjects s ON s.source_id=i.source_id AND s.subject_kind=i.subject_kind AND s.subject_id=i.subject_id WHERE s.source_id=$1 AND s.binding_generation<>$2 AND a.state IN ('pending','uncertain')),
-                   EXISTS(SELECT 1 FROM casework_source_reconciliation_progress WHERE source_id=$1 AND binding_generation=$2),
-                   EXISTS(SELECT 1 FROM casework_source_reconciliation_progress WHERE source_id=$1 AND binding_generation<>$2)
-                   OR EXISTS(SELECT 1 FROM casework_subjects WHERE source_id=$1 AND binding_generation<>$2 AND erased_at IS NULL)",
-                &[&source_id, &generation],
-            )
-            .await?;
-        let (pending, recorded, other): (bool, bool, bool) = (row.get(0), row.get(1), row.get(2));
-        if pending {
-            refusals.push(ActivationRefusal::new(
-                "attempt-pending",
-                format!("runtime.yaml:/sources/{source_id}"),
-                format!(
-                    "source {source_id} has a source attempt still pending or uncertain under its previous binding generation; settle it with `caseworkctl attempt settle` (after `caseworkctl attempt mark-uncertain` for an expired lease), then {PLAN_THEN_APPLY}"
-                ),
-            ));
-        }
-        let change = if other {
-            GenerationChange::Changed
-        } else if recorded {
-            GenerationChange::Unchanged
-        } else {
-            GenerationChange::Registered
-        };
-        source_generations.push(SourceGenerationEffect {
-            source_id: source_id.to_owned(),
-            change,
-        });
-    }
     let mut task_templates = Vec::new();
     let mut configured = BTreeSet::new();
     let stored: BTreeMap<(String, String), (Value, bool)> = transaction
@@ -1006,7 +897,10 @@ async fn evaluate_effects(
         };
         let change = match stored.get(&(template.id.clone(), template.version.clone())) {
             None => TemplateChange::Added,
-            Some((stored, _)) if *stored != document => {
+            Some((stored, _))
+                if crate::task_grants::template_behavior(stored.clone())
+                    != crate::task_grants::template_behavior(document.clone()) =>
+            {
                 refusals.push(ActivationRefusal::new(
                     "template-changed",
                     "casework.yaml:/taskTemplates",
@@ -1038,7 +932,6 @@ async fn evaluate_effects(
     Ok((
         ActivationEffects {
             pinned_work: PinnedWorkEffect { verdict, stranded },
-            source_generations,
             task_templates,
         },
         refusals,
@@ -1104,14 +997,6 @@ async fn lock_runtime_order(transaction: &Transaction<'_>) -> Result<(), StoreEr
         transaction
             .query(
                 "SELECT 1 FROM casework_meta WHERE singleton=true FOR UPDATE",
-                &[],
-            )
-            .await?;
-    }
-    if relation_exists(transaction, "casework_source_reconciliation_progress").await? {
-        transaction
-            .query(
-                "SELECT 1 FROM casework_source_reconciliation_progress ORDER BY source_id,binding_generation FOR UPDATE",
                 &[],
             )
             .await?;

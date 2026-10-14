@@ -323,7 +323,7 @@ fn read_test_receipt(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
     let stat = match entry.stat() {
         Ok(stat) => stat,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(PackageLifecycleError::TestReceiptMissing)
+            return Err(PackageLifecycleError::TestReceiptMissing);
         }
         Err(_) => return Err(receipt_refused("the schema-test receipt is not readable")),
     };

@@ -37,6 +37,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 Path("release/docker/Dockerfile.casework"),
                 Path("release/docker/Dockerfile.scheduling"),
                 Path("release/docker/Dockerfile.messaging"),
+                Path("release/docker/Dockerfile.coordinator"),
             },
             set(POLICY.DOCKERFILES),
         )
@@ -52,6 +53,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 Path("release/docker/Dockerfile.casework"),
                 Path("release/docker/Dockerfile.scheduling"),
                 Path("release/docker/Dockerfile.messaging"),
+                Path("release/docker/Dockerfile.coordinator"),
             },
             set(POLICY.HTTP_PROBE_DOCKERFILES),
         )
@@ -495,6 +497,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 Path("release/docker/Dockerfile.casework"): "caseworkctl",
                 Path("release/docker/Dockerfile.scheduling"): "schedulingctl",
                 Path("release/docker/Dockerfile.messaging"): "messagingctl",
+                Path("release/docker/Dockerfile.coordinator"): "coordinatorctl",
             },
             {
                 relative: contract["tool"]

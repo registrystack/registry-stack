@@ -114,6 +114,38 @@ impl BaseRegistryClient {
             .1
     }
 
+    /// Read current caller-filtered metadata while preserving the receiver's
+    /// retry scheduling hint, including on an unavailable response.
+    pub async fn registry_contract_observation(
+        &self,
+        access_profile: Option<&str>,
+    ) -> BRegObservation<BRegMetadata> {
+        let mut retry_after = RetryAfter::Absent;
+        let outcome = async {
+            let pairs = access_profile_query(access_profile)?;
+            let observed = self
+                .get_with_retry_after(
+                    &["v1", "registry"],
+                    &pairs,
+                    APPLICATION_JSON,
+                    Credential::Optional,
+                    EntityTagExpectation::Forbidden,
+                )
+                .await;
+            retry_after = observed.0;
+            let wire = observed.1?;
+            self.bind_registry_contract(BRegComplete {
+                value: BRegRawDocument::new(wire.media_type, wire.body),
+                metadata: wire.metadata,
+            })
+        }
+        .await;
+        BRegObservation {
+            outcome,
+            retry_after,
+        }
+    }
+
     /// Retrieve Registry Metadata v1 as [`Self::registry_contract`] does, and
     /// also return the engine version the service reported beside it.
     ///
@@ -1303,6 +1335,28 @@ impl BaseRegistryClient {
         body: Option<Vec<u8>>,
         key: Option<&BRegIdempotencyKey>,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        if link.method() == "GET" && body.is_none() && key.is_none() {
+            return self.proposal_observation_exchange(link).await.outcome;
+        }
+        let builder = self.proposal_request(link, body)?;
+        if let Some(key) = key {
+            self.send_keyed(
+                builder.header("idempotency-key", key.as_str()),
+                |response| self.decode_proposal_response(response),
+            )
+            .await
+        } else {
+            let builder = self.authorize(builder, Credential::Optional).await?;
+            self.decode_proposal_response(self.transport.send(builder).await?)
+                .await
+        }
+    }
+
+    fn proposal_request(
+        &self,
+        link: &BRegProposalLink,
+        body: Option<Vec<u8>>,
+    ) -> Result<reqwest::RequestBuilder, BaseRegistryClientError> {
         let segments = fixed_operation_segments(link.path())?;
         let pairs = access_profile_query(Some(link.access_profile()))?;
         let url = self.url_with_query(&segments, &pairs)?;
@@ -1324,21 +1378,43 @@ impl BaseRegistryClient {
         if let Some(etag) = link.if_match() {
             builder = builder.header(IF_MATCH, etag);
         }
-        let decode = move |response: Response| async move {
-            let wire = self.proposal_wire(response).await?;
-            crate::strict_json::from_slice(&wire.body)
-                .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
-            Ok(BRegComplete {
-                value: BRegRawDocument::new(wire.media_type, wire.body),
-                metadata: wire.metadata,
-            })
-        };
-        if let Some(key) = key {
-            self.send_keyed(builder.header("idempotency-key", key.as_str()), decode)
-                .await
-        } else {
+        Ok(builder)
+    }
+
+    async fn decode_proposal_response(
+        &self,
+        response: Response,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        let wire = self.proposal_wire(response).await?;
+        crate::strict_json::from_slice(&wire.body)
+            .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+        Ok(BRegComplete {
+            value: BRegRawDocument::new(wire.media_type, wire.body),
+            metadata: wire.metadata,
+        })
+    }
+
+    pub(crate) async fn proposal_observation_exchange(
+        &self,
+        link: &BRegProposalLink,
+    ) -> BRegObservation<BRegRawDocument> {
+        let mut retry_after = RetryAfter::Absent;
+        let outcome = async {
+            if link.method() != "GET" {
+                return Err(BaseRegistryClientError::InvalidRequest {
+                    reason: "Proposal observation requires a read link",
+                });
+            }
+            let builder = self.proposal_request(link, None)?;
             let builder = self.authorize(builder, Credential::Optional).await?;
-            decode(self.transport.send(builder).await?).await
+            let response = self.transport.send(builder).await?;
+            retry_after = RetryAfter::from_headers(response.headers());
+            self.decode_proposal_response(response).await
+        }
+        .await;
+        BRegObservation {
+            outcome,
+            retry_after,
         }
     }
 
@@ -1707,11 +1783,30 @@ impl BaseRegistryClient {
         credential: Credential,
         etag: EntityTagExpectation,
     ) -> Result<BRegWire, BaseRegistryClientError> {
-        let url = self.url_with_query(segments, pairs)?;
-        let mut builder = self.transport.http.get(url).header(ACCEPT, accept);
-        builder = self.authorize(builder, credential).await?;
-        let response = self.transport.send(builder).await?;
-        self.wire(response, accept, etag).await
+        self.get_with_retry_after(segments, pairs, accept, credential, etag)
+            .await
+            .1
+    }
+
+    async fn get_with_retry_after(
+        &self,
+        segments: &[&str],
+        pairs: &[(String, String)],
+        accept: &str,
+        credential: Credential,
+        etag: EntityTagExpectation,
+    ) -> (RetryAfter, Result<BRegWire, BaseRegistryClientError>) {
+        let mut retry_after = RetryAfter::Absent;
+        let outcome = async {
+            let url = self.url_with_query(segments, pairs)?;
+            let mut builder = self.transport.http.get(url).header(ACCEPT, accept);
+            builder = self.authorize(builder, credential).await?;
+            let response = self.transport.send(builder).await?;
+            retry_after = RetryAfter::from_headers(response.headers());
+            self.wire(response, accept, etag).await
+        }
+        .await;
+        (retry_after, outcome)
     }
 
     async fn authorize(

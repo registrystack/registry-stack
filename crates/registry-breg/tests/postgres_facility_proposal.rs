@@ -497,6 +497,17 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
     let status = response.status();
     let context: Value = response.json().await.unwrap();
     assert_eq!(status, reqwest::StatusCode::OK, "{context}");
+    assert_eq!(context["subject"]["source"], "facility-registry");
+    assert_eq!(context["subject"]["subjectType"], "proposal");
+    assert_eq!(context["subject"]["id"], submitted.id());
+    assert_eq!(
+        context["subject"]["version"],
+        submitted.submission_version().to_string()
+    );
+    assert_eq!(
+        context["subject"]["digest"],
+        submitted.effect_digest().unwrap()
+    );
     let action = fixture
         .registry
         .actions()
@@ -524,6 +535,27 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
         json!({"facilityId":facility,"currentAddressLine":"1 Main Road",
         "proposedAddressLine":"3 Civic Road","proposedCity":"Chiang Mai","proposedPostalCode":"50000"})
     );
+    let metadata = reviewer
+        .client
+        .registry_contract(Some("proposal-reviewer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = metadata
+        .select_proposal_review_context("proposal-reviewer", "correct-address")
+        .unwrap();
+    let purpose_read = reviewer
+        .client
+        .read_proposal_review_by_id(&binding, submitted.id())
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(purpose_read.subject.id, submitted.id());
+    assert_eq!(
+        purpose_read.subject.digest,
+        submitted.effect_digest().unwrap()
+    );
+    assert!(purpose_read.context.fields.is_some());
     approve(&fixture, &submitted, &review).await;
     assert!(fixture
         .mutations

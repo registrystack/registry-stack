@@ -242,6 +242,35 @@ projection for durable attempt and accountability storage. It includes the
 source record identifier, revision, snapshot reference, and request outcome,
 and contains no access token or record fields.
 
+## Standalone Proposal observation
+
+A proposal-mode Action uses `start_proposal` to create a draft. Prepare and
+execute the draft's promoted `submit` transition separately to freeze its exact
+submission. Persist `BRegPreparedProposal` before dispatch; after restart,
+`recover_proposal` restores the original condition, body and key under current
+ordinary authority. A later status read does not recover an uncertain command.
+
+Select a current Proposal Get binding from `registry_contract`, then use
+`get_proposal` for an authorized representation. Its optional `applicationStatus`
+reports the retained frozen submission's pending, applying, blocked, applied or
+cancelled state, with closed recovery reasons and bounded automatic retry
+progress. Applied state includes the separate exact application evidence. Match
+Proposal ID, Action revision, submission version and effect digest before using
+that evidence to continue a dependent workflow. A blocked state does not claim
+that application can never occur.
+
+`registry_contract_observation` and `get_proposal_observation` retain the same
+validated response and error contracts while exposing `BRegRetryAfter` separately
+on `BRegObservation`. `Absent`, bounded `Seconds` and `Unusable` are the only hint
+states; raw header text is discarded, including on errors. These methods perform
+one read and never schedule or mutate work. The caller combines receiver hints
+with its own observation interval, deadline and budget. `BRegObservation` Debug
+omits document contents.
+
+Automatic recovery Apply and Retry require an explicit current grant and a
+verified human caller. An observing service gains no recovery authority.
+The built-in executor uses its own governed system grant.
+
 ## Response security
 
 Before returning a body, the client enforces bounded headers and body, exactly

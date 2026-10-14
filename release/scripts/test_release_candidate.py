@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from unittest.mock import patch as roster_patch
+
 import base64
 import copy
 import hashlib
@@ -54,6 +56,7 @@ def security_evidence_members(
         "messaging",
         "evidence-oid4vci",
         "registry-render",
+        "coordinator",
     ),
 ) -> dict[str, bytes]:
     refs = {
@@ -134,6 +137,11 @@ def security_evidence_tar(
 class ReleaseCandidateTest(TestCase):
     def setUp(self) -> None:
         self.module = load_module()
+        enabled = mock.patch.object(
+            self.module.release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0)
+        )
+        enabled.start()
+        self.addCleanup(enabled.stop)
         self.now = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -1005,6 +1013,7 @@ class ReleaseCandidateTest(TestCase):
                     }.issubset(required)
                 )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_image_operator_tools_join_only_the_v0_36_images(self) -> None:
         for version in ("0.33.0", "0.35.0", "0.35.9"):
             with self.subTest(version=version):
@@ -1026,7 +1035,7 @@ class ReleaseCandidateTest(TestCase):
             self.module.image_operator_tools("0.37.99"),
         )
         # The Messaging image carries messagingctl only from its first release.
-        for version in ("0.38.0", "1.0.0"):
+        for version in ("0.38.0", "0.41.99"):
             with self.subTest(version=version):
                 self.assertEqual(
                     {
@@ -1037,7 +1046,21 @@ class ReleaseCandidateTest(TestCase):
                     },
                     self.module.image_operator_tools(version),
                 )
+        # The Coordinator image carries coordinatorctl only from its first release.
+        for version in ("0.42.0", "1.0.0"):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    {
+                        "breg": "bregctl",
+                        "casework": "caseworkctl",
+                        "scheduling": "schedulingctl",
+                        "messaging": "messagingctl",
+                        "coordinator": "coordinatorctl",
+                    },
+                    self.module.image_operator_tools(version),
+                )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_image_operator_tools_cli_emits_image_and_tool_pairs(self) -> None:
         for version, expected in (
             ("0.35.0", ""),
@@ -1053,6 +1076,11 @@ class ReleaseCandidateTest(TestCase):
                 "0.38.0",
                 "breg=bregctl casework=caseworkctl messaging=messagingctl "
                 "scheduling=schedulingctl\n",
+            ),
+            (
+                "0.42.0",
+                "breg=bregctl casework=caseworkctl coordinator=coordinatorctl "
+                "messaging=messagingctl scheduling=schedulingctl\n",
             ),
         ):
             with self.subTest(version=version):
@@ -1091,6 +1119,7 @@ class ReleaseCandidateTest(TestCase):
             },
         )
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_no_version_ships_messaging_until_the_roster_names_a_first_release(
         self,
     ) -> None:
@@ -1111,6 +1140,10 @@ class ReleaseCandidateTest(TestCase):
                     ):
                         expected_images |= (
                             self.module.EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
+                        )
+                    if self.module.release_roster.coordinator_in_release(parsed):
+                        expected_images |= (
+                            self.module.COORDINATOR_RUNTIME_IMAGE_NAMES
                         )
                     self.assertEqual(
                         expected_images,
@@ -1141,6 +1174,89 @@ class ReleaseCandidateTest(TestCase):
                         )
                     self.assertEqual(0, result)
                     self.assertNotIn("messagingctl", stdout.getvalue())
+
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    def test_coordinator_joins_only_the_rosters_from_its_first_release(self) -> None:
+        self.assertEqual(
+            self.module._candidate_image_names("0.41.99") | {"coordinator"},
+            self.module._candidate_image_names("0.42.0"),
+        )
+        self.assertNotIn("coordinator", self.module._candidate_image_names("0.41.0"))
+        self.assertNotIn(
+            "coordinator", self.module.image_operator_tools("0.41.0")
+        )
+        self.assertEqual(
+            "coordinatorctl", self.module.image_operator_tools("0.42.0")["coordinator"]
+        )
+        historical = self.module._release_payload_inventory("0.41.0")
+        self.assertFalse(any(name.startswith("coordinator") for name in historical))
+        current = self.module._release_payload_inventory("0.42.0")
+        self.assertEqual(
+            {
+                "coordinator-v0.42.0-linux-amd64": "binary",
+                "coordinatorctl-v0.42.0-linux-amd64": "binary",
+            },
+            {
+                name: kind
+                for name, kind in current.items()
+                if name.startswith("coordinator")
+            },
+        )
+        self.assertEqual(
+            {name.replace("0.41.0", "0.42.0"): kind for name, kind in historical.items()},
+            {
+                name: kind
+                for name, kind in current.items()
+                if not name.startswith("coordinator")
+            },
+        )
+        required = self.module._security_evidence_required_files(
+            self.module._candidate_image_names("0.42.0")
+        )
+        self.assertTrue(
+            {
+                "image-sbom/coordinator.spdx.json",
+                "syft/coordinator.syft.json",
+                "grype/coordinator.grype.json",
+            }.issubset(required)
+        )
+        self.assertTrue(
+            {
+                "image-sbom/coordinator.spdx.json",
+                "syft/coordinator.syft.json",
+                "grype/coordinator.grype.json",
+            }.issubset(self.module.SECURITY_EVIDENCE_REQUIRED_FILES)
+        )
+
+    def test_no_version_ships_coordinator_until_the_roster_names_a_first_release(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            self.module.release_roster, "COORDINATOR_FIRST_RELEASE", None
+        ):
+            for version in ("0.42.0", "1.0.0"):
+                with self.subTest(version=version):
+                    self.assertNotIn(
+                        "coordinator", self.module._candidate_image_names(version)
+                    )
+                    self.assertFalse(
+                        any(
+                            name.startswith("coordinator")
+                            for name in self.module._release_payload_inventory(
+                                version
+                            )
+                        )
+                    )
+                    self.assertNotIn(
+                        "coordinator", self.module.image_operator_tools(version)
+                    )
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                        result = self.module.main(
+                            ["image-names", "--version", version]
+                        )
+                    self.assertEqual(0, result)
+                    self.assertNotIn("coordinator", stdout.getvalue().split())
 
     def test_breg_services_join_only_the_rosters_from_their_first_release(
         self,
@@ -1182,6 +1298,7 @@ class ReleaseCandidateTest(TestCase):
             self.assertNotIn(f"{service}-v0.38.0-install.sh", inventory)
             self.assertNotIn(f"{service}-v0.38.0-macos-arm64", inventory)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_no_version_ships_the_breg_services_until_the_roster_names_one(
         self,
     ) -> None:
@@ -1202,6 +1319,10 @@ class ReleaseCandidateTest(TestCase):
                     ):
                         expected_images |= (
                             self.module.EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
+                        )
+                    if self.module.release_roster.coordinator_in_release(parsed):
+                        expected_images |= (
+                            self.module.COORDINATOR_RUNTIME_IMAGE_NAMES
                         )
                     self.assertEqual(
                         expected_images,
@@ -1238,6 +1359,7 @@ class ReleaseCandidateTest(TestCase):
                 inventory = self.module._release_payload_inventory(version)
                 self.assertEqual(expected, f"mint-v{version}-linux-amd64" in inventory)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_image_names_cli_emits_the_version_appropriate_roster(self) -> None:
         cases = (
             ("0.20.2", "relay\n"),
@@ -1266,6 +1388,17 @@ class ReleaseCandidateTest(TestCase):
                 "0.39.0",
                 "breg breg-mcp breg-review casework discovery evidence "
                 "evidence-oid4vci messaging registry-render scheduling\n",
+            ),
+            (
+                "0.40.0",
+                "breg breg-mcp breg-review casework discovery evidence "
+                "evidence-oid4vci messaging registry-render scheduling\n",
+            ),
+            (
+                "0.42.0",
+                "breg breg-mcp breg-review casework coordinator discovery "
+                "evidence evidence-oid4vci messaging registry-render "
+                "scheduling\n",
             ),
         )
         for version, expected in cases:
@@ -1476,6 +1609,55 @@ class ReleaseCandidateTest(TestCase):
                 root, "0.39.0", allow_missing_baseline=True
             ),
         )
+
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
+    def test_coordinator_onboarding_stays_closed_until_external_setup(self) -> None:
+        root = self.onboarding_repository()
+        shutil.copy2(
+            ROOT / "release/docker/Dockerfile.coordinator",
+            root / "release/docker/Dockerfile.coordinator",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "coordinator advisory baseline is missing",
+        ):
+            self.module.check_image_onboarding(root, "0.42.0")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain coordinator-candidate",
+        ):
+            self.module.check_image_onboarding(
+                root, "0.42.0", allow_missing_baseline=True
+            )
+        cleanup = root / "release/scripts/cleanup-release-candidates.py"
+        cleanup.write_text(
+            cleanup.read_text(encoding="utf-8").replace(
+                '    "messaging-candidate",\n',
+                '    "messaging-candidate",\n    "coordinator-candidate",\n',
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            self.module._candidate_image_names("0.42.0"),
+            self.module.check_image_onboarding(
+                root, "0.42.0", allow_missing_baseline=True
+            ),
+        )
+        recipe = root / "release/scripts/build-release-binaries.sh"
+        recipe.write_text(
+            recipe.read_text(encoding="utf-8").replace(
+                "cp target/release/coordinatorctl dist/image-bin/coordinatorctl",
+                "cp target/release/coordinatorctl dist/image-bin/wrong-coordinatorctl",
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "canonical binary recipe must stage dist/image-bin/coordinatorctl",
+        ):
+            self.module.check_image_onboarding(
+                root, "0.42.0", allow_missing_baseline=True
+            )
 
     def test_breg_services_onboarding_stays_closed_until_external_setup(
         self,

@@ -1,0 +1,623 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+# Synthetic replies exercise the compiled model. HTTP authority and durability are tested separately.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: approved-exact-result
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    policy:
+      id: notice-review
+      version: '1'
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    subject:
+      source: notices
+      type: notice
+      id: notice-7
+      version: '3'
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    requesterReference: notice-request-7
+    context:
+      mode: submitted
+      snapshot:
+        summary: A synthetic notice for review.
+  replies:
+    submit:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  waits:
+    await-result:
+      type: event
+      value:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        resultId: 00000000-0000-4000-8000-000000000002
+        status: approved
+        completedAt: '2026-10-14T00:01:00Z'
+        availableUntil: '2026-11-14T00:00:00Z'
+  expect:
+    path:
+    - submit
+    - await-result
+    - report-result
+    state: completed
+    outcome:
+      type: named
+      value: review-result
+    output:
+      requestId: 00000000-0000-4000-8000-000000000001
+      subject:
+        source: notices
+        type: notice
+        id: notice-7
+        version: '3'
+        digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      policy:
+        id: notice-review
+        version: '1'
+        digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      resultId: 00000000-0000-4000-8000-000000000002
+      status: approved
+      completedAt: '2026-10-14T00:01:00Z'
+      availableUntil: '2026-11-14T00:00:00Z'
+- id: rejected-exact-result
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    policy:
+      id: notice-review
+      version: '1'
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    subject:
+      source: notices
+      type: notice
+      id: notice-7
+      version: '3'
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    requesterReference: notice-request-7
+    context:
+      mode: submitted
+      snapshot:
+        summary: A synthetic notice for review.
+  replies:
+    submit:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  waits:
+    await-result:
+      type: event
+      value:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        resultId: 00000000-0000-4000-8000-000000000002
+        status: rejected
+        completedAt: '2026-10-14T00:01:00Z'
+        availableUntil: '2026-11-14T00:00:00Z'
+        outcome: notice-not-approved
+  expect:
+    path:
+    - submit
+    - await-result
+    - report-result
+    state: completed
+    outcome:
+      type: named
+      value: review-result
+    output:
+      requestId: 00000000-0000-4000-8000-000000000001
+      subject:
+        source: notices
+        type: notice
+        id: notice-7
+        version: '3'
+        digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      policy:
+        id: notice-review
+        version: '1'
+        digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      resultId: 00000000-0000-4000-8000-000000000002
+      status: rejected
+      completedAt: '2026-10-14T00:01:00Z'
+      availableUntil: '2026-11-14T00:00:00Z'
+      outcome: notice-not-approved
+- id: superseded-exact-result
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    policy:
+      id: notice-review
+      version: '1'
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    subject:
+      source: notices
+      type: notice
+      id: notice-7
+      version: '3'
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    requesterReference: notice-request-7
+    context:
+      mode: submitted
+      snapshot:
+        summary: A synthetic notice for review.
+  replies:
+    submit:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  waits:
+    await-result:
+      type: event
+      value:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        resultId: 00000000-0000-4000-8000-000000000002
+        status: superseded
+        completedAt: '2026-10-14T00:01:00Z'
+        availableUntil: '2026-11-14T00:00:00Z'
+  expect:
+    path:
+    - submit
+    - await-result
+    - report-result
+    state: completed
+    outcome:
+      type: named
+      value: review-result
+    output:
+      requestId: 00000000-0000-4000-8000-000000000001
+      subject:
+        source: notices
+        type: notice
+        id: notice-7
+        version: '3'
+        digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      policy:
+        id: notice-review
+        version: '1'
+        digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      resultId: 00000000-0000-4000-8000-000000000002
+      status: superseded
+      completedAt: '2026-10-14T00:01:00Z'
+      availableUntil: '2026-11-14T00:00:00Z'
+- id: timeout-cancelled
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    policy:
+      id: notice-review
+      version: '1'
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    subject:
+      source: notices
+      type: notice
+      id: notice-7
+      version: '3'
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    requesterReference: notice-request-7
+    context:
+      mode: submitted
+      snapshot:
+        summary: A synthetic notice for review.
+  replies:
+    submit:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    withdraw-timeout:
+    - type: success
+      value:
+        outcome: cancelled
+        result:
+          requestId: 00000000-0000-4000-8000-000000000001
+          subject:
+            source: notices
+            type: notice
+            id: notice-7
+            version: '3'
+            digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          policy:
+            id: notice-review
+            version: '1'
+            digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          resultId: 00000000-0000-4000-8000-000000000002
+          status: cancelled
+          completedAt: '2026-10-14T00:01:00Z'
+          availableUntil: '2026-11-14T00:00:00Z'
+  waits:
+    await-result:
+      type: timeout
+  expect:
+    path:
+    - submit
+    - await-result
+    - withdraw-timeout
+    - report-timeout-withdrawal
+    state: completed
+    outcome:
+      type: named
+      value: timeout-withdrawal-result
+    output:
+      outcome: cancelled
+      result:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        resultId: 00000000-0000-4000-8000-000000000002
+        status: cancelled
+        completedAt: '2026-10-14T00:01:00Z'
+        availableUntil: '2026-11-14T00:00:00Z'
+- id: timeout-approved
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    policy:
+      id: notice-review
+      version: '1'
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    subject:
+      source: notices
+      type: notice
+      id: notice-7
+      version: '3'
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    requesterReference: notice-request-7
+    context:
+      mode: submitted
+      snapshot:
+        summary: A synthetic notice for review.
+  replies:
+    submit:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    withdraw-timeout:
+    - type: success
+      value:
+        outcome: already-terminal
+        result:
+          requestId: 00000000-0000-4000-8000-000000000001
+          subject:
+            source: notices
+            type: notice
+            id: notice-7
+            version: '3'
+            digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          policy:
+            id: notice-review
+            version: '1'
+            digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          resultId: 00000000-0000-4000-8000-000000000002
+          status: approved
+          completedAt: '2026-10-14T00:01:00Z'
+          availableUntil: '2026-11-14T00:00:00Z'
+  waits:
+    await-result:
+      type: timeout
+  expect:
+    path:
+    - submit
+    - await-result
+    - withdraw-timeout
+    - report-timeout-withdrawal
+    state: completed
+    outcome:
+      type: named
+      value: timeout-withdrawal-result
+    output:
+      outcome: already-terminal
+      result:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        resultId: 00000000-0000-4000-8000-000000000002
+        status: approved
+        completedAt: '2026-10-14T00:01:00Z'
+        availableUntil: '2026-11-14T00:00:00Z'
+- id: cancel-cancelled
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    policy:
+      id: notice-review
+      version: '1'
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    subject:
+      source: notices
+      type: notice
+      id: notice-7
+      version: '3'
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    requesterReference: notice-request-7
+    context:
+      mode: submitted
+      snapshot:
+        summary: A synthetic notice for review.
+  replies:
+    submit:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    withdraw-operator:
+    - type: success
+      value:
+        outcome: cancelled
+        result:
+          requestId: 00000000-0000-4000-8000-000000000001
+          subject:
+            source: notices
+            type: notice
+            id: notice-7
+            version: '3'
+            digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          policy:
+            id: notice-review
+            version: '1'
+            digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          resultId: 00000000-0000-4000-8000-000000000002
+          status: cancelled
+          completedAt: '2026-10-14T00:01:00Z'
+          availableUntil: '2026-11-14T00:00:00Z'
+  waits:
+    await-result:
+      type: cancel
+  expect:
+    path:
+    - submit
+    - await-result
+    - withdraw-operator
+    - report-operator-withdrawal
+    state: completed
+    outcome:
+      type: named
+      value: operator-withdrawal-result
+    output:
+      outcome: cancelled
+      result:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        resultId: 00000000-0000-4000-8000-000000000002
+        status: cancelled
+        completedAt: '2026-10-14T00:01:00Z'
+        availableUntil: '2026-11-14T00:00:00Z'
+- id: cancel-approved
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    policy:
+      id: notice-review
+      version: '1'
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    subject:
+      source: notices
+      type: notice
+      id: notice-7
+      version: '3'
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    requesterReference: notice-request-7
+    context:
+      mode: submitted
+      snapshot:
+        summary: A synthetic notice for review.
+  replies:
+    submit:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    withdraw-operator:
+    - type: success
+      value:
+        outcome: already-terminal
+        result:
+          requestId: 00000000-0000-4000-8000-000000000001
+          subject:
+            source: notices
+            type: notice
+            id: notice-7
+            version: '3'
+            digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          policy:
+            id: notice-review
+            version: '1'
+            digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          resultId: 00000000-0000-4000-8000-000000000002
+          status: approved
+          completedAt: '2026-10-14T00:01:00Z'
+          availableUntil: '2026-11-14T00:00:00Z'
+  waits:
+    await-result:
+      type: cancel
+  expect:
+    path:
+    - submit
+    - await-result
+    - withdraw-operator
+    - report-operator-withdrawal
+    state: completed
+    outcome:
+      type: named
+      value: operator-withdrawal-result
+    output:
+      outcome: already-terminal
+      result:
+        requestId: 00000000-0000-4000-8000-000000000001
+        subject:
+          source: notices
+          type: notice
+          id: notice-7
+          version: '3'
+          digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        policy:
+          id: notice-review
+          version: '1'
+          digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        resultId: 00000000-0000-4000-8000-000000000002
+        status: approved
+        completedAt: '2026-10-14T00:01:00Z'
+        availableUntil: '2026-11-14T00:00:00Z'
+- id: submit-authority-refused
+  admittedAt: '2026-10-14T00:00:00Z'
+  input:
+    policy:
+      id: notice-review
+      version: '1'
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    subject:
+      source: notices
+      type: notice
+      id: notice-7
+      version: '3'
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    requesterReference: notice-request-7
+    context:
+      mode: submitted
+      snapshot:
+        summary: A synthetic notice for review.
+  replies:
+    submit:
+    - type: refused
+      code: credential-refused
+  expect:
+    path:
+    - submit
+    state: refused
+    outcome:
+      type: none

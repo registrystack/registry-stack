@@ -14,7 +14,9 @@ pub use error::{
     ReviewClientError, ReviewMutationErrorClass, ReviewProblem, ReviewProblemCode,
     ReviewProtocolFailure, ReviewValidationError, ReviewValidationReason,
 };
-pub use model::{ReviewAuth, ReviewComplete, ReviewResultResponse, ReviewResultsQuery};
+pub use model::{
+    ReviewAuth, ReviewComplete, ReviewResultObservation, ReviewResultResponse, ReviewResultsQuery,
+};
 pub use registry_platform_httputil::client::BearerToken;
 pub use registry_review_protocol::{
     submission_digest, ContentDigest, HumanIdentity, PolicyBinding, ProtocolError,

@@ -51,6 +51,7 @@ PUBLIC_PACKAGES = (
     "casework",
     "scheduling",
     "messaging",
+    "coordinator",
     "relay",
 )
 

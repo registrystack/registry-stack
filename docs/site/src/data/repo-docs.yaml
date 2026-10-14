@@ -25,6 +25,16 @@ repos:
     local: ../..
     openapi: products/messaging/generated/registry-messaging.openapi.json
 
+  # The Coordinator runtime is unreleased. Only its product-owned OpenAPI
+  # artifact is pulled; the start, configure, operate, configuration, and API
+  # reference pages are hand-authored.
+  registry-coordinator:
+    remote: https://github.com/registrystack/registry-stack
+    ref: HEAD
+    version: main source (unreleased)
+    local: ../..
+    openapi: products/coordinator/generated/openapi/coordinator.openapi.json
+
   # Casework first enters an archived docset at v0.30.0. Its product-owned
   # OpenAPI artifact is rendered directly; adopter prose remains hand-authored
   # in the Casework product lane rather than duplicating the long product README.

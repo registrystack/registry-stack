@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "ContentDigest": {
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "HumanIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "issuer": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "issuer",
+        "subject"
+      ],
+      "type": "object"
+    },
+    "PolicyBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/ContentDigest"
+        },
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "ReviewContext": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "submitted",
+              "type": "string"
+            },
+            "snapshot": {
+              "additionalProperties": true,
+              "type": "object",
+              "x-maximum-canonical-bytes": 65536,
+              "x-maximum-json-depth": 32,
+              "x-maximum-json-nodes": 4096
+            }
+          },
+          "required": [
+            "mode",
+            "snapshot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "binding": {
+              "$ref": "#/$defs/SourceContextBinding"
+            },
+            "mode": {
+              "const": "current-source",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "binding"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SourceContextBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference"
+      ],
+      "type": "object"
+    },
+    "SubjectBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/ContentDigest"
+        },
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "type",
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "context": {
+      "$ref": "#/$defs/ReviewContext"
+    },
+    "initiator": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HumanIdentity"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "policy": {
+      "$ref": "#/$defs/PolicyBinding"
+    },
+    "requesterReference": {
+      "type": "string"
+    },
+    "resultConstraints": {
+      "additionalProperties": true,
+      "type": "object",
+      "x-maximum-canonical-bytes": 16384
+    },
+    "subject": {
+      "$ref": "#/$defs/SubjectBinding"
+    }
+  },
+  "required": [
+    "policy",
+    "subject",
+    "requesterReference",
+    "context"
+  ],
+  "title": "casework.submit-review-request/v1 input",
+  "type": "object"
+}

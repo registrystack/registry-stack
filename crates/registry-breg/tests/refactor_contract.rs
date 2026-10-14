@@ -1013,3 +1013,150 @@ fn omitted_proposal_application_uses_the_bounded_builtin_executor() {
         json!({"mode":"automatic","maximumAttempts":3})
     );
 }
+
+#[test]
+fn public_action_export_comes_from_the_compiled_owner_contract() {
+    let model = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
+    let artifact = model
+        .artifacts()
+        .get("generated/action-contracts.json")
+        .unwrap();
+    let exported: serde_json::Value = serde_json::from_slice(&artifact.bytes).unwrap();
+    assert_eq!(
+        exported["apiVersion"],
+        registry_breg::artifacts::ACTION_CONTRACTS_API_VERSION
+    );
+    assert_eq!(
+        exported["kind"],
+        registry_breg::artifacts::ACTION_CONTRACTS_KIND
+    );
+    let format_schema: serde_json::Value = serde_json::from_slice(
+        &model
+            .artifacts()
+            .get("generated/action-contracts.schema.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&format_schema)
+        .unwrap();
+    assert!(validator.is_valid(&exported));
+    let mut unversioned = exported.clone();
+    unversioned.as_object_mut().unwrap().remove("apiVersion");
+    assert!(!validator.is_valid(&unversioned));
+    let mut unknown = exported.clone();
+    unknown["actions"][0]["handler"] = serde_json::json!({"source":"private-code"});
+    assert!(!validator.is_valid(&unknown));
+    let openapi: serde_json::Value = serde_json::from_slice(
+        &model
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let actions = exported["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), model.actions().actions.len());
+    for action in &model.actions().actions {
+        let entry = actions
+            .iter()
+            .find(|entry| entry["id"] == action.id)
+            .unwrap();
+        assert_eq!(entry["revision"], action.definition_revision);
+        assert_eq!(
+            entry["input"],
+            openapi["components"]["schemas"][format!("action-{}-invoke-input", action.id)]
+        );
+        assert_eq!(
+            entry["output"],
+            openapi["components"]["schemas"][format!("action-{}-invoke-response", action.id)]
+        );
+        assert!(entry.get("systemApplyProfile").is_none());
+        let keys = entry
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(keys.is_subset(
+            &[
+                "id",
+                "revision",
+                "display",
+                "mode",
+                "input",
+                "output",
+                "review",
+                "application",
+                "declaredRefusal"
+            ]
+            .into_iter()
+            .collect()
+        ));
+        assert!(!entry.to_string().contains("correct-address.rhai"));
+    }
+    let correction = actions
+        .iter()
+        .find(|entry| entry["id"] == "correct-address")
+        .unwrap();
+    assert_eq!(correction["mode"], "proposal");
+    assert!(correction.get("review").is_some());
+    assert!(correction.get("application").is_some());
+    assert!(
+        correction.get("declaredRefusal").is_none(),
+        "draft creation does not evaluate the Proposal plan"
+    );
+}
+
+#[test]
+fn coordinator_information_request_declares_and_executes_blank_reason_refusal() {
+    use registry_breg::action_handler::{evaluate_action, ActionHandlerOutcome};
+    let project = parse_project_yaml(include_bytes!(
+        "../../../products/breg/examples/coordinator-actions/registry.yaml"
+    ))
+    .unwrap();
+    let registry = compile_project_with_assets(&project, &[], &[ModuleAssetSource { module: None, path: "scripts/request-information.rhai".into(), bytes: include_bytes!("../../../products/breg/examples/coordinator-actions/scripts/request-information.rhai").to_vec() }], CompileProfile::Authoring).unwrap();
+    let export: serde_json::Value = serde_json::from_slice(
+        &registry
+            .artifacts()
+            .get("generated/action-contracts.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let exported = export["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == "request-information")
+        .unwrap();
+    let refusal = jsonschema::JSONSchema::compile(&exported["declaredRefusal"]).unwrap();
+    assert!(refusal.is_valid(&serde_json::json!({"refusalCode":"invalid-reason"})));
+    assert!(!refusal.is_valid(&serde_json::json!({"refusalCode":"transport-error"})));
+    assert!(!refusal
+        .is_valid(&serde_json::json!({"refusalCode":"invalid-reason","detail":"private-input"})));
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "request-information")
+        .unwrap();
+    let input =
+        serde_json::json!({"application":"00000000-0000-4000-8000-000000000001","reason":"   "})
+            .as_object()
+            .unwrap()
+            .clone();
+    let outcome = evaluate_action(
+        action,
+        &input,
+        std::time::Instant::now() + std::time::Duration::from_secs(2),
+    )
+    .unwrap();
+    let ActionHandlerOutcome::Refusal(refusal) = outcome else {
+        panic!("whitespace reason is a declared business refusal")
+    };
+    assert_eq!(refusal.code, "invalid-reason");
+    assert_eq!(refusal.field.as_deref(), Some("reason"));
+}

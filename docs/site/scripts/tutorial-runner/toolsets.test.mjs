@@ -22,6 +22,15 @@ const CASES = {
     runs: ['caseworkctl dev start .', 'casework --version', 'caseworkctl check . | tail -1'],
     names: ['cd tutorial-work/casework', 'cat .casework/dev/state.json', 'cat casework.yaml', 'ls casework/'],
   },
+  coordinator: {
+    runs: [
+      'coordinatorctl run start',
+      'coordinator --runtime-config runtime.yaml',
+      'python3 products/coordinator/examples/reviewed-notice/session.py start',
+      'reviewed-notice-input --record-id "$application"',
+    ],
+    names: ['cd products/coordinator', 'cat coordinator.yaml', 'ls reviewed-notice-input/'],
+  },
   evidence: {
     runs: ['evidencectl init .', 'evidence --version', 'evidence-oid4vci --help', 'products/evidence/scripts/check-contracts.sh'],
     names: ['cd ~/work/evidence', 'ls .evidence/clients', 'cat evidence.yaml', 'ls evidence/', "curl --get --data-urlencode 'serviceKind=evidence' $url"],

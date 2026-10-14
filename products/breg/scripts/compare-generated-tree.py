@@ -17,6 +17,8 @@ REFACTOR_PATHS = (
     'compiled/modules.json',
     'compiled/query-inventory.json',
     'compiled/routes.json',
+    'generated/action-contracts.json',
+    'generated/action-contracts.schema.json',
     'generated/action-schemas/correct-address.invoke.input.schema.json',
     'generated/action-schemas/correct-address.invoke.response.schema.json',
     'generated/action-schemas/deactivate-facility.invoke.input.schema.json',

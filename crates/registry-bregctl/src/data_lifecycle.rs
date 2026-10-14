@@ -694,10 +694,10 @@ fn submit_ingestion_chunks(
             BRegIngestionRunStatus::Blocked => {
                 return Err(DataLifecycleError::ImportRunBlocked(
                     started.run.blocked_reason(),
-                ))
+                ));
             }
             BRegIngestionRunStatus::Cancelled => {
-                return Err(DataLifecycleError::ImportRunCancelled)
+                return Err(DataLifecycleError::ImportRunCancelled);
             }
             BRegIngestionRunStatus::Complete => break,
         }

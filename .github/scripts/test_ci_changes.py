@@ -316,6 +316,7 @@ class CiChangesTest(unittest.TestCase):
             "messaging-postgres": (
                 "needs.changes.outputs.messaging_postgres == 'true'"
             ),
+            "coordinator-postgres": "needs.changes.outputs.coordinator == 'true'",
             "messaging-contracts": (
                 "needs.changes.outputs.messaging_contracts == 'true'"
             ),
@@ -440,6 +441,7 @@ class CiChangesTest(unittest.TestCase):
             "messaging-contracts",
             "messaging-postgres",
             "messaging-smtp",
+            "coordinator-postgres",
             "release-tool",
             "release-tool-required",
             "release-source-proof",
@@ -477,6 +479,7 @@ class CiChangesTest(unittest.TestCase):
                 "messaging-postgres",
                 "messaging-contracts",
                 "messaging-smtp",
+                "coordinator-postgres",
                 "config-conformance",
             ),
             "release-tool-required": ("changes", "release-tool"),
@@ -503,6 +506,7 @@ class CiChangesTest(unittest.TestCase):
                 "messaging-postgres",
                 "messaging-contracts",
                 "messaging-smtp",
+                "coordinator-postgres",
                 "config-conformance",
                 "release-tool",
                 "release-source-proof",
@@ -560,7 +564,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(33, len(final_needs))
+        self.assertEqual(34, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -622,6 +626,8 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-breg-review/src/config.rs",
             "crates/registry-platform-config/src/blocks.rs",
             "crates/registry-messaging/src/config.rs",
+            "crates/registry-coordinator/src/runtime.rs",
+            "products/coordinator/generated/runtime/runtime.schema.json",
             "products/messaging/generated/runtime/runtime.schema.json",
             "crates/registry-breg/src/runtime_config.rs",
             "crates/registry-render/src/manifest.rs",
@@ -1116,6 +1122,63 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(unrelated["messaging_contracts"])
         self.assertFalse(unrelated["messaging_postgres"])
 
+    def test_coordinator_selects_its_runtime_cli_reference_and_postgres_proof(self) -> None:
+        for path in (
+            "crates/registry-coordinator/src/worker.rs",
+            "products/coordinator/examples/delayed-follow-up/workflow.yaml",
+            "products/coordinator/scripts/test-postgres.sh",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertEqual(outputs["rust_packages"], ["registry-cli-docs", "registry-coordinator"])
+                self.assertTrue(outputs["coordinator"])
+                self.assertFalse(outputs["messaging_postgres"])
+                self.assertEqual(
+                    outputs["rust_matrix"]["include"],
+                    [{"name": "developer-tools", "packages": ["registry-cli-docs", "registry-coordinator"], "all_features": False}],
+                )
+
+        for dependency in (
+            "registry-platform-dispatch",
+            "registry-platform-testing",
+            "registry-breg-client",
+            "registry-casework-client",
+            "registry-messaging-client",
+            "registry-scheduling-client",
+        ):
+            with self.subTest(dependency=dependency):
+                outputs = classify(self.workspace, (f"crates/{dependency}/src/lib.rs",))
+                self.assertTrue(outputs["coordinator"])
+
+    def test_coordinator_configuration_formats_run_the_existing_conformance_job(self) -> None:
+        for path in (
+            "products/coordinator/generated/project/project.schema.json",
+            "products/coordinator/generated/runtime/runtime.schema.json",
+            "products/coordinator/generated/scenarios/scenarios.schema.json",
+            "products/coordinator/scripts/check-schemas.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["config_conformance"])
+        steps = self.workflow_jobs["config-conformance"]["steps"]
+        self.assertTrue(any(step.get("run") == "products/coordinator/scripts/check-schemas.sh" for step in steps))
+        self.assertIn("registry-coordinator", CONFIG_CHECK_PACKAGES)
+
+    def test_coordinator_postgres_proof_has_its_own_database_job(self) -> None:
+        job = self.workflow_jobs["coordinator-postgres"]
+        proof = next(step for step in job["steps"] if step.get("run") == "products/coordinator/scripts/test-postgres.sh")
+        self.assertNotIn("if", proof)
+        # A Coordinator change pays only for its own suite, never Messaging's.
+        self.assertNotIn("coordinator", self.workflow_jobs["messaging-postgres"]["if"])
+        self.assertIn("COORDINATOR_TEST_DATABASE_URL", proof["env"])
+        self.assertIn("COORDINATOR_MESSAGING_TEST_DATABASE_URL", proof["env"])
+        self.assertNotEqual(proof["env"]["COORDINATOR_TEST_DATABASE_URL"], proof["env"]["COORDINATOR_MESSAGING_TEST_DATABASE_URL"])
+        script = Path("products/coordinator/scripts/test-postgres.sh").read_text()
+        self.assertRegex(script, r"cargo test --locked -p registry-coordinator[^\n]*--lib")
+        self.assertIn("--test messaging_integration", script)
+        self.assertIn("--test process_restart", script)
+        self.assertIn("--test deployment_postgres", script)
+        self.assertIn("cargo build --locked -p registry-messaging -p registry-messagingctl", script)
+
     def test_shared_review_protocol_selects_casework_and_breg_consumers(self) -> None:
         outputs = classify(
             self.workspace,
@@ -1281,6 +1344,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-evidence-client-py/src/lib.rs",
             "crates/registry-messaging-client-py/src/lib.rs",
             "crates/registry-scheduling-client-py/src/lib.rs",
+            "crates/registry-coordinator-client-py/src/lib.rs",
         ):
             with self.subTest(path=path):
                 self.assertTrue(
@@ -2281,6 +2345,36 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-scheduling-client-node", outputs["rust_packages"])
         self.assertIn("registry-scheduling-client-py", outputs["rust_packages"])
 
+    def test_coordinator_bindings_run_the_native_client_job(self) -> None:
+        # The Coordinator bindings are covered only by the shared native-client
+        # job, and the Python one also ships in the assembled package the
+        # application tutorial imports.
+        for path in (
+            "crates/registry-coordinator-client-node/src/lib.rs",
+            "crates/registry-coordinator-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["client_bindings"])
+                self.assertIn(
+                    path.split("/")[1], outputs["rust_packages"]
+                )
+        self.assertTrue(
+            classify(
+                self.workspace, ("crates/registry-coordinator-client-py/src/lib.rs",)
+            )["evidence_tutorial"]
+        )
+
+    def test_a_coordinator_client_change_also_runs_the_binding_job(self) -> None:
+        # Both bindings are Cargo path-dependents of the Rust client, so a
+        # client change can alter the native surface the packages wrap.
+        outputs = classify(
+            self.workspace, ("crates/registry-coordinator-client/src/lib.rs",)
+        )
+        self.assertTrue(outputs["client_bindings"])
+        self.assertIn("registry-coordinator-client-node", outputs["rust_packages"])
+        self.assertIn("registry-coordinator-client-py", outputs["rust_packages"])
+
     def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
         # Both bindings are Cargo path-dependents of the SDK and the verifier,
         # so either can change the native surface or the error envelope the
@@ -3046,13 +3140,14 @@ class LockfileSelectionTest(unittest.TestCase):
         self,
     ) -> None:
         # tree-sitter-yaml compiles C, so it is proven by the full sweep; its
-        # pure-Rust companion rhai reaches six members through normal edges.
+        # pure-Rust companion rhai reaches its consumers through normal edges.
         change = self.change(bump_lock_package(self.lock, "rhai", "1.26.2"))
         self.assertEqual(
             change.members,
             frozenset(
                 {
                     "registry-breg",
+                    "registry-coordinator",
                     "registry-evidence",
                     "registry-evidence-authoring",
                     "registry-evidencectl",

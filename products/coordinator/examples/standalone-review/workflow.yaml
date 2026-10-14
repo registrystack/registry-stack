@@ -1,0 +1,68 @@
+# Input is the source-neutral Casework request, including expected PolicyBinding.
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: standalone-review
+  version: "1"
+
+operations:
+  request-review:
+    uses: casework.submit-review-request/v1
+    connection: review
+  withdraw-review:
+    uses: casework.cancel-review-request/v1
+    connection: review
+
+workflow:
+  input: {operationInput: request-review}
+  deadlineSeconds: 2592000
+  start: submit
+  steps:
+    submit:
+      title: Request review of the submitted context
+      type: call
+      operation: request-review
+      input: {type: input}
+      next: await-result
+    await-result:
+      type: wait-for
+      completion: {step: submit, name: result}
+      timeoutSeconds: 1209600
+      next: report-result
+      onTimeout: withdraw-timeout
+      onCancel: withdraw-operator
+    report-result:
+      type: finish
+      outcome: review-result
+      output: {type: step, step: await-result}
+    withdraw-timeout:
+      type: call
+      operation: withdraw-review
+      input:
+        type: fields
+        fields:
+          request: {type: step, step: submit}
+          reason: {type: literal, value: "No decision within fourteen days."}
+      next: report-timeout-withdrawal
+    report-timeout-withdrawal:
+      type: finish
+      outcome: timeout-withdrawal-result
+      output: {type: step, step: withdraw-timeout}
+    withdraw-operator:
+      type: call
+      operation: withdraw-review
+      input:
+        type: fields
+        fields:
+          request: {type: step, step: submit}
+          reason: {type: literal, value: "The workflow operator cancelled the run."}
+      next: report-operator-withdrawal
+    report-operator-withdrawal:
+      type: finish
+      outcome: operator-withdrawal-result
+      output: {type: step, step: withdraw-operator}
+  outcomes:
+    review-result:
+      completionOutput: {operation: request-review, name: result}
+    timeout-withdrawal-result: {operationOutput: withdraw-review}
+    operator-withdrawal-result: {operationOutput: withdraw-review}

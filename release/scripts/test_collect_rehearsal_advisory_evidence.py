@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from unittest.mock import patch as roster_patch
+
 import argparse
 import importlib.util
 import io
@@ -315,14 +317,34 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 with self.assertRaises(MODULE.EvidenceError):
                     MODULE.parse_operator_tools(output, roster)
 
+    @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_operator_tools_are_owned_by_the_release_roster(self) -> None:
-        for version in ("0.39.0", "1.0.0"):
+        # Child-process checks use the same hypothetical enabled roster as this test.
+        candidate = ROOT / "release/scripts/release_candidate.py"
+        fixture_command = [
+            "python3", "-c",
+            "import runpy,sys; "
+            f"sys.path.insert(0, {str(ROOT / 'release/scripts')!r}); "
+            "import release_roster; release_roster.COORDINATOR_FIRST_RELEASE=(0,42,0); "
+            f"runpy.run_path({str(candidate)!r}, run_name='__main__')",
+        ]
+        tools = {
+            "breg": "bregctl",
+            "casework": "caseworkctl",
+            "messaging": "messagingctl",
+            "scheduling": "schedulingctl",
+        }
+        for version, expected in (
+            ("0.39.0", tools),
+            ("0.40.0", tools),
+            ("0.42.0", tools | {"coordinator": "coordinatorctl"}),
+            ("1.0.0", tools | {"coordinator": "coordinatorctl"}),
+        ):
             with self.subTest(version=version):
                 results = [
                     subprocess.run(
                         [
-                            "python3",
-                            str(ROOT / "release/scripts/release_candidate.py"),
+                            *fixture_command,
                             command,
                             "--version",
                             version,
@@ -335,16 +357,24 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 ]
                 roster = MODULE.parse_roster(results[0])
                 self.assertEqual(
-                    {
-                        "breg": "bregctl",
-                        "casework": "caseworkctl",
-                        "messaging": "messagingctl",
-                        "scheduling": "schedulingctl",
-                    },
-                    MODULE.parse_operator_tools(results[1], roster),
+                    expected, MODULE.parse_operator_tools(results[1], roster)
                 )
-                # The collector supports no image the roster holds out.
-                self.assertEqual(MODULE.IMAGE_NAMES, set(roster))
+                # The collector supports exactly the newest roster, so an
+                # older roster is a subset of it.
+                self.assertLessEqual(set(roster), MODULE.IMAGE_NAMES)
+        current = subprocess.run(
+            [
+                *fixture_command,
+                "image-names",
+                "--version",
+                "1.0.0",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        # The collector supports no image the roster holds out.
+        self.assertEqual(MODULE.IMAGE_NAMES, set(MODULE.parse_roster(current)))
 
     def test_each_operator_tool_gets_its_own_exposure_report(self) -> None:
         tools = {"breg": "bregctl"}

@@ -131,11 +131,35 @@ impl ReviewClient {
         auth: ReviewAuth<'_>,
         expected: &ReviewRequestAccepted,
     ) -> Result<ReviewResultResponse, ReviewClientError> {
+        self.result_observation(auth, expected).await.outcome
+    }
+
+    pub async fn result_observation(
+        &self,
+        auth: ReviewAuth<'_>,
+        expected: &ReviewRequestAccepted,
+    ) -> crate::ReviewResultObservation {
+        let mut retry_after = registry_platform_httputil::client::RetryAfter::Absent;
+        let outcome = self.result_exchange(auth, expected, &mut retry_after).await;
+        crate::ReviewResultObservation {
+            outcome,
+            retry_after,
+        }
+    }
+
+    async fn result_exchange(
+        &self,
+        auth: ReviewAuth<'_>,
+        expected: &ReviewRequestAccepted,
+        retry_after: &mut registry_platform_httputil::client::RetryAfter,
+    ) -> Result<ReviewResultResponse, ReviewClientError> {
         let request_id = expected.request_id;
         let url = self.url_from_constant(&review_result_path(request_id))?;
         let response = self
             .send(self.authorized(self.http.get(url), &auth)?)
             .await?;
+        *retry_after =
+            registry_platform_httputil::client::RetryAfter::from_headers(response.headers());
         let status = response.status();
         let trace_id = response_trace(status, response.headers())?;
         match status {

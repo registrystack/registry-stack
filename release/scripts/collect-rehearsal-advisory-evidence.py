@@ -32,6 +32,7 @@ IMAGE_NAMES = frozenset(
         "breg-mcp",
         "breg-review",
         "casework",
+        "coordinator",
         "discovery",
         "evidence",
         "evidence-oid4vci",
@@ -46,6 +47,7 @@ OPERATOR_TOOLS = {
     "casework": "caseworkctl",
     "scheduling": "schedulingctl",
     "messaging": "messagingctl",
+    "coordinator": "coordinatorctl",
 }
 SEMVER_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")

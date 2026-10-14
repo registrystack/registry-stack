@@ -9,16 +9,18 @@ export declare class CaseworkClient {
   reviewResult(token: string, profile: string, accepted: any): Promise<CaseworkOutcome>
   reviewResults(token: string, profile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   cancelReviewRequest(token: string, profile: string, accepted: any, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
-  reviewKinds(token: string, profile: string): Promise<CaseworkOutcome>
-  reviewKind(token: string, profile: string, kindId: string): Promise<CaseworkOutcome>
+  reviewPolicies(token: string, profile: string): Promise<CaseworkOutcome>
+  reviewPolicy(token: string, profile: string, policyId: string): Promise<CaseworkOutcome>
   reviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  nextReviewTask(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  reviewTaskHoldings(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewTask(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   ownReviewDecisions(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   supervisoryReviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewTaskContext(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  previewReviewTaskTemplates(token: string, profile: string, sourceProfile: string, taskId: string): Promise<CaseworkOutcome>
-  listReviewTaskGrants(token: string, profile: string, sourceProfile: string, taskId: string): Promise<CaseworkOutcome>
-  approveReviewTaskGrant(token: string, profile: string, sourceProfile: string, taskId: string, expectedRevision: number, idempotencyKey: string, approval: any): Promise<CaseworkOutcome>
+  previewReviewTaskTemplates(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  listReviewTaskGrants(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  approveReviewTaskGrant(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, approval: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   revokeReviewTaskGrant(token: string, profile: string, taskId: string, grantId: string): Promise<CaseworkOutcome>
   claimReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   releaseReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string): Promise<CaseworkOutcome>
@@ -32,26 +34,9 @@ export declare class CaseworkClient {
   addReviewNote(token: string, profile: string, requestId: string, idempotencyKey: string, note: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewClocks(token: string, profile: string, requestId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewAccountability(token: string, profile: string, eventId: string): Promise<CaseworkOutcome>
-  listWorkItems(token: string, profile: string, sourceProfile: string, query: any): Promise<CaseworkOutcome>
-  nextWorkItem(token: string, profile: string, sourceProfile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
-  getWorkItem(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>
-  previewTaskTemplates(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>
-  listTaskGrants(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>
-  approveTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, expectedRevision: number, idempotencyKey: string, approval: any): Promise<CaseworkOutcome>
-  revokeTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, grantId: string): Promise<CaseworkOutcome>
   taskAssertion(token: string, grantId: string): Promise<CaseworkOutcome>
   taskAssertionEndpoint(grantId: string): string
   taskGrantStatus(token: string, grantId: string): Promise<CaseworkOutcome>
-  claimWorkItem(token: string, profile: string, sourceProfile: string, action: any, idempotencyKey: string): Promise<CaseworkOutcome>
-  releaseWorkItem(token: string, profile: string, sourceProfile: string, action: any, idempotencyKey: string): Promise<CaseworkOutcome>
-  getDraft(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>
-  saveDraft(token: string, profile: string, sourceProfile: string, itemId: string, expectedRevision: number, idempotencyKey: string, draft: any): Promise<CaseworkOutcome>
-  deleteDraft(token: string, profile: string, sourceProfile: string, itemId: string, expectedRevision: number, idempotencyKey: string): Promise<CaseworkOutcome>
-  decideWorkItem(token: string, profile: string, sourceProfile: string, action: any, idempotencyKey: string, decision: any): Promise<CaseworkOutcome>
-  recoverDecision(token: string, profile: string, sourceProfile: string, itemId: string, attemptId: string, recovery: any): Promise<CaseworkOutcome>
-  recoverDecisionByKey(token: string, profile: string, sourceProfile: string, itemId: string, idempotencyKey: string, recovery: any): Promise<CaseworkOutcome>
-  workItemHistory(token: string, profile: string, sourceProfile: string, itemId: string, query?: any | undefined | null): Promise<CaseworkOutcome>
-  holdings(token: string, profile: string, sourceProfile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   directory(token: string, profile: string): Promise<CaseworkOutcome>
   directoryTargets(token: string, profile: string, query: any): Promise<CaseworkOutcome>
   bootstrapDirectory(token: string, profile: string, expectedRevision: number, idempotencyKey: string, bootstrap: any): Promise<CaseworkOutcome>
@@ -59,12 +44,9 @@ export declare class CaseworkClient {
   createAbsence(token: string, profile: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
   updateAbsence(token: string, profile: string, absenceId: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
   deleteAbsence(token: string, profile: string, absenceId: string, expectedRevision: number, idempotencyKey: string): Promise<CaseworkOutcome>
-  assignWorkItem(token: string, profile: string, itemId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  delegateWorkItem(token: string, profile: string, itemId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  previewCaseloadMove(token: string, profile: string, movement: any, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  previewCaseloadMove(token: string, profile: string, movement: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   applyCaseloadMove(token: string, profile: string, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   updateDirectoryTeam(token: string, profile: string, teamId: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
-  workItemClocks(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>
   holidayRevision(token: string, profile: string, holidaySet: string, revision: number): Promise<CaseworkOutcome>
   createHolidayRevision(token: string, profile: string, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
   previewClockRecompute(token: string, profile: string, request: any): Promise<CaseworkOutcome>

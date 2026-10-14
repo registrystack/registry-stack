@@ -23,11 +23,11 @@ accessProfiles:
 queues:
   - id: decisions
     label: Decisions awaiting review
-reviewKinds:
+reviewPolicies:
   - id: decision
     version: "1"
     purpose: answer
-    contextStrategy: submitted
+    context: {mode: submitted}
     stages:
       - id: answer
         queue: decisions
@@ -52,11 +52,11 @@ reviewKinds:
         label: Return for correction
         settlement: answered
         reasonRequired: true
-reviewProducers:
+trustedProducers:
   - id: requester
     profile: requester
-    issuer: http://127.0.0.1:8091
-    subject: requester
+    issuer: http://127.0.0.1:8093
+    subject: b75315b2-5854-70f3-8867-511dd771a6da
     sourceNamespaces: [standalone]
-    kinds: [decision]
+    reviewPolicies: [decision]
     recoveryDays: 30

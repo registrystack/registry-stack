@@ -537,7 +537,9 @@ fn field_source(yaml: &mut Yaml, indent: usize, field: &PlannedField) {
             max_length,
         } => {
             if *min_length > 0 {
-                format!("type: string{required}, minimumLength: {min_length}, maximumLength: {max_length}")
+                format!(
+                    "type: string{required}, minimumLength: {min_length}, maximumLength: {max_length}"
+                )
             } else {
                 format!("type: string{required}, maximumLength: {max_length}")
             }

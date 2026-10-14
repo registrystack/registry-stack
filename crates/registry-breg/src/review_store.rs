@@ -1498,7 +1498,7 @@ pub(crate) async fn enqueue_submission(
         },
         requester_reference: requester_reference.to_owned(),
         initiator: initiator.cloned(),
-        context: registry_review_client::ReviewContext::Source {
+        context: registry_review_client::ReviewContext::CurrentSource {
             binding: SourceContextBinding {
                 reference: source_reference,
             },
@@ -2101,20 +2101,22 @@ pub async fn reconcile_result(
     {
         return Err(MutationError::PreconditionFailed);
     }
-    // Observation holds this row while composing lifecycle, result and job
-    // state. Publish the correlated result and its automatic job under the
-    // same lifecycle-first lock order as Apply, Cancel and detail erasure.
-    let proposal_id =
+    // The accepted subject and result agree above. Lock that lifecycle row
+    // before the review submission, matching mutations and public observations.
+    // The exact accepted-binding lookup and id/version/digest checks below
+    // prove it is the same Proposal before retaining a result or creating a job.
+    let locked_proposal =
         Uuid::parse_str(&accepted.subject.id).map_err(|_| MutationError::PreconditionFailed)?;
     transaction
         .query_opt(
-            "SELECT proposal_id FROM registry_internal.registry_proposal_state
+            "SELECT 1 FROM registry_internal.registry_proposal_state
               WHERE proposal_id=$1 FOR UPDATE",
-            &[&proposal_id],
+            &[&locked_proposal],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?
         .ok_or(MutationError::PreconditionFailed)?;
+    let accepted_value = serde_json::to_value(accepted).map_err(|_| MutationError::Unavailable)?;
     let row = transaction
         .query_opt(
             "SELECT action_id,proposal_id,submission_version,proposal_digest,
@@ -2122,10 +2124,7 @@ pub async fn reconcile_result(
                FROM registry_internal.registry_proposal_review_submissions
               WHERE authority=$1 AND accepted_binding=$2 AND state IN ('accepted','cancelling')
               FOR UPDATE",
-            &[
-                &authority,
-                &serde_json::to_value(accepted).map_err(|_| MutationError::Unavailable)?,
-            ],
+            &[&authority, &accepted_value],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?
@@ -2134,7 +2133,8 @@ pub async fn reconcile_result(
     let proposal_id: Uuid = row.get(1);
     let version: i64 = row.get(2);
     let proposal_digest: String = row.get(3);
-    if result.subject.id != proposal_id.to_string()
+    if proposal_id != locked_proposal
+        || result.subject.id != proposal_id.to_string()
         || result.subject.version != version.to_string()
         || result.subject.digest.as_str() != proposal_digest
     {

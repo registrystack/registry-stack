@@ -2,6 +2,7 @@
 //! Generated JSON Schema for the local development clients file a Casework
 //! project holds, `dev-clients.yaml`.
 
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::dev::config::{Clients, DEV_CLIENTS_API_VERSION, DEV_CLIENTS_KIND};
@@ -22,6 +23,31 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
             DEV_CLIENTS_SCHEMA_ID,
             "Registry Casework development clients",
         )?,
+    )]
+    .into())
+}
+
+/// The one command-tagged report schema derives from the owning output DTOs.
+pub fn report_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
+    let mut settings = schemars::generate::SchemaSettings::draft2020_12();
+    settings.contract = schemars::generate::Contract::Serialize;
+    let schema = settings
+        .into_generator()
+        .into_root_schema_for::<crate::report::CliReport>();
+    let mut value = serde_json::to_value(schema)?;
+    value["$id"] = Value::String(
+        "https://id.registrystack.org/schemas/casework/report/report.v1alpha1.schema.json".into(),
+    );
+    value["title"] = Value::String("Casework command report".into());
+    value["properties"] = serde_json::json!({"apiVersion":{"const":crate::report::REPORT_API_VERSION},"kind":{"const":crate::report::REPORT_KIND}});
+    value["required"] = serde_json::json!(["apiVersion", "kind"]);
+    value["allOf"] = serde_json::json!([
+        {"if":{"properties":{"ok":{"const":true}},"required":["ok"]},"then":{"required":["data"],"properties":{"status":{"const":"complete"}}},"else":{"properties":{"status":{"enum":["domain-refusal","usage-error","operational-failure"]},"diagnostics":{"minItems":1}}}}
+    ]);
+
+    Ok([(
+        "report.schema.json",
+        serde_json::to_string_pretty(&value)? + "\n",
     )]
     .into())
 }
@@ -55,16 +81,14 @@ mod tests {
     fn the_maintained_example_and_templates_validate_against_the_schema() {
         let schema = schema();
         assert!(schema.is_valid(&example()));
-        for template in [
-            crate::project::STANDALONE_DEV_CLIENTS,
-            crate::project::PROFESSIONAL_REVIEW_DEV_CLIENTS,
-        ] {
-            let document = crate::dev::config::read("dev-clients.yaml", template.as_bytes())
-                .unwrap()
-                .document
-                .to_json_value();
-            assert!(schema.is_valid(&document));
-        }
+        let document = crate::dev::config::read(
+            "dev-clients.yaml",
+            crate::project::STANDALONE_DEV_CLIENTS.as_bytes(),
+        )
+        .unwrap()
+        .document
+        .to_json_value();
+        assert!(schema.is_valid(&document));
     }
 
     #[test]

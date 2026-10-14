@@ -90,13 +90,6 @@
             "id": {
               "$ref": "#/$defs/LocalId"
             },
-            "pauseWhile": {
-              "items": {
-                "$ref": "#/$defs/SubjectClockPause"
-              },
-              "type": "array",
-              "uniqueItems": true
-            },
             "type": {
               "const": "subject",
               "type": "string"
@@ -107,8 +100,7 @@
             "id",
             "anchor",
             "completeOn",
-            "after",
-            "pauseWhile"
+            "after"
           ],
           "type": "object"
         },
@@ -237,17 +229,11 @@
       ],
       "type": "string"
     },
-    "DisplayReferencePolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "field": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "field"
-      ],
-      "type": "object"
+    "ContentDigest": {
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
     },
     "ElapsedDuration": {
       "additionalProperties": false,
@@ -333,35 +319,6 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
-    "OccurrenceState": {
-      "enum": [
-        "open",
-        "claimed",
-        "waiting-applicant",
-        "waiting-application",
-        "synchronizing",
-        "completed",
-        "superseded",
-        "cancelled"
-      ],
-      "type": "string"
-    },
-    "PassiveTargetPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "after": {
-          "$ref": "#/$defs/ElapsedDuration"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        }
-      },
-      "required": [
-        "id",
-        "after"
-      ],
-      "type": "object"
-    },
     "ProjectIdentity": {
       "additionalProperties": false,
       "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
@@ -411,73 +368,121 @@
       ],
       "type": "object"
     },
-    "ReviewContextStrategy": {
+    "ReviewContextCapability": {
       "enum": [
-        "submitted",
-        "source"
+        "human-display",
+        "service-status",
+        "task-grant-context",
+        "routing-context"
       ],
       "type": "string"
     },
-    "ReviewKindPolicy": {
+    "ReviewContextContract": {
       "additionalProperties": false,
       "properties": {
-        "clocks": {
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "$ref": "#/$defs/ContentDigest"
+        },
+        "schemaDigest": {
+          "$ref": "#/$defs/ContentDigest"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "schemaDigest"
+      ],
+      "type": "object"
+    },
+    "ReviewContextPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "submitted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contract": {
+              "$ref": "#/$defs/ReviewContextContract"
+            },
+            "mode": {
+              "const": "current-source",
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "provider",
+            "contract"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ReviewContextProviderPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/ReviewContextCapability"
           },
           "type": "array"
         },
-        "contextStrategy": {
-          "$ref": "#/$defs/ReviewContextStrategy"
+        "deploymentRef": {
+          "type": "string"
         },
-        "displaySchema": {
-          "x-registry-foreign": "json-schema-2020-12"
+        "description": {
+          "type": "string"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
-        "outcomes": {
-          "items": {
-            "$ref": "#/$defs/ReviewOutcomePolicy"
+        "serviceProfiles": {
+          "additionalProperties": false,
+          "default": {},
+          "properties": {
+            "human-display": {
+              "type": "string"
+            },
+            "routing-context": {
+              "type": "string"
+            },
+            "service-status": {
+              "type": "string"
+            },
+            "task-grant-context": {
+              "type": "string"
+            }
           },
-          "type": "array"
+          "type": "object"
         },
-        "purpose": {
-          "$ref": "#/$defs/ReviewKindPurpose"
-        },
-        "resultSchema": {
-          "x-registry-foreign": "json-schema-2020-12"
-        },
-        "retention": {
-          "$ref": "#/$defs/ReviewRetentionPolicy"
-        },
-        "stages": {
-          "items": {
-            "$ref": "#/$defs/ReviewStagePolicy"
-          },
-          "type": "array"
-        },
-        "version": {
+        "sourceNamespace": {
           "type": "string"
         }
       },
       "required": [
         "id",
-        "version",
-        "purpose",
-        "contextStrategy",
-        "stages",
-        "retention",
-        "displaySchema"
+        "capabilities",
+        "sourceNamespace",
+        "deploymentRef"
       ],
       "type": "object"
-    },
-    "ReviewKindPurpose": {
-      "enum": [
-        "approval",
-        "answer"
-      ],
-      "type": "string"
     },
     "ReviewOutcomePolicy": {
       "additionalProperties": false,
@@ -508,11 +513,72 @@
     },
     "ReviewOutcomeSettlement": {
       "enum": [
+        "approved",
         "rejected",
         "changes-requested",
         "answered"
       ],
       "type": "string"
+    },
+    "ReviewPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "clocks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "context": {
+          "$ref": "#/$defs/ReviewContextPolicy"
+        },
+        "displaySchema": {
+          "x-registry-foreign": "json-schema-2020-12"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "outcomes": {
+          "items": {
+            "$ref": "#/$defs/ReviewOutcomePolicy"
+          },
+          "type": "array"
+        },
+        "purpose": {
+          "$ref": "#/$defs/ReviewPurpose"
+        },
+        "resultSchema": {
+          "x-registry-foreign": "json-schema-2020-12"
+        },
+        "retention": {
+          "$ref": "#/$defs/ReviewRetentionPolicy"
+        },
+        "routing": {
+          "items": {
+            "$ref": "#/$defs/RoutingRule"
+          },
+          "type": "array"
+        },
+        "stages": {
+          "items": {
+            "$ref": "#/$defs/ReviewStagePolicy"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "purpose",
+        "context",
+        "stages",
+        "retention",
+        "displaySchema"
+      ],
+      "type": "object"
     },
     "ReviewProducerPolicy": {
       "additionalProperties": false,
@@ -530,12 +596,6 @@
         "issuer": {
           "$ref": "#/$defs/Url"
         },
-        "kinds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "profile": {
           "type": "string"
         },
@@ -544,6 +604,12 @@
           "maximum": 3650,
           "minimum": 1,
           "type": "integer"
+        },
+        "reviewPolicies": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "sourceNamespaces": {
           "items": {
@@ -564,10 +630,17 @@
         "issuer",
         "subject",
         "sourceNamespaces",
-        "kinds",
+        "reviewPolicies",
         "recoveryDays"
       ],
       "type": "object"
+    },
+    "ReviewPurpose": {
+      "enum": [
+        "approval",
+        "answer"
+      ],
+      "type": "string"
     },
     "ReviewRetentionPolicy": {
       "additionalProperties": false,
@@ -631,8 +704,7 @@
     },
     "RoutingActivity": {
       "enum": [
-        "review",
-        "apply"
+        "review"
       ],
       "type": "string"
     },
@@ -647,7 +719,7 @@
             "$ref": "#/$defs/RoutingPredicate"
           },
           "propertyNames": {
-            "$ref": "#/$defs/LocalId"
+            "$ref": "#/$defs/ExternalId"
           },
           "type": "object"
         },
@@ -735,93 +807,15 @@
       ],
       "type": "object"
     },
-    "SourcePolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "adapter": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "requests": {
-          "items": {
-            "$ref": "#/$defs/SourceRequestPolicy"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "id",
-        "adapter",
-        "description",
-        "requests"
-      ],
-      "type": "object"
-    },
-    "SourceRequestPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "clock": {
-          "type": "string"
-        },
-        "contextProjection": {
-          "description": "Source fields that may be returned to an authorized human reviewing a\nunified source-context task. Values are fetched afresh through that\ncaller's source credential and are never retained by Casework.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "displayReference": {
-          "$ref": "#/$defs/DisplayReferencePolicy",
-          "description": "One source-owned string field that may be retained for exact officer\nlookup. It remains subject to the current caller's source disclosure."
-        },
-        "entity": {
-          "type": "string"
-        },
-        "projection": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "queue": {
-          "type": "string"
-        },
-        "routing": {
-          "items": {
-            "$ref": "#/$defs/RoutingRule"
-          },
-          "type": "array"
-        },
-        "target": {
-          "$ref": "#/$defs/PassiveTargetPolicy"
-        }
-      },
-      "required": [
-        "entity",
-        "queue"
-      ],
-      "type": "object"
-    },
     "SubjectClockAnchor": {
       "enum": [
-        "first-submitted-at"
+        "request-accepted-at"
       ],
       "type": "string"
     },
     "SubjectClockCompletion": {
       "enum": [
-        "review-completed"
-      ],
-      "type": "string"
-    },
-    "SubjectClockPause": {
-      "enum": [
-        "awaiting-applicant"
+        "result-terminal"
       ],
       "type": "string"
     },
@@ -1001,19 +995,6 @@
         "id": {
           "$ref": "#/$defs/LocalId"
         },
-        "itemKinds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "itemStates": {
-          "items": {
-            "$ref": "#/$defs/OccurrenceState"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
         "label": {
           "type": "string"
         },
@@ -1029,8 +1010,8 @@
         "resource": {
           "type": "string"
         },
-        "reviewKinds": {
-          "description": "Unified review kinds whose currently-held tasks may issue this grant.\nThis is a separate eligibility mode from source work-item kinds/states.",
+        "reviewPolicies": {
+          "description": "Policies whose currently held ReviewTasks may issue this grant.",
           "items": {
             "type": "string"
           },
@@ -1074,6 +1055,43 @@
         "bounds",
         "subjects",
         "lifetimeSeconds"
+      ],
+      "type": "object"
+    },
+    "TeamPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "label": {
+          "type": "string"
+        },
+        "memberProfiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "serves": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "supervisorProfiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "serves",
+        "memberProfiles",
+        "supervisorProfiles"
       ],
       "type": "object"
     },
@@ -1172,6 +1190,13 @@
       },
       "type": "array"
     },
+    "contextProviders": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ReviewContextProviderPolicy"
+      },
+      "type": "array"
+    },
     "inbox": {
       "$ref": "#/$defs/InboxPolicy",
       "default": {
@@ -1195,24 +1220,10 @@
       },
       "type": "array"
     },
-    "reviewKinds": {
+    "reviewPolicies": {
       "default": [],
       "items": {
-        "$ref": "#/$defs/ReviewKindPolicy"
-      },
-      "type": "array"
-    },
-    "reviewProducers": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ReviewProducerPolicy"
-      },
-      "type": "array"
-    },
-    "sources": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/SourcePolicy"
+        "$ref": "#/$defs/ReviewPolicy"
       },
       "type": "array"
     },
@@ -1220,6 +1231,20 @@
       "default": [],
       "items": {
         "$ref": "#/$defs/TaskTemplate"
+      },
+      "type": "array"
+    },
+    "teams": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TeamPolicy"
+      },
+      "type": "array"
+    },
+    "trustedProducers": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ReviewProducerPolicy"
       },
       "type": "array"
     }

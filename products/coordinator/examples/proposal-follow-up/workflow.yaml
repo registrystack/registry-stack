@@ -1,0 +1,86 @@
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: proposal-follow-up
+  version: "1"
+
+# Owner-generated export pins the exact Action schema, revision and policy.
+contracts:
+  facilities:
+    type: breg
+    source: generated/facilities.contract.json
+
+types:
+  follow-up-input:
+    type: object
+    additionalProperties: false
+    required: [correction, notice]
+    properties:
+      correction: {operationInput: start-correction}
+      notice: {operationInput: send-notice}
+
+operations:
+  start-correction:
+    uses: breg.invoke-action/v1
+    action: {contract: facilities, id: correct-address}
+    connection: facilities
+  submit-correction:
+    uses: breg.submit-proposal/v1
+    connection: facilities
+  send-notice:
+    uses: messaging.submit-message/v1
+    connection: notices
+
+workflow:
+  input: {typeRef: follow-up-input}
+  deadlineSeconds: 2592000
+  start: start-draft
+  steps:
+    start-draft:
+      title: Propose a correction
+      type: call
+      operation: start-correction
+      input: {type: input, path: /correction}
+      next: submit
+    submit:
+      title: Freeze and submit the Proposal
+      type: call
+      operation: submit-correction
+      input: {type: step, step: start-draft, path: /proposal}
+      next: await-application
+    await-application:
+      title: Wait for BReg to apply this submission
+      type: wait-for
+      completion: {step: submit, name: application}
+      timeoutSeconds: 1209600
+      next: application-outcome
+      onTimeout: stopped-waiting
+    application-outcome:
+      type: choose
+      choose: {type: step, step: await-application, path: /outcome}
+      cases:
+        applied: notify
+        closed: report-closed
+    notify:
+      title: Submit the separately authorized notice
+      type: call
+      operation: send-notice
+      input: {type: input, path: /notice}
+      next: report-accepted
+    report-accepted:
+      type: finish
+      outcome: message-accepted
+      output: {type: step, step: notify}
+    report-closed:
+      type: finish
+      outcome: proposal-closed
+      output: {type: step, step: await-application}
+    stopped-waiting:
+      type: finish
+      outcome: application-wait-expired
+      # BReg may continue its own work. No implicit cancellation or failure claim.
+  outcomes:
+    message-accepted: {operationOutput: send-notice}
+    proposal-closed:
+      completionOutput: {operation: submit-correction, name: application}
+    application-wait-expired: {type: "null"}

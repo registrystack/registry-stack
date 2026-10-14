@@ -1,0 +1,62 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: coordinator-actions
+  version: "1"
+  canonicalBaseIri: https://synthetic.example.invalid/coordinator-actions
+  defaultLanguage: en
+package:
+  sourceRevision: coordinator-actions-v1
+datasets:
+  - {id: applications}
+recordTypes:
+  - id: application
+    primaryDataset: applications
+    route: applications
+    mutationMode: mutable
+    fields:
+      - {id: owner, type: string, required: true, maximumLength: 80, classification: internal}
+      - {id: information-requested, apiName: informationRequested, type: boolean, required: true, classification: internal}
+      - {id: reason, type: string, required: false, minimumLength: 1, maximumLength: 256, classification: internal}
+functions:
+  - id: request-information-plan
+    runtime: rhai
+    source: scripts/request-information.rhai
+    entrypoint: plan
+    abi: registry.action-plan/v1
+actions:
+  - id: request-information
+    execution: {mode: immediate}
+    inputs:
+      - {id: application, apiName: applicationId, type: reference, target: application, required: true, classification: internal}
+      - {id: reason, type: string, required: true, minimumLength: 1, maximumLength: 256, classification: internal}
+    plan:
+      type: function
+      function: request-information-plan
+      inputs: [application, reason]
+      refusals:
+        - {code: invalid-reason, label: The information request requires a nonblank reason.}
+      writes:
+        - id: application
+          target: {fromInput: application}
+          operation: patch
+          fields: [information-requested, reason]
+accessProfiles:
+  - id: coordinator
+    principalClaim: sub
+    requiredScopes: [applications:manage]
+    actorKind: service
+    requesterClients: [coordinator-client]
+    permissions:
+      records:
+        - recordType: application
+          operations: [get]
+          readableFields: [information-requested, reason]
+          rowBoundaries: [{field: owner, claim: sub, operator: equals}]
+      actions:
+        - action: request-information
+          operations: [invoke]
+          targets:
+            - recordType: application
+              rowBoundaries: [{field: owner, claim: sub, operator: equals}]
+          results: [application]

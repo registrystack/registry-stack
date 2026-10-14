@@ -428,7 +428,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         .unwrap_or_default();
     let captured = capture(&project, &bytes)?;
     if captured.digest != state.source_digest {
-        bail!("authored inputs differ from the retained session; restore the recorded inputs before preparing a source. Arbitrary changes require the reviewed package lifecycle");
+        bail!(
+            "authored inputs differ from the retained session; restore the recorded inputs before preparing a source. Arbitrary changes require the reviewed package lifecycle"
+        );
     }
     let mut docs = documents(&captured.files)?;
     let compiled = crate::compile(&project, crate::ProfileArg::Production, "prepare-source")
@@ -442,7 +444,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             || args.all_records
             || args.row_field.is_some()
         {
-            bail!("select --record-type, --selector-field, --readable-fields and explicit row authority to preview or apply");
+            bail!(
+                "select --record-type, --selector-field, --readable-fields and explicit row authority to preview or apply"
+            );
         }
         return Ok(report);
     };
@@ -455,7 +459,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         )
         .map_err(|_| anyhow::anyhow!(INVALID_PREPARATION))?;
         if prepared.request_digest != request_digest {
-            bail!("selected source client already has different prepared authority; use fresh IDs for a separate source");
+            bail!(
+                "selected source client already has different prepared authority; use fresh IDs for a separate source"
+            );
         }
         let mut report = prepared.report;
         report["requiresRestart"] = json!(!state.activated);
@@ -468,7 +474,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         || !state.activated
         || state.package_digest.is_none()
     {
-        bail!("prepare-source requires a normally stopped, activated retained session; finish the pending dev start then stop it before adding a source");
+        bail!(
+            "prepare-source requires a normally stopped, activated retained session; finish the pending dev start then stop it before adding a source"
+        );
     }
     for value in [&args.client, &args.access_profile, &args.selector_profile] {
         if !config::identifier(value) {
@@ -488,7 +496,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         bail!("select 1..16 distinct --readable-fields explicitly");
     }
     if !args.all_records && args.row_field.is_none() {
-        bail!("select --all-records or an explicit --row-field, --row-claim and --row-value-file binding");
+        bail!(
+            "select --all-records or an explicit --row-field, --row-claim and --row-value-file binding"
+        );
     }
     let mut clients = config::clients(&state.clients_file.display().to_string(), &bytes)?;
     if clients
@@ -520,7 +530,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         .iter()
         .any(|f| f["id"] == *selector && identifier(entity, f))
     {
-        bail!("selector must be an existing required, bounded scalar field with an exact single-field unique constraint");
+        bail!(
+            "selector must be an existing required, bounded scalar field with an exact single-field unique constraint"
+        );
     }
     for id in &args.readable_fields {
         if !fields.iter().any(|f| f["id"] == *id && scalar(f)) {
@@ -700,13 +712,26 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             report[key] = value;
         }
         if args.apply {
-            let originals = replacements.keys().map(|path| {
-                let expected = if path == &state.clients_file { bytes.clone() } else {
-                    captured.files[path.strip_prefix(&project)?.to_str().context("source path must be UTF-8")?].clone()
-                };
-                if read_authoring(path)? != expected { bail!("authoring changed during source preview; inspect the changes and retry"); }
-                Ok((path.clone(),expected))
-            }).collect::<Result<_>>()?;
+            let originals = replacements
+                .keys()
+                .map(|path| {
+                    let expected = if path == &state.clients_file {
+                        bytes.clone()
+                    } else {
+                        captured.files[path
+                            .strip_prefix(&project)?
+                            .to_str()
+                            .context("source path must be UTF-8")?]
+                        .clone()
+                    };
+                    if read_authoring(path)? != expected {
+                        bail!(
+                            "authoring changed during source preview; inspect the changes and retry"
+                        );
+                    }
+                    Ok((path.clone(), expected))
+                })
+                .collect::<Result<_>>()?;
             let transition = Transition {
                 api_version: transition_api_version(),
                 kind: transition_kind(),
@@ -722,7 +747,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             let journal = serde_json::to_vec(&transition)?;
             // A journal the reader would refuse could never be recovered.
             if journal.len() > registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES {
-                bail!("source transition exceeds the 1 MiB retained journal bound; reduce the size of the registry project's model documents and retry");
+                bail!(
+                    "source transition exceeds the 1 MiB retained journal bound; reduce the size of the registry project's model documents and retry"
+                );
             }
             private::replace(&root.join("source-transition.json"), &journal)?;
             finish(&state, &transition)?;

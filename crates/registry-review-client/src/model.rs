@@ -47,6 +47,22 @@ pub struct ReviewComplete<T> {
     pub trace_id: String,
 }
 
+/// One bounded result read and the scheduling hint returned with that exchange.
+/// The client does not retry; callers retain their own original deadline.
+pub struct ReviewResultObservation {
+    pub outcome: Result<ReviewResultResponse, crate::ReviewClientError>,
+    pub retry_after: registry_platform_httputil::client::RetryAfter,
+}
+
+impl std::fmt::Debug for ReviewResultObservation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReviewResultObservation")
+            .field("received", &self.outcome.is_ok())
+            .field("retry_after", &self.retry_after)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReviewResultResponse {
     Available(Box<ReviewComplete<ReviewResult>>),

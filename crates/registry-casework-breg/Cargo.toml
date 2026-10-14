@@ -6,12 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-description = "Bounded Base Registry Engine source adapter for Registry Casework."
+description = "Read-only native Proposal context provider for Registry Casework."
 
 [features]
 default = []
 schema = [
     "dep:schemars",
+    "registry-casework-core/schema",
     "registry-platform-config/schema",
     "registry-platform-yaml/schema",
 ]
@@ -21,12 +22,13 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+jsonschema.workspace = true
 registry-casework-core.workspace = true
 registry-breg-client.workspace = true
 registry-platform-buildinfo.workspace = true
+registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
-registry-platform-hooks.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-yaml.workspace = true
 schemars = { workspace = true, optional = true }

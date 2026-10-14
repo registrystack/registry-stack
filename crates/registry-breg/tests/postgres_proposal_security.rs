@@ -919,6 +919,24 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     assert_review_contract(&fixture.registry, &value);
     assert!(value["context"].get("fields").is_none());
     assert!(!value.to_string().contains("current-name-canary"));
+    let metadata = service
+        .client
+        .registry_contract(Some("review-status"))
+        .await
+        .unwrap()
+        .value;
+    let binding = metadata
+        .select_proposal_review_status("review-status", "correct-name")
+        .unwrap();
+    let purpose_read = service
+        .client
+        .read_proposal_review_by_id(&binding, id)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(purpose_read.subject.id, id);
+    assert!(purpose_read.context.fields.is_none());
+    assert_eq!(purpose_read.result.unwrap().state, "pending");
     for suffix in ["", "/review-context"] {
         let (code, value, _) = send(
             &service,

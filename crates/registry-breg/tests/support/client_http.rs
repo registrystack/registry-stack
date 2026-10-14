@@ -72,6 +72,12 @@ pub struct ClientFixture {
 }
 
 impl ClientFixture {
+    /// Reuse the installed native services with a real token authenticator in
+    /// cross-product journeys; each caller still receives its own profile.
+    pub fn service(&self) -> Arc<HttpService> {
+        Arc::clone(&self.service)
+    }
+
     pub async fn start(
         registry: registry_breg::CompiledRegistry,
         claims: VerifiedRequestClaims,

@@ -61,6 +61,7 @@ pub enum AttendanceState {
 /// included. A parent accompanying two children is three attendees and two
 /// recipients, and consumes recipient units, never attendee counts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PartyCounts {
     pub recipients: u32,
@@ -780,6 +781,7 @@ impl SchedulingRecords {
 /// A request for one admission decision. The evaluator is pure: it resolves
 /// nothing, fetches nothing, and reads exactly what it is handed.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdmissionRequest {
     pub offering: String,

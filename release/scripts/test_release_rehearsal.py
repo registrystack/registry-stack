@@ -300,6 +300,16 @@ class ReleaseRehearsalTest(unittest.TestCase):
             'if [[ "${messaging_in_release}" == true ]]; then\n', 1
         )[1].split("fi", 1)[0]
         self.assertIn("dist/image-bin/messagingctl --version", messaging_smoke)
+        coordinator_gate = (
+            'coordinator_in_release="$(python3 release/scripts/release_roster.py \\\n'
+            '  coordinator-in-release "${REHEARSAL_VERSION}")"\n'
+            'if [[ "${coordinator_in_release}" == true ]]; then\n'
+        )
+        self.assertIn(coordinator_gate, merge)
+        coordinator_smoke = merge.split(coordinator_gate, 1)[1].split("\nfi\n", 1)[0]
+        for binary in ("coordinator", "coordinatorctl"):
+            self.assertIn(f"{binary}-v${{REHEARSAL_VERSION}}-linux-amd64", coordinator_smoke)
+            self.assertIn(f"dist/image-bin/{binary} --version", coordinator_smoke)
         breg_services = merge.split(
             'breg_services_in_release="$(python3 release/scripts/release_roster.py \\\n'
             '  breg-services-in-release "${REHEARSAL_VERSION}")"\n'
@@ -403,6 +413,8 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("clients+=(messaging)", build)
         self.assertIn('scheduling-client-in-release "${CLIENT_VERSION}"', build)
         self.assertIn("clients+=(scheduling)", build)
+        self.assertIn('coordinator-client-in-release "${CLIENT_VERSION}"', build)
+        self.assertIn("clients+=(coordinator)", build)
         helper_call = "release/scripts/build-linux-node-client"
         self.assertIn(helper_call, build)
         for argument in (

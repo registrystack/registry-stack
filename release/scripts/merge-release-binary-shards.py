@@ -127,6 +127,13 @@ def rosters(
         common.remove(f"mint-{tag}-linux-amd64")
     if release_roster.render_in_release(parsed):
         common.append(f"registry-render-{tag}-linux-amd64")
+    if release_roster.coordinator_in_release(parsed):
+        common.extend(
+            [
+                f"coordinator-{tag}-linux-amd64",
+                f"coordinatorctl-{tag}-linux-amd64",
+            ]
+        )
     core.extend(common)
     historical_images = ["evidence", "mint"]
     if release_roster.relay_in_release(parsed):
@@ -142,6 +149,9 @@ def rosters(
         image_bins.append(
             ("registry-render", f"registry-render-{tag}-linux-amd64")
         )
+    if release_roster.coordinator_in_release(parsed):
+        for binary in ("coordinator", "coordinatorctl"):
+            image_bins.append((binary, f"{binary}-{tag}-linux-amd64"))
     return {
         "core": core,
         "breg": breg,

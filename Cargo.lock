@@ -4918,6 +4918,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-record",
  "reqwest 0.12.28",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -5110,6 +5111,7 @@ dependencies = [
  "jsonschema",
  "jsonwebtoken",
  "registry-breg",
+ "registry-breg-client",
  "registry-bregctl",
  "registry-casework-breg",
  "registry-casework-client",
@@ -5127,6 +5129,7 @@ dependencies = [
  "registry-platform-oidc",
  "registry-platform-testing",
  "registry-platform-yaml",
+ "registry-review-client",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustls",
@@ -5155,12 +5158,13 @@ version = "0.42.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
+ "jsonschema",
  "registry-breg-client",
  "registry-casework-core",
  "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",
- "registry-platform-hooks",
  "registry-platform-httputil",
  "registry-platform-yaml",
  "schemars",
@@ -5187,6 +5191,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "registry-casework-core",
+ "registry-platform-canonical-json",
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
@@ -5273,6 +5278,7 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-httputil",
  "registry-platform-yaml",
+ "registry-stack-client",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustix 1.1.5",
@@ -5301,6 +5307,7 @@ dependencies = [
  "registry-casework",
  "registry-caseworkctl",
  "registry-cli-reference",
+ "registry-coordinator",
  "registry-evidence",
  "registry-evidence-oid4vci",
  "registry-evidencectl",
@@ -5320,6 +5327,107 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "registry-coordinator"
+version = "0.42.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "clap",
+ "deadpool-postgres",
+ "hex",
+ "jsonschema",
+ "jsonwebtoken",
+ "registry-breg-client",
+ "registry-casework-client",
+ "registry-messaging-client",
+ "registry-messaging-core",
+ "registry-platform-activation",
+ "registry-platform-audit",
+ "registry-platform-authcommon",
+ "registry-platform-canonical-json",
+ "registry-platform-config",
+ "registry-platform-crypto",
+ "registry-platform-dispatch",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-platform-script",
+ "registry-platform-testing",
+ "registry-platform-yaml",
+ "registry-review-protocol",
+ "registry-scheduling-client",
+ "registry-scheduling-core",
+ "reqwest 0.12.28",
+ "rhai",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-coordinator-client"
+version = "0.42.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "registry-platform-canonical-json",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "registry-coordinator-client-node"
+version = "0.42.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-coordinator-client",
+ "serde",
+ "serde_json",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "registry-coordinator-client-py"
+version = "0.42.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-coordinator-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -5925,6 +6033,7 @@ name = "registry-platform-activation"
 version = "0.42.0"
 dependencies = [
  "chrono",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -6234,6 +6343,7 @@ dependencies = [
 name = "registry-record"
 version = "0.42.0"
 dependencies = [
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -6303,6 +6413,7 @@ version = "0.42.0"
 dependencies = [
  "chrono",
  "registry-platform-canonical-json",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -6451,6 +6562,7 @@ dependencies = [
  "chrono",
  "registry-breg-client",
  "registry-casework-client",
+ "registry-coordinator-client",
  "registry-discovery-client",
  "registry-evidence-client",
  "registry-messaging-client",
@@ -6944,6 +7056,7 @@ dependencies = [
  "schemars_derive",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

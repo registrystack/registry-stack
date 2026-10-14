@@ -164,7 +164,9 @@ manifest="registry-stack-${tag}-release-manifest.json"
 jq -e --arg tag "${tag}" '
   ($tag | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") |
     {major: (.major | tonumber), minor: (.minor | tonumber)}) as $version |
-  (if ($version.major > 0 or $version.minor >= 39)
+  (if ($version.major > 0 or $version.minor >= 41)
+   then ["breg", "breg-mcp", "breg-review", "casework", "coordinator", "discovery", "evidence", "evidence-oid4vci", "messaging", "registry-render", "scheduling"]
+   elif $version.minor >= 39
    then ["breg", "breg-mcp", "breg-review", "casework", "discovery", "evidence", "evidence-oid4vci", "messaging", "registry-render", "scheduling"]
    elif $version.minor >= 38
    then ["breg", "breg-mcp", "breg-review", "casework", "discovery", "evidence", "evidence-oid4vci", "messaging", "registry-render", "relay", "scheduling"]
@@ -201,10 +203,12 @@ and Registry Scheduling joins at `v0.33.0`. The citizen MCP gateway and review
 page (`breg-mcp` and `breg-review`), Registry Messaging, Registry Render, and
 the separate Evidence OID4VCI adapter image join at `v0.38.0`.
 Registry Relay's final numbered release is `v0.38.0`; releases from `v0.39.0`
-omit it from the image and payload rosters.
+omit it from the image and payload rosters. Registry Coordinator runtime publication remains held. Its first binary and image release is
+set by `COORDINATOR_FIRST_RELEASE` once publication prerequisites are ready.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
-`RENDER_FIRST_RELEASE`, and `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE` in
-`release/scripts/release_roster.py` own these boundaries. v0.38.0 also adds the
+`RENDER_FIRST_RELEASE`, `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`, and
+`COORDINATOR_FIRST_RELEASE` in `release/scripts/release_roster.py` own these
+boundaries. v0.38.0 also adds the
 Linux amd64 Scheduling runtime and `discoveryctl` assets
 beside the existing Discovery runtime asset. Earlier releases require a source
 build of `discoveryctl`. Mint is retired from `v0.31.0`; historical releases
@@ -215,7 +219,7 @@ as their candidate bindings:
 ```sh
 while IFS=$'\t' read -r name digest final_ref; do
   case "${name}" in
-    breg|breg-mcp|breg-review|casework|discovery|evidence|evidence-oid4vci|messaging|mint|registry-render|relay|scheduling) ;;
+    breg|breg-mcp|breg-review|casework|coordinator|discovery|evidence|evidence-oid4vci|messaging|mint|registry-render|relay|scheduling) ;;
     *) echo "unexpected release image: ${name}" >&2; exit 1 ;;
   esac
   resolved_digest="$(crane digest "${final_ref}")"
@@ -253,7 +257,8 @@ reports and Grype reports for `evidence`, `mint`, and `relay`, joined by
 `discovery` from `v0.24.0`, `breg` from `v0.26.0`, and `casework` from
 `v0.30.0`, with `scheduling` from `v0.33.0`. Reports for `breg-mcp`,
 `breg-review`, `messaging`, `registry-render`, and `evidence-oid4vci` join from
-`v0.38.0`. Mint reports are excluded from `v0.31.0` onward; `v0.19.x` and
+`v0.38.0`. Coordinator reports join when its runtime publication is enabled in the
+release roster. Mint reports are excluded from `v0.31.0` onward; `v0.19.x` and
 `v0.20.x` archives contain those reports for `relay`
 only. The archive also
 contains the advisory verdict used for candidate acceptance. Each report names
@@ -283,6 +288,10 @@ private-candidate recovery and evidence-regeneration procedure for a failed gate
 
 From `v0.38.0`, the checksum-covered Linux amd64 binary payload also includes `discoveryctl`
 and the standalone Scheduling runtime, alongside their existing runtime and operator artifacts.
+The Coordinator runtime `coordinator` and operator tool `coordinatorctl` join the
+verified binary payload only when `COORDINATOR_FIRST_RELEASE` enables publication.
+Until then, build them from the release source. Coordinator clients join the
+unified client packages from `v0.42.0`.
 
 ## Verify client registries
 

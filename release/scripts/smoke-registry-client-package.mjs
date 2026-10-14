@@ -58,4 +58,11 @@ if (Object.hasOwn(client, 'scheduling')) {
   assert.ok(new client.scheduling.SchedulingClient({ baseUrl: 'https://scheduling.invalid' }));
 }
 
+// Coordinator joins published packages at its first client release, under the
+// same rule.
+if (Object.hasOwn(client, 'coordinator')) {
+  assert.strictEqual(typeof client.coordinator.CoordinatorClient, 'function');
+  assert.ok(new client.coordinator.CoordinatorClient({ baseUrl: 'https://coordinator.invalid' }));
+}
+
 console.log('Unified Node Registry client package ESM smoke passed');

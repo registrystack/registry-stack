@@ -1,0 +1,406 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: reviewed-notice
+  version: '1'
+types:
+  workflow-input:
+    type: object
+    additionalProperties: false
+    required:
+    - applicationId
+    - applicationRevision
+    - applicationDigest
+    properties:
+      applicationId:
+        type: string
+        format: uuid
+      applicationRevision:
+        type: string
+        minLength: 1
+        maxLength: 64
+      applicationDigest:
+        type: string
+        pattern: ^sha256:[0-9a-f]{64}$
+functions:
+  review-subject-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: review_subject_route
+    inputs:
+      input:
+        typeRef: workflow-input
+      record:
+        operationOutput: applications-read-record
+    output:
+      type: string
+      enum:
+      - current
+      - changed
+  review-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: review_request
+    inputs:
+      input:
+        typeRef: workflow-input
+      record:
+        operationOutput: applications-read-record
+    output:
+      operationInput: review-submit-review-request
+  notice-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: notice_route
+    inputs:
+      input:
+        typeRef: workflow-input
+      record:
+        operationOutput: applications-read-record
+    output:
+      type: string
+      enum:
+      - send
+      - changed
+      - permission-gone
+  notice-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: notice_request
+    inputs:
+      input:
+        typeRef: workflow-input
+      result:
+        completionOutput:
+          operation: review-submit-review-request
+          name: result
+      record:
+        operationOutput: applications-read-record
+    output:
+      operationInput: notices-submit-message
+operations:
+  applications-read-record:
+    uses: breg.read-record/v1
+    connection: applications
+  review-submit-review-request:
+    uses: casework.submit-review-request/v1
+    connection: review
+  notices-submit-message:
+    uses: messaging.submit-message/v1
+    connection: notices
+  review-cancel-review-request:
+    uses: casework.cancel-review-request/v1
+    connection: review
+workflow:
+  input:
+    typeRef: workflow-input
+  deadlineSeconds: 2592000
+  start: read-for-review
+  steps:
+    read-for-review:
+      type: call
+      operation: applications-read-record
+      input:
+        type: fields
+        fields:
+          collection:
+            type: literal
+            value: applications
+          recordId:
+            type: input
+            path: /applicationId
+      next: verify-review-subject
+    verify-review-subject:
+      type: choose
+      choose:
+        type: function
+        function: review-subject-route
+        inputs:
+          input:
+            type: input
+          record:
+            type: step
+            step: read-for-review
+      cases:
+        current: submit-review
+        changed: changed-before-review
+    submit-review:
+      type: call
+      operation: review-submit-review-request
+      input:
+        type: function
+        function: review-request
+        inputs:
+          input:
+            type: input
+          record:
+            type: step
+            step: read-for-review
+      next: await-review
+    await-review:
+      type: wait-for
+      timeoutSeconds: 1209600
+      next: decide
+      onTimeout: withdraw-timeout
+      onCancel: withdraw-operator
+      completion:
+        step: submit-review
+        name: result
+    decide:
+      type: choose
+      choose:
+        type: step
+        step: await-review
+        path: /status
+      cases:
+        approved: read-for-notice
+        rejected: review-rejected
+        changes-requested: review-not-approved
+        answered: review-not-approved
+        cancelled: review-not-approved
+        superseded: review-not-approved
+    read-for-notice:
+      type: call
+      operation: applications-read-record
+      input:
+        type: fields
+        fields:
+          collection:
+            type: literal
+            value: applications
+          recordId:
+            type: input
+            path: /applicationId
+      next: verify-notice
+    verify-notice:
+      type: choose
+      choose:
+        type: function
+        function: notice-route
+        inputs:
+          input:
+            type: input
+          record:
+            type: step
+            step: read-for-notice
+      cases:
+        send: notify
+        changed: changed-after-review
+        permission-gone: notice-permission-gone
+    notify:
+      type: call
+      operation: notices-submit-message
+      input:
+        type: function
+        function: notice-request
+        inputs:
+          input:
+            type: input
+          result:
+            type: step
+            step: await-review
+          record:
+            type: step
+            step: read-for-notice
+      next: notice-accepted
+    notice-accepted:
+      type: finish
+      outcome: notice-accepted
+      output:
+        type: fields
+        fields:
+          messageId:
+            type: step
+            step: notify
+            path: /id
+          resultId:
+            type: step
+            step: await-review
+            path: /resultId
+    changed-before-review:
+      type: finish
+      outcome: application-changed
+    changed-after-review:
+      type: finish
+      outcome: application-changed
+    notice-permission-gone:
+      type: finish
+      outcome: notice-permission-gone
+    review-rejected:
+      type: finish
+      outcome: review-rejected
+      output:
+        type: fields
+        fields:
+          resultId:
+            type: step
+            step: await-review
+            path: /resultId
+    review-not-approved:
+      type: finish
+      outcome: review-not-approved
+      output:
+        type: fields
+        fields:
+          status:
+            type: step
+            step: await-review
+            path: /status
+    withdraw-timeout:
+      type: call
+      operation: review-cancel-review-request
+      input:
+        type: fields
+        fields:
+          request:
+            type: step
+            step: submit-review
+          reason:
+            type: literal
+            value: No decision within fourteen days.
+      next: confirm-timeout-withdrawal
+    confirm-timeout-withdrawal:
+      type: choose
+      choose:
+        type: step
+        step: withdraw-timeout
+        path: /outcome
+      cases:
+        cancelled: timeout-withdrawn
+        already-terminal: timeout-decided-late
+    timeout-withdrawn:
+      type: finish
+      outcome: review-timeout-withdrawn
+      output:
+        type: fields
+        fields:
+          resultId:
+            type: step
+            step: withdraw-timeout
+            path: /result/resultId
+    timeout-decided-late:
+      type: finish
+      outcome: decided-late
+      output:
+        type: fields
+        fields:
+          status:
+            type: step
+            step: withdraw-timeout
+            path: /result/status
+          resultId:
+            type: step
+            step: withdraw-timeout
+            path: /result/resultId
+    withdraw-operator:
+      type: call
+      operation: review-cancel-review-request
+      input:
+        type: fields
+        fields:
+          request:
+            type: step
+            step: submit-review
+          reason:
+            type: literal
+            value: The workflow operator cancelled the run.
+      next: confirm-operator-withdrawal
+    confirm-operator-withdrawal:
+      type: choose
+      choose:
+        type: step
+        step: withdraw-operator
+        path: /outcome
+      cases:
+        cancelled: operator-withdrawn
+        already-terminal: operator-decided-late
+    operator-withdrawn:
+      type: finish
+      outcome: review-operator-withdrawn
+      output:
+        type: fields
+        fields:
+          resultId:
+            type: step
+            step: withdraw-operator
+            path: /result/resultId
+    operator-decided-late:
+      type: finish
+      outcome: decided-late
+      output:
+        type: fields
+        fields:
+          status:
+            type: step
+            step: withdraw-operator
+            path: /result/status
+          resultId:
+            type: step
+            step: withdraw-operator
+            path: /result/resultId
+  outcomes:
+    notice-accepted:
+      type: object
+      additionalProperties: false
+      required:
+      - messageId
+      - resultId
+      properties:
+        messageId:
+          type: string
+          format: uuid
+        resultId:
+          type: string
+          format: uuid
+    application-changed:
+      type: 'null'
+    notice-permission-gone:
+      type: 'null'
+    review-rejected:
+      type: object
+      additionalProperties: false
+      required:
+      - resultId
+      properties:
+        resultId:
+          type: string
+          format: uuid
+    review-not-approved:
+      type: object
+      additionalProperties: false
+      required:
+      - status
+      properties:
+        status:
+          type: string
+    review-timeout-withdrawn:
+      type: object
+      additionalProperties: false
+      required:
+      - resultId
+      properties:
+        resultId:
+          type: string
+          format: uuid
+    review-operator-withdrawn:
+      type: object
+      additionalProperties: false
+      required:
+      - resultId
+      properties:
+        resultId:
+          type: string
+          format: uuid
+    decided-late:
+      type: object
+      additionalProperties: false
+      required:
+      - status
+      - resultId
+      properties:
+        status:
+          type: string
+        resultId:
+          type: string
+          format: uuid

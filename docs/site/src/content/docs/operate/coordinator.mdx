@@ -1,0 +1,908 @@
+---
+title: Deploy Registry Coordinator
+description: Create the keys, database, and runtime file for Registry Coordinator, apply and serve its workflow packages, watch its metrics, and recover, erase, rotate, and restore what it holds.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+An author has handed you one or more Registry Coordinator packages with their package digests, and
+you want the workflows served. At the end of this page a `coordinator` process serves those workflows
+against PostgreSQL behind your TLS edge and answers `GET /ready`, and you can inspect and recover
+its runs, erase settled payloads, rotate its keys, and restore it from a backup.
+
+Writing, checking, and packaging a workflow stay with its author;
+[Author a Coordinator workflow](../../configure/coordinator/) covers that side. This page starts from
+the package directories and the author's sanitized runtime template and connection requirements.
+
+## What you provide
+
+- **PostgreSQL 17 or newer**, with one database and two login roles: a migration role that owns
+  the schema and a runtime role that serves. Apply and startup refuse an older server.
+- **Your existing OpenID Connect issuer.** Callers present its RFC 9068 access tokens
+  (`typ: at+jwt`) to the Coordinator. For each product connection, the Coordinator obtains its own
+  token from the token endpoint that connection names, as a registered client with its own signing
+  key.
+- **A TLS terminator** in front of the service listener, which you bind to a private address.
+- **Secret files** for three keys, the two database URLs, and each connection credential, owned by
+  the service user.
+- **Durable storage for the audit file**, at an absolute path the service user can write.
+- **The package directory and package digest of each workflow**, up to sixteen workflows in one deployment,
+  plus its sanitized runtime template and connection requirements.
+- **Configured downstream contracts:** the Base Registry Engine (BReg) access profiles, Casework trusted producer and exact review policy,
+  and Messaging templates and provider that the workflow names. Register each connection identity and
+  its least-privilege scopes with the issuer and receiving product before applying the workflow.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Create the keys and secrets, Create the database
+    and roles, and Configure the deployment; crates/registry-coordinator/src/access.rs,
+    access_token_typ_set. */}
+
+## Install the binaries
+
+Install `coordinator` and `coordinatorctl` from the same release, as
+[Get `coordinatorctl`](../../configure/coordinator/#get-coordinatorctl) describes, and use absolute
+executable paths in your service definition. Install each package directory read-only and keep the
+package digest its author gave you. The service reads its runtime file from an absolute path;
+`coordinatorctl` also accepts a path relative to the current directory.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Install and package and Apply and start. */}
+
+## Create the keys and secrets
+
+Create every secret as the user that runs `coordinator` and `coordinatorctl`. The runtime file
+names a secret as `secret:file/<name>`, read from the file `<name>` directly under the file
+provider's `root`. That file must be a regular file owned by the service user, with mode `0400` or
+`0600` and exactly one link.
+
+The Coordinator uses three keys, each exactly 32 random bytes in its own file:
+
+- The **payload state key** encrypts the run state held in PostgreSQL. You can add versions of it
+  later.
+- The **admission key** derives start identities, owner hashes, and command keys. It stays the same
+  for the deployment's lifetime and differs from every state key.
+- The **audit key** derives the keyed references the audit journal records, such as `runRef` and
+  `actorRef`.
+
+```sh
+install -d -m 0700 /run/registry-coordinator/secrets
+(umask 077 && openssl rand -out /run/registry-coordinator/secrets/state-key-1 32)
+(umask 077 && openssl rand -out /run/registry-coordinator/secrets/admission-key 32)
+(umask 077 && openssl rand -out /run/registry-coordinator/secrets/audit-key 32)
+```
+
+:::caution[Keep every key under backup custody]
+A restored database needs every state key version its rows were written with, and the admission
+key the deployment has used from the start. Back up each key file under custody separate from the
+database backups.
+:::
+
+The database URLs are secrets too. Institutional connections use `sslmode=require`:
+
+Enter each URL at a hidden prompt, so its password stays out of shell history. Use a
+URL such as `postgresql://coordinator_runtime:...@db.example.org:5432/coordinator?sslmode=require`.
+This writes new owner-only files and refuses to overwrite existing secrets:
+
+```sh
+python3 - <<'PYTHON'
+import getpass
+import os
+from pathlib import Path
+
+root = Path('/run/registry-coordinator/secrets')
+for name in ('runtime-database-url', 'migration-database-url'):
+    value = getpass.getpass(f'{name}: ')
+    if not value:
+        raise SystemExit('A database URL is required')
+    fd = os.open(root / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as secret:
+        secret.write(value)
+PYTHON
+```
+
+A connection's `authorization.signingKeyRef` resolves to a **private JWK**, not raw random bytes
+or a PEM file. Register its public half with the connection's OAuth client at the issuer. Reuse
+the platform key generator through `evidencectl`, choosing an algorithm the issuer accepts:
+
+```sh
+evidencectl keygen client-assertion --algorithm es384 \
+  --output-dir /run/registry-coordinator/secrets --private-name reader-jwk
+```
+
+Point `signingKeyRef` at `secret:file/reader-jwk`; `reader-jwk-public.jwk.json` is its public half.
+Use a separate client and key for each downstream authority. Keep private keys in secret custody.
+ A Casework connection that receives completion events also
+names a bearer token that Casework presents to the Coordinator. Generate it as visible ASCII and
+give Casework the same value under its own secret reference:
+
+```sh
+(umask 077 && openssl rand -hex 32 > /run/registry-coordinator/secrets/review-completion-token)
+```
+
+Secret values never appear in a diagnostic or a log.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Create the keys and secrets and Backup and
+    restore. */}
+
+## Create the database and roles
+
+As a PostgreSQL administrator, create the two roles and the database, and let only those roles
+connect:
+
+```sql
+CREATE ROLE coordinator_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
+CREATE ROLE coordinator_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
+CREATE DATABASE coordinator;
+REVOKE ALL ON DATABASE coordinator FROM PUBLIC;
+GRANT CONNECT ON DATABASE coordinator TO coordinator_migration, coordinator_runtime;
+GRANT CREATE ON DATABASE coordinator TO coordinator_migration;
+```
+
+These are the only grants you make. `apply` creates the schema the runtime file's `namespace`
+names, owned by the migration role, and grants the runtime role what it needs there: `USAGE` on the
+schema, `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on `runs`, `jobs`, `admission_lock`, and
+`completion_waits`, `SELECT` on `control`, `coordinator_activations`, and `coordinator_migrations`, and
+`UPDATE` on the four recovery-hold columns of `control`. A namespace starts with `coordinator_` and
+is at most 60 characters.
+
+`apply`, `deployment-status`, and startup refuse a runtime role that is a superuser, bypasses
+row-level security, belongs to the migration role directly or indirectly, can create objects in the
+schema, holds `TRIGGER`, or owns objects there. Each service process keeps a pool of at most 32
+sessions as the runtime role, so allow 32 connections per process in the role's connection limit
+and in the server's `max_connections`.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Create the database and roles. */}
+
+## Write the runtime file
+
+The runtime file is a `CoordinatorRuntimeConfig`. Start from the author's `runtime.yaml`, keep its
+`secretProviders`, `database`, `namespace`, and logical `connections`, and add a `deployment`
+block. Keep the file outside the packages, and put no secret value in it:
+
+```yaml
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
+kind: CoordinatorRuntimeConfig
+secretProviders:
+  file:
+    root: /run/registry-coordinator/secrets
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+namespace: coordinator_delayed_follow_up
+connections:
+  applications:
+    type: breg
+    baseUrl: https://breg.example.org
+    profile: follow-up-reader
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-reader
+      signingKeyRef: secret:file/reader-jwk
+      resource: urn:example:applications
+      scopes: [applications:read]
+  notices:
+    type: messaging
+    baseUrl: https://messaging.example.org
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-notices
+      signingKeyRef: secret:file/notices-jwk
+      resource: urn:example:messaging
+      scopes: [messaging:send]
+deployment:
+  databaseId: coordinator-institution-delayed-follow-up
+  runtimeRole: coordinator_runtime
+  packages:
+    - root: /opt/registry-coordinator/delayed-follow-up
+      expectedDigest: sha256:<package-digest>
+  listener:
+    bind: 127.0.0.1:8108
+    tlsTermination: operator-controlled-upstream
+  metricsListener:
+    bind: 127.0.0.1:9108
+  authentication:
+    issuer: https://issuer.example.org
+    audience: urn:example:coordinator
+    jwksSource:
+      type: discovery
+    policies:
+      institution-producer:
+        requiredScopes: [coordinator:start]
+        workflows: [delayed-follow-up]
+        actions: [start, status]
+      institution-operator:
+        requiredScopes: [coordinator:operate]
+        workflows: [delayed-follow-up]
+        actions:
+          - status
+          - inspect
+          - retry-same
+          - cancel
+          - reconcile
+          - doctor
+          - restore-hold
+          - release-restore-hold
+          - release-admission-hold
+          - complete-execution-recovery
+          - retain
+        operator: true
+  auditFile: /var/lib/registry-coordinator/audit.jsonl
+  auditKeyRef: secret:file/audit-key
+  activeStateKey: 1
+  stateKeys:
+    "1":
+      keyRef: secret:file/state-key-1
+  admissionKeyRef: secret:file/admission-key
+```
+
+| Key under `deployment` | What it sets |
+| --- | --- |
+| `databaseId` | The deployment's durable identity. Keep it constant through restarts, credential rotation, and package updates; a mismatch refuses startup and apply. |
+| `runtimeRole` | The runtime role's name. It must match the role in `database.runtimeUrlRef`. |
+| `packages` | One entry per workflow, up to sixteen: the package directory as `root` and its package digest as `expectedDigest`. |
+| `listener` | The service socket. `operator-controlled-upstream` puts it behind your TLS terminator; `development-loopback` binds only loopback, for local work. |
+| `metricsListener` | Optional. A concrete loopback or private address on a nonzero port, other than the service socket, that serves `/metrics`. Without it no metrics are served. |
+| `authentication` | The issuer, audience, signing-key source, admitted clients, and caller policies. |
+| `auditFile` and the key references | The absolute audit file path, the audit key, the state key versions with the one that writes, and the admission key. |
+
+{/* Evidence: products/coordinator/examples/single-flow-runtime.yaml;
+    products/coordinator/DEPLOYMENT.md, Configure the deployment;
+    crates/registry-coordinator/src/runtime.rs, KIND. */}
+
+### Write the caller policies
+
+Key `authentication.policies` by exact verified client identity. Those keys are the admitted
+client set; each policy supplies its required scopes and actions. Run actions `start`, `status`,
+`inspect`, `retry-same`, `cancel`, and `reconcile` reach only its listed `workflows`.
+Deployment-wide actions `doctor`, `restore-hold`, `release-restore-hold`,
+`release-admission-hold`, `complete-execution-recovery`, and `retain` require `operator: true`.
+A policy with only deployment-wide actions omits `workflows`. Keep institutional producers
+separate from operators.
+
+The Coordinator reads a token's scopes from its `registry_scopes` claim. For an issuer that puts
+them in the standard `scope` claim, set `scopeClaim: scope` under `deployment.authentication`. A
+run belongs to the verified `iss` and `sub` of the token that started it, never to an input field.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Configure the deployment;
+    crates/registry-coordinator/src/access.rs, scopeClaim. */}
+
+### Bind the connections
+
+Bind every logical connection under one `connections` map, with at most sixteen names.
+Each entry selects its complete contract through `type`: `breg`, `casework-review-producer`,
+`messaging`, `scheduling`, `external-http`, or `evaluation`.
+
+BReg Action and Proposal calls need a standing BReg service identity and permitted profile.
+Keep a separate task-bound connection for record reads when the workflow needs both.
+A task-bound Scheduling connection also needs ordinary `observationAuthorization` with the
+same original owner and receipt-read scopes, independent of task-grant expiry.
+
+An external HTTP connection permits exact paths and query names, optional service authorization,
+and a validated response schema. It performs GET only. An evaluation connection selects an
+explicit protocol, model, and stable provider account; review disclosed data and possible cost
+before activating it. The [configuration reference](../../reference/coordinator-configuration/)
+lists the contracts and bounds.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Configure the deployment and Recover safely. */}
+
+### Wake waiting runs from Casework
+
+`casework.submit-review-request/v1`, `casework.cancel-review-request/v1`, and a `wait-for` step use a Casework connection
+that acts as one Casework review producer:
+
+```yaml
+connections:
+  review:
+    type: casework-review-producer
+    baseUrl: https://casework.example.org
+    profile: coordinator-producer
+    producer: coordinator
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-review-producer
+      signingKeyRef: secret:file/review-jwk
+      resource: urn:example:casework
+      scopes: [casework:review]
+    completion:
+      recipientBinding: coordinator-v1
+      bearerTokenRef: secret:file/review-completion-token
+    resultCheckSeconds: 900
+```
+
+`profile` names the Casework access profile the producer's client is admitted to, and `producer`
+names the producer's `id` in the Casework project's `trustedProducers`. The `authorization` obtains a
+token with the issuer and subject that producer declares; a Casework connection takes no task
+authority. A waiting run reads the review result through this connection every
+`resultCheckSeconds`, from 60 to 86,400 and 900 by default. Each read is one request to Casework per
+waiting run.
+
+The `completion` block lets Casework wake a waiting run sooner. On the Casework side, the
+producer's `completion` names a destination and the same recipient binding, and that destination
+points at `https://<coordinator-host>/v1/review-completions` with Casework's own reference to the
+same token. The Coordinator accepts no custom header, so present the token as a bearer token.
+[Casework policy configuration](../../configure/casework/) covers that
+side. `recipientBinding` is 1 to 256 visible ASCII characters and differs between Casework
+connections. An event brings the waiting run's next read forward and never starts a run. Without a
+`completion` block the Coordinator refuses every event and waits rely on result reads, so lower
+`resultCheckSeconds` when events cannot reach it. You can change `completion` or
+`resultCheckSeconds`, or rotate the completion token, while runs wait.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Configure the deployment;
+    crates/registry-coordinator/src/completion.rs, receive_review_completion. */}
+
+### Check the runtime file
+
+```sh
+coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml check
+```
+
+The check reads no credential and contacts no endpoint. It reports each refusal with its position
+in the file and a repair. Add `--deny-warnings` to refuse warnings too, including checks deferred
+until environment values are supplied.
+
+{/* Evidence: crates/registry-coordinator/src/cli.rs, Check;
+    products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
+
+This version creates protected state schema version 3. Earlier pilot namespaces
+using schema versions 1 or 2 are refused: apply reports `schema-version`, while
+`deployment-status` refuses state access as `coordinator.command.store-unavailable`.
+Settle their work with the matching source binary, then use a fresh namespace and database identity; apply
+never silently rewrites an earlier pilot layout.
+
+## Apply and start
+
+```sh
+coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml plan
+coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml apply
+coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml deployment-status
+coordinator --runtime-config /etc/registry-coordinator/runtime.yaml
+```
+
+- `plan` reports, for each workflow, whether `apply` would `install`, `replace`, leave `unchanged`, or
+  `remove` its package, with the listed and active package digests and the `workflowsDigest` of the
+  listed set. Only `apply` reads the migration URL.
+- `apply` uses the migration credential. It verifies each pinned package, migrates the schema,
+  grants the runtime role, and records each workflow's active package. It is the only command that
+  migrates.
+- `deployment-status` uses the runtime credential only. It checks the pinned packages, the database
+  identity, the migrations, the runtime role's effective authority, and the bindings of live runs,
+  and reports `status: checked` with `databaseId`, `workflowsDigest`, each workflow's package digest,
+  `schemaVersion`, `runtimeRole`, and the `active` activation.
+- `coordinator` verifies the same things before it serves, and never migrates or activates.
+
+A `plan` or `apply` that finds a pinned package whose content no longer matches its digest refuses
+with `coordinator.deployment.refused`; restore the exact package. One that finds a changed
+definition under a workflow version runs already use refuses with
+`coordinator.command.workflow-version-conflict`; ask the author for a new `project.version`.
+
+Startup also checks that each live run's endpoint, registered identity, scopes, and task authority
+are the ones it started with. When a change to the runtime file breaks one, restore the original
+binding, or investigate with dispatch and admissions disabled:
+
+```sh
+coordinator --runtime-config /etc/registry-coordinator/runtime.yaml --recovery-only
+```
+
+A recovery-only service still verifies the package, database, schema, role, and key custody, and its
+`/ready` stays false.
+
+The service writes JSON lines to standard error at the `info` level. A worker poll that fails logs a
+warning with its code, pauses for 1 second, doubling up to 30 seconds while failures continue, and
+repeats the deployment check. While the database is unreachable the worker logs
+`store-unavailable`, `/ready` answers 503, and starts answer 503 `service.unavailable`; the service
+keeps running and logs `worker loop resumed` once a poll succeeds. Any other refusal stops the
+service with exit status 1 and its code and fix on standard error: `deployment.refused` when an
+apply moved the activation, and `state-key-custody` when key custody no longer matches what apply
+registered.
+
+SIGTERM or SIGINT stops the service within 15 seconds: the listener finishes the requests it is
+answering, the worker finishes the attempt in flight, and the service logs `stopped` and exits 0.
+Give your supervisor a stop timeout of at least 15 seconds. An attempt still unfinished when the
+service is killed keeps its lease until the lease expires, and a worker then holds it for operator
+review.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Apply and start and Package digest and definition
+    digest; crates/registry-coordinator/src/service.rs, SHUTDOWN_GRACE, recovery_only. */}
+
+### Check health and run doctor
+
+Keep the operator's access token in an owner-readable file, and pass its path, never its value:
+
+```sh
+curl -fsS http://127.0.0.1:8108/health
+curl -fsS http://127.0.0.1:8108/ready
+coordinatorctl doctor --url https://coordinator.example.org --token-file /run/operator-token
+```
+
+`/health` answers `{"live":true}` while the process answers. `/ready` answers `{"ready":true}`, or
+HTTP 503 with `{"ready":false}` while the service cannot accept work. Each `/ready` probe checks the
+schema, activation, role, state key custody, audit, and holds, and reuses the scan of live bindings
+for up to 30 seconds. Keep both probes on the private listener.
+
+In the doctor report, `activationReady` and `state.auditReady` are `true` on a serving deployment,
+and `state.restoreHold` and `state.admissionsHold` are `false` until a hold is placed.
+`state.states` counts runs by state, `state.uncertain` counts steps waiting for an operator,
+`state.restoreReviewRequired` counts runs that need restore review, and `state.oldestDueAt` is the
+earliest next attempt. `state.terminalPayloads` and `state.oldestTerminalPayloadAt` show what
+retention can erase.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Check health and run doctor. */}
+
+### Change the workflows
+
+Each workflow's package applies on its own. To add a workflow, list its package; to upgrade or roll one
+back, change only that entry's `root` and `expectedDigest`. `apply` leaves every other workflow's
+active package and runs untouched. Runs in flight on a replaced workflow keep the definition they
+started with, and new starts use the replacement. An apply that changes the listed set fences the
+services started under the previous set, so restart every service after each apply. One deployment
+is one trust domain: workflows that must not share connections belong in separate deployments.
+
+Dropping an entry never retires a workflow by itself. `plan` and `apply` refuse an active workflow missing
+from the list with `coordinator.deployment.workflow-unlisted` until you list it again or name it:
+
+```sh
+coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml plan --remove-workflow governed-action-follow-up
+coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml apply --remove-workflow governed-action-follow-up
+```
+
+Removal is refused with `coordinator.deployment.workflow-live-runs` while the workflow has a run that is
+running, waiting, uncertain, recoverable, or awaiting restore review. Let those runs settle or
+cancel them first, because a removed workflow leaves no definition to finish them under. A removed
+workflow's ended runs stay readable, and starts naming it are refused.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Add, upgrade, roll back and remove a workflow;
+    crates/registry-coordinator/src/cli.rs, Command. */}
+
+## Watch metrics
+
+```sh
+curl -fsS http://127.0.0.1:9108/metrics
+```
+
+The metrics listener serves Prometheus text, and every label takes a closed set of values:
+
+| Series | Type | Labels |
+| --- | --- | --- |
+| `coordinator_runs_admitted_total` | counter | none |
+| `coordinator_runs_finished_total` | counter | `state`: `finished`, `failed`, `cancelled`, `cancelled-after-effect`, `expired` |
+| `coordinator_step_attempts_total` | counter | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent`, `unavailable` |
+| `coordinator_authentication_refusals_total` | counter | `reason`: `refused`, `policy`, `unavailable` |
+| `coordinator_dispatch_jobs` | gauge | `state`: `pending`, `leased`, `unknown` |
+
+Counters are per process and start at zero when a process starts. `maybe-sent` counts an attempt
+whose effect is uncertain and waits for an operator. `coordinator_dispatch_jobs` is read from the
+database on each scrape with a 2-second bound; when the database cannot answer, that scrape has no
+`coordinator_dispatch_jobs` samples rather than zeros, so alert on the gauge going absent as well as
+on its value. No label carries a workflow, run, input, or principal; per-workflow and per-run detail lives
+in the audit journal and in `coordinatorctl status` and `inspect`. Bind the metrics listener where
+only your monitoring can reach it.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Watch metrics;
+    crates/registry-coordinator/src/metrics.rs, METRICS_PATH. */}
+
+## Admit and inspect runs
+
+Callers start runs through the API or the Rust, Node.js, and Python clients. To check a deployment
+from the command line, start one run with a key file you keep for that logical start and reuse
+through its recovery. `input.json` holds the workflow's input, in the shape its author declared:
+
+```sh
+umask 077
+python3 -c 'import uuid; print(uuid.uuid4())' > ./idempotency-key
+coordinatorctl workflow --workflow delayed-follow-up \
+  --url https://coordinator.example.org --token-file /run/producer-token
+coordinatorctl start --workflow delayed-follow-up --workflow-revision <workflow-revision> --input ./input.json --key-file ./idempotency-key \
+  --url https://coordinator.example.org --token-file /run/producer-token
+coordinatorctl status --run <run-id> \
+  --url https://coordinator.example.org --token-file /run/producer-token
+coordinatorctl inspect --run <run-id> \
+  --url https://coordinator.example.org --token-file /run/operator-token
+```
+
+Use the discovered `workflowRevision` in the start command. A fresh admission must match
+that active revision. If admission is unknown, resend the original identity, key, revision, and
+input, including after a package change. A mismatch on new work returns
+`workflow.revision-mismatch`; conflicting key reuse returns `idempotency.key-reused`.
+
+A start runs under the workflow's active definition. A caller whose policy does not list the workflow is
+refused with HTTP 403 `operation.not-authorized`, and a workflow the deployment does not serve with
+HTTP 404 `workflow.not-served`. A start that reuses a key returns the original run.
+
+Inspection also reports accepted or unknown `effects` with pinned operation revisions, and
+`waits` with completion revisions, deadlines, next observations, persistent floors, and count/limit.
+Protected command and correlation values remain absent.
+
+`inspect` shows bounded step state, never inputs, raw product responses, or prepared commands. Its
+`recovery.operation` describes the current call's recovery and whether the product offers a
+read-only receipt. `retryAllowed` and `reason` describe scheduling eligibility only; neither proves
+that the product would still authorize the call. `coordinatorctl list --limit <n>` returns a page of runs, newest first, 20 by default and at most
+100. Pass `--state failed` for one effective state, or `--attention true` for runs whose effective
+state is `attention` or `failed`. `--attention false` excludes both. Filters compose.
+
+```sh
+coordinatorctl list --attention true --limit 20 \
+  --url https://coordinator.example.org --token-file /run/operator-token
+coordinatorctl list --attention true --limit 20 --cursor '<nextCursor>' \
+  --url https://coordinator.example.org --token-file /run/operator-token
+```
+
+When the result includes `nextCursor`, pass it on the next request with the same filters. Each
+page checks the current caller and workflow permissions again. Keep each start's run ID for direct
+status lookup; the list is ordered by admission time, rather than by the last state change.
+
+`retry-same`, `cancel`, `reconcile`, `restore-hold`, and `release-restore-hold` take a `--reason`:
+a bounded investigation reference such as `incident-2026-10-12` that holds no personal data. The
+audit journal records a keyed reference to it, so keep the investigation record itself outside the
+Coordinator.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Admit and inspect work;
+    crates/registry-coordinator/src/cli.rs, Command, RetrySame, RestoreHold. */}
+
+## Recover a run
+
+The Coordinator retries a call by itself only after a definite retryable answer, one the receiving
+product reports it did not act on, and it resends the saved command and key. A call step makes at
+most ten attempts, with waits that roughly double from 1 second to 256 seconds; the nine waits add
+up to between 255.5 and 511 seconds. When Messaging or an external service sends a `Retry-After`,
+the next attempt waits at least that long, up to five minutes, so the waits never exceed 45 minutes
+in total. A retry that would
+start at or after the run deadline is never scheduled, and the run ends `expired`. After the tenth
+attempt the run reports `failed` and waits for you. An uncertain answer is never retried
+automatically.
+
+An `external.get/v1` reply with status 429, 502, 503, or 504 is retried as `external-rate-limited` or
+`external-unavailable`. The tenth attempt delivers that status to the workflow like any other reply.
+
+Inspect before you act, then choose:
+
+- **`reconcile`** asks Messaging or Scheduling for its receipt of the stored command under the
+  original key and owner. A missing or expired receipt, or an unavailable product, does not prove
+  the command was never received. A BReg action has no read-only receipt, so `reconcile` leaves it
+  unresolved; for a Casework review request it reports `reconciliation-unavailable`.
+- **`retry-same`** sends the original body, key, binding, and authority again, when the product's
+  recovery contract and the original deadline permit it. A BReg action checks current metadata and
+  fresh authority first, and stops on a changed contract, denied authority, or stale condition.
+  Casework answers a repeated key with its stored response while it keeps one.
+- **`cancel`** takes a parked review wait's authored `onCancel` path when one exists. This lets
+  the workflow withdraw the accepted Casework request durably under its original producer authority.
+  Status reports `authoredCancelRequested: true`; repeat cancellations leave that cleanup runnable.
+  Without that edge, or after the wait has advanced, cancellation stops future calls where it can.
+  It does not roll back an appointment, action, or message a product already accepted.
+
+```sh
+coordinatorctl reconcile --run <run-id> --reason incident-2026-10-12 \
+  --url https://coordinator.example.org --token-file /run/operator-token
+coordinatorctl retry-same --run <run-id> --reason incident-2026-10-12 \
+  --url https://coordinator.example.org --token-file /run/operator-token
+```
+
+:::caution[A fresh idempotency key is a fresh operation]
+Starting the same work again under a new key can perform its effects a second time. Settle an
+uncertain call with `reconcile` or `retry-same`, which keep its original key, and do not infer
+success or absence from an ordinary record read.
+:::
+
+Some failures need a change, not a retry:
+
+- A `wait-for` observes a named completion of an earlier accepted call. Pending Casework and
+  BReg reads default to 900 seconds. Top-level `minimumObservationIntervalSeconds` raises the
+  persistent 30-second floor, up to 86,400 seconds. Retry hints cannot exceed the host ceiling;
+  unusable hints hold the wait. Restart, completion wake-up, retry, and timeout preserve the floor
+  and original observation budget. Invalid, blocked, refused, or mismatched evidence holds the
+  wait and cannot become a business-failure outcome. Inspect `waits` before recovery. Timeout
+  takes `onTimeout` or reports `wait-timed-out`; it does not establish BReg application failure.
+  Use explicit `onCancel` cleanup when downstream work needs withdrawal, and report a Casework
+  `already-terminal` cancellation result as the decision that won the race.
+- **`mapping-invalid`** means a call succeeded but the mapping after it did not. The run keeps that
+  call's output, and `retry-same` cannot repeat the accepted call. Inspect the existing effect
+  before you start a new run under a corrected workflow version.
+- **`invalid-command`** means a computed call input fell outside its operation's contract, before
+  anything was sent. The status reports `failurePath`, an RFC 6901 path into the input, and never
+  the value. Correct the mapping in a new workflow version, or the data it reads, and start a new
+  run.
+- **An `evaluation.evaluate/v1` call with an unknown result**, including after HTTP 429, is held as
+  `hold-after-dispatch`: `retry-same` and `reconcile` are refused, and `cancel` cannot undo what the
+  provider processed.
+
+When configuration drift blocks recovery, restore the original downstream binding. Rotate a
+connection's key material under the same registered identity rather than changing the identity.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Recover safely and Configure the deployment;
+    crates/registry-coordinator/src/cli.rs, Reconcile, RetrySame. */}
+
+## Erase ended payloads
+
+`retain` erases the payloads of runs that ended before a cutoff, at most `--limit` records per
+call, from 1 to 100 and 100 by default:
+
+```sh
+coordinatorctl retain --before 2026-07-01T00:00:00Z --limit 100 \
+  --url https://coordinator.example.org --token-file /run/operator-token
+```
+
+It keeps bounded tombstones of the spent start and command identities, and never erases live or
+uncertain work. Take the cutoff, an RFC 3339 instant in the past, from your institution's approved
+retention policy. An erased run can no longer be retried or reconciled, and asking answers
+`run.payload-erased`.
+
+:::danger[Erasing cannot be undone]
+`retain` deletes the payloads it selects permanently. Removing a state key version before the data
+written under it is erased has the same effect on every run it encrypted: that state becomes
+unreadable, and the runs can neither run nor be disclosed safely.
+:::
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Recover safely;
+    crates/registry-coordinator/src/cli.rs, Retain;
+    docs/site/src/data/coordinator-api.yaml. */}
+
+## Rotate and replace keys
+
+Run every command as the service user.
+
+### Rotate the payload state key
+
+Rotation adds a key version and makes it the one that writes. Runs written under an older version
+still read with it, so the deployment keeps every registered version for its lifetime.
+
+1. Create the key file for the next version:
+
+   ```sh
+   (umask 077 && openssl rand -out /run/registry-coordinator/secrets/state-key-2 32)
+   ```
+
+2. Add the version to `deployment.stateKeys`, keep every version already listed, and set
+   `activeStateKey` to the new one:
+
+   ```yaml
+   deployment:
+     activeStateKey: 2
+     stateKeys:
+       "1":
+         keyRef: secret:file/state-key-1
+       "2":
+         keyRef: secret:file/state-key-2
+   ```
+
+3. Put the edited runtime file and the new key file in place for every service, then apply and
+   check:
+
+   ```sh
+   coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml apply
+   coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml deployment-status
+   ```
+
+4. Restart every service with the edited runtime file as soon as apply succeeds.
+
+Until apply registers the new version, startup and `deployment-status` refuse the edited file with
+`state-key-custody`. Once apply has registered it, a service still running with the previous file
+answers starts with 409 `deployment.refused` and `/ready` with 503, and stops with exit status 1 at
+its next poll. A runtime file that omits a registered version or names different key bytes for one
+is refused with `state-key-custody` too.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Rotate the payload state key. */}
+
+### Rotate the audit key
+
+The database keeps no record of the audit key, so its rotation needs no apply.
+
+1. Create the new key file:
+
+   ```sh
+   (umask 077 && openssl rand -out /run/registry-coordinator/secrets/audit-key-2 32)
+   ```
+
+2. Point `deployment.auditKeyRef` at it:
+
+   ```yaml
+   deployment:
+     auditKeyRef: secret:file/audit-key-2
+   ```
+
+3. Check the runtime file, then restart every service with it, so all of them write under the same
+   key:
+
+   ```sh
+   coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml check
+   ```
+
+The same run or actor gets a different reference under each key, so journal records from before
+the rotation do not join records from after it. Keep the old key with the journal it wrote: an
+investigator needs it to match a known run or actor to those records.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Rotate the audit key. */}
+
+### Replace a compromised admission key
+
+The admission key stays the same for the deployment's lifetime, and apply refuses a different one
+with `state-key-custody`. When the key is exposed, close the deployment and admit new work in a
+fresh one.
+
+1. Stop admissions. Remove `start` from each caller policy's `actions`, remove a policy left with
+   no action along with its client policy, and restart the service. Starts are then
+   refused with HTTP 403 `operation.not-authorized`, while status, inspection, and operator actions
+   keep working. Do not use `restore-hold` for this: it also stops dispatch, so runs in flight
+   cannot finish.
+
+2. Let runs finish, or cancel the ones you will not wait for, and settle each uncertain step as
+   [Recover a run](#recover-a-run) describes:
+
+   ```sh
+   coordinatorctl doctor --url https://coordinator.example.org --token-file /run/operator-token
+   coordinatorctl list --limit 100 --url https://coordinator.example.org --token-file /run/operator-token
+   coordinatorctl cancel --run <run-id> --reason incident-2026-10-12 \
+     --url https://coordinator.example.org --token-file /run/operator-token
+   ```
+
+3. Stop the service. Keep its runtime file, namespace, keys, and audit journal for as long as you
+   need its history: the old runs stay in the old namespace.
+
+4. Create a new admission key file:
+
+   ```sh
+   (umask 077 && openssl rand -out /run/registry-coordinator/secrets/admission-key-2 32)
+   ```
+
+5. Write a runtime file for the new deployment with a new `namespace`, a new
+   `deployment.databaseId`, and the new key, and restore `start` to the caller policies:
+
+   ```yaml
+   namespace: coordinator_follow_up_2
+   deployment:
+     databaseId: coordinator-institution-follow-up-2
+     admissionKeyRef: secret:file/admission-key-2
+   ```
+
+6. Plan, apply, check, and start the new deployment:
+
+   ```sh
+   coordinatorctl --runtime-config /etc/registry-coordinator/runtime-2.yaml plan
+   coordinatorctl --runtime-config /etc/registry-coordinator/runtime-2.yaml apply
+   coordinatorctl --runtime-config /etc/registry-coordinator/runtime-2.yaml deployment-status
+   coordinator --runtime-config /etc/registry-coordinator/runtime-2.yaml
+   ```
+
+:::caution[The new deployment does not know the old keys]
+The new deployment has no record of the idempotency keys the old one spent, so a key reused
+against it admits a new run. Tell producers to send a fresh start only for work the old deployment
+did not admit.
+:::
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Replace a compromised admission key. */}
+
+## Back up and restore
+
+Back up PostgreSQL, every state key version still needed, the admission key, the audit key, the
+durable audit stream, and the exact package of every listed workflow, and test the restore procedure.
+
+:::danger[Never restore the database without its keys]
+Restore the state key versions and the admission key from their custody with the database. A
+replacement state key cannot read state written under the original, and apply refuses an admission
+key other than the one the deployment has always used.
+:::
+
+A backup can predate an effect a product already accepted, so a restored deployment starts held:
+
+1. Stop or externally fence the old service and every worker, including replicas that use the same
+   database or credentials. Never start an ordinary worker on the restored database.
+
+2. Restore the database and put the keys, audit stream, and packages back. Start a maintenance
+   instance under your supervisor with
+   `coordinator --runtime-config /etc/registry-coordinator/runtime.yaml --recovery-only`. It serves
+   authenticated recovery operations and never dispatches. Place the restore hold through it, which
+   also places a separate admission hold:
+
+   ```sh
+   coordinatorctl restore-hold --reason restore-2026-10-12 \
+     --url https://coordinator.example.org --token-file /run/operator-token
+   ```
+
+3. Inspect and reconcile every command that may have been sent after the backup, through the
+   receiving products' original-key receipts. Receipt expiry limits what you can establish: keep
+   unresolved work held and consult the product's own records, and never infer that an effect did
+   not happen.
+
+4. When complete point-in-time recovery or retained execution evidence establishes the history,
+   attest it while the hold remains. This clears review marks for resolved work, holds safe pending
+   work as failed work for an explicit `retry-same` or `cancel`, and starts nothing:
+
+   ```sh
+   coordinatorctl complete-execution-recovery --recovery-reference restore-2026-10-12 \
+     --execution-history-complete --prior-deployment-fenced \
+     --url https://coordinator.example.org --token-file /run/operator-token
+   ```
+
+5. Record the fencing and reconciliation evidence, then release the restore hold. Release refuses
+   with `restore.unresolved` while held work is unresolved, and leaves the admission hold in place:
+
+   ```sh
+   coordinatorctl release-restore-hold --reason restore-2026-10-12 \
+     --url https://coordinator.example.org --token-file /run/operator-token
+   ```
+
+6. Inspect the held work. Use `retry-same` where the original deadline still permits it, or cancel
+   the work and let retention erase it.
+
+7. Keep admissions held until complete point-in-time recovery or retained admission evidence
+   establishes every key the deployment spent, because an older backup can omit whole admissions.
+   Then reopen them:
+
+   ```sh
+   coordinatorctl release-admission-hold --recovery-reference restore-2026-10-12 \
+     --admission-history-complete --prior-deployment-fenced \
+     --url https://coordinator.example.org --token-file /run/operator-token
+   ```
+
+The `--admission-history-complete`, `--execution-history-complete`, and `--prior-deployment-fenced`
+flags are audited operator attestations, not automated proof, so keep the evidence behind them
+under institutional custody. Do not cancel a restored run to erase its unresolved history. The
+[deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#backup-and-restore)
+gives the full rules for each kind of held work, including a cancelled evaluation whose outcome is
+unknown.
+
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Backup and restore;
+    crates/registry-coordinator/src/cli.rs, RestoreHold, ReleaseRestoreHold,
+    ReleaseAdmissionHold, CompleteExecutionRecovery. */}
+
+## Codes you see
+
+Each surface names a refusal in its own vocabulary:
+
+- **The service's standard error** carries the raw failure code: `store-unavailable` while the
+  database is unreachable, `deployment.refused` or `state-key-custody` when the service stops, and
+  `live-binding-conflict` when startup finds a live run's binding changed.
+- **`coordinatorctl`** prefixes its diagnostic codes with `coordinator.`, as in
+  `coordinator.deployment.refused`, `coordinator.deployment.workflow-unlisted`,
+  `coordinator.deployment.workflow-live-runs`, `coordinator.command.workflow-version-conflict`,
+  `coordinator.command.state-key-custody`, and `coordinator.command.live-binding-conflict`.
+- **HTTP answers** carry RFC 9457 problem documents whose `code` comes from a closed catalogue.
+- **A run's status** carries the code its failed step ended with, such as `mapping-invalid`,
+  `invalid-command`, or `wait-timed-out`, which [Recover a run](#recover-a-run) covers.
+
+The HTTP codes an operator acts on:
+
+- `service.unavailable` (503): the database, audit stream, or token verifier is unavailable. Try
+  again after it recovers.
+- `audit.response-unavailable` (503): the operation may have completed, but its audited result was
+  not released. Inspect the run before repeating the operation.
+- `deployment.refused` (409): the activation, runtime file, or key custody check failed.
+- `deployment.activation-changed` (409): an apply changed the active packages after the service
+  started. Restart it with the runtime file apply used.
+- `binding.conflict` and `binding.live-conflict` (409): the runtime file changed connection settings
+  a run uses. Restore the original settings and restart the service, or investigate in
+  recovery-only mode.
+- `execution.held` and `admission.held` (409): the restore hold or the admission hold is in place.
+- `admission.recovery-only` (409): this instance is in recovery-only mode and admits no runs.
+- `restore.hold-required`, `restore.unresolved`, `restore.review-required`, and
+  `restore.lease-incompatible` (409): a restore step is out of order, or held work still needs
+  review.
+- `reconcile.unsupported`, `reconcile.refused`, `reconcile.raced`, `receipt.expired`, and
+  `retry.refused` (409): the held call cannot be reconciled or retried that way, or changed while it
+  was reconciled. Inspect it again. An expired receipt is not evidence that the command was never
+  sent.
+- `run.payload-erased` (409): retention erased the run's payloads.
+
+The [API reference](../../reference/apis/registry-coordinator/#problem-documents-and-codes) lists
+every HTTP code with its status.
+
+{/* Evidence: crates/registry-coordinator/src/error.rs, report;
+    crates/registry-coordinator/tests/deployment_postgres.rs;
+    products/coordinator/DEPLOYMENT.md, Apply and start and Add, upgrade, roll back and remove a
+    workflow; docs/site/src/data/coordinator-api.yaml. */}
+
+## Next
+
+- [Registry Coordinator API](../../reference/apis/registry-coordinator/) for the contract callers
+  use to start and follow runs.
+- [Registry Coordinator configuration reference](../../reference/coordinator-configuration/) for
+  every runtime key and operation.
+- [Author a Coordinator workflow](../../configure/coordinator/) for how the packages you serve are
+  built.
+- [Author a Casework policy](../../configure/casework/) for the review producer and completion
+  destination on the Casework side.

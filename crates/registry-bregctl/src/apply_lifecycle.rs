@@ -474,7 +474,9 @@ async fn prepare_proposal_compatibility(
         Ok(inventory) if !inventory.is_empty() => Ok(Some(inventory)),
         Ok(_) => Ok(None),
         Err(registry_breg::mutation::MutationError::Unavailable) => {
-            eprintln!("warning: The retained Review closure could not be verified; affected Proposals will require rebase or cancellation after activation.");
+            eprintln!(
+                "warning: The retained Review closure could not be verified; affected Proposals will require rebase or cancellation after activation."
+            );
             Ok(None)
         }
         Err(_) => Err(ApplyLifecycleError::ProposalCompatibility),

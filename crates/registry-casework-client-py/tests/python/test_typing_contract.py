@@ -70,29 +70,29 @@ class TypingContractTests(unittest.TestCase):
             self.assertEqual(fields["trace_id"], "str")
 
         self.assertEqual(
-            ast.unparse(aliases["ReviewerTaskState"].value),
+            ast.unparse(aliases["ReviewTaskState"].value),
             "Literal['open', 'decided'] | ReviewHeldTaskState",
         )
         reviewer_task_fields = {
             node.target.id: ast.unparse(node.annotation)
-            for node in classes["ReviewerTask"].body
+            for node in classes["ReviewTask"].body
             if isinstance(node, ast.AnnAssign)
         }
-        self.assertEqual(reviewer_task_fields["state"], "ReviewerTaskState")
+        self.assertEqual(reviewer_task_fields["state"], "ReviewTaskState")
         self.assertEqual(reviewer_task_fields["stageIndex"], "SafeInteger")
         self.assertEqual(reviewer_task_fields["revision"], "SafeInteger")
         self.assertEqual(
-            [ast.unparse(base) for base in classes["ReviewerTask"].bases],
-            ["_ReviewerTaskOptional"],
+            [ast.unparse(base) for base in classes["ReviewTask"].bases],
+            ["_ReviewTaskOptional"],
         )
         optional_task_fields = {
             node.target.id: ast.unparse(node.annotation)
-            for node in classes["_ReviewerTaskOptional"].body
+            for node in classes["_ReviewTaskOptional"].body
             if isinstance(node, ast.AnnAssign)
         }
         self.assertEqual(
             optional_task_fields,
-            {"decidedByCaller": "bool", "decisionReceipt": "ReviewDecisionReceipt"},
+            {"decidedByCaller": "bool", "decisionReceipt": "ReviewDecisionReceipt", "deadlineAt": "str | None", "displayReference": "str"},
         )
         self.assertEqual(
             ast.unparse(aliases["ReviewTaskOwnership"].value),
@@ -113,7 +113,7 @@ class TypingContractTests(unittest.TestCase):
         }
         self.assertEqual(
             receipt_fields,
-            {"policy": "ReviewPolicyBinding", "decision": "ReviewDecisionType", "decidedAt": "str"},
+            {"policy": "PolicyBinding", "decision": "ReviewDecisionType", "decidedAt": "str"},
         )
         self.assertEqual(
             {node.target.id for node in classes["_ReviewDecisionReceiptOptional"].body if isinstance(node, ast.AnnAssign)},
@@ -204,7 +204,7 @@ class TypingContractTests(unittest.TestCase):
         )
         self.assertEqual(
             {node.target.id for node in request.body if isinstance(node, ast.AnnAssign)},
-            {"kind", "subject", "requesterReference", "context"},
+            {"policy", "subject", "requesterReference", "context"},
         )
         self.assertEqual(
             [base.id for base in request.bases if isinstance(base, ast.Name)],
@@ -235,7 +235,7 @@ class TypingContractTests(unittest.TestCase):
                 for node in classes["ReviewSubmittedCreateContext"].body
                 if isinstance(node, ast.AnnAssign)
             },
-            {"strategy", "snapshot"},
+            {"mode", "snapshot"},
         )
         self.assertEqual(
             {
@@ -243,7 +243,7 @@ class TypingContractTests(unittest.TestCase):
                 for node in classes["ReviewSourceCreateContext"].body
                 if isinstance(node, ast.AnnAssign)
             },
-            {"strategy", "binding"},
+            {"mode", "binding"},
         )
 
     def test_review_request_view_keeps_only_active_stage_optional(self) -> None:
@@ -421,24 +421,15 @@ class TypingContractTests(unittest.TestCase):
         ):
             self.assertIn(decision_name, classes)
 
-    def test_decide_and_recover_bodies_leave_the_source_profile_to_the_header(self) -> None:
+    def test_review_model_has_no_parallel_source_action_lifecycle(self) -> None:
         module = ast.parse(STUB.read_text(encoding="utf-8"))
-        classes = {
-            node.name: node
-            for node in module.body
-            if isinstance(node, ast.ClassDef)
-        }
-
-        def fields(name: str) -> set[str]:
-            return {
-                node.target.id
-                for node in classes[name].body
-                if isinstance(node, ast.AnnAssign)
-            }
-
-        self.assertEqual(fields("RecoverAttemptRequest"), set())
-        self.assertEqual(fields("DecideRequest"), {"displayedBinding", "operation"})
-        self.assertEqual(fields("_DecideRequestOptional"), {"reason", "flaggedFields"})
+        classes = {node.name: node for node in module.body if isinstance(node, ast.ClassDef)}
+        for name in ("ReviewPolicy", "ReviewCreateRequest", "ReviewTask", "Decision", "ReviewResult"):
+            self.assertIn(name, classes)
+        for name in ("WorkItem", "Draft", "RecoverAttemptRequest", "MutationResponse"):
+            self.assertNotIn(name, classes)
+        request = classes["ReviewTaskDecisionRequest"]
+        self.assertEqual({n.target.id:ast.unparse(n.annotation) for n in request.body if isinstance(n,ast.AnnAssign)}, {"decision":"DecisionKind"})
 
 
 if __name__ == "__main__":

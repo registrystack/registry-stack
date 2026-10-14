@@ -1024,6 +1024,16 @@ class GateInventoryTest(unittest.TestCase):
                 "registry-messaging-client-node",
                 "Scheduling Node client binding coverage",
             ),
+            (
+                "registry-scheduling-client-py registry-coordinator-client-py",
+                "registry-scheduling-client-py",
+                "Coordinator Python client binding coverage",
+            ),
+            (
+                "registry-scheduling-client-node registry-coordinator-client-node",
+                "registry-scheduling-client-node",
+                "Coordinator Node client binding coverage",
+            ),
         ):
             with self.subTest(gate=gate):
                 text = self.workflow.replace(snippet, replacement, 1)
@@ -1147,6 +1157,21 @@ class GateInventoryTest(unittest.TestCase):
                     ),
                 )
 
+    def test_missing_coordinator_dependency_gates_are_reported(self) -> None:
+        for snippet, gate in (
+            (
+                "run: python3 products/coordinator/scripts/check_dependency_direction.py",
+                "Coordinator dependency-direction guard",
+            ),
+            (
+                "run: python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'",
+                "Coordinator dependency gate tests",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, "true # disabled", 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
     def test_linux_node_release_proof_is_two_runner_read_only_and_aggregated(
         self,
     ) -> None:
@@ -1207,7 +1232,7 @@ class GateInventoryTest(unittest.TestCase):
         # Both the build loop and the copy loop must include every binding.
         self.assertEqual(
             proof.count(
-                "for client in discovery evidence breg casework messaging scheduling; do"
+                "for client in discovery evidence breg casework messaging scheduling coordinator; do"
             ),
             2,
         )

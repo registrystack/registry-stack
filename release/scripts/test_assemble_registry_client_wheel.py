@@ -17,7 +17,9 @@ from unittest import TestCase, main, mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
+PRODUCTS = (
+    "discovery", "evidence", "breg", "casework", "messaging", "scheduling", "coordinator"
+)
 TAG = "cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
 
 
@@ -38,7 +40,7 @@ class AssembleRegistryClientWheelTest(TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.directory = Path(self.temporary_directory.name)
-        self.version = "0.40.0"
+        self.version = "0.42.0"
         self.facade = self.directory / "registry-stack-client-py"
         shutil.copytree(ROOT / "crates/registry-stack-client-py", self.facade)
         pyproject = self.facade / "pyproject.toml"
@@ -89,7 +91,8 @@ class AssembleRegistryClientWheelTest(TestCase):
 
     def run_assembler(
         self, *, version: str | None = None, include_casework: bool = False,
-        include_messaging: bool = False, include_scheduling: bool = False
+        include_messaging: bool = False, include_scheduling: bool = False,
+        include_coordinator: bool = False
     ) -> subprocess.CompletedProcess[str]:
         command = [
             "python3",
@@ -105,6 +108,8 @@ class AssembleRegistryClientWheelTest(TestCase):
             command.append("--include-messaging")
         if include_scheduling:
             command.append("--include-scheduling")
+        if include_coordinator:
+            command.append("--include-coordinator")
         for product, wheel in self.wheels.items():
             command.extend((f"--{product}-wheel", str(wheel)))
         module = load_module()
@@ -198,16 +203,17 @@ class AssembleRegistryClientWheelTest(TestCase):
         for product in PRODUCTS:
             self.assertIn(f"`registry_client.{product}`", description)
 
-    def test_assembled_facade_imports_all_six_product_namespaces(self) -> None:
+    def test_assembled_facade_imports_all_seven_product_namespaces(self) -> None:
         result = self.run_assembler()
         self.assertEqual(result.returncode, 0, result.stderr)
         # The fixture modules exercise facade imports without claiming a native
         # build. Native extension loading remains covered by the package smoke.
         import_script = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from registry_client import discovery, evidence, breg, casework, messaging, scheduling; "
+            "from registry_client import discovery, evidence, breg, casework, messaging, "
+            "scheduling, coordinator; "
             "print(discovery.PRODUCT, evidence.PRODUCT, breg.PRODUCT, casework.PRODUCT, "
-            "messaging.PRODUCT, scheduling.PRODUCT)"
+            "messaging.PRODUCT, scheduling.PRODUCT, coordinator.PRODUCT)"
         )
         imported = subprocess.run(
             [
@@ -219,7 +225,7 @@ class AssembleRegistryClientWheelTest(TestCase):
         self.assertEqual(imported.returncode, 0, imported.stderr)
         self.assertEqual(
             imported.stdout.strip(),
-            "discovery evidence breg casework messaging scheduling",
+            "discovery evidence breg casework messaging scheduling coordinator",
         )
 
     def test_unified_and_legacy_distributions_never_own_the_same_path(self) -> None:
@@ -240,7 +246,7 @@ class AssembleRegistryClientWheelTest(TestCase):
     def test_local_messaging_override_assembles_without_admitting_a_release(self) -> None:
         module = load_module()
         with mock.patch.object(
-            module.client_registry.release_roster, "MESSAGING_FIRST_RELEASE", (0, 41, 0)
+            module.client_registry.release_roster, "MESSAGING_FIRST_RELEASE", (0, 43, 0)
         ):
             refused = self.run_assembler()
             self.assertEqual(2, refused.returncode)
@@ -255,7 +261,7 @@ class AssembleRegistryClientWheelTest(TestCase):
         with mock.patch.object(
             module.client_registry.release_roster,
             "SCHEDULING_CLIENT_FIRST_RELEASE",
-            (0, 41, 0),
+            (0, 43, 0),
         ):
             refused = self.run_assembler()
             self.assertEqual(2, refused.returncode)
@@ -264,6 +270,21 @@ class AssembleRegistryClientWheelTest(TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
                 self.assertIn("registry_client/scheduling/native.abi3.so", archive.namelist())
+
+    def test_local_coordinator_override_assembles_without_admitting_a_release(self) -> None:
+        module = load_module()
+        with mock.patch.object(
+            module.client_registry.release_roster,
+            "COORDINATOR_CLIENT_FIRST_RELEASE",
+            (0, 43, 0),
+        ):
+            refused = self.run_assembler()
+            self.assertEqual(2, refused.returncode)
+            self.assertIn("--include-coordinator", refused.stderr)
+            result = self.run_assembler(include_coordinator=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
+                self.assertIn("registry_client/coordinator/native.abi3.so", archive.namelist())
 
     def test_rejects_a_malformed_version_without_a_traceback(self) -> None:
         result = self.run_assembler(version="not-a-version")

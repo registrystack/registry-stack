@@ -189,6 +189,8 @@ pub enum PackageFileRole {
     GeneratedOpenapi,
     EntityJsonSchema,
     ActionJsonSchema,
+    ReviewContextSchemaIndex,
+    ReviewContextJsonSchema,
     LossyManifestProjection,
     DcatCatalogProjection,
     ReviewedMigrationDescriptor,
@@ -3364,6 +3366,10 @@ fn add_compiled_artifacts(
         _ => return Err(PackageError::Derivation),
     }
     for (path, artifact) in compiled.artifacts().entries() {
+        if path.starts_with("generated/review-context-schemas/") {
+            insert_generated(files, path, artifact.bytes.clone())?;
+            continue;
+        }
         if let Some(schema_name) = path.strip_prefix("generated/action-schemas/") {
             insert_generated(
                 files,
@@ -3473,6 +3479,12 @@ fn package_role_for_path(path: &str) -> Result<PackageFileRole> {
         }
         path if path.starts_with("action-schemas/") && path.ends_with(".schema.json") => {
             PackageFileRole::ActionJsonSchema
+        }
+        "generated/review-context-schemas/index.json" => PackageFileRole::ReviewContextSchemaIndex,
+        path if path.starts_with("generated/review-context-schemas/")
+            && path.ends_with(".schema.json") =>
+        {
+            PackageFileRole::ReviewContextJsonSchema
         }
         "manifest/registry-manifest.json" => PackageFileRole::LossyManifestProjection,
         "manifest/dcat.jsonld" => PackageFileRole::DcatCatalogProjection,

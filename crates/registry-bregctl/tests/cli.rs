@@ -3043,7 +3043,7 @@ fn unavailable_artifact_selections_name_the_selection_and_the_alternatives() {
 }
 
 #[test]
-fn action_artifact_selector_publishes_only_compiled_action_surfaces() {
+fn action_artifact_selector_publishes_only_public_action_contracts() {
     let project = TestProject::from_registry_source(action_fixture());
     let output_root = project.path().join("action-output");
 
@@ -3058,7 +3058,19 @@ fn action_artifact_selector_publishes_only_compiled_action_surfaces() {
     ]);
 
     assert!(output.status.success(), "{output:?}");
-    assert!(output_root.join("compiled/actions.json").is_file());
+    assert!(!output_root.join("compiled/actions.json").exists());
+    assert!(output_root
+        .join("generated/action-contracts.schema.json")
+        .is_file());
+    let contracts: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(output_root.join("generated/action-contracts.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(contracts["kind"], "BRegActionContracts");
+    assert_eq!(
+        contracts["apiVersion"],
+        "id.registrystack.org/formats/breg/action-contracts/v1"
+    );
     assert!(output_root
         .join("generated/action-schemas/register-household-contact.invoke.input.schema.json")
         .is_file());
@@ -3082,7 +3094,8 @@ fn action_artifact_selector_publishes_only_compiled_action_surfaces() {
     assert_eq!(
         tree(&output_root).keys().cloned().collect::<Vec<_>>(),
         vec![
-            "compiled/actions.json",
+            "generated/action-contracts.json",
+            "generated/action-contracts.schema.json",
             "generated/action-schemas/register-household-contact.invoke.input.schema.json",
             "generated/action-schemas/register-household-contact.invoke.response.schema.json",
             "generated/action-schemas/register-household-contact.target-conditions.input.schema.json",

@@ -1,0 +1,21 @@
+{
+  "policy": {
+    "id": "notice-review",
+    "version": "1",
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "subject": {
+    "source": "notices",
+    "type": "notice",
+    "id": "notice-7",
+    "version": "3",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "requesterReference": "notice-request-7",
+  "context": {
+    "mode": "submitted",
+    "snapshot": {
+      "summary": "A synthetic notice for review."
+    }
+  }
+}

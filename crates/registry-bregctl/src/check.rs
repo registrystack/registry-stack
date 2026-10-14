@@ -44,16 +44,14 @@ const MODULE_ARTIFACT: &str = registry_breg::contract::MODULE_FORMAT.kind;
 
 const CORRECT_SOURCE: &str =
     "Correct the source at this path so it meets the rule the message states.";
-const WRITE_REQUIRED_ROW_BOUNDARY: &str =
-    "Write a rowBoundaries list on this permission with one entry for each boundary the entity's accessRequirements declare (field, claim, and operator); the unrestricted sentinel does not satisfy a requirement.";
+const WRITE_REQUIRED_ROW_BOUNDARY: &str = "Write a rowBoundaries list on this permission with one entry for each boundary the entity's accessRequirements declare (field, claim, and operator); the unrestricted sentinel does not satisfy a requirement.";
 const REVIEW_FINDING: &str =
     "Review the finding, and change the source if the behavior it describes is not intended.";
 const RUN_SCHEMA_TEST: &str =
     "Run bregctl test against a disposable PostgreSQL database to verify the pattern.";
 const LOCK_MODULES: &str =
     "Run bregctl project lock against this project, then review the module lock change it records.";
-const FIND_PROJECT: &str =
-    "Point bregctl check at a readable project directory that holds registry.yaml, or create one with bregctl init.";
+const FIND_PROJECT: &str = "Point bregctl check at a readable project directory that holds registry.yaml, or create one with bregctl init.";
 const REBUILD_PACKAGE: &str = "Rebuild the package with bregctl package PROJECT --test-receipt RECEIPT --output BUILD; a package is checked as the build wrote it, unmodified.";
 
 /// What `bregctl check` was asked to check.
@@ -696,10 +694,18 @@ fn package_code(error: &PackageError) -> &'static str {
 
 fn package_action(error: &PackageError) -> &'static str {
     match error {
-        PackageError::UnsafePath => "Point --package at the package directory itself, by a path without symbolic links.",
-        PackageError::Permissions => "Remove group and other write permission from the package directory and its files (chmod -R go-w), then check again.",
-        PackageError::Read => "Point --package at a readable package directory that bregctl package wrote.",
-        PackageError::RetiredApiVersion => "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD.",
+        PackageError::UnsafePath => {
+            "Point --package at the package directory itself, by a path without symbolic links."
+        }
+        PackageError::Permissions => {
+            "Remove group and other write permission from the package directory and its files (chmod -R go-w), then check again."
+        }
+        PackageError::Read => {
+            "Point --package at a readable package directory that bregctl package wrote."
+        }
+        PackageError::RetiredApiVersion => {
+            "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD."
+        }
         _ => REBUILD_PACKAGE,
     }
 }
@@ -731,7 +737,7 @@ fn place(
     match path {
         "project" => return file_level(project.to_path_buf(), Some(PROJECT_ARTIFACT)),
         "registry.yaml" => {
-            return file_level(project.join("registry.yaml"), Some(PROJECT_ARTIFACT))
+            return file_level(project.join("registry.yaml"), Some(PROJECT_ARTIFACT));
         }
         "modules" => return file_level(project.join("modules"), None),
         "arguments" => {

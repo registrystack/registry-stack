@@ -4,7 +4,7 @@ This is the Registry Stack monorepo: registry-facing services over the data
 institutions already hold and the registries they do not hold yet. Pre-1.0;
 APIs and deployment contracts may change.
 
-Five independent runtime products are relevant:
+The maintained runtime products include:
 
 - **Base Registry Engine** compiles a declared registry project into a
   PostgreSQL-backed writable registry: schema, REST API, per-profile
@@ -20,6 +20,17 @@ Five independent runtime products are relevant:
 - **Registry Messaging** sends one message to one destination over one
   channel for an authorized caller, rendered from a reviewed template through
   an operator-configured provider, and reports what is known about delivery.
+- **Registry Coordinator** runs finite, reviewed workflows that an authorized
+  caller starts explicitly: product API calls made through the maintained
+  product clients, separated by waits, with progress kept durable across
+  outages and restarts. Products retain effect ownership and authorization; a
+  wait never renews an approval or creates downstream authority. A run
+  waits until an instant or for a named completion exposed by an accepted operation,
+  including a Casework result, exact BReg Proposal application, or bounded external
+  read. A completion wake-up only advances an eligible authoritative read.
+  A run never starts from a product event, only from an
+  explicit caller request, so it sequences product calls for the caller who
+  started the run; it does not let one product start work in another.
 
 The products compose without merging their boundaries. Evidence may use a Base
 Registry Engine route or another bounded HTTP endpoint as a fixed source and
@@ -48,10 +59,13 @@ and verifier libraries only: no Evidence crate depends on `registry-breg`, and
 
 `evidencectl source add` drives the `bregctl` binary of the same version found
 on `PATH` to export a client and connect a local registry as a fixed Evidence
-source. Adopter tooling may compose across products this way; runtimes may
-not. The composition happens through the public CLI of the other product,
-never through a crate dependency: `registry-evidencectl` does not depend on
-`registry-breg` or `registry-bregctl`.
+source. Adopter tooling may compose across products this way, through the
+public CLI of the other product and never through a crate dependency:
+`registry-evidencectl` does not depend on `registry-breg` or
+`registry-bregctl`. Outside its tests, a runtime never drives another
+product's CLI or links another product's runtime or tooling crates. It may
+compose products only through their public product clients, under a
+dependency gate that names what it may reach, as the Coordinator does.
 
 Registry Manifest describes sources portably; BReg and `registry-manifest-cli`
 consume its model and renderers. `registry-platform-*` crates are shared
@@ -70,6 +84,11 @@ The dependency runs one way only in production: no Evidence crate depends on
 
 | Area | Owns |
 |---|---|
+| `crates/registry-coordinator` | Optional Coordinator runtime and operator CLI, durable workflow state and client adapters |
+| `crates/registry-coordinator-client` | Bounded Rust Coordinator client over the runtime's HTTP contract |
+| `crates/registry-coordinator-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
+| `crates/registry-coordinator-client-py` | Internal PyO3 binding used to assemble the unified Python client |
+| `products/coordinator` | Coordinator product contract, deployment runbook, example projects, generated schemas, OpenAPI and operation contracts, and contributor check and test scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
 | `crates/registry-discovery-client` | Rust relying-party SDK for bounded search, resolution, and inert exact selections |
@@ -136,6 +155,7 @@ Before editing crates in these areas, also read the owning guide:
 - `registry-manifest-*`: `products/manifest/AGENTS.md`
 - `registry-platform-*`: `products/platform/AGENTS.md`
 - `registry-evidence*` and `registry-language-server`: `products/evidence/AGENTS.md`
+- `registry-coordinator*`: `products/coordinator/AGENTS.md`
 - product clients, their language bindings, `registry-record`, and
   `registry-stack-client*`: `crates/CLIENTS.md` plus the owning product guide
 
@@ -231,6 +251,29 @@ allowed to act on an item is not thereby allowed to send a message, the
 Messaging access profile decides. Messaging never writes to another product's
 database. The source-neutral core depends on no other Messaging crate, and the
 client never reaches the runtime.
+
+Registry Coordinator is implemented by `registry-coordinator`, which carries
+the `coordinator` runtime and the `coordinatorctl` operator CLI, and by
+`registry-coordinator-client` with its Node.js and Python bindings,
+`registry-coordinator-client-node` and `registry-coordinator-client-py`. Its
+deployment contract, generated schemas and OpenAPI document, examples, and
+focused gates live under `products/coordinator`. The Coordinator owns its
+reviewed workflow packages, its durable run state and prepared commands, its
+waits, and its audit journal; it never owns product authority, product
+data, eligibility, or capacity. It reaches each product only over that
+product's public HTTP contract through the maintained Rust client, inherits no
+authorization from a caller or a product, and never writes to another
+product's database. The runtime may depend on product clients, product cores,
+`registry-record`, and `registry-platform-*`, and never on a product runtime,
+adopter tooling, a supporting service, or a binding; its client reaches only
+`registry-platform-*`. No product crate depends on a Coordinator crate: only
+`registry-stack-client`, on the client, and `registry-cli-docs`, on the
+runtime for the CLI reference, may. The Coordinator dependency-direction gate
+enforces both directions on the whole forward closure, and the Casework,
+Scheduling, and Messaging gates refuse the Coordinator from their side.
+Casework adopter tests may reach the Coordinator client through the unified
+client facade. The gate excludes that test-only allowance from the shipped
+`registry-caseworkctl` normal and build dependency closure.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.
@@ -515,6 +558,22 @@ skips, without `MESSAGING_TEST_DATABASE_URL`. The contracts check holds every
 security invariant row in `products/messaging/contracts/` to a threat, an
 enforcement point, a refusal, and either a runnable negative test or the
 later slice that owes one.
+
+Registry Coordinator product and gates:
+
+```bash
+python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'
+python3 products/coordinator/scripts/check_dependency_direction.py
+products/coordinator/scripts/check-schemas.sh
+COORDINATOR_TEST_DATABASE_URL=<disposable database> \
+COORDINATOR_MESSAGING_TEST_DATABASE_URL=<separate disposable database> \
+  products/coordinator/scripts/test-postgres.sh
+```
+
+Root CI runs the dependency gate on every Rust change, so a crate anywhere in
+the workspace that starts depending on a Coordinator crate fails it.
+`products/coordinator/README.md` names the focused runtime test targets and
+the native-service journeys.
 
 The unified Node.js and Python packages are generated from the maintained product
 bindings. After changing a binding or facade, run:

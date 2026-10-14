@@ -1,0 +1,89 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+# Synthetic replies and virtual time. These cases do not prove Casework approval,
+# task-grant exchange or BReg access policy, and contact no product.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: record-checked-after-virtual-wait
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    collection: applications
+    recordId: 00000000-0000-4000-8000-000000000001
+    notBefore: '2026-10-09T09:30:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000010
+      expiresAt: 1791540000
+  replies:
+    read:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: applications-registry
+          datasetIdentifier: applications
+          entityTypeIdentifier: application
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-1
+          domainData:
+            status: approved
+  expect:
+    path: [due, read, checked]
+    state: completed
+    outcome: {type: named, value: record-checked}
+    output:
+      recordId: 00000000-0000-4000-8000-000000000001
+    workflowElapsedSeconds: 1800
+- id: expired-approval-refuses-the-read
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    collection: applications
+    recordId: 00000000-0000-4000-8000-000000000001
+    notBefore: '2026-10-09T09:30:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000010
+      expiresAt: 1791540000
+  replies:
+    read:
+    - type: refused
+      code: credential-refused
+  expect:
+    path: [due, read]
+    state: refused
+    outcome: {type: none}
+    workflowElapsedSeconds: 1800
+- id: record-no-longer-visible
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    collection: applications
+    recordId: 00000000-0000-4000-8000-000000000001
+    notBefore: '2026-10-09T09:30:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000010
+      expiresAt: 1791540000
+  replies:
+    read:
+    - type: refused
+      code: product-not-found
+  expect:
+    path: [due, read]
+    state: refused
+    outcome: {type: none}
+    workflowElapsedSeconds: 1800
+- id: credential-service-unavailable
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    collection: applications
+    recordId: 00000000-0000-4000-8000-000000000001
+    notBefore: '2026-10-09T09:30:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000010
+      expiresAt: 1791540000
+  replies:
+    read:
+    - type: retryable
+      code: credential-unavailable
+  expect:
+    path: [due, read]
+    state: retryable
+    outcome: {type: none}
+    workflowElapsedSeconds: 1800

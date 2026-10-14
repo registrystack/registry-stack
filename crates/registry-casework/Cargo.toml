@@ -18,6 +18,7 @@ postgres-test = ["dep:registry-breg", "registry-breg/postgres-test"]
 schema = [
     "dep:schemars",
     "registry-casework-core/schema",
+    "registry-platform-activation/schema",
     "registry-casework-breg/schema",
     "registry-platform-audit/schema",
     "registry-platform-config/schema",
@@ -73,6 +74,8 @@ registry-evidence.workspace = true
 registry-thunderid-tooling.workspace = true
 jsonschema.workspace = true
 registry-casework-client.workspace = true
+registry-breg-client.workspace = true
+registry-review-client.workspace = true
 registry-bregctl.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
@@ -80,41 +83,16 @@ tower.workspace = true
 wiremock.workspace = true
 
 [[test]]
-name = "activation_postgres"
-path = "tests/activation_postgres.rs"
+name = "review_migration_postgres"
+path = "tests/review_migration_postgres.rs"
 required-features = ["postgres-test"]
 
 [[test]]
-name = "postgres_transactions"
-path = "tests/postgres_transactions.rs"
+name = "review_directory_postgres"
+path = "tests/review_directory_postgres.rs"
 required-features = ["postgres-test"]
 
 [[test]]
-name = "service_visibility"
-path = "tests/service_visibility.rs"
-required-features = ["postgres-test"]
-
-[[test]]
-name = "assignment_postgres"
-path = "tests/assignment_postgres.rs"
-required-features = ["postgres-test"]
-
-[[test]]
-name = "routing_postgres"
-path = "tests/routing_postgres.rs"
-required-features = ["postgres-test"]
-
-[[test]]
-name = "source_retention_postgres"
-path = "tests/source_retention_postgres.rs"
-required-features = ["postgres-test"]
-
-[[test]]
-name = "inbox_ordering_postgres"
-path = "tests/inbox_ordering_postgres.rs"
-required-features = ["postgres-test"]
-
-[[test]]
-name = "task_grant_invalidation"
-path = "tests/task_grant_invalidation.rs"
+name = "review_acceptance_postgres"
+path = "tests/review_acceptance_postgres.rs"
 required-features = ["postgres-test"]

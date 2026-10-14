@@ -97,6 +97,10 @@ SHARDS = {
         "registry-evidencectl",
     ),
     "developer-tools": (
+        "registry-coordinator",
+        "registry-coordinator-client",
+        "registry-coordinator-client-node",
+        "registry-coordinator-client-py",
         "registry-thunderid-tooling",
         "registry-cli-docs",
         "registry-cli-reference",
@@ -121,6 +125,7 @@ STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 CONFIG_CONFORMANCE_PACKAGES = frozenset(
     {
         "registry-platform-config",
+        "registry-coordinator",
         "registry-breg",
         "registry-breg-mcp",
         "registry-breg-review",
@@ -138,6 +143,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
 # job builds; a change to one, or to anything it links, runs the corpus.
 CONFIG_CHECK_PACKAGES = frozenset(
     {
+        "registry-coordinator",
         "registry-breg-mcp",
         "registry-breg-review",
         "registry-bregctl",
@@ -385,6 +391,9 @@ MESSAGING_BINDING_PACKAGES = frozenset(
 SCHEDULING_BINDING_PACKAGES = frozenset(
     {"registry-scheduling-client-node", "registry-scheduling-client-py"}
 )
+COORDINATOR_BINDING_PACKAGES = frozenset(
+    {"registry-coordinator-client-node", "registry-coordinator-client-py"}
+)
 NATIVE_BINDING_PACKAGES = (
     DISCOVERY_BINDING_PACKAGES
     | EVIDENCE_BINDING_PACKAGES
@@ -392,6 +401,7 @@ NATIVE_BINDING_PACKAGES = (
     | CASEWORK_BINDING_PACKAGES
     | MESSAGING_BINDING_PACKAGES
     | SCHEDULING_BINDING_PACKAGES
+    | COORDINATOR_BINDING_PACKAGES
 )
 
 # The breg-contracts matrix lanes. Review runs the first; the merge queue, the
@@ -1058,6 +1068,8 @@ def classify(
                 seeds.update(SCHEDULING_PACKAGES)
             elif path.startswith("products/messaging/"):
                 seeds.update(MESSAGING_PACKAGES)
+            elif path.startswith("products/coordinator/"):
+                seeds.add("registry-coordinator")
             elif path.startswith("products/identifiers/"):
                 # Catalog-only tooling does not require the full Rust matrix.
                 pass
@@ -1216,6 +1228,7 @@ def classify(
             "products/casework/generated/registry-casework.openapi.json",
             "products/messaging/generated/registry-messaging.openapi.json",
             "products/scheduling/generated/registry-scheduling.openapi.json",
+            "products/coordinator/generated/openapi/coordinator.openapi.json",
             # The client capabilities page imports this inventory at build.
             "products/breg/contracts/client-capabilities.json",
             "products/breg/evidence/**",
@@ -1407,6 +1420,7 @@ def classify(
         ) and bool(affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})),
         "messaging_contracts": bool(affected & MESSAGING_PACKAGES),
         "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
+        "coordinator": "registry-coordinator" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,

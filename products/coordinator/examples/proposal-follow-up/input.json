@@ -1,0 +1,24 @@
+{
+  "correction": {
+    "input": {
+      "facilityId": "00000000-0000-4000-8000-000000000001",
+      "addressLine": "12 Example Road",
+      "city": "Example City",
+      "postalCode": "10000"
+    }
+  },
+  "notice": {
+    "senderProfile": "notices",
+    "to": {
+      "email": "person@example.invalid"
+    },
+    "template": {
+      "id": "address-updated",
+      "version": "1"
+    },
+    "locale": "en",
+    "data": {
+      "facility": "Synthetic clinic"
+    }
+  }
+}

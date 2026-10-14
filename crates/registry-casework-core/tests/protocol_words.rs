@@ -7,8 +7,8 @@
 use std::fmt::Debug;
 
 use registry_casework_core::{
-    CaseloadItemOutcome, ClockRuntimeState, DirectoryTargetPurpose, DirectoryTargetsQuery,
-    InboxView, ListWorkItemsQuery, PageStatus, ReviewClockState, StaffingDiagnostic,
+    ClockRuntimeState, DirectoryTargetPurpose, DirectoryTargetsQuery, InboxView, PageStatus,
+    ReviewClockState, StaffingDiagnostic,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::json;
@@ -70,20 +70,6 @@ fn every_page_status_is_kebab_case() {
 }
 
 #[test]
-fn every_caseload_item_outcome_is_kebab_case() {
-    assert_words(&[
-        (CaseloadItemOutcome::Moved, "moved"),
-        (CaseloadItemOutcome::NotVisible, "not-visible"),
-        (CaseloadItemOutcome::NotEligible, "not-eligible"),
-        (
-            CaseloadItemOutcome::AttemptInProgress,
-            "attempt-in-progress",
-        ),
-        (CaseloadItemOutcome::Conflict, "conflict"),
-    ]);
-}
-
-#[test]
 fn every_inbox_view_is_kebab_case() {
     assert_words(&[
         (InboxView::Mine, "mine"),
@@ -94,7 +80,7 @@ fn every_inbox_view_is_kebab_case() {
     ]);
     for previous in ["my_teams", "team_holdings", "completed_by_me"] {
         assert!(
-            serde_json::from_value::<ListWorkItemsQuery>(json!({"view": previous})).is_err(),
+            serde_json::from_value::<InboxView>(json!(previous)).is_err(),
             "a list query naming {previous} is refused"
         );
     }

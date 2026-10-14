@@ -11,6 +11,7 @@ use crate::IssuerPrincipal;
 /// A live directory fact. Recording an absence does not move existing work
 /// or grant the cover any source authority.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AbsenceRecord {
     pub absence_id: Uuid,
@@ -22,6 +23,7 @@ pub struct AbsenceRecord {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AbsenceList {
     pub directory_revision: i64,
@@ -31,6 +33,7 @@ pub struct AbsenceList {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AbsenceInput {
     pub person: IssuerPrincipal,
@@ -97,6 +100,7 @@ pub fn validate_absence(
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AbsenceCover {
     pub person: IssuerPrincipal,
@@ -104,6 +108,7 @@ pub struct AbsenceCover {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AssignmentRequest {
     pub assignee: IssuerPrincipal,
@@ -112,6 +117,7 @@ pub struct AssignmentRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DelegateRequest {
     pub delegate: IssuerPrincipal,
@@ -119,66 +125,6 @@ pub struct DelegateRequest {
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CaseloadMoveRequest {
-    pub from: IssuerPrincipal,
-    pub to: IssuerPrincipal,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub queue_id: Option<String>,
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CaseloadItemSelection {
-    pub item_id: Uuid,
-    pub expected_revision: i64,
-}
-
-/// Apply only explicitly reviewed items. The service refuses more than 100
-/// selections and checks each revision in its own atomic transaction.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CaseloadApplyRequest {
-    pub movement: CaseloadMoveRequest,
-    pub items: Vec<CaseloadItemSelection>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CaseloadItemOutcome {
-    Moved,
-    NotVisible,
-    NotEligible,
-    AttemptInProgress,
-    Conflict,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CaseloadItemResult {
-    pub item_id: Uuid,
-    pub result: CaseloadItemOutcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revision: Option<i64>,
-}
-
-/// Preview pages contain only caller-visible work items; an apply response
-/// contains results only for the explicit selections supplied by that caller.
-pub type CaseloadPreviewPage = crate::Page<crate::WorkItem>;
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CaseloadPreviewQuery {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<usize>,
-}
-
-/// Resolve routing only. The caller must check current queue membership and
-/// retain unassignable work in its serving queue with a staffing diagnostic.
 pub fn resolve_absence_cover(
     person: &IssuerPrincipal,
     now: DateTime<Utc>,

@@ -31,6 +31,9 @@ mod proposal_artifacts;
 pub(crate) use proposal_artifacts::append_proposal_openapi;
 
 pub const REGISTRY_METADATA_ARTIFACT_PATH: &str = "generated/metadata/registry.json";
+pub const ACTION_CONTRACTS_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/action-contracts/v1";
+pub const ACTION_CONTRACTS_KIND: &str = "BRegActionContracts";
 
 pub(crate) struct EventDataSchemaBinding {
     pub schema: Value,
@@ -145,6 +148,16 @@ pub(crate) fn generate_artifacts(
     }
     if !actions.is_empty() {
         insert_json(&mut artifacts, "compiled/actions.json", actions)?;
+        insert_json_value(
+            &mut artifacts,
+            "generated/action-contracts.json",
+            &action_contracts(actions),
+        )?;
+        insert_json_value(
+            &mut artifacts,
+            "generated/action-contracts.schema.json",
+            &action_contracts_schema(),
+        )?;
     }
     insert_json(&mut artifacts, "compiled/routes.json", routes)?;
     insert_json(&mut artifacts, "compiled/access.json", access)?;
@@ -766,6 +779,91 @@ pub(crate) fn public_action_metadata(actions: &CompiledActionInventory) -> Value
             .iter()
             .map(|action| public_action_metadata_entry(action, None))
             .collect::<Vec<_>>()
+    })
+}
+
+/// Portable interaction contracts derived from the same definitions and schemas
+/// as the receiving API. They describe policy without exporting its grants.
+fn action_contracts(actions: &CompiledActionInventory) -> Value {
+    let entries = actions
+        .actions
+        .iter()
+        .map(|action| {
+            let mut contract = json!({
+                "id": action.id,
+                "revision": action.definition_revision,
+                "display": action.display,
+                "mode": if action.execution.is_proposal() { "proposal" } else { "immediate" },
+                "input": openapi_action_input_schema(action),
+                "output": openapi_action_response_schema(action, None),
+            });
+            if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution
+            {
+                contract["review"] =
+                    serde_json::to_value(&proposal.review).expect("compiled review serializes");
+                contract["application"] = serde_json::to_value(&proposal.application)
+                    .expect("compiled application policy serializes");
+            }
+            let refusals: Vec<_> = action
+                .handler
+                .iter()
+                .flat_map(|handler| handler.refusals.keys())
+                .collect();
+            // A Proposal invocation creates a draft. Its planner only runs on
+            // Submit, so these invocation schemas must not promise that refusal.
+            if !action.execution.is_proposal() && !refusals.is_empty() {
+                contract["declaredRefusal"] = json!({
+                    "type": "object", "additionalProperties": false,
+                    "required": ["refusalCode"],
+                    "properties": { "refusalCode": { "type": "string", "enum": refusals } }
+                });
+            }
+            contract
+        })
+        .collect::<Vec<_>>();
+    json!({ "apiVersion": ACTION_CONTRACTS_API_VERSION, "kind": ACTION_CONTRACTS_KIND, "actions": entries })
+}
+
+/// Closed envelope for the public Action contract projection. Embedded schemas
+/// retain their owning API's JSON Schema vocabulary and validation rules.
+fn action_contracts_schema() -> Value {
+    json!({
+        "$schema":"https://json-schema.org/draft/2020-12/schema",
+        "$id":"https://id.registrystack.org/schemas/breg/action-contracts/action-contracts.v1.schema.json",
+        "title":"BReg Action contracts", "type":"object", "additionalProperties":false,
+        "required":["apiVersion","kind","actions"],
+        "properties":{
+            "apiVersion":{"const":ACTION_CONTRACTS_API_VERSION},
+            "kind":{"const":ACTION_CONTRACTS_KIND},
+            "actions":{"type":"array","items":{"$ref":"#/$defs/Action"}}
+        },
+        "$defs":{
+            "Schema":{"type":["object","boolean"]},
+            "Display":{"type":"object","additionalProperties":false,"properties":{
+                "label":{"type":"string"},"description":{"type":"string"},"titleField":{"type":"string"}
+            }},
+            "Policy":{"type":"object","additionalProperties":false,"required":["id","version","digest"],"properties":{
+                "id":{"type":"string"},"version":{"type":"string"},"digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}
+            }},
+            "Review":{"oneOf":[
+                {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"none"}}},
+                {"type":"object","additionalProperties":false,"required":["type","authority","source","policy"],"properties":{
+                    "type":{"const":"required"},"authority":{"type":"string"},"source":{"type":"string"},"policy":{"$ref":"#/$defs/Policy"}
+                }}
+            ]},
+            "Application":{"oneOf":[
+                {"type":"object","additionalProperties":false,"required":["mode"],"properties":{"mode":{"const":"manual"}}},
+                {"type":"object","additionalProperties":false,"required":["mode","maximumAttempts"],"properties":{
+                    "mode":{"const":"automatic"},"maximumAttempts":{"type":"integer","minimum":1,"maximum":32}
+                }}
+            ]},
+            "Action":{"type":"object","additionalProperties":false,"required":["id","revision","display","mode","input","output"],"properties":{
+                "id":{"type":"string"},"revision":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+                "display":{"$ref":"#/$defs/Display"},"mode":{"enum":["immediate","proposal"]},
+                "input":{"$ref":"#/$defs/Schema"},"output":{"$ref":"#/$defs/Schema"},
+                "declaredRefusal":{"$ref":"#/$defs/Schema"},"review":{"$ref":"#/$defs/Review"},"application":{"$ref":"#/$defs/Application"}
+            },"allOf":[{"if":{"properties":{"mode":{"const":"proposal"}}},"then":{"required":["review","application"]},"else":{"not":{"anyOf":[{"required":["review"]},{"required":["application"]}]}}}]}
+        }
     })
 }
 

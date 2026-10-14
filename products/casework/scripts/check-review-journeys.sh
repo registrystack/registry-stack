@@ -6,7 +6,7 @@ set -eu
 # the candidate service and CLI, runs explicit apply/doctor/readiness checks,
 # and retains pending and terminal work across process restarts.
 #
-# It also loads the exact unified Node and Python Casework facades against the
+# It also loads the exact unified Rust, Node and Python Casework facades against the
 # candidate product-native bindings and real HTTP service. The unified release
 # artifacts normally bundle six native products. Building all six here would
 # duplicate the release assembly gate, so the test supplies inert sibling
@@ -99,4 +99,4 @@ done
 cargo test --locked -p registry-caseworkctl --test dev_lifecycle -- \
   --ignored --test-threads=1
 
-echo "Casework candidate service, operator lifecycle, and Node/Python Casework facade journeys passed."
+echo "Casework candidate service, operator lifecycle, and Rust/Node/Python Casework facade journeys passed."

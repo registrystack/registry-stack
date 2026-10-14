@@ -287,6 +287,7 @@ struct ActionInvocationEnvelope<'a> {
 
 /// One disclosed effect reference in a successful action receipt.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct BRegActionResultReference {
     #[serde(rename = "recordType")]
@@ -315,6 +316,7 @@ impl BRegActionResultReference {
 
 /// Successful immediate-action application receipt.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct BRegActionReceipt {
     action: String,
