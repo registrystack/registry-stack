@@ -3,9 +3,9 @@ apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
 kind: CoordinatorRuntimeConfig
 # One deployment serving the delayed-follow-up and governed-action-follow-up
 # example projects. Each project is packaged on its own and pinned below; the
-# flow id each package serves is its workflow id. Both flows share the
+# workflow id each package serves is its workflow id. Both workflows share the
 # connections, so the applications connection carries the read and act scopes
-# the governed flow needs.
+# the governed workflow needs.
 secretProviders:
   file:
     root: /run/registry-coordinator/secrets
@@ -17,7 +17,7 @@ database:
 namespace: coordinator_follow_up
 connections:
   applications:
-    product: breg
+    type: breg
     baseUrl: https://breg.example.org
     profile: workflow-actions
     authorization:
@@ -27,7 +27,7 @@ connections:
       resource: urn:example:applications
       scopes: [applications:read, applications:act]
   notices:
-    product: messaging
+    type: messaging
     baseUrl: https://messaging.example.org
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
@@ -51,25 +51,24 @@ deployment:
     audience: urn:example:coordinator
     jwksSource:
       type: discovery
-    allowedClients: [reminder-producer, information-producer, institution-operator, deployment-operator]
-    # Run actions reach only the flows a policy lists. Deployment-wide actions
-    # reach every flow this deployment serves, including flows added later, so
-    # the deployment operator lists no flows.
+    # Run actions reach only the workflows a policy lists. Deployment-wide actions
+    # reach every workflow this deployment serves, including workflows added later, so
+    # the deployment operator lists no workflows.
     policies:
-      - clientId: reminder-producer
+      reminder-producer:
         requiredScopes: [coordinator:start]
-        flows: [delayed-follow-up]
+        workflows: [delayed-follow-up]
         actions: [start, status]
-      - clientId: information-producer
+      information-producer:
         requiredScopes: [coordinator:start]
-        flows: [governed-action-follow-up]
+        workflows: [governed-action-follow-up]
         actions: [start, status]
-      - clientId: institution-operator
+      institution-operator:
         requiredScopes: [coordinator:operate]
-        flows: [delayed-follow-up, governed-action-follow-up]
+        workflows: [delayed-follow-up, governed-action-follow-up]
         actions: [status, inspect, retry-same, cancel, reconcile]
         operator: true
-      - clientId: deployment-operator
+      deployment-operator:
         requiredScopes: [coordinator:operate]
         actions: [doctor, restore-hold, release-restore-hold, release-admission-hold, complete-execution-recovery, retain]
         operator: true

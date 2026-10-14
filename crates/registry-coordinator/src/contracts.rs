@@ -10,7 +10,7 @@ use jsonschema::{
     error::{TypeKind, ValidationErrorKind},
     JSONSchema,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::protocol::Operation;
 
@@ -20,8 +20,10 @@ pub struct OperationContract {
     pub output: Value,
     /// Output made available only on an authored `onDeclaredRefusal` route.
     pub declared_refusal: Option<Value>,
+    pub action: Option<crate::breg_action::ActionContract>,
     input_validator: JSONSchema,
     output_validator: JSONSchema,
+    refusal_validator: Option<JSONSchema>,
 }
 
 /// Where a value leaves a contract. The path is an RFC 6901 pointer into the
@@ -50,6 +52,28 @@ impl Violation {
 }
 
 impl OperationContract {
+    pub fn new(
+        input: Value,
+        output: Value,
+        declared_refusal: Option<Value>,
+        action: Option<crate::breg_action::ActionContract>,
+    ) -> crate::Result<Self> {
+        let input_validator = crate::definition::compile_schema(&input)?;
+        let output_validator = crate::definition::compile_schema(&output)?;
+        let refusal_validator = declared_refusal
+            .as_ref()
+            .map(crate::definition::compile_schema)
+            .transpose()?;
+        Ok(Self {
+            input,
+            output,
+            declared_refusal,
+            action,
+            input_validator,
+            output_validator,
+            refusal_validator,
+        })
+    }
     /// Checks a value the operation's adapter would decode.
     pub fn check_input(&self, value: &Value) -> Result<(), Violation> {
         first_violation(&self.input_validator, value)
@@ -59,9 +83,233 @@ impl OperationContract {
     pub fn check_output(&self, value: &Value) -> Result<(), Violation> {
         first_violation(&self.output_validator, value)
     }
+
+    pub fn check_refusal(&self, value: &Value) -> Result<(), Violation> {
+        match &self.refusal_validator {
+            Some(validator) => first_violation(validator, value),
+            None => Err(Violation {
+                path: String::new(),
+                expected: "an Operation declaring this business refusal".into(),
+            }),
+        }
+    }
+}
+
+const SAFE_INTEGER: i64 = (1 << 53) - 1;
+
+fn bound_numbers(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            let bounds: Option<(Value, Value)> = match object.get("format").and_then(Value::as_str)
+            {
+                Some("uint8") => Some((json!(0), json!(u8::MAX))),
+                Some("uint16") => Some((json!(0), json!(u16::MAX))),
+                Some("uint32") => Some((json!(0), json!(u32::MAX))),
+                Some("uint64" | "uint") => Some((json!(0), json!(SAFE_INTEGER))),
+                Some("int8") => Some((json!(i8::MIN), json!(i8::MAX))),
+                Some("int16") => Some((json!(i16::MIN), json!(i16::MAX))),
+                Some("int32") => Some((json!(i32::MIN), json!(i32::MAX))),
+                Some("int64" | "int") => Some((json!(-SAFE_INTEGER), json!(SAFE_INTEGER))),
+                Some("double" | "float") => Some((Value::Null, Value::Null)),
+                _ => None,
+            };
+            if let Some((minimum, maximum)) = bounds {
+                object.remove("format");
+                if !minimum.is_null() && !object.contains_key("minimum") {
+                    object.insert("minimum".into(), minimum);
+                }
+                if !maximum.is_null() && !object.contains_key("maximum") {
+                    object.insert("maximum".into(), maximum);
+                }
+            }
+            // Only descend into schema positions. Values in const, enum,
+            // default and examples are authored data, even when they contain
+            // keys such as format or properties.
+            for keyword in [
+                "$defs",
+                "definitions",
+                "properties",
+                "patternProperties",
+                "dependentSchemas",
+            ] {
+                if let Some(schemas) = object.get_mut(keyword).and_then(Value::as_object_mut) {
+                    schemas.values_mut().for_each(bound_numbers);
+                }
+            }
+            for keyword in [
+                "additionalProperties",
+                "unevaluatedProperties",
+                "propertyNames",
+                "items",
+                "additionalItems",
+                "unevaluatedItems",
+                "contains",
+                "not",
+                "if",
+                "then",
+                "else",
+            ] {
+                if let Some(schema) = object.get_mut(keyword) {
+                    bound_numbers(schema);
+                }
+            }
+            for keyword in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+                if let Some(schemas) = object.get_mut(keyword).and_then(Value::as_array_mut) {
+                    schemas.iter_mut().for_each(bound_numbers);
+                }
+            }
+            if let Some(dependencies) = object
+                .get_mut("dependencies")
+                .and_then(Value::as_object_mut)
+            {
+                for schema in dependencies.values_mut().filter(|value| value.is_object()) {
+                    bound_numbers(schema);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(bound_numbers),
+        _ => {}
+    }
+}
+
+/// Resolve one specialization from a local, owner-generated public export.
+/// Live metadata still establishes the caller's authority at preparation time.
+pub fn resolve_operation(
+    operation: Operation,
+    action: Option<&Value>,
+    imported: &BTreeMap<String, Value>,
+) -> crate::Result<OperationContract> {
+    let invalid = || {
+        crate::CoordinatorError::new(
+            "coordinator.operation.contract-invalid",
+            "select one Action from a generated BReg Action contract export",
+        )
+    };
+    let Some(reference) = action else {
+        if operation == Operation::InvokeBregAction {
+            return Err(invalid());
+        }
+        let base = contract(operation);
+        return OperationContract::new(
+            base.input.clone(),
+            base.output.clone(),
+            base.declared_refusal.clone(),
+            None,
+        );
+    };
+    if operation != Operation::InvokeBregAction {
+        return Err(invalid());
+    }
+    let object = reference
+        .as_object()
+        .filter(|value| value.len() == 2)
+        .ok_or_else(invalid)?;
+    let source = object
+        .get("contract")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    let export = imported
+        .get(source)
+        .filter(|value| {
+            value.get("apiVersion").and_then(Value::as_str)
+                == Some("id.registrystack.org/formats/breg/action-contracts/v1")
+                && value.get("kind").and_then(Value::as_str) == Some("BRegActionContracts")
+        })
+        .ok_or_else(invalid)?;
+    let entries = export
+        .get("actions")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?;
+    let mut matching = entries
+        .iter()
+        .filter(|entry| entry.get("id").and_then(Value::as_str) == Some(id));
+    let entry = matching.next().ok_or_else(invalid)?;
+    if matching.next().is_some() {
+        return Err(invalid());
+    }
+    let revision = entry
+        .get("revision")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    if !revision.strip_prefix("sha256:").is_some_and(|text| {
+        text.len() == 64
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    }) {
+        return Err(invalid());
+    }
+    let mode = serde_json::from_value(entry.get("mode").cloned().ok_or_else(invalid)?)
+        .map_err(|_| invalid())?;
+    let mut input = entry.get("input").cloned().ok_or_else(invalid)?;
+    let mut output = entry.get("output").cloned().ok_or_else(invalid)?;
+    // Local embedding changes the schema's base URI, never its validation rules.
+    if let Some(schema) = input.as_object_mut() {
+        schema.remove("$id");
+    }
+    if let Some(schema) = output.as_object_mut() {
+        schema.remove("$id");
+        schema.remove("$schema");
+    }
+    bound_numbers(&mut input);
+    bound_numbers(&mut output);
+    let output = if mode == registry_breg_client::BRegActionMode::Proposal {
+        let definitions = output
+            .as_object_mut()
+            .and_then(|schema| schema.remove("$defs"));
+        let mut wrapper = serde_json::json!({"type":"object","additionalProperties":false,"required":["proposal"],"properties":{"proposal":output}});
+        if let Some(definitions) = definitions {
+            wrapper["$defs"] = definitions;
+        }
+        wrapper
+    } else {
+        // Preparation obtains current target conditions using the maintained
+        // client. An author may provide expected conditions, but cannot mint them.
+        if let Some(required) = input.get_mut("required").and_then(Value::as_array_mut) {
+            required.retain(|field| field != "preconditions");
+        }
+        output
+    };
+    OperationContract::new(
+        input,
+        output,
+        entry.get("declaredRefusal").cloned(),
+        Some(crate::breg_action::ActionContract {
+            action_id: id.to_owned(),
+            action_revision: revision.to_owned(),
+            mode,
+        }),
+    )
+}
+
+pub fn breg_application_schema() -> &'static Value {
+    static SCHEMA: OnceLock<Value> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        let proposal = contract(Operation::SubmitBregProposal).output.clone();
+        // Keep local references local after embedding the owner schema.
+        let mut schema = serde_json::json!({
+            "type":"object", "additionalProperties":false,
+            "required":["outcome","proposal"],
+            "properties": {"outcome":{"type":"string","enum":["applied","closed"]}, "proposal":proposal}
+        });
+        if let Some(defs) = schema["properties"]["proposal"].as_object_mut().and_then(|value| value.remove("$defs")) {
+            schema["$defs"] = defs;
+        }
+        schema
+    })
 }
 
 pub(crate) fn first_violation(validator: &JSONSchema, value: &Value) -> Result<(), Violation> {
+    if crate::functions::check_value(value).is_err() {
+        return Err(Violation {
+            path: String::new(),
+            expected: "a value within the host's bounded JSON contract".into(),
+        });
+    }
     let Err(mut errors) = validator.validate(value) else {
         return Ok(());
     };
@@ -137,128 +385,99 @@ fn expected(kind: &ValidationErrorKind) -> String {
     }
 }
 
-macro_rules! embedded {
-    ($($id:literal),* $(,)?) => {
-        &[$((
-            $id,
-            include_str!(concat!(
-                "../../../products/coordinator/generated/operations/",
-                $id,
-                ".input.schema.json"
-            )),
-            include_str!(concat!(
-                "../../../products/coordinator/generated/operations/",
-                $id,
-                ".output.schema.json"
-            )),
-        )),*]
-    };
-}
-
-static EMBEDDED: &[(&str, &str, &str)] = embedded!(
-    "cancel-review-request",
-    "create-appointment",
-    "evaluate-decision",
-    "external-get",
-    "invoke-breg-action",
-    "read-availability",
-    "read-record",
-    "read-scheduling",
-    "submit-message",
-    "submit-review-request",
-);
-
-static DECLARED_REFUSALS: &[(&str, &str)] = &[(
-    "invoke-breg-action",
-    include_str!(
-        "../../../products/coordinator/generated/operations/invoke-breg-action.declared-refusal.schema.json"
-    ),
-)];
-
-/// The committed contract of a wait event: the value a wait-for step that
+/// The committed completion contract: the value a wait-for step that
 /// continues with `next` holds as its output.
-pub struct EventContract {
+pub struct CompletionContract {
     pub output: Value,
     validator: JSONSchema,
 }
 
-impl EventContract {
-    /// Checks a value offered as the event a wait receives.
+impl CompletionContract {
+    /// Checks a value offered as the terminal result a wait receives.
     pub fn check(&self, value: &Value) -> Result<(), Violation> {
         first_violation(&self.validator, value)
     }
 }
 
-static EVENTS: &[(&str, &str)] = &[(
-    "review-result",
-    include_str!(
-        "../../../products/coordinator/generated/operations/review-result.event.schema.json"
-    ),
-)];
+/// Casework's owning result schema. Signals never carry this result.
+pub fn casework_completion_schema() -> &'static Value {
+    static SCHEMA: OnceLock<Value> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        #[cfg(feature="schema")]
+        { let mut schema=derived::output::<registry_casework_client::ReviewResult>(); derived::finish(&mut schema,"Casework result completion"); schema }
+        #[cfg(not(feature="schema"))]
+        { serde_json::from_str(include_str!("../../../products/coordinator/generated/operations/casework.submit-review-request.v1.result.completion.schema.json")).expect("generated result schema") }
+    })
+}
 
-/// The committed contract of the event a wait-for step waits for.
-pub fn event_contract(event: &crate::definition::WaitEvent) -> &'static EventContract {
-    static CONTRACTS: OnceLock<BTreeMap<&'static str, EventContract>> = OnceLock::new();
-    let contracts = CONTRACTS.get_or_init(|| {
-        EVENTS
-            .iter()
-            .map(|(id, text)| {
-                let output: Value =
-                    serde_json::from_str(text).expect("committed event contract is JSON");
-                let validator = crate::definition::compile_schema(&output)
-                    .expect("committed event contract compiles");
-                (*id, EventContract { output, validator })
-            })
-            .collect()
-    });
-    contracts
-        .get(event.id())
-        .expect("every wait event has a committed contract")
+/// A compiled completion's result contract, irrespective of its adapter.
+pub fn completion_contract(event: &crate::definition::CompletionDefinition) -> CompletionContract {
+    CompletionContract {
+        output: event.output.clone(),
+        validator: crate::definition::compile_schema(&event.output)
+            .expect("compiled completion schema"),
+    }
 }
 
 /// The committed contract of a catalog operation.
 pub fn contract(operation: Operation) -> &'static OperationContract {
-    static CONTRACTS: OnceLock<BTreeMap<&'static str, OperationContract>> = OnceLock::new();
+    static CONTRACTS: OnceLock<BTreeMap<String, OperationContract>> = OnceLock::new();
     let contracts = CONTRACTS.get_or_init(|| {
-        EMBEDDED
-            .iter()
-            .map(|(id, input, output)| {
-                let parse = |text: &str| -> (Value, JSONSchema) {
-                    let schema =
-                        serde_json::from_str(text).expect("committed operation contract is JSON");
-                    let validator = crate::definition::compile_schema(&schema)
-                        .expect("committed operation contract compiles");
-                    (schema, validator)
-                };
-                let (input, input_validator) = parse(input);
-                let (output, output_validator) = parse(output);
-                let declared_refusal = DECLARED_REFUSALS
-                    .iter()
-                    .find(|(operation, _)| operation == id)
-                    .map(|(_, schema)| {
-                        serde_json::from_str(schema).expect("committed operation contract is JSON")
-                    });
-                (
-                    *id,
-                    OperationContract {
-                        input,
-                        output,
-                        input_validator,
-                        output_validator,
-                        declared_refusal,
-                    },
-                )
-            })
-            .collect()
+        #[cfg(feature = "schema")]
+        {
+            derived_contracts()
+                .into_iter()
+                .map(|(id, (mut input, mut output))| {
+                    derived::finish(&mut input, &format!("{id} input"));
+                    derived::finish(&mut output, &format!("{id} output"));
+                    let declared_refusal = (id == Operation::InvokeBregAction.as_str())
+                        .then(derived::output::<crate::protocol::DeclaredRefusal>);
+                    (
+                        id.to_owned(),
+                        OperationContract::new(input, output, declared_refusal, None)
+                            .expect("owning schemas compile"),
+                    )
+                })
+                .collect()
+        }
+        #[cfg(not(feature = "schema"))]
+        {
+            let schemas: BTreeMap<String, Value> = serde_json::from_str(include_str!(
+                "../../../products/coordinator/generated/operations/catalog.json"
+            ))
+            .expect("generated catalog is JSON");
+            assert_eq!(
+                schemas.len(),
+                crate::operations::descriptors().len(),
+                "generated catalog covers every registered operation"
+            );
+            schemas
+                .into_iter()
+                .map(|(id, value)| {
+                    assert!(
+                        crate::operations::descriptor(&id).is_some(),
+                        "generated schema belongs to a registered operation"
+                    );
+                    let contract = OperationContract::new(
+                        value["input"].clone(),
+                        value["output"].clone(),
+                        value.get("declaredRefusal").cloned(),
+                        None,
+                    )
+                    .expect("generated owning schemas compile");
+                    (id, contract)
+                })
+                .collect()
+        }
     });
     contracts
         .get(operation.as_str())
         .expect("every catalog operation has a committed contract")
 }
 
-/// Generated contract files and their reference, keyed by file name.
+/// Schemas derived from the owning wire models and adapter inputs.
 #[cfg(feature = "schema")]
-pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
+fn derived_contracts() -> BTreeMap<&'static str, (Value, Value)> {
     use crate::{
         adapters::{AvailabilityRequest, ReadRequest, SchedulingReadRequest},
         breg_action::ActionInput,
@@ -266,7 +485,7 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         external_http::{ExternalResponse, GetRequest},
         review::CancelReviewInput,
     };
-    use registry_breg_client::{BRegActionReceipt, RegistryRecordSingleResponse};
+    use registry_breg_client::{BRegActionReceipt, BRegProposal, RegistryRecordSingleResponse};
     use registry_casework_client::{
         ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted,
     };
@@ -329,6 +548,25 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         derived::input::<CancelReviewInput>(),
         derived::output::<ReviewCancelResponse>(),
     );
+    for operation in [
+        Operation::SubmitBregProposal,
+        Operation::ApplyBregProposal,
+        Operation::RetryBregProposal,
+        Operation::CancelBregProposal,
+    ] {
+        add(
+            operation,
+            derived::input::<BRegProposal>(),
+            derived::output::<BRegProposal>(),
+        );
+    }
+    contracts
+}
+
+/// Generated contract files and their reference, keyed by file name.
+#[cfg(feature = "schema")]
+pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
+    let mut contracts = derived_contracts();
     let mut files = BTreeMap::new();
     for descriptor in crate::operations::descriptors() {
         let (mut input, mut output) = contracts
@@ -347,7 +585,10 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         for (role, schema) in [("input", input), ("output", output)] {
             let mut text = serde_json::to_string_pretty(&schema)?;
             text.push('\n');
-            files.insert(format!("{}.{role}.schema.json", descriptor.id), text);
+            files.insert(
+                format!("{}.{role}.schema.json", descriptor.id.replace('/', ".")),
+                text,
+            );
         }
     }
     assert!(
@@ -355,17 +596,39 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         "every contract names a catalog operation"
     );
     let mut event = derived::output::<registry_casework_client::ReviewResult>();
-    derived::finish(&mut event, "review-result event");
+    derived::finish(&mut event, "Casework result completion");
     let mut text = serde_json::to_string_pretty(&event)?;
     text.push('\n');
-    files.insert("review-result.event.schema.json".into(), text);
+    files.insert(
+        "casework.submit-review-request.v1.result.completion.schema.json".into(),
+        text,
+    );
     let mut refusal = derived::output::<crate::protocol::DeclaredRefusal>();
     derived::finish(&mut refusal, "invoke-breg-action declared-refusal output");
     let mut text = serde_json::to_string_pretty(&refusal)?;
     text.push('\n');
     files.insert(
-        "invoke-breg-action.declared-refusal.schema.json".into(),
+        "breg.invoke-action.v1.declared-refusal.schema.json".into(),
         text,
+    );
+    let mut catalog = serde_json::Map::new();
+    for descriptor in crate::operations::descriptors() {
+        let prefix = descriptor.id.replace('/', ".");
+        let mut operation = serde_json::json!({
+            "host":descriptor.host_contract(),
+            "input":serde_json::from_str::<Value>(&files[&format!("{prefix}.input.schema.json")])?,
+            "output":serde_json::from_str::<Value>(&files[&format!("{prefix}.output.schema.json")])?,
+        });
+        if descriptor.declared_refusal {
+            operation["declaredRefusal"] = serde_json::from_str::<Value>(
+                &files[&format!("{prefix}.declared-refusal.schema.json")],
+            )?;
+        }
+        catalog.insert(descriptor.id.into(), operation);
+    }
+    files.insert(
+        "catalog.json".into(),
+        format!("{}\n", serde_json::to_string_pretty(&catalog)?),
     );
     files.insert("README.md".into(), derived::reference(&files)?);
     Ok(files)
@@ -501,42 +764,8 @@ mod derived {
     /// width becomes explicit bounds. Canonical JSON carries integers only
     /// within the IEEE 754 safe range, which bounds the 64-bit widths.
     pub(super) fn finish(schema: &mut Value, title: &str) {
-        bound_numbers(schema);
+        super::bound_numbers(schema);
         schema["title"] = json!(title);
-    }
-
-    const SAFE_INTEGER: i64 = (1 << 53) - 1;
-
-    fn bound_numbers(value: &mut Value) {
-        match value {
-            Value::Object(object) => {
-                let bounds: Option<(Value, Value)> =
-                    match object.get("format").and_then(Value::as_str) {
-                        Some("uint8") => Some((json!(0), json!(u8::MAX))),
-                        Some("uint16") => Some((json!(0), json!(u16::MAX))),
-                        Some("uint32") => Some((json!(0), json!(u32::MAX))),
-                        Some("uint64" | "uint") => Some((json!(0), json!(SAFE_INTEGER))),
-                        Some("int8") => Some((json!(i8::MIN), json!(i8::MAX))),
-                        Some("int16") => Some((json!(i16::MIN), json!(i16::MAX))),
-                        Some("int32") => Some((json!(i32::MIN), json!(i32::MAX))),
-                        Some("int64" | "int") => Some((json!(-SAFE_INTEGER), json!(SAFE_INTEGER))),
-                        Some("double" | "float") => Some((Value::Null, Value::Null)),
-                        _ => None,
-                    };
-                if let Some((minimum, maximum)) = bounds {
-                    object.remove("format");
-                    if !minimum.is_null() && !object.contains_key("minimum") {
-                        object.insert("minimum".into(), minimum);
-                    }
-                    if !maximum.is_null() && !object.contains_key("maximum") {
-                        object.insert("maximum".into(), maximum);
-                    }
-                }
-                object.values_mut().for_each(bound_numbers);
-            }
-            Value::Array(items) => items.iter_mut().for_each(bound_numbers),
-            _ => {}
-        }
     }
 
     /// The operation reference, built from the descriptors and the contracts.
@@ -567,7 +796,7 @@ mod derived {
                 declared_refusal = if descriptor.declared_refusal {
                     format!(
                         "[`onDeclaredRefusal`]({}.declared-refusal.schema.json)",
-                        descriptor.id
+                        descriptor.id.replace('/', ".")
                     )
                 } else {
                     "none".into()
@@ -576,8 +805,11 @@ mod derived {
         }
         for descriptor in crate::operations::descriptors() {
             text.push_str(&format!("\n## {}\n", descriptor.id));
+            text.push_str("\nHost execution and completion contract:\n\n```json\n");
+            text.push_str(&serde_json::to_string_pretty(&descriptor.host_contract())?);
+            text.push_str("\n```\n");
             for role in ["input", "output"] {
-                let file = format!("{}.{role}.schema.json", descriptor.id);
+                let file = format!("{}.{role}.schema.json", descriptor.id.replace('/', "."));
                 let schema: Value = serde_json::from_str(&files[&file])?;
                 text.push_str(&format!(
                     "\n{} ([`{file}`]({file})):\n\n",
@@ -586,7 +818,10 @@ mod derived {
                 text.push_str(&members(&schema));
             }
             if descriptor.declared_refusal {
-                let file = format!("{}.declared-refusal.schema.json", descriptor.id);
+                let file = format!(
+                    "{}.declared-refusal.schema.json",
+                    descriptor.id.replace('/', ".")
+                );
                 let schema: Value = serde_json::from_str(&files[&file])?;
                 text.push_str(&format!(
                     "\nDeclared-refusal output ([`{file}`]({file})):\n\n"
@@ -595,16 +830,19 @@ mod derived {
             }
         }
         text.push_str(
-            "\n## Wait events\n\n\
-             A wait-for step waits for one event. When the event arrives, the step continues \
-             with `next` and holds the event as its output, so a reference into a wait-for \
-             step's output must name a path the event contract declares. A step reached by \
-             `onTimeout` reads no event.\n",
+            "\n## Completions\n\n\
+             A `wait-for` step observes a named completion on an accepted Operation. The host \
+             reads the authoritative result under current connection authority, using the \
+             saved command and exact correlation. A terminal result continues through `next` \
+             as the step output. A step reached by `onTimeout` has no completion output. \
+             Authenticated signals only wake an eligible read and never carry the result. \
+             Durable read spacing, the observation budget and the original deadline survive \
+             retries and restarts.\n",
         );
-        let file = "review-result.event.schema.json";
+        let file = "casework.submit-review-request.v1.result.completion.schema.json";
         let schema: Value = serde_json::from_str(&files[file])?;
         text.push_str(&format!(
-            "\n### review-result\n\nThe result of a review request a `submit-review-request` \
+            "\n### casework.submit-review-request/v1.result\n\nThe result of a review request a `casework.submit-review-request/v1` \
              step submitted, once the reviewing product reports it complete \
              ([`{file}`]({file})):\n\n"
         ));
@@ -699,12 +937,67 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn numeric_format_projection_preserves_literal_schema_shaped_data() {
+        let literal = json!({"format":"uint8","properties":{"x":{"format":"int64"}}});
+        let mut schema = json!({
+            "type":"object", "const":literal, "enum":[literal],
+            "default":literal, "examples":[literal],
+            "properties":{"number":{"type":"integer","format":"uint8"}},
+            "$defs":{"Number":{"allOf":[{"type":"integer","format":"int64"}]}},
+            "additionalProperties":{"type":"integer","format":"uint16"},
+            "dependentSchemas":{"number":{"properties":{"other":{"type":"integer","format":"int8"}}}}
+        });
+        bound_numbers(&mut schema);
+        for key in ["const", "default"] {
+            assert_eq!(schema[key], literal);
+        }
+        for key in ["enum", "examples"] {
+            assert_eq!(schema[key][0], literal);
+        }
+        assert_eq!(
+            schema["properties"]["number"],
+            json!({"type":"integer","minimum":0,"maximum":255})
+        );
+        assert_eq!(
+            schema["$defs"]["Number"]["allOf"][0]["maximum"],
+            SAFE_INTEGER
+        );
+        assert_eq!(schema["additionalProperties"]["maximum"], u16::MAX);
+        assert_eq!(
+            schema["dependentSchemas"]["number"]["properties"]["other"]["minimum"],
+            i8::MIN
+        );
+    }
+
+    #[test]
+    fn operation_values_obey_host_bounds_before_schema_validation() {
+        let contract =
+            OperationContract::new(json!(true), json!(true), Some(json!(true)), None).unwrap();
+        let oversized =
+            json!({"private-canary":"x".repeat(crate::functions::MAXIMUM_VALUE_STRING_BYTES + 1)});
+        for violation in [
+            contract.check_input(&oversized),
+            contract.check_output(&oversized),
+            contract.check_refusal(&oversized),
+        ] {
+            let violation = violation.unwrap_err();
+            assert_eq!(violation.path, "");
+            assert_eq!(
+                violation.expected,
+                "a value within the host's bounded JSON contract"
+            );
+            assert!(!format!("{violation:?}").contains("private-canary"));
+        }
+    }
+
     #[cfg(feature = "schema")]
     fn generated_input(operation: Operation) -> JSONSchema {
         let files = generate().unwrap();
-        let schema =
-            serde_json::from_str(&files[&format!("{}.input.schema.json", operation.as_str())])
-                .unwrap();
+        let schema = serde_json::from_str(
+            &files[&format!("{}.input.schema.json", operation.as_str().replace('/', "."))],
+        )
+        .unwrap();
         crate::definition::compile_schema(&schema).unwrap()
     }
 
@@ -755,7 +1048,14 @@ mod tests {
 
     #[test]
     fn every_catalog_operation_has_a_compilable_contract() {
-        assert_eq!(EMBEDDED.len(), crate::operations::descriptors().len());
+        assert_eq!(
+            serde_json::from_str::<BTreeMap<String, Value>>(include_str!(
+                "../../../products/coordinator/generated/operations/catalog.json"
+            ))
+            .unwrap()
+            .len(),
+            crate::operations::descriptors().len()
+        );
         for descriptor in crate::operations::descriptors() {
             let operation = Operation::parse(descriptor.id).unwrap();
             let contract = contract(operation);
@@ -1216,17 +1516,13 @@ mod tests {
     #[test]
     fn committed_contracts_match_their_generator() {
         let generated = generate().unwrap();
-        for (id, input, output) in EMBEDDED {
-            assert_eq!(generated[&format!("{id}.input.schema.json")], *input);
-            assert_eq!(generated[&format!("{id}.output.schema.json")], *output);
-        }
-        for (id, event) in EVENTS {
-            assert_eq!(generated[&format!("{id}.event.schema.json")], *event);
-        }
-        for (id, refusal) in DECLARED_REFUSALS {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/coordinator/generated/operations");
+        for (file, text) in generated {
             assert_eq!(
-                generated[&format!("{id}.declared-refusal.schema.json")],
-                *refusal
+                std::fs::read_to_string(root.join(&file)).unwrap(),
+                text,
+                "{file}"
             );
         }
     }

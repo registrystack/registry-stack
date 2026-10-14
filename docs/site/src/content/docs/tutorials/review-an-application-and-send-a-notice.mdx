@@ -65,9 +65,14 @@ python3 products/coordinator/examples/reviewed-notice/session.py start \
 ```
 
 The helper seeds one application, computes its reviewed projection digest with the maintained Rust
-review protocol, starts a `reviewed-notice` run, and waits until Casework owns the decision. It keeps
-credentials in owner-only files. Its status contains endpoint and file references, not secret
-values:
+review protocol, discovers the permitted `reviewed-notice` contract, starts with that exact `workflowRevision`, and
+waits until Casework owns the decision. It keeps
+credentials in owner-only files. Its status contains the Workflow revision, endpoint references,
+and file references without secret values.
+
+Standalone Casework review carries an exact expected PolicyBinding. Acceptance and the eventual
+result must match its ID, version, and digest, as well as the subject and submission digest.
+This workflow creates no BReg Proposal and grants no registry mutation authority.
 
 The producer is trusted to prepare the review subject with the supplied helper. Coordinator checks
 the submitted BReg revision before it requests review, but it does not recompute the producer's
@@ -86,10 +91,6 @@ print('Run:', s['runId'])
 PY
 ```
 
-```text
-Session: ready
-```
-
 Local access tokens expire. If a later request returns `401`, refresh the relevant header file
 with `cargo run --locked -p registry-bregctl --bin bregctl -- dev token CLIENT PROJECT`.
 Use `staff` for Casework or `coordinator-producer` for Coordinator as `CLIENT`, and the
@@ -100,8 +101,9 @@ Use `staff` for Casework or `coordinator-producer` for Coordinator as `CLIENT`, 
 
 ## Inspect the parked run
 
-Read the run through Coordinator's authenticated inspection API. The run is durably parked at
-`await-review`; it has not sent a message.
+Read the run through Coordinator's authenticated inspection API. Confirm state `running`, step
+`await-review`, and the original `workflowRevision`. This completion wait has not sent a message.
+Inspection also exposes its next observation and durable budget without the review correlation data.
 
 ```sh
 python3 - <<'PY'
@@ -117,12 +119,9 @@ with urllib.request.urlopen(request) as response:
     run = json.load(response)['run']
 print('State:', run['state'])
 print('Step:', run['step'])
+assert run['workflow'] == s['workflow']
+assert run['workflowRevision'] == s['workflowRevision']
 PY
-```
-
-```text
-State: running
-Step: await-review
 ```
 
 ## Read and claim the Casework task
@@ -151,13 +150,7 @@ print('Requested amount:', facts['requestedAmount'])
 PY
 ```
 
-```text
-Applicant: Amina Example
-Program: housing-support
-Requested amount: 1200
-```
-
-Claim that exact revision:
+The printed facts must match the synthetic application. Claim that exact task revision:
 
 ```sh
 python3 - <<'PY'
@@ -179,13 +172,12 @@ print('Claimed')
 PY
 ```
 
-```text
-Claimed
-```
-
 {/* Evidence: products/coordinator/examples/reviewed-notice/functions.rhai,
     review_subject_route and review_request; products/coordinator/examples/reviewed-notice/workflow.yaml,
     read-for-review through await-review. */}
+
+A successful claim prints `Claimed`. If a concurrent change makes the revision stale, read the task
+again and claim its current revision.
 
 ## Restart Coordinator while it waits
 
@@ -224,11 +216,10 @@ print('Approved')
 PY
 ```
 
-```text
-Approved
-```
+A successful decision prints `Approved`. If the task revision changed, read it again before deciding.
 
-The Casework completion event wakes the restarted worker. Coordinator reads the authoritative
+The Casework completion event advances an eligible read on the restarted worker while preserving
+the durable observation floor. Coordinator reads the authoritative
 result, reads BReg again, verifies the reviewed revision still matches, checks that
 `noticeAllowed` is still true, and obtains the recipient from that current record.
 
@@ -244,7 +235,7 @@ token = next(line.split(': ', 1)[1].strip() for line in open(s['coordinatorHeade
              if line.startswith('Authorization: '))
 headers = {'Authorization': token}
 url = f"{s['coordinatorApi']}/v1/runs/{s['runId']}/inspect"
-deadline = time.monotonic() + 30
+deadline = time.monotonic() + 60
 while True:
     with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:
         run = json.load(response)['run']
@@ -257,10 +248,9 @@ assert run['output']['messageId']
 PY
 ```
 
-```text
-State: finished
-Outcome: notice-accepted
-```
+Confirm `finished` with outcome `notice-accepted` and a message identifier. If the run remains
+held, inspect its failure code and wait budget before any retry. Keep the original start identity,
+key, revision, and input; a fresh key creates fresh work.
 
 Finally, inspect what the local SMTP server received. SMTP acceptance is the available receipt in
 this setup; SMTP does not report later recipient delivery back to Messaging.
@@ -284,11 +274,9 @@ print('Subject:', message['Subject'])
 PY
 ```
 
-```text
-Messages: 1
-To: amina@example.invalid
-Subject: Application approved
-```
+Confirm exactly one message addressed to `amina@example.invalid` with subject `Application approved`.
+No message or a held run requires inspection of the private session logs; do not infer delivery
+from Coordinator acceptance alone.
 
 Changing the application revision after submission routes to `application-changed`. Removing
 `noticeAllowed` routes to `notice-permission-gone`. A rejection routes to `review-rejected`. None

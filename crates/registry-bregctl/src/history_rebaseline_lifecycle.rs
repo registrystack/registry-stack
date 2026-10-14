@@ -15,16 +15,16 @@ use std::time::Duration;
 
 use registry_breg::audit::RegistryAudit;
 use registry_breg::history_rebaseline::{
-    rebaseline_history_coverage_with_connection, HistoryRebaselineError, HistoryRebaselineOutcome,
-    HistoryRebaselineRequest, HistoryRebaselineTimeouts,
+    HistoryRebaselineError, HistoryRebaselineOutcome, HistoryRebaselineRequest,
+    HistoryRebaselineTimeouts, rebaseline_history_coverage_with_connection,
 };
 use registry_breg::package::PackageError;
 use registry_breg::postgres::RegistryLockKey;
-use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
+use registry_breg::runtime_config::{RuntimeConfigError, load_runtime_config};
 use registry_platform_canonical_json::parse_json_strict;
 use serde::{Deserialize, Serialize};
 
-use crate::active_registry::{recorded_active_identity, ActiveRegistryError};
+use crate::active_registry::{ActiveRegistryError, recorded_active_identity};
 use crate::safe_path::SafeEntry;
 
 const MAX_REBASELINE_REQUEST_BYTES: u64 = 16 * 1024;
@@ -232,15 +232,17 @@ mod tests {
 
         assert!(parse_rebaseline_request_bytes(br#"{"operatorReference":""}"#).is_err());
         assert!(parse_rebaseline_request_bytes(br#"{}"#).is_err());
-        assert!(parse_rebaseline_request_bytes(
-            br#"{
+        assert!(
+            parse_rebaseline_request_bytes(
+                br#"{
               "operatorReference":"ops-ticket-1",
               "entityId":"membership",
               "recordId":"018feaa0-68f9-4a45-b9e3-58436df07af7",
               "eraseThroughRevision":1
             }"#,
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[cfg(unix)]

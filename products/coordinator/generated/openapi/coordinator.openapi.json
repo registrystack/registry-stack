@@ -109,6 +109,34 @@
         ],
         "type": "object"
       },
+      "EffectStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "$ref": "#/components/schemas/OperationIdentity"
+          },
+          "operationRevision": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "accepted",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "operation",
+          "operationRevision",
+          "state"
+        ],
+        "type": "object"
+      },
       "Erased": {
         "properties": {
           "erased": {
@@ -179,16 +207,20 @@
           },
           "id": {
             "enum": [
-              "read-record",
-              "submit-message",
-              "read-scheduling",
-              "read-availability",
-              "create-appointment",
-              "invoke-breg-action",
-              "external-get",
-              "evaluate-decision",
-              "submit-review-request",
-              "cancel-review-request"
+              "breg.read-record/v1",
+              "messaging.submit-message/v1",
+              "scheduling.read-service/v1",
+              "scheduling.read-availability/v1",
+              "scheduling.create-appointment/v1",
+              "breg.invoke-action/v1",
+              "external.get/v1",
+              "evaluation.evaluate/v1",
+              "casework.submit-review-request/v1",
+              "casework.cancel-review-request/v1",
+              "breg.submit-proposal/v1",
+              "breg.apply-proposal/v1",
+              "breg.retry-proposal/v1",
+              "breg.cancel-proposal/v1"
             ],
             "type": "string"
           },
@@ -250,8 +282,6 @@
               "deployment.refused",
               "evaluation.uncertain",
               "execution.held",
-              "flow.not-served",
-              "flow.version-conflict",
               "idempotency.key-invalid",
               "idempotency.key-reused",
               "input.invalid",
@@ -278,7 +308,9 @@
               "run.not-visible",
               "run.payload-erased",
               "runtime.failure",
-              "service.unavailable"
+              "service.unavailable",
+              "workflow.not-served",
+              "workflow.revision-mismatch"
             ],
             "type": "string"
           },
@@ -307,8 +339,6 @@
               "https://id.registrystack.org/problems/registry-coordinator/deployment/refused",
               "https://id.registrystack.org/problems/registry-coordinator/evaluation/uncertain",
               "https://id.registrystack.org/problems/registry-coordinator/execution/held",
-              "https://id.registrystack.org/problems/registry-coordinator/flow/not-served",
-              "https://id.registrystack.org/problems/registry-coordinator/flow/version-conflict",
               "https://id.registrystack.org/problems/registry-coordinator/idempotency/key-invalid",
               "https://id.registrystack.org/problems/registry-coordinator/idempotency/key-reused",
               "https://id.registrystack.org/problems/registry-coordinator/input/invalid",
@@ -335,7 +365,9 @@
               "https://id.registrystack.org/problems/registry-coordinator/run/not-visible",
               "https://id.registrystack.org/problems/registry-coordinator/run/payload-erased",
               "https://id.registrystack.org/problems/registry-coordinator/runtime/failure",
-              "https://id.registrystack.org/problems/registry-coordinator/service/unavailable"
+              "https://id.registrystack.org/problems/registry-coordinator/service/unavailable",
+              "https://id.registrystack.org/problems/registry-coordinator/workflow/not-served",
+              "https://id.registrystack.org/problems/registry-coordinator/workflow/revision-mismatch"
             ],
             "type": "string"
           }
@@ -433,6 +465,12 @@
       },
       "RunInspection": {
         "properties": {
+          "effects": {
+            "items": {
+              "$ref": "#/components/schemas/EffectStatus"
+            },
+            "type": "array"
+          },
           "recovery": {
             "properties": {
               "operation": {
@@ -461,11 +499,19 @@
               "$ref": "#/components/schemas/StepStatus"
             },
             "type": "array"
+          },
+          "waits": {
+            "items": {
+              "$ref": "#/components/schemas/WaitStatus"
+            },
+            "type": "array"
           }
         },
         "required": [
           "run",
           "steps",
+          "effects",
+          "waits",
           "recovery"
         ],
         "type": "object"
@@ -510,9 +556,6 @@
             "format": "date-time",
             "type": "string"
           },
-          "definitionDigest": {
-            "type": "string"
-          },
           "failureCode": {
             "type": [
               "string",
@@ -555,18 +598,17 @@
           "uncertain": {
             "type": "boolean"
           },
-          "workflowId": {
+          "workflow": {
             "type": "string"
           },
-          "workflowVersion": {
+          "workflowRevision": {
             "type": "string"
           }
         },
         "required": [
           "runId",
-          "workflowId",
-          "workflowVersion",
-          "definitionDigest",
+          "workflow",
+          "workflowRevision",
           "bindingDigest",
           "step",
           "state",
@@ -582,15 +624,20 @@
       "Start": {
         "additionalProperties": false,
         "properties": {
-          "flow": {
-            "maxLength": 128,
+          "input": {},
+          "workflow": {
+            "maxLength": 64,
             "minLength": 1,
             "type": "string"
           },
-          "input": {}
+          "workflowRevision": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          }
         },
         "required": [
-          "flow",
+          "workflow",
+          "workflowRevision",
           "input"
         ],
         "type": "object"
@@ -655,6 +702,89 @@
           "receiptExpired"
         ],
         "type": "object"
+      },
+      "WaitStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptedStep": {
+            "type": "string"
+          },
+          "completion": {
+            "type": "string"
+          },
+          "completionRevision": {
+            "type": "string"
+          },
+          "minimumIntervalSeconds": {
+            "maximum": 86400,
+            "minimum": 30,
+            "type": "integer"
+          },
+          "nextObservationAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notBefore": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "observationLimit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "observations": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step": {
+            "type": "string"
+          },
+          "timeoutAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "acceptedStep",
+          "completion",
+          "completionRevision",
+          "timeoutAt",
+          "nextObservationAt",
+          "notBefore",
+          "minimumIntervalSeconds",
+          "observations",
+          "observationLimit"
+        ],
+        "type": "object"
+      },
+      "WorkflowContract": {
+        "additionalProperties": false,
+        "properties": {
+          "input": {},
+          "outcomes": {
+            "maxProperties": 64,
+            "minProperties": 1,
+            "type": "object"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "workflowRevision": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow",
+          "workflowRevision",
+          "input",
+          "outcomes"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -673,7 +803,7 @@
   "info": {
     "description": "Registry Coordinator HTTP contract. Every refusal is one application/problem+json document from the closed vocabulary.",
     "title": "Registry Coordinator",
-    "version": "0.41.0"
+    "version": "0.42.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2754,7 +2884,7 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "flow.not-served"
+                            "workflow.not-served"
                           ]
                         }
                       }
@@ -2763,7 +2893,7 @@
                 }
               }
             },
-            "description": "A problem: flow.not-served."
+            "description": "A problem: workflow.not-served."
           },
           "405": {
             "content": {
@@ -2808,8 +2938,8 @@
                             "deployment.activation-changed",
                             "deployment.refused",
                             "execution.held",
-                            "flow.version-conflict",
-                            "idempotency.key-reused"
+                            "idempotency.key-reused",
+                            "workflow.revision-mismatch"
                           ]
                         }
                       }
@@ -2818,7 +2948,7 @@
                 }
               }
             },
-            "description": "A problem: admission.held, admission.recovery-only, binding.conflict, binding.live-conflict, definition.refused, deployment.activation-changed, deployment.refused, execution.held, flow.version-conflict, idempotency.key-reused."
+            "description": "A problem: admission.held, admission.recovery-only, binding.conflict, binding.live-conflict, definition.refused, deployment.activation-changed, deployment.refused, execution.held, idempotency.key-reused, workflow.revision-mismatch."
           },
           "413": {
             "content": {
@@ -2928,7 +3058,7 @@
             "bearer": []
           }
         ],
-        "summary": "Start a run of a served flow"
+        "summary": "Start a run of a served workflow"
       }
     },
     "/v1/runs/{run}": {
@@ -4253,6 +4383,222 @@
           }
         ],
         "summary": "Retry a held step with the same command"
+      }
+    },
+    "/v1/workflows/{workflow}": {
+      "get": {
+        "operationId": "workflowContract",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowContract"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: authentication.refused.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "operation.not-authorized"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: operation.not-authorized."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "workflow.not-served"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: workflow.not-served."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "deployment.activation-changed",
+                            "deployment.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: deployment.activation-changed, deployment.refused."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "runtime.failure"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: runtime.failure."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "audit.response-unavailable",
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: audit.response-unavailable, service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Discover the active workflow revision and typed contract"
       }
     }
   }

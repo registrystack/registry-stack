@@ -47,6 +47,11 @@ enum Format {
     Json,
 }
 #[derive(Clone, Copy, ValueEnum)]
+enum SdkLanguage {
+    Typescript,
+    Python,
+}
+#[derive(Clone, Copy, ValueEnum)]
 enum ListState {
     Running,
     Finished,
@@ -85,7 +90,7 @@ enum Command {
     /// Validate the workflow, functions and root YAML companions offline.
     Check {
         #[arg(long)]
-        /// Directory containing workflow.yaml and functions.rhai.
+        /// Directory containing workflow.yaml and its declared code and contract assets.
         project: Option<PathBuf>,
         #[arg(long, requires = "project")]
         /// Include reviewed call semantics, recovery and execution bounds.
@@ -100,13 +105,29 @@ enum Command {
     /// Explain a checked graph, mappings and execution bounds offline.
     Explain {
         #[arg(long)]
-        /// Directory containing workflow.yaml and functions.rhai.
+        /// Directory containing workflow.yaml and its declared code and contract assets.
         project: PathBuf,
+    },
+    /// Export revision-pinned typed clients from the compiled workflow contract.
+    Types {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long, value_enum)]
+        language: SdkLanguage,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Discover a permitted workflow's active revision and input/outcome contract.
+    Workflow {
+        #[arg(long)]
+        workflow: String,
+        #[command(flatten)]
+        service: Service,
     },
     /// Run deterministic scenarios with a virtual clock and fake products offline.
     Test {
         #[arg(long)]
-        /// Directory containing workflow.yaml and functions.rhai.
+        /// Directory containing workflow.yaml and its declared code and contract assets.
         project: PathBuf,
         #[arg(long)]
         /// Scenario YAML file; defaults to scenarios.yaml in the project.
@@ -115,33 +136,36 @@ enum Command {
     /// Build a new immutable package; existing output is never overwritten.
     Package {
         #[arg(long)]
-        /// Directory containing workflow.yaml and functions.rhai.
+        /// Directory containing workflow.yaml and its declared code and contract assets.
         project: PathBuf,
         #[arg(long)]
         /// New package directory; existing content is refused.
         output: PathBuf,
     },
-    /// Inspect activation, schema and each flow's package change using runtime credentials, without migrating.
+    /// Inspect activation, schema and each workflow's package change using runtime credentials, without migrating.
     Plan {
-        #[arg(long = "remove-flow", value_name = "FLOW")]
-        /// Active flow to retire because its package is no longer listed; repeat for each flow.
-        remove_flow: Vec<String>,
+        #[arg(long = "remove-workflow", value_name = "WORKFLOW")]
+        /// Active workflow to retire because its package is no longer listed; repeat for each workflow.
+        remove_workflow: Vec<String>,
     },
-    /// Apply every listed flow's package and least-privileged runtime grants using migration credentials.
+    /// Apply every listed workflow's package and least-privileged runtime grants using migration credentials.
     Apply {
-        #[arg(long = "remove-flow", value_name = "FLOW")]
-        /// Active flow to retire because its package is no longer listed; refused while it has runs that are not terminal.
-        remove_flow: Vec<String>,
+        #[arg(long = "remove-workflow", value_name = "WORKFLOW")]
+        /// Active workflow to retire because its package is no longer listed; refused while it has runs that are not terminal.
+        remove_workflow: Vec<String>,
     },
-    /// Inspect deployed flow packages and schema using runtime credentials.
+    /// Inspect deployed workflow packages and schema using runtime credentials.
     DeploymentStatus,
     /// Generate the authenticated service OpenAPI document offline.
     Openapi,
-    /// Start one allowed flow with caller ownership and an idempotency key.
+    /// Start one allowed workflow with caller ownership and an idempotency key.
     Start {
         #[arg(long)]
-        /// Allowed flow identifier from the activated workflow package.
-        flow: String,
+        /// Allowed workflow identifier from the activated workflow package.
+        workflow: String,
+        #[arg(long)]
+        /// Computed revision obtained from types export or workflow discovery.
+        workflow_revision: String,
         #[arg(long)]
         /// JSON input file validated against the workflow input schema.
         input: PathBuf,
@@ -284,6 +308,8 @@ impl Command {
             Self::Init { .. } => "init",
             Self::Check { .. } => "check",
             Self::Explain { .. } => "explain",
+            Self::Types { .. } => "types",
+            Self::Workflow { .. } => "workflow",
             Self::Test { .. } => "test",
             Self::Package { .. } => "package",
             Self::Plan { .. } => "plan",
@@ -360,7 +386,7 @@ fn check(
     let mut result = match loaded.map(|(definition, _)| definition) {
         Some(definition) if explain => definition.explain()?,
         Some(definition) => {
-            json!({"status":"valid","workflow":definition.workflow.id,"version":definition.workflow.version,"definitionDigest":definition.digest,"steps":definition.workflow.steps.len()})
+            json!({"status":"valid","workflow":definition.workflow.id,"version":definition.workflow.version,"workflowRevision":definition.digest,"steps":definition.workflow.steps.len()})
         }
         None => json!({"status":"valid"}),
     };
@@ -611,13 +637,13 @@ fn escape_controls(text: &str) -> String {
 fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
     Some(match problem {
         ProblemCode::AuthenticationRefused => "Write a current access token, issued by the deployment's configured issuer to an admitted client, into the --token-file file.",
-        ProblemCode::OperationNotAuthorized => "Use a token whose client and scopes match a caller policy that lists this action and, for a run action, this flow; deployment-wide actions need a policy with operator: true.",
-        ProblemCode::FlowNotServed => "Name a flow this deployment serves; its operator lists them with coordinatorctl deployment-status.",
-        ProblemCode::RunNotVisible => "Check --run; without operator authority a caller reaches only the runs it started, and only in flows its policy lists.",
-        ProblemCode::InputInvalid => "Correct the --input file to satisfy the flow's declared input schema and value bounds.",
+        ProblemCode::OperationNotAuthorized => "Use a token whose client and scopes match a caller policy that lists this action and, for a run action, this workflow; deployment-wide actions need a policy with operator: true.",
+        ProblemCode::WorkflowNotServed => "Name a workflow this deployment serves; its operator lists them with coordinatorctl deployment-status.",
+        ProblemCode::RunNotVisible => "Check --run; without operator authority a caller reaches only the runs it started, and only in workflows its policy lists.",
+        ProblemCode::InputInvalid => "Correct the --input file to satisfy the workflow's declared input schema and value bounds.",
         ProblemCode::IdempotencyKeyInvalid => "Write an idempotency key of 1 to 256 bytes into the --key-file file.",
         ProblemCode::IdempotencyKeyReused => "This idempotency key already started a run with different input; resend the original input to reach that run, or use another key for a different operation.",
-        ProblemCode::FlowVersionConflict => "This deployment's package changed the workflow's definition under a version that runs already use; give the changed definition a new project.version in its workflow.yaml, then package, plan and apply it.",
+        ProblemCode::WorkflowRevisionMismatch => "Discover the active workflow revision before starting new work. To recover an earlier admission, retain its original workflow revision, caller identity, key and input.",
         ProblemCode::AdmissionRecoveryOnly => "This instance runs in recovery-only mode and admits no runs; send starts to the ordinary service.",
         ProblemCode::AdmissionHeld => "Starts stay held after a restore; once execution hold is released, admission history is complete and the prior deployment is fenced, an operator runs coordinatorctl release-admission-hold --recovery-reference REFERENCE --admission-history-complete --prior-deployment-fenced.",
         ProblemCode::ExecutionHeld => "Execution is under restore hold; once fencing and reconciliation evidence is recorded, an operator runs coordinatorctl release-restore-hold --reason REFERENCE.",
@@ -664,30 +690,42 @@ async fn execute(cli: &Cli) -> Result<Value> {
         Command::Package { project, output } => {
             Ok(json!({"packageDigest":deployment::package(project,output)?,"root":output}))
         }
-        Command::Plan { remove_flow } | Command::Apply { remove_flow } => {
+        Command::Plan { remove_workflow } | Command::Apply { remove_workflow } => {
             let apply = matches!(cli.command, Command::Apply { .. });
             let r = runtime(cli)?;
-            let flows = deployment::load_flows(deployment::config(&r)?)?;
+            let workflows = deployment::load_workflows(deployment::config(&r)?)?;
             let store = deployment::open_ctl(&r, apply).await?;
             if apply {
-                serde_json::to_value(deployment::apply(&store, &r, &flows, remove_flow).await?)
+                serde_json::to_value(deployment::apply(&store, &r, &workflows, remove_workflow).await?)
                     .map_err(|_| CoordinatorError::new("output-unavailable", "cannot encode activation"))
             } else {
-                deployment::plan(&store, &r, &flows, remove_flow).await
+                deployment::plan(&store, &r, &workflows, remove_workflow).await
             }
         }
         Command::DeploymentStatus => {
             let r = runtime(cli)?;
-            let flows = deployment::load_flows(deployment::config(&r)?)?;
-            flows.validate(&r)?;
+            let workflows = deployment::load_workflows(deployment::config(&r)?)?;
+            workflows.validate(&r)?;
             let store = deployment::open_ctl(&r, false).await?;
-            let active = deployment::check_serving(&store, &r, flows.digest()).await?;
+            let active = deployment::check_serving(&store, &r, workflows.digest()).await?;
             let d = deployment::config(&r)?;
-            Ok(json!({"status":"checked","databaseId":d.database_id,"flowsDigest":flows.digest(),"flows":flows.package_digests(),"schemaVersion":crate::store::SCHEMA_VERSION,"runtimeRole":d.runtime_role,"active":active}))
+            Ok(json!({"status":"checked","databaseId":d.database_id,"workflowsDigest":workflows.digest(),"workflows":workflows.package_digests(),"schemaVersion":crate::store::SCHEMA_VERSION,"runtimeRole":d.runtime_role,"active":active}))
         }
         Command::Openapi => Ok(http::openapi()),
+        Command::Types { project, language, output } => {
+            let definition = Definition::load(project)?;
+            let language = match language { SdkLanguage::Typescript => crate::sdk::Language::Typescript, SdkLanguage::Python => crate::sdk::Language::Python };
+            let source = crate::sdk::generate(&definition, language)?;
+            std::fs::write(output, source).map_err(|_| CoordinatorError::new("output-unavailable", "cannot write the typed workflow client").suggest("Name a writable output file."))?;
+            Ok(json!({"status":"exported","output":output,"workflow":definition.workflow.id,"workflowRevision":definition.digest}))
+        }
+        Command::Workflow { workflow, service } => {
+            if !crate::definition::valid_name(workflow) { return Err(CoordinatorError::new("input-invalid", "supply a bounded workflow identifier")); }
+            remote(service, reqwest::Method::GET, &format!("/v1/workflows/{workflow}"), None, None).await
+        }
         Command::Start {
-            flow,
+            workflow,
+            workflow_revision,
             input,
             key_file,
             service,
@@ -699,7 +737,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
                 service,
                 reqwest::Method::POST,
                 "/v1/runs",
-                Some(json!({"flow":flow,"input":input})),
+                Some(json!({"workflow":workflow,"workflowRevision":workflow_revision,"input":input})),
                 Some(&key),
             )
             .await
@@ -1011,7 +1049,7 @@ fn render_human(cli: &Cli, value: &Value) -> String {
                 out.push_str(&format!(
                     "Valid workflow {workflow} version {}\nDefinition: {}\n",
                     text(&value["version"]),
-                    text(&value["definitionDigest"])
+                    text(&value["workflowRevision"])
                 ));
             }
             if cli.runtime_config.is_some() {
@@ -1063,7 +1101,7 @@ fn render_explain(value: &Value) -> String {
         "Workflow {} version {}\nDefinition: {}\nDeadline: {} seconds; outcomes: {}\nSteps from start:\n",
         text(&value["workflow"]),
         text(&value["version"]),
-        text(&value["definitionDigest"]),
+        text(&value["workflowRevision"]),
         value["deadlineSeconds"],
         listed(&value["outcomes"])
     );
@@ -1073,8 +1111,8 @@ fn render_explain(value: &Value) -> String {
             "wait-until" => format!("wait until {}, then {next}", mapping(&step["mapping"])),
             "wait-for" => format!(
                 "wait for the {} of {}, at most {} seconds, then {}; on timeout {}; on cancel {}",
-                text(&step["event"]),
-                text(&step["request"]),
+                text(&step["completion"]["name"]),
+                text(&step["completion"]["step"]),
                 step["timeoutSeconds"],
                 text(&step["next"][0]),
                 match step["onTimeout"].as_str() {

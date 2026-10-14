@@ -10,14 +10,14 @@ use registry_casework_client::{
     submission_digest, CaseworkAuth, CaseworkClient, CaseworkClientError, CaseworkProblemCode,
     ReviewCancelRequest, ReviewCreateRequest, ReviewRequestAccepted, ReviewResultResponse,
 };
-use registry_platform_httputil::client::{PrivateKeyJwt, TokenProvider};
+use registry_platform_httputil::client::{PrivateKeyJwt, RetryAfter, TokenProvider};
 use serde::Deserialize;
 use serde_json::Value;
 use zeroize::Zeroizing;
 
 use crate::{
     adapters::{refused, retryable, token_failure, valid_key},
-    protocol::{CallOutcome, CallRequest, Operation, ReviewRead},
+    protocol::{CallOutcome, CallRequest, CompletionObservation, Operation},
 };
 
 /// The input of `cancel-review-request`: the accepted request a submit step
@@ -94,28 +94,52 @@ impl CaseworkConnection {
     /// Read the result of an accepted request. The client holds a 200 answer
     /// to the accepted request's identifier, subject, policy and submission
     /// digest, so a result for anything else is refused as invalid-response.
-    pub(crate) async fn read_result(&self, accepted: &Value) -> ReviewRead {
+    pub(crate) async fn read_result(&self, accepted: &Value) -> CompletionObservation {
         let Ok(accepted) = serde_json::from_value::<ReviewRequestAccepted>(accepted.clone()) else {
-            return ReviewRead::Failed(refused("invalid-command"));
+            return CompletionObservation::from_failure(refused("invalid-command"));
         };
         let token = match self.tokens.bearer_token().await {
             Ok(token) => token,
-            Err(error) => return ReviewRead::Failed(token_failure(&error)),
+            Err(error) => return CompletionObservation::from_failure(token_failure(&error)),
         };
-        match self
+        let observation = self
             .client
-            .review_result(CaseworkAuth::new(&token, &self.profile), &accepted)
-            .await
-        {
+            .review_result_observation(CaseworkAuth::new(&token, &self.profile), &accepted)
+            .await;
+        match observation.outcome {
             Ok(ReviewResultResponse::Available(answer)) => match serde_json::to_value(answer.value)
             {
-                Ok(value) => ReviewRead::Settled(value),
-                Err(_) => ReviewRead::Failed(refused("invalid-response")),
+                Ok(value) => CompletionObservation::Settled(value),
+                Err(_) => CompletionObservation::from_failure(refused("invalid-response")),
             },
-            Ok(ReviewResultResponse::Pending { .. }) => ReviewRead::Pending,
-            Ok(ReviewResultResponse::ConcealedOrUnknown { .. }) => ReviewRead::Unknown,
-            Ok(ReviewResultResponse::Expired { .. }) => ReviewRead::Expired,
-            Err(error) => ReviewRead::Failed(read_failure(error)),
+            Ok(ReviewResultResponse::Pending { .. }) => {
+                match observation_hint(&observation.retry_after) {
+                    Ok(retry_after) => CompletionObservation::Pending { retry_after },
+                    Err(()) => CompletionObservation::Hold {
+                        code: "completion-unusable-retry-after".into(),
+                    },
+                }
+            }
+            Ok(ReviewResultResponse::ConcealedOrUnknown { .. }) => CompletionObservation::Hold {
+                code: "review-request-unknown".into(),
+            },
+            Ok(ReviewResultResponse::Expired { .. }) => CompletionObservation::Hold {
+                code: "review-result-expired".into(),
+            },
+            Err(error) => {
+                let mut result = CompletionObservation::from_failure(read_failure(error));
+                if let CompletionObservation::Retryable { retry_after, .. } = &mut result {
+                    match observation_hint(&observation.retry_after) {
+                        Ok(hint) => *retry_after = hint,
+                        Err(()) => {
+                            return CompletionObservation::Hold {
+                                code: "completion-unusable-retry-after".into(),
+                            }
+                        }
+                    }
+                }
+                result
+            }
         }
     }
 
@@ -190,6 +214,16 @@ impl CaseworkConnection {
             }
             _ => refused("operation-unbound"),
         }
+    }
+}
+
+fn observation_hint(hint: &RetryAfter) -> std::result::Result<Option<std::time::Duration>, ()> {
+    match hint {
+        RetryAfter::Absent => Ok(None),
+        RetryAfter::Seconds(seconds) if *seconds <= 86400 => {
+            Ok(Some(std::time::Duration::from_secs(*seconds)))
+        }
+        _ => Err(()),
     }
 }
 

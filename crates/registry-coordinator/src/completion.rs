@@ -16,6 +16,58 @@ use chrono::{DateTime, Utc};
 use registry_review_protocol::ReviewCompletion;
 use uuid::Uuid;
 
+/// Interpret one bounded external observation using the pinned pure Function.
+/// The original saved command is the only correlation input; mappings are not
+/// evaluated again while waiting. Invalid evidence remains a recovery hold.
+pub(crate) fn interpret_poll(
+    definition: &crate::definition::Definition,
+    request: &crate::protocol::CallRequest,
+    completion: &crate::definition::CompletionDefinition,
+    response: serde_json::Value,
+    synthetic: bool,
+) -> crate::protocol::CompletionObservation {
+    use crate::{definition::CompletionKind, protocol::CompletionObservation};
+    let hold = || CompletionObservation::Hold {
+        code: "completion-invalid-response".into(),
+    };
+    let CompletionKind::BoundedPoll { interpret, .. } = &completion.kind else {
+        return hold();
+    };
+    let Some(operation) = definition.workflow.operations.values().find(|operation| {
+        operation.uses == request.operation
+            && operation.connection == request.connection
+            && operation
+                .completions
+                .values()
+                .any(|candidate| candidate == completion)
+    }) else {
+        return hold();
+    };
+    let Ok(schema) = crate::definition::compile_schema(&operation.output) else {
+        return hold();
+    };
+    if crate::functions::check_value(&response).is_err() || !schema.is_valid(&response) {
+        return hold();
+    }
+    let inputs = serde_json::json!({"command":request.input,"response":response});
+    let Ok(value) = definition.evaluate_function(interpret, &inputs, synthetic) else {
+        return CompletionObservation::Hold {
+            code: "completion-interpretation-failed".into(),
+        };
+    };
+    match value.get("state").and_then(serde_json::Value::as_str) {
+        Some("pending") => CompletionObservation::Pending { retry_after: None },
+        Some("complete" | "refused")
+            if crate::contracts::completion_contract(completion)
+                .check(&value)
+                .is_ok() =>
+        {
+            CompletionObservation::Settled(value)
+        }
+        _ => hold(),
+    }
+}
+
 /// The header naming the recipient binding Casework's destination declares.
 pub const RECIPIENT_BINDING_HEADER: &str = "registry-recipient-binding";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";

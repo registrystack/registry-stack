@@ -129,24 +129,30 @@ async fn harness() -> Harness {
         r#"apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project: {id: recovery-audit, version: v1}
-input: {type: object}
-connections: {}
-functionsFile: functions.rhai
-deadlineSeconds: 3600
-start: wait
-steps:
-  wait:
-    type: wait-until
-    waitUntil: {type: function, function: timer, arguments: [{type: input}]}
-    next: done
-  done: {type: finish, outcome: done}
-outcomes: {done: {type: 'null'}}
+functions:
+  timer:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: timer
+    inputs: {input: {type: object}}
+    output: {type: string, format: date-time}
+workflow:
+  input: {type: object}
+  deadlineSeconds: 3600
+  start: wait
+  steps:
+    wait:
+      type: wait-until
+      waitUntil: {type: function, function: timer, inputs: {input: {type: input}}}
+      next: done
+    done: {type: finish, outcome: done}
+  outcomes: {done: {type: 'null'}}
 "#,
     )
     .unwrap();
     std::fs::write(
         project.path().join("functions.rhai"),
-        "fn timer(input) { input.at }",
+        "fn timer(args) { args.input.at }",
     )
     .unwrap();
     let definition = Definition::load(project.path()).unwrap();

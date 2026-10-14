@@ -43,23 +43,23 @@ async fn execute(cli: Cli) -> Result<()> {
     let shutdown = shutdown_signal()?;
     let runtime = Arc::new(RuntimeConfig::load(&cli.runtime_config)?);
     let d = deployment::config(&runtime)?;
-    let flows = Arc::new(deployment::load_flows(d)?);
-    flows.validate(&runtime)?;
+    let workflows = Arc::new(deployment::load_workflows(d)?);
+    workflows.validate(&runtime)?;
     let authenticator = Arc::new(
         d.authentication
             .authenticator(&runtime.secret_providers, d.local())
             .await?,
     );
     let store = deployment::open(&runtime, false).await?;
-    // One worker serves every flow: start it with each pinned definition
+    // One worker serves every workflow: start it with each pinned definition
     // compiled, so only earlier snapshots of in-flight runs compile later.
-    for (_, package) in flows.iter() {
+    for (_, package) in workflows.iter() {
         store.definitions().seed(package.definition.clone())?;
     }
     if cli.recovery_only {
-        deployment::check(&store, &runtime, flows.digest()).await?;
+        deployment::check(&store, &runtime, workflows.digest()).await?;
     } else {
-        deployment::check_serving(&store, &runtime, flows.digest()).await?;
+        deployment::check_serving(&store, &runtime, workflows.digest()).await?;
     }
     let adapters: Arc<dyn AdapterSet> = Arc::new(HttpAdapters::new(&runtime)?);
     let worker = Worker::new(store.clone(), adapters.clone());
@@ -89,7 +89,7 @@ async fn execute(cli: Cli) -> Result<()> {
         recovery_only: cli.recovery_only,
         store: store.clone(),
         runtime: runtime.clone(),
-        flows: flows.clone(),
+        workflows: workflows.clone(),
         authenticator,
         adapters,
     };
@@ -121,7 +121,7 @@ async fn execute(cli: Cli) -> Result<()> {
         cli.recovery_only,
         stopped,
         || async {
-            deployment::check(&store, &runtime, flows.digest())
+            deployment::check(&store, &runtime, workflows.digest())
                 .await
                 .map(|_| ())
         },
@@ -838,17 +838,17 @@ mod tests {
         client
             .execute(
                 "UPDATE control SET active_flows_digest=$1 WHERE id",
-                &[&"synthetic-current-flows"],
+                &[&"synthetic-current-workflows"],
             )
             .await
             .unwrap();
-        let store = Arc::new(store.with_flows_digest("synthetic-current-flows".into()));
+        let store = Arc::new(store.with_workflows_digest("synthetic-current-workflows".into()));
         let worker = Worker::new(store, Arc::new(NoCalls));
         assert!(!worker.tick().await.unwrap());
         client
             .execute(
                 "UPDATE control SET active_flows_digest=$1 WHERE id",
-                &[&"synthetic-replacement-flows"],
+                &[&"synthetic-replacement-workflows"],
             )
             .await
             .unwrap();
@@ -867,7 +867,7 @@ mod tests {
                     .await
                     .unwrap();
                 let active: String = row.get(0);
-                if active == "synthetic-current-flows" {
+                if active == "synthetic-current-workflows" {
                     Ok(())
                 } else {
                     Err(refusal("deployment.refused"))

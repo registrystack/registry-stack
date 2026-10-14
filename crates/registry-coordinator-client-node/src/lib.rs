@@ -105,6 +105,15 @@ impl CoordinatorClient {
     }
 
     #[napi(
+        ts_args_type = "token: string, workflow: string",
+        ts_return_type = "Promise<import('./client').CoordinatorOutcome<import('./client').WorkflowContract>>"
+    )]
+    pub async fn workflow(&self, token: String, workflow: String) -> Result<CoordinatorOutcome> {
+        let token = bearer(token)?;
+        outcome(self.inner.workflow(&token, &workflow).await)
+    }
+
+    #[napi(
         ts_args_type = "token: string, runId: import('./client').RunId",
         ts_return_type = "Promise<import('./client').CoordinatorOutcome<import('./client').RunStatus>>"
     )]

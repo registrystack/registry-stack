@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use registry_breg::startup::{check, CheckedStartup, StartupError};
+use registry_breg::startup::{CheckedStartup, StartupError, check};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
 /// The startup dependencies `prepare()` checks, in the order it checks them.
@@ -270,9 +270,9 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "eventDestinations",
             "the event destination bindings were refused",
         ),
-        StartupError::RetainedWebhookBindings { .. } => unreachable!(
-            "retained webhook binding diagnostics return before the generic mapping"
-        ),
+        StartupError::RetainedWebhookBindings { .. } => {
+            unreachable!("retained webhook binding diagnostics return before the generic mapping")
+        }
         StartupError::ReviewBindings => (
             "startup.review-bindings.refused",
             "reviewBindings",
@@ -772,16 +772,18 @@ mod tests {
             };
             assert_eq!(diagnostic.code, expected_code);
             assert_eq!(diagnostic.path, expected_path);
-            assert!(diagnostic
-                .message
-                .starts_with(&format!("{message}; next: ")));
+            assert!(
+                diagnostic
+                    .message
+                    .starts_with(&format!("{message}; next: "))
+            );
         }
     }
 
     #[test]
     fn a_refused_runtime_file_reports_every_reader_diagnostic_unchanged() {
         use registry_breg::runtime_config::{
-            parse_runtime_config_with_env, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
+            RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND, parse_runtime_config_with_env,
         };
         let refused = parse_runtime_config_with_env(
             &format!(
@@ -799,10 +801,12 @@ mod tests {
             .map(|diagnostic| diagnostic.path.as_str())
             .collect::<Vec<_>>();
         assert_eq!(unknown, ["/listenr", "/audt"]);
-        assert!(refusal
-            .diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic.message.contains("; next: ")));
+        assert!(
+            refusal
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.message.contains("; next: "))
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use super::resolve::{Classification, FieldKind, Plan, PlannedEntity, PlannedField, Text};
@@ -537,7 +537,9 @@ fn field_source(yaml: &mut Yaml, indent: usize, field: &PlannedField) {
             max_length,
         } => {
             if *min_length > 0 {
-                format!("type: string{required}, minimumLength: {min_length}, maximumLength: {max_length}")
+                format!(
+                    "type: string{required}, minimumLength: {min_length}, maximumLength: {max_length}"
+                )
             } else {
                 format!("type: string{required}, maximumLength: {max_length}")
             }
@@ -1500,9 +1502,9 @@ mod tests {
     use registry_breg::fixtures::validate_fixture_journeys;
     use registry_linkml::publicschema;
 
-    use super::super::resolve::{resolve, ModelFacts};
+    use super::super::resolve::{ModelFacts, resolve};
     use super::*;
-    use crate::{compile, ProfileArg};
+    use crate::{ProfileArg, compile};
 
     fn starter_plan(name: &str) -> (Plan, Selection) {
         let starter = publicschema::starters()
@@ -1600,9 +1602,11 @@ mod tests {
             lines.iter().all(|line| line.len() <= SCHEMA_LINE_WIDTH + 2),
             "{lines:#?}"
         );
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("\"code-0\", \"code-1\"")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("\"code-0\", \"code-1\""))
+        );
         assert!(
             lines.contains(&"    \"empty\": {},".to_owned()),
             "{lines:#?}"
@@ -1661,9 +1665,11 @@ mod tests {
             elevated.len(),
             "{findings:?}"
         );
-        assert!(elevated
-            .iter()
-            .any(|(entity, field)| entity.id == "person" && field.id == "marital-status"));
+        assert!(
+            elevated
+                .iter()
+                .any(|(entity, field)| entity.id == "person" && field.id == "marital-status")
+        );
         validate_fixture_journeys(&files[FIXTURE_JOURNEYS_PATH], &authoring)
             .unwrap_or_else(|error| panic!("{error}"));
     }
@@ -1973,12 +1979,16 @@ mod tests {
         let household_manifest_fields = manifest_entities[1]["fields"]
             .as_array()
             .expect("household manifest fields");
-        assert!(!household_manifest_fields
-            .iter()
-            .any(|field| field["id"] == "address"));
-        assert!(household_manifest_fields
-            .iter()
-            .any(|field| field["id"] == "name"));
+        assert!(
+            !household_manifest_fields
+                .iter()
+                .any(|field| field["id"] == "address")
+        );
+        assert!(
+            household_manifest_fields
+                .iter()
+                .any(|field| field["id"] == "name")
+        );
         let manifest_vocabularies = registry["manifestProjection"]["vocabularies"]
             .as_array()
             .expect("manifest vocabularies");
@@ -2076,9 +2086,11 @@ mod tests {
             membership["request"]["data"]["person"]["recordCapture"],
             "example-person"
         );
-        assert!(steps
-            .iter()
-            .any(|step| step["id"] == "read-persons-as-reader"));
+        assert!(
+            steps
+                .iter()
+                .any(|step| step["id"] == "read-persons-as-reader")
+        );
         let runtime = String::from_utf8(files["runtime.example.yaml"].clone()).expect("UTF-8");
         assert!(runtime.contains("instanceId: household-registry-1"));
         assert!(!runtime.contains(RUNTIME_EXAMPLE_PLACEHOLDER));

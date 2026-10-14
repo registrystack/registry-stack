@@ -2,8 +2,8 @@
 //! Synthetic action handler evaluation and value-free exact assertions.
 use super::*;
 use registry_breg::action_handler::{
-    evaluate_action_detailed, evaluate_action_with_evidence, ActionHandlerError,
-    ActionHandlerOutcome,
+    ActionHandlerError, ActionHandlerOutcome, evaluate_action_detailed,
+    evaluate_action_with_evidence,
 };
 use registry_breg::model::{
     CompiledPlanEffect, CompiledPlanFunction, CompiledPlanFunctionKind, CompiledPlanMutation,
@@ -580,9 +580,11 @@ accessProfiles:
         handler.module_sha256 = Some("sha256:module-digest-canary".into());
         let failure = handler_identity(&handler).expect_err("a WASM handler is not executed here");
         assert_eq!(failure.diagnostics[0].code, "action-test.handler.backend");
-        assert!(!serde_json::to_string(&failure)
-            .unwrap()
-            .contains("sha256:module-digest-canary"));
+        assert!(
+            !serde_json::to_string(&failure)
+                .unwrap()
+                .contains("sha256:module-digest-canary")
+        );
     }
 
     #[test]
@@ -603,24 +605,30 @@ accessProfiles:
                 .unwrap(),
             json!({"active":true})
         );
-        assert!(state
-            .resolve("status", json!({"farmer":{"id":"secret"}}))
-            .is_err());
+        assert!(
+            state
+                .resolve("status", json!({"farmer":{"id":"secret"}}))
+                .is_err()
+        );
         assert_eq!(state.mismatch, Some((1, "capability")));
         let mut state = SyntheticTranscript {
             calls: vec![call()],
             next: 0,
             mismatch: None,
         };
-        assert!(state
-            .resolve("status", json!({"farmer":{"id":"other-secret"}}))
-            .is_err());
+        assert!(
+            state
+                .resolve("status", json!({"farmer":{"id":"other-secret"}}))
+                .is_err()
+        );
         assert_eq!(state.mismatch, Some((0, "selectors")));
         let mut value = json!({"evidenceCalls":[{"capability":"status","selectors":{},"response":{},"secret-key":true}]});
         let report = take_evidence_calls(Some(&mut value)).err().unwrap();
-        assert!(!serde_json::to_string(&report)
-            .unwrap()
-            .contains("secret-key"));
+        assert!(
+            !serde_json::to_string(&report)
+                .unwrap()
+                .contains("secret-key")
+        );
     }
 
     #[test]
@@ -779,19 +787,21 @@ accessProfiles:
             arguments.extend(flags);
             assert!(Cli::try_parse_from(arguments).is_err());
         }
-        assert!(Cli::try_parse_from([
-            "bregctl",
-            "project",
-            "action-test",
-            "project",
-            "--action",
-            "register-person",
-            "--input",
-            "input.json",
-            "--expect",
-            "expect.json"
-        ])
-        .is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "bregctl",
+                "project",
+                "action-test",
+                "project",
+                "--action",
+                "register-person",
+                "--input",
+                "input.json",
+                "--expect",
+                "expect.json"
+            ])
+            .is_ok()
+        );
         let help = Cli::try_parse_from(["bregctl", "project", "action-test", "--help"])
             .unwrap_err()
             .to_string();
@@ -830,10 +840,12 @@ accessProfiles:
             .unwrap_or_else(|failure| panic!("evaluation failed: {}", failure.diagnostics[0].code));
         assert_eq!(report.assertions_passed, Some(true));
         let rendered = serde_json::to_string(&report).unwrap();
-        assert!(serde_json::to_value(&report)
-            .unwrap()
-            .get("disposition")
-            .is_none());
+        assert!(
+            serde_json::to_value(&report)
+                .unwrap()
+                .get("disposition")
+                .is_none()
+        );
         for canary in ["Mina", "Example", "0123456789012", "fn handle", "scripts/"] {
             assert!(!rendered.contains(canary));
         }
@@ -855,10 +867,12 @@ accessProfiles:
         });
         assert_eq!(report.counts.effects, 0);
         assert_eq!(report.assertions_passed, Some(true));
-        assert!(serde_json::to_value(&report)
-            .unwrap()
-            .get("disposition")
-            .is_none());
+        assert!(
+            serde_json::to_value(&report)
+                .unwrap()
+                .get("disposition")
+                .is_none()
+        );
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         assert_eq!(

@@ -4,6 +4,7 @@
 export declare class CoordinatorClient {
   constructor(config: import('./client').CoordinatorClientConfig)
   start(token: string, idempotencyKey: string, request: import('./client').StartRunRequest): Promise<import('./client').CoordinatorOutcome<import('./client').RunStatus>>
+  workflow(token: string, workflow: string): Promise<import('./client').CoordinatorOutcome<import('./client').WorkflowContract>>
   status(token: string, runId: import('./client').RunId): Promise<import('./client').CoordinatorOutcome<import('./client').RunStatus>>
   inspect(token: string, runId: import('./client').RunId): Promise<import('./client').CoordinatorOutcome<import('./client').RunInspection>>
   reconcile(token: string, runId: import('./client').RunId, reason: string): Promise<import('./client').CoordinatorOutcome<import('./client').RunInspection>>

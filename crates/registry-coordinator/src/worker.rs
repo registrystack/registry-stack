@@ -2,10 +2,10 @@
 //! One bounded step per tick, with leases and checkpoints owned by Dispatch.
 
 use crate::{
-    contracts::{contract, event_contract},
-    definition::{Step, WaitEvent},
+    contracts::completion_contract,
+    definition::{CompletionDefinition, CompletionKind, Step},
     metrics::StepAttempt,
-    protocol::{AdapterSet, CallOutcome, CallRequest, ReviewRead},
+    protocol::{AdapterSet, CallOutcome, CallRequest, CompletionObservation},
     store::{Detail, FrozenCommand, Job, Store, RETRY_MAXIMUM_DELAY, WAIT_READ_SPACING_SECONDS},
     CoordinatorError, Result,
 };
@@ -86,6 +86,8 @@ fn advance(next: String, output: Option<Value>) -> Detail {
         failure_code: None,
         failure_path: None,
         uncertain: false,
+        recovery_hold: false,
+        observation_pause_seconds: None,
         receipt_expired: false,
         completed_without_effect: false,
         recheck_seconds: None,
@@ -127,75 +129,72 @@ fn call_result(
     }
 }
 
-/// What one read of a waiting step comes to. A settled result that keeps
-/// the event's contract continues at `next` with the result as the step's
-/// output, even when the timeout has passed. A wait that has reached its
-/// timeout without a result continues at `on_timeout`, or fails. Otherwise
-/// the wait goes on: an open review is read again after `recheck_seconds`,
-/// and a read that could not answer after the product's pause, kept between
-/// the read spacing and `recheck_seconds`, or without a pause after the
-/// longest retry delay, bounded by `recheck_seconds`.
+/// One authenticated observation. Business refusal is a typed terminal result;
+/// unavailable or invalid evidence can never enter a success/refusal edge.
 fn wait_result(
-    event: &WaitEvent,
-    read: Option<ReviewRead>,
+    completion: &CompletionDefinition,
+    read: Option<CompletionObservation>,
     next: &str,
     on_timeout: Option<&str>,
     timed_out: bool,
     recheck_seconds: u32,
 ) -> Sent<Detail> {
-    // A read that could not answer before the timeout leaves the wait open
-    // like a pending one, so an outage shorter than the timeout spends no
-    // attempt budget: the next read follows the product's pause, no sooner
-    // than the read spacing and no later than the configured check interval.
-    // Without a pause it waits the longest retry delay, so waiting runs do
-    // not all read again as soon as the product recovers; a completion event
-    // still brings the read forward.
-    let unanswered = |code: &'static str, hint: Option<Duration>| {
-        let seconds = |delay: Duration| u32::try_from(delay.as_secs()).unwrap_or(u32::MAX);
-        let pause = hint.map_or(seconds(RETRY_MAXIMUM_DELAY), |hint| {
-            seconds(hint).max(WAIT_READ_SPACING_SECONDS)
+    let pending = |code: Option<&'static str>, hint: Option<Duration>| {
+        if hint.is_some_and(|delay| {
+            delay
+                > Duration::from_secs(u64::from(
+                    crate::operations::MAXIMUM_OBSERVATION_INTERVAL_SECONDS,
+                ))
+        }) {
+            return held("completion-unusable-retry-after");
+        }
+        let seconds = hint.map(|delay| {
+            u32::try_from(
+                delay
+                    .as_secs()
+                    .saturating_add(u64::from(delay.subsec_nanos() > 0)),
+            )
+            .unwrap_or(u32::MAX)
         });
+        let pause = seconds
+            .unwrap_or(recheck_seconds)
+            .max(WAIT_READ_SPACING_SECONDS);
         accepted(Detail {
-            recheck_seconds: Some(pause.min(recheck_seconds)),
-            ..Detail::failure(code, false)
+            recheck_seconds: Some(pause),
+            observation_pause_seconds: seconds,
+            failure_code: code,
+            next: None,
+            ..Detail::failure("observation-pending", false)
         })
     };
     match read {
-        Some(ReviewRead::Settled(value)) => {
-            if event_contract(event).check(&value).is_ok() {
+        Some(CompletionObservation::Settled(value)) => {
+            if completion_contract(completion).check(&value).is_ok() {
                 accepted(advance(next.to_owned(), Some(value)))
             } else {
-                failed("invalid-response", false)
+                held("completion-invalid-response")
             }
         }
-        Some(ReviewRead::Unknown) => failed("review-request-unknown", false),
-        Some(ReviewRead::Expired) => failed("review-result-expired", false),
-        Some(ReviewRead::Failed(
-            CallOutcome::Refused { code } | CallOutcome::Uncertain { code },
-        )) => failed(safe_code(&code, "remote-refused"), false),
-        Some(ReviewRead::Failed(
-            CallOutcome::Success(_) | CallOutcome::DeclaredRefusal(_) | CallOutcome::ReceiptExpired,
-        )) => failed("invalid-response", false),
+        Some(CompletionObservation::Hold { code }) => {
+            held(safe_code(&code, "completion-unavailable"))
+        }
         _ if timed_out => match on_timeout {
             Some(step) => accepted(advance(step.to_owned(), None)),
             None => failed("wait-timed-out", false),
         },
-        Some(ReviewRead::Pending) => accepted(Detail {
-            next: None,
-            output: None,
-            outcome: None,
-            failure_code: None,
-            failure_path: None,
-            uncertain: false,
-            receipt_expired: false,
-            completed_without_effect: false,
-            recheck_seconds: Some(recheck_seconds),
-        }),
-        Some(ReviewRead::Failed(CallOutcome::Retryable { code, retry_after })) => {
-            unanswered(safe_code(&code, "remote-retryable"), retry_after)
-        }
-        None => unanswered("attempt-timeout", None),
+        Some(CompletionObservation::Pending { retry_after }) => pending(None, retry_after),
+        Some(CompletionObservation::Retryable { code, retry_after }) => pending(
+            Some(safe_code(&code, "remote-retryable")),
+            retry_after.or(Some(RETRY_MAXIMUM_DELAY)),
+        ),
+        None => pending(Some("attempt-timeout"), Some(RETRY_MAXIMUM_DELAY)),
     }
+}
+
+fn held(code: &'static str) -> Sent<Detail> {
+    let mut result = failed(code, false);
+    result.detail.recovery_hold = true;
+    result
 }
 
 impl Worker {
@@ -237,24 +236,70 @@ impl Worker {
                 {
                     return Ok(failed("deadline-reached", false));
                 }
-                let Some(timed_out) = self
+                let completion = match definition.completion(wait_for) {
+                    Ok(completion) => completion,
+                    Err(_) => return Ok(held("protected-state-invalid")),
+                };
+                let (Some(Step::Call { call, .. }), Some(accepted_value)) = (
+                    definition.workflow.steps.get(&wait_for.step),
+                    payload.outputs.get(&wait_for.step),
+                ) else {
+                    return Ok(held("protected-state-invalid"));
+                };
+                let Some(command) = self
                     .store
-                    .wait_timed_out(job)
+                    .accepted_command(job, &wait_for.step)
                     .await
                     .map_err(|_| DispatchError::Unavailable)?
                 else {
-                    return Ok(failed("protected-state-invalid", false));
+                    return Ok(held("protected-state-invalid"));
                 };
-                let (Some(Step::Call { call, .. }), Some(accepted)) = (
-                    definition.workflow.steps.get(wait_for.request()),
-                    payload.outputs.get(wait_for.request()),
-                ) else {
-                    return Ok(failed("protected-state-invalid", false));
+                let request = command.request();
+                if request.operation != call.operation
+                    || request.connection != call.connection
+                    || request.operation_contract != definition.workflow.operation(call).action
+                {
+                    return Ok(held("protected-state-invalid"));
+                }
+                let recheck_seconds = self
+                    .adapters
+                    .observation_interval(&call.connection, completion);
+                let permit = self
+                    .store
+                    .begin_observation(
+                        job,
+                        self.adapters
+                            .minimum_observation_interval(&call.connection, completion),
+                    )
+                    .await
+                    .map_err(|_| DispatchError::Unavailable)?;
+                let timed_out = match permit {
+                    Some(crate::store::ObservationPermit::Observe { timed_out }) => timed_out,
+                    Some(crate::store::ObservationPermit::Pause { seconds }) => {
+                        return Ok(accepted(Detail {
+                            recheck_seconds: Some(seconds),
+                            failure_code: None,
+                            ..Detail::failure("observation-pending", false)
+                        }));
+                    }
+                    Some(crate::store::ObservationPermit::TimedOut) => {
+                        return Ok(wait_result(
+                            completion,
+                            None,
+                            next,
+                            on_timeout.as_deref(),
+                            true,
+                            recheck_seconds,
+                        ));
+                    }
+                    Some(crate::store::ObservationPermit::Exhausted) => {
+                        return Ok(held("observation-budget-exhausted"))
+                    }
+                    None => return Ok(held("protected-state-invalid")),
                 };
-                let recheck_seconds = self.adapters.result_check_seconds(&call.connection);
                 let Some(budget) = job.remaining_budget(std::time::SystemTime::now()) else {
                     return Ok(wait_result(
-                        wait_for,
+                        completion,
                         None,
                         next,
                         on_timeout.as_deref(),
@@ -262,14 +307,35 @@ impl Worker {
                         recheck_seconds,
                     ));
                 };
-                let read = tokio::time::timeout(
-                    budget,
-                    self.adapters.read_review_result(&call.connection, accepted),
-                )
+                let read = tokio::time::timeout(budget, async {
+                    if matches!(completion.kind, CompletionKind::BoundedPoll { .. }) {
+                        // The only repeated command is the immutable read frozen
+                        // before the original accepted call. No mutation is allowed.
+                        if request.operation != crate::protocol::Operation::ExternalGet {
+                            return CompletionObservation::Hold {
+                                code: "operation-unbound".into(),
+                            };
+                        }
+                        match self.adapters.call(request).await {
+                            CallOutcome::Success(response) => crate::completion::interpret_poll(
+                                &definition,
+                                request,
+                                completion,
+                                response,
+                                false,
+                            ),
+                            outcome => CompletionObservation::from_failure(outcome),
+                        }
+                    } else {
+                        self.adapters
+                            .observe_completion(request, accepted_value, completion)
+                            .await
+                    }
+                })
                 .await
                 .ok();
                 Ok(wait_result(
-                    wait_for,
+                    completion,
                     read,
                     next,
                     on_timeout.as_deref(),
@@ -305,6 +371,8 @@ impl Worker {
                     failure_code: None,
                     failure_path: None,
                     uncertain: false,
+                    recovery_hold: false,
+                    observation_pause_seconds: None,
                     receipt_expired: false,
                     completed_without_effect: false,
                     recheck_seconds: None,
@@ -331,7 +399,11 @@ impl Worker {
                     // The input is held to the contract the adapter decodes
                     // before anything is prepared, frozen or sent. Only the
                     // declared path is recorded, never the computed value.
-                    if let Err(violation) = contract(call.operation).check_input(&value) {
+                    let operation = definition.workflow.operation(call);
+                    let Ok(contract) = definition.operation_contract(call) else {
+                        return Ok(held("snapshot-incompatible"));
+                    };
+                    if let Err(violation) = contract.check_input(&value) {
                         let mut sent = failed("invalid-command", job.job.uncertain);
                         sent.detail.failure_path = Some(violation.declared_path().to_owned());
                         return Ok(sent);
@@ -339,6 +411,7 @@ impl Worker {
                     let request = CallRequest {
                         connection: call.connection.clone(),
                         operation: call.operation,
+                        operation_contract: operation.action.clone(),
                         input: value,
                         idempotency_key: call.operation.requires_key().then(|| {
                             self.store
@@ -388,7 +461,9 @@ impl Worker {
                                     ))
                                 }
                             };
-                        if value.as_ref().is_some_and(|bytes| bytes.len() > 65_536) {
+                        if value.as_ref().is_some_and(|bytes| {
+                            bytes.len() > crate::operations::MAXIMUM_PREPARATION_BYTES
+                        }) {
                             return Ok(failed("preparation-too-large", job.job.uncertain));
                         }
                         value
@@ -401,7 +476,10 @@ impl Worker {
                         .map_err(|_| DispatchError::Unavailable)?
                 };
                 let request = command.request();
-                if request.operation != call.operation || request.connection != call.connection {
+                if request.operation != call.operation
+                    || request.connection != call.connection
+                    || request.operation_contract != definition.workflow.operation(call).action
+                {
                     return Ok(failed("protected-state-invalid", job.job.uncertain));
                 }
                 if !self
@@ -437,6 +515,21 @@ impl Worker {
                         retry_after: None,
                     },
                 };
+                let contract = definition
+                    .operation_contract(call)
+                    .map_err(|_| DispatchError::Unavailable)?;
+                let valid = match &result {
+                    CallOutcome::Success(value) => contract.check_output(value).is_ok(),
+                    CallOutcome::DeclaredRefusal(refusal) => serde_json::to_value(refusal)
+                        .is_ok_and(|value| contract.check_refusal(&value).is_ok()),
+                    _ => true,
+                };
+                if !valid {
+                    return Ok(failed(
+                        "invalid-response",
+                        request.operation.has_dispatch_risk() || job.job.uncertain,
+                    ));
+                }
                 Ok(call_result(
                     result,
                     next,
@@ -486,17 +579,19 @@ mod leased_wait_deadline_tests;
 mod tests {
     use super::{attempt_class, call_result, safe_code, wait_result};
     use crate::{
-        definition::WaitEvent,
+        definition::{CompletionDefinition, CompletionKind},
         metrics::StepAttempt,
-        protocol::{CallOutcome, DeclaredRefusal, ReviewRead},
+        protocol::{CallOutcome, CompletionObservation, DeclaredRefusal},
     };
     use registry_platform_dispatch::SendOutcome;
     use serde_json::{json, Value};
     use std::time::Duration;
 
-    fn review() -> WaitEvent {
-        WaitEvent::ReviewResult {
-            request: "submit-review".into(),
+    fn review() -> CompletionDefinition {
+        CompletionDefinition {
+            kind: CompletionKind::CaseworkResult {},
+            output: crate::contracts::casework_completion_schema().clone(),
+            revision: format!("sha256:{}", "a".repeat(64)),
         }
     }
 
@@ -521,7 +616,7 @@ mod tests {
     }
 
     fn wait(
-        read: Option<ReviewRead>,
+        read: Option<CompletionObservation>,
         on_timeout: Option<&str>,
         timed_out: bool,
     ) -> super::Sent<super::Detail> {
@@ -546,7 +641,7 @@ mod tests {
         ] {
             for timed_out in [false, true] {
                 let sent = wait(
-                    Some(ReviewRead::Settled(result(status))),
+                    Some(CompletionObservation::Settled(result(status))),
                     Some("withdraw"),
                     timed_out,
                 );
@@ -561,24 +656,36 @@ mod tests {
         }
         let mut carried = result("approved");
         carried["unexpected"] = json!("value");
-        let sent = wait(Some(ReviewRead::Settled(carried)), None, false);
-        assert_eq!(permanent(&sent), Some("invalid-response"));
+        let sent = wait(Some(CompletionObservation::Settled(carried)), None, false);
+        assert_eq!(permanent(&sent), Some("completion-invalid-response"));
     }
 
     #[test]
     fn a_pending_result_keeps_waiting_until_the_timeout() {
-        let sent = wait(Some(ReviewRead::Pending), None, false);
+        let sent = wait(
+            Some(CompletionObservation::Pending { retry_after: None }),
+            None,
+            false,
+        );
         assert!(matches!(sent.outcome, SendOutcome::Accepted { .. }));
         assert_eq!(sent.detail.next, None);
         assert_eq!(sent.detail.output, None);
         assert_eq!(sent.detail.recheck_seconds, Some(900));
-        let sent = wait(Some(ReviewRead::Pending), Some("withdraw"), true);
+        let sent = wait(
+            Some(CompletionObservation::Pending { retry_after: None }),
+            Some("withdraw"),
+            true,
+        );
         assert!(matches!(sent.outcome, SendOutcome::Accepted { .. }));
         assert_eq!(sent.detail.next.as_deref(), Some("withdraw"));
         assert_eq!(sent.detail.output, None);
         assert_eq!(sent.detail.recheck_seconds, None);
         assert_eq!(
-            permanent(&wait(Some(ReviewRead::Pending), None, true)),
+            permanent(&wait(
+                Some(CompletionObservation::Pending { retry_after: None }),
+                None,
+                true
+            )),
             Some("wait-timed-out")
         );
     }
@@ -586,10 +693,12 @@ mod tests {
     #[test]
     fn an_unreadable_result_at_the_timeout_takes_the_timeout_route() {
         let busy = || {
-            Some(ReviewRead::Failed(CallOutcome::Retryable {
-                code: "rate-limited".into(),
-                retry_after: None,
-            }))
+            Some(CompletionObservation::from_failure(
+                CallOutcome::Retryable {
+                    code: "rate-limited".into(),
+                    retry_after: None,
+                },
+            ))
         };
         for read in [busy(), None] {
             let sent = wait(read, Some("withdraw"), true);
@@ -605,7 +714,9 @@ mod tests {
         for timed_out in [false, true] {
             assert_eq!(
                 permanent(&wait(
-                    Some(ReviewRead::Unknown),
+                    Some(CompletionObservation::Hold {
+                        code: "review-request-unknown".into()
+                    }),
                     Some("withdraw"),
                     timed_out
                 )),
@@ -613,7 +724,9 @@ mod tests {
             );
             assert_eq!(
                 permanent(&wait(
-                    Some(ReviewRead::Expired),
+                    Some(CompletionObservation::Hold {
+                        code: "review-result-expired".into()
+                    }),
                     Some("withdraw"),
                     timed_out
                 )),
@@ -621,7 +734,7 @@ mod tests {
             );
             assert_eq!(
                 permanent(&wait(
-                    Some(ReviewRead::Failed(CallOutcome::Refused {
+                    Some(CompletionObservation::from_failure(CallOutcome::Refused {
                         code: "product-forbidden".into()
                     })),
                     Some("withdraw"),
@@ -635,19 +748,23 @@ mod tests {
             CallOutcome::ReceiptExpired,
         ] {
             assert_eq!(
-                permanent(&wait(Some(ReviewRead::Failed(outcome)), None, false)),
+                permanent(&wait(
+                    Some(CompletionObservation::from_failure(outcome)),
+                    None,
+                    false
+                )),
                 Some("invalid-response")
             );
         }
         assert_eq!(
             permanent(&wait(
-                Some(ReviewRead::Failed(CallOutcome::Refused {
+                Some(CompletionObservation::from_failure(CallOutcome::Refused {
                     code: "Bearer synthetic-secret-canary".into()
                 })),
                 None,
                 false
             )),
-            Some("remote-refused")
+            Some("completion-unavailable")
         );
     }
 
@@ -657,13 +774,15 @@ mod tests {
             (None, 300),
             (Some(Duration::from_secs(5)), 30),
             (Some(Duration::from_secs(120)), 120),
-            (Some(Duration::from_secs(3600)), 900),
+            (Some(Duration::from_secs(3600)), 3600),
         ] {
             let sent = wait(
-                Some(ReviewRead::Failed(CallOutcome::Retryable {
-                    code: "rate-limited".into(),
-                    retry_after: hint,
-                })),
+                Some(CompletionObservation::from_failure(
+                    CallOutcome::Retryable {
+                        code: "rate-limited".into(),
+                        retry_after: hint,
+                    },
+                )),
                 None,
                 false,
             );
@@ -681,12 +800,16 @@ mod tests {
         let sent = wait_result(&review(), None, "decide", None, false, 120);
         assert_eq!(
             sent.detail.recheck_seconds,
-            Some(120),
-            "a shorter check interval bounds the wait without a hint"
+            Some(300),
+            "a failed transport retains its bounded retry pause"
         );
         assert_eq!(attempt_class(&Ok(sent)), StepAttempt::Transient);
         assert_eq!(
-            attempt_class(&Ok(wait(Some(ReviewRead::Pending), None, false))),
+            attempt_class(&Ok(wait(
+                Some(CompletionObservation::Pending { retry_after: None }),
+                None,
+                false
+            ))),
             StepAttempt::Accepted
         );
     }
@@ -711,6 +834,25 @@ mod tests {
             call_result(rate_limited(hint), "next", None, true).outcome,
             SendOutcome::MaybeSent
         );
+    }
+
+    #[test]
+    fn an_unusable_completion_pause_is_held_instead_of_shortened() {
+        let delay = Some(Duration::from_secs(
+            u64::from(crate::operations::MAXIMUM_OBSERVATION_INTERVAL_SECONDS) + 1,
+        ));
+        for observation in [
+            CompletionObservation::Pending { retry_after: delay },
+            CompletionObservation::Retryable {
+                code: "rate-limited".into(),
+                retry_after: delay,
+            },
+        ] {
+            let sent = wait(Some(observation), None, false);
+            assert_eq!(permanent(&sent), Some("completion-unusable-retry-after"));
+            assert_eq!(sent.detail.recheck_seconds, None);
+            assert_eq!(sent.detail.output, None);
+        }
     }
 
     #[test]
@@ -752,6 +894,14 @@ mod tests {
 
     #[test]
     fn operator_codes_preserve_reviewed_categories_and_scrub_runtime_text() {
+        for code in [
+            "proposal-blocked",
+            "proposal-not-visible",
+            "submission-stale",
+            "proposal-dependency-outage",
+        ] {
+            assert_eq!(safe_code(code, "completion-unavailable"), code);
+        }
         assert_eq!(
             safe_code("credential-refused", "remote-refused"),
             "credential-refused"

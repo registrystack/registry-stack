@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn claims(subject: &str, jurisdiction: &str) -> VerifiedRequestClaims {
-    VerifiedRequestClaims::authenticated(
+    VerifiedRequestClaims::authenticated_with_actor_kind(
         "sub",
         subject,
         BTreeSet::from(["proposal:manage".into()]),
@@ -28,6 +28,7 @@ fn claims(subject: &str, jurisdiction: &str) -> VerifiedRequestClaims {
             "jurisdiction".into(),
             VerifiedClaimValue::direct_string(jurisdiction).unwrap(),
         )]),
+        registry_platform_oidc::ActorKind::Human,
     )
     .unwrap()
 }
@@ -83,7 +84,7 @@ fn registry_source(automatic: bool) -> Value {
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
             "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
-        "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],
+        "accessProfiles":[{"id":"clerk","default":true,"actorKind":"human","principalClaim":"sub","requiredScopes":["proposal:manage"],
             "requiredPurposes":["registry-administration"],"permissions":{
                 "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],
                     "writableFields":["name","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
@@ -444,6 +445,11 @@ async fn explicit_automatic_uses_current_builtin_grant_and_one_atomic_receipt() 
         .unwrap()
         .value;
     assert_eq!(submitted.state(), BRegProposalState::Submitted);
+    let pending = serde_json::to_value(&submitted).unwrap();
+    assert_eq!(
+        pending["applicationStatus"],
+        json!({"state":"pending","mode":"automatic","automaticRetry":{"scheduled":true,"attempts":0,"maximumAttempts":3}})
+    );
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_application_jobs SET next_attempt_at=transaction_timestamp()-interval '1 minute'",&[]).await.unwrap();
     assert!(application_queue_age(&fixture).await >= 60.0);
     assert!(
@@ -468,6 +474,19 @@ async fn explicit_automatic_uses_current_builtin_grant_and_one_atomic_receipt() 
         .unwrap()
         .value;
     assert_eq!(current.state(), BRegProposalState::Applied);
+    let applied = serde_json::to_value(&current).unwrap();
+    assert_eq!(
+        applied["applicationStatus"],
+        json!({"state":"applied","mode":"automatic"})
+    );
+    assert_eq!(
+        applied["application"]["submissionVersion"],
+        pending["submissionVersion"]
+    );
+    assert_eq!(
+        applied["application"]["effectDigest"],
+        pending["effectDigest"]
+    );
     let row = fixture
         .database
         .admin
@@ -2871,4 +2890,141 @@ async fn incompatible_or_expired_inventory_cannot_activate_or_change_proposals_a
         );
         fixture.finish().await;
     }
+}
+
+#[test]
+fn automatic_recovery_grants_require_explicit_human_profiles() {
+    for actor in [None, Some("service"), Some("agent")] {
+        let mut source = registry_source(true);
+        if let Some(actor) = actor {
+            source["accessProfiles"][0]["actorKind"] = json!(actor);
+        } else {
+            source["accessProfiles"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("actorKind");
+        }
+        let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        let error = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+        assert!(format!("{error:?}").contains("breg.proposal.automatic-recovery-human-required"));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exact_application_status_exposes_bounded_block_and_human_recovery() {
+    let mut source = registry_source(true);
+    let mut service = source["accessProfiles"][0].clone();
+    service["id"] = json!("coordinator");
+    service["default"] = json!(false);
+    service["actorKind"] = json!("service");
+    service["permissions"]["proposals"][0]["operations"] = json!(["get"]);
+    service["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
+    service["permissions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("actions");
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(service);
+    let fixture =
+        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Human recovery", "status-start").await;
+    assert!(draft.application_status().is_none());
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("status-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let frozen = (
+        submitted.submission_version(),
+        submitted.effect_digest().unwrap().to_string(),
+    );
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_application_jobs SET state='blocked',last_error_code='dependency-outage',attempt_count=1", &[]).await.unwrap();
+    let blocked = client.read_proposal(&submitted).await.unwrap().value;
+    let public = serde_json::to_value(&blocked).unwrap();
+    assert_eq!(
+        public["applicationStatus"],
+        json!({"state":"blocked","mode":"automatic","reason":"dependency-outage","recovery":"retry","automaticRetry":{"scheduled":false,"attempts":1,"maximumAttempts":3}})
+    );
+    assert_eq!(blocked.submission_version(), frozen.0);
+    assert_eq!(blocked.effect_digest(), Some(frozen.1.as_str()));
+    assert!(blocked.application().is_none());
+    let service_claims = VerifiedRequestClaims::authenticated_with_actor_kind(
+        "sub",
+        "author",
+        BTreeSet::from(["proposal:manage".into()]),
+        Some("registry-administration".into()),
+        BTreeMap::from([(
+            "jurisdiction".into(),
+            VerifiedClaimValue::direct_string("zone-a").unwrap(),
+        )]),
+        registry_platform_oidc::ActorKind::Service,
+    )
+    .unwrap();
+    let service = fixture.client_for(service_claims).await;
+    let metadata = service
+        .client
+        .registry_contract(Some("coordinator"))
+        .await
+        .unwrap();
+    let get = metadata.value.select_proposal_get("coordinator").unwrap();
+    let ordinary = service
+        .client
+        .get_proposal(&get, blocked.id())
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(ordinary.application_status(), blocked.application_status());
+    assert!(ordinary.link("apply").is_none());
+    assert!(ordinary.link("retry").is_none());
+    for operation in ["apply", "retry"] {
+        let body = if operation == "apply" {
+            json!({"submissionVersion":blocked.submission_version(),"effectDigest":blocked.effect_digest().unwrap()})
+        } else {
+            json!({})
+        };
+        let prepared = client
+            .prepare_proposal(
+                &blocked,
+                operation,
+                body,
+                &key(&format!("service-denied-{operation}")),
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .client
+                .execute_proposal(&prepared)
+                .await
+                .unwrap_err()
+                .problem_code(),
+            Some(BRegProblemCode::ResourceNotFound),
+            "a service cannot reuse the explicit human recovery grant"
+        );
+    }
+    let retry = client
+        .prepare_proposal(&blocked, "retry", json!({}), &key("human-status-retry"))
+        .unwrap();
+    let retried = client.execute_proposal(&retry).await.unwrap().value;
+    assert_eq!(
+        retried.application_status().unwrap().state,
+        registry_breg_client::BRegProposalApplicationState::Pending
+    );
+    assert!(
+        fixture
+            .mutations
+            .run_automatic_proposal_once_for_test()
+            .await
+            .unwrap()
+    );
+    let applied = client.read_proposal(&retried).await.unwrap().value;
+    assert_eq!(applied.state(), BRegProposalState::Applied);
+    assert_eq!(
+        applied.application_status().unwrap().state,
+        registry_breg_client::BRegProposalApplicationState::Applied
+    );
+    assert_eq!(applied.application().unwrap().effect_digest, frozen.1);
+    drop(service);
+    fixture.finish().await;
 }

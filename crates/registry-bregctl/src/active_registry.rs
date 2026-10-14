@@ -8,8 +8,8 @@
 //! runs, in the database the runtime configuration names.
 
 use registry_breg::migration::{
-    bind_active_package, read_activation_status, read_recorded_registry_state,
-    ActivationDeployment, ApplyTimeouts, MigrationError,
+    ActivationDeployment, ApplyTimeouts, MigrationError, bind_active_package,
+    read_activation_status, read_recorded_registry_state,
 };
 use registry_breg::package::VerifiedPackage;
 use registry_breg::postgres::{ConnectionConfig, ExpectedRegistryIdentity};

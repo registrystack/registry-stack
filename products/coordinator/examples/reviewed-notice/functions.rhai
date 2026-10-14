@@ -1,7 +1,10 @@
 // A trusted starter computes applicationDigest over this exact bounded
 // projection before it starts the run. The Coordinator reads the application
 // and verifies that its revision is still the starter's reviewed revision.
-fn review_subject_route(input, record) {
+fn review_subject_route(args) {
+    let input = args["input"];
+    let record = args["record"];
+
     if record.data.recordIdentifier == input.applicationId
         && record.data.revisionIdentifier == input.applicationRevision {
         "current"
@@ -10,9 +13,12 @@ fn review_subject_route(input, record) {
     }
 }
 
-fn review_request(input, record) {
+fn review_request(args) {
+    let input = args["input"];
+    let record = args["record"];
+
     #{
-        kind: "application-review",
+        policy: #{id: "application-review", version: "1", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
         subject: #{
             source: "applications",
             type: "application",
@@ -35,7 +41,10 @@ fn review_request(input, record) {
 // Revoked consent is reported explicitly even though changing that field also
 // advances the record revision. Every other revision change takes the changed
 // outcome. A notice requires both the reviewed revision and current consent.
-fn notice_route(input, record) {
+fn notice_route(args) {
+    let input = args["input"];
+    let record = args["record"];
+
     if !record.data.domainData.noticeAllowed {
         "permission-gone"
     } else if record.data.recordIdentifier != input.applicationId
@@ -46,7 +55,11 @@ fn notice_route(input, record) {
     }
 }
 
-fn notice_request(input, result, record) {
+fn notice_request(args) {
+    let input = args["input"];
+    let result = args["result"];
+    let record = args["record"];
+
     #{
         senderProfile: "transactional",
         to: #{ email: record.data.domainData.email },

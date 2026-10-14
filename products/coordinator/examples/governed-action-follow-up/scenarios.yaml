@@ -19,7 +19,7 @@ cases:
         action: request-information
         applicationId: 00000000-0000-4000-8000-000000000003
         results:
-          application: {entity: applications, recordId: 00000000-0000-4000-8000-000000000001, revision: 2}
+          application: {recordType: application, recordId: 00000000-0000-4000-8000-000000000001, revision: 2}
     notify:
     - type: success
       value:
@@ -72,12 +72,12 @@ cases:
         data: {recordIdentifier: 00000000-0000-4000-8000-000000000001, revisionIdentifier: revision-1, domainData: {complete: false, missingField: proof of address}}
     request-information:
     - type: declared-refusal
-      refusalCode: already-requested
+      refusalCode: invalid-reason
   expect:
     path: [read-application, needs-information, request-information, action-refused]
     state: completed
     outcome: {type: named, value: information-request-refused}
-    output: {refusalCode: already-requested}
+    output: {refusalCode: invalid-reason}
 - id: action-response-loss-then-declared-refusal-stays-unknown
   admittedAt: '2026-10-10T09:00:00Z'
   input: {applicationId: 00000000-0000-4000-8000-000000000001}
@@ -91,7 +91,7 @@ cases:
     - type: uncertain
       code: transport-uncertain
     - type: declared-refusal
-      refusalCode: already-requested
+      refusalCode: invalid-reason
   recovery:
     request-information: retry-same
   expect:
@@ -131,7 +131,7 @@ cases:
         action: request-information
         applicationId: 00000000-0000-4000-8000-000000000003
         results:
-          application: {entity: applications, recordId: 00000000-0000-4000-8000-000000000001, revision: 2}
+          application: {recordType: application, recordId: 00000000-0000-4000-8000-000000000001, revision: 2}
     notify:
     - type: success
       value:
@@ -160,7 +160,7 @@ cases:
         action: request-information
         applicationId: 00000000-0000-4000-8000-000000000003
         results:
-          application: {entity: applications, recordId: 00000000-0000-4000-8000-000000000001, revision: 2}
+          application: {recordType: application, recordId: 00000000-0000-4000-8000-000000000001, revision: 2}
     notify:
     - type: refused
       code: product-forbidden

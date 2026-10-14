@@ -54,3 +54,9 @@ to abandon that cancelled evaluation without blocking unrelated work or replayin
 
 General JSON generation, images, asynchronous jobs, training, and model tool
 execution are not supported. No live provider call is part of the offline check.
+
+The `contracts` import uses the owning BReg-generated Action export. The Operation alias selects
+its exact Action ID and pins its revision, mode, policy, input, output, and declared refusals.
+Regenerate the owner export and review a changed contract before packaging a new workflow version.
+Functions declare named input schemas and take one object of those inputs; they do not select
+transport credentials or replace the imported Action contract.

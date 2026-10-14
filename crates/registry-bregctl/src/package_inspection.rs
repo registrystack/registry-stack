@@ -4,14 +4,14 @@
 
 use std::path::Path;
 
+use registry_breg::CompiledRegistry;
 use registry_breg::package::{
+    IntegrityInspectedPackage, PackageError, PackageLoadContext, VerifiedPredecessorPackage,
     inspect_package_integrity_with_verified_envelope, load_predecessor_package,
     load_predecessor_rehearsal_baseline,
-    load_predecessor_rehearsal_baseline_with_verified_envelope, IntegrityInspectedPackage,
-    PackageError, PackageLoadContext, VerifiedPredecessorPackage,
+    load_predecessor_rehearsal_baseline_with_verified_envelope,
 };
-use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
-use registry_breg::CompiledRegistry;
+use registry_breg::runtime_config::{RuntimeConfig, RuntimeConfigError, load_runtime_config};
 use registry_platform_config::package::VerifiedPackage as SharedVerifiedPackage;
 
 /// A baseline package named by `--baseline-package` is read on the author's

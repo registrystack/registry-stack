@@ -6,8 +6,8 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use jsonschema::JSONSchema;
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httputil::{
-    client::TokenProvider, read_bounded, retry_after_seconds, BoundedReadError, FetchUrlError,
-    FetchUrlPolicy, ServiceBaseUrl,
+    client::{RetryAfter, TokenProvider},
+    read_bounded, BoundedReadError, FetchUrlError, FetchUrlPolicy, ServiceBaseUrl,
 };
 use registry_platform_yaml::{BoundedU64, ExternalId, ForeignValue, UniqueList};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -39,9 +39,10 @@ pub struct ExternalHttpConfig {
     #[cfg_attr(feature = "schema", schemars(extend("x-registry-foreign" = "json-schema-2020-12")))]
     pub response_schema: ForeignValue,
     #[serde(default = "default_timeout")]
-    pub attempt_timeout_milliseconds: BoundedU64<1, 2000>,
+    pub attempt_timeout_milliseconds:
+        BoundedU64<1, { crate::operations::HTTP_REQUEST_TIMEOUT_MILLISECONDS }>,
     #[serde(default = "default_response_bytes")]
-    pub maximum_response_bytes: BoundedU64<1, 65536>,
+    pub maximum_response_bytes: BoundedU64<1, { crate::operations::MAXIMUM_HTTP_RESPONSE_BYTES }>,
 }
 
 fn endpoint<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Url, D::Error> {
@@ -54,12 +55,14 @@ fn endpoint<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Url, D::Erro
     written.as_str().parse().map_err(serde::de::Error::custom)
 }
 
-fn default_timeout() -> BoundedU64<1, 2000> {
-    BoundedU64::new(2000).expect("the default is within the declared bound")
+fn default_timeout() -> BoundedU64<1, { crate::operations::HTTP_REQUEST_TIMEOUT_MILLISECONDS }> {
+    BoundedU64::new(crate::operations::HTTP_REQUEST_TIMEOUT_MILLISECONDS)
+        .expect("the default is within the declared bound")
 }
 
-fn default_response_bytes() -> BoundedU64<1, 65536> {
-    BoundedU64::new(65536).expect("the default is within the declared bound")
+fn default_response_bytes() -> BoundedU64<1, { crate::operations::MAXIMUM_HTTP_RESPONSE_BYTES }> {
+    BoundedU64::new(crate::operations::MAXIMUM_HTTP_RESPONSE_BYTES)
+        .expect("the default is within the declared bound")
 }
 
 /// The longest `Retry-After` wait taken from a directory, the bound the
@@ -301,11 +304,13 @@ impl ExternalHttpConnection {
             if let Some(code) = code {
                 return CallOutcome::Retryable {
                     code: code.into(),
-                    retry_after: retry_after_seconds(
-                        response.headers(),
-                        MAXIMUM_RETRY_AFTER_SECONDS,
-                    )
-                    .map(Duration::from_secs),
+                    retry_after: match RetryAfter::from_headers(response.headers()) {
+                        RetryAfter::Absent => None,
+                        RetryAfter::Seconds(seconds) if seconds <= MAXIMUM_RETRY_AFTER_SECONDS => {
+                            Some(Duration::from_secs(seconds))
+                        }
+                        _ => return refused("external-unusable-retry-after"),
+                    },
                 };
             }
         }

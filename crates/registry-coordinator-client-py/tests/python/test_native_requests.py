@@ -58,6 +58,15 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(observed["content_type"], "application/json")
         self.assertEqual(json.loads(observed["body"]), START_REQUEST)
 
+    def test_workflow_discovers_one_bound_revision_without_starting(self) -> None:
+        contract = {"workflow": "nursing-notice", "workflowRevision": START_REQUEST["workflowRevision"], "input": {"type": "object"}, "outcomes": {"sent": {"type": "object"}}}
+        self.service.script(ok(contract))
+        self.assertEqual(self.client.workflow("contract-token", "nursing-notice"), {"kind": "complete", "value": contract})
+        (observed,) = self.observed()
+        self.assertEqual(observed["method"], "GET")
+        self.assertEqual(observed["path"], "/deployment/v1/workflows/nursing-notice")
+        self.assertEqual(observed["idempotency_key"], "")
+
     def test_status_reads_the_run_without_a_key_or_body(self) -> None:
         self.service.script(ok(STATUS))
 
@@ -323,7 +332,7 @@ class NativeRequestTests(unittest.TestCase):
             self.assertEqual(raised.exception.protocol_failure, "body")
 
     def test_a_start_answer_for_another_flow_is_a_protocol_failure(self) -> None:
-        self.service.script(ok({**STATUS, "workflowId": "other-flow"}))
+        self.service.script(ok({**STATUS, "workflow": "other-workflow"}))
         with self.assertRaises(CoordinatorClientError) as raised:
             self.client.start("token", KEY, START_REQUEST)
         self.assertEqual(raised.exception.protocol_failure, "body")
@@ -383,10 +392,10 @@ class NativeRequestTests(unittest.TestCase):
                 with self.assertRaises(CoordinatorClientError) as raised:
                     self.client.start("token", key, START_REQUEST)
                 self.assertEqual(raised.exception.kind, "invalid-request")
-        for flow in ("", "has space", "a/b", "f" * 65):
-            with self.subTest(flow=flow[:12]):
+        for workflow in ("", "has space", "a/b", "f" * 65):
+            with self.subTest(workflow=workflow[:12]):
                 with self.assertRaises(CoordinatorClientError) as raised:
-                    self.client.start("token", KEY, {"flow": flow, "input": {}})
+                    self.client.start("token", KEY, {"workflow": workflow, "input": {}})
                 self.assertEqual(raised.exception.kind, "invalid-request")
         for reason in ("", "line\nbreak", "r" * 257, "\u00e9" * 129):
             for call in (self.client.reconcile, self.client.retry_same, self.client.cancel):

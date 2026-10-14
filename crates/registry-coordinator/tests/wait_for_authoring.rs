@@ -89,8 +89,10 @@ fn a_review_wait_checks_and_explains_its_request_timeout_and_routes() {
         .find(|step| step["id"] == "await-review")
         .unwrap();
     assert_eq!(wait["kind"], "wait-for");
-    assert_eq!(wait["event"], "review-result");
-    assert_eq!(wait["request"], "submit-review");
+    assert_eq!(
+        wait["completion"],
+        serde_json::json!({"step":"submit-review","name":"result"})
+    );
     assert_eq!(wait["timeoutSeconds"], 1_209_600);
     assert_eq!(wait["onTimeout"], "withdraw");
     assert!(wait["onCancel"].is_null());
@@ -99,7 +101,7 @@ fn a_review_wait_checks_and_explains_its_request_timeout_and_routes() {
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(
         text.contains(
-            "await-review: wait for the review-result of submit-review, at most 1209600 seconds, then decide; on timeout withdraw; on cancel the run stops with ordinary cancellation"
+            "await-review: wait for the result of submit-review, at most 1209600 seconds, then decide; on timeout withdraw; on cancel the run stops with ordinary cancellation"
         ),
         "{text}"
     );
@@ -116,19 +118,19 @@ fn cut<'a>(text: &'a str, start: &str, last: &str) -> (&'a str, String) {
 fn a_wait_without_on_timeout_explains_that_the_run_fails() {
     let withdraw = cut(
         WORKFLOW,
-        "  withdraw:\n",
-        "status: {type: step, step: withdraw, path: /result/status}\n        resultId: {type: step, step: withdraw, path: /result/resultId}\n",
+        "    withdraw:\n",
+        "status: {type: step, step: withdraw, path: /result/status}\n          resultId: {type: step, step: withdraw, path: /result/resultId}\n",
     );
     let outcome = cut(
         WORKFLOW,
-        "  withdrawn:\n    type: object",
-        "      status: {type: string}\n      resultId: {type: string, format: uuid}\n",
+        "    withdrawn:\n      type: object",
+        "        status: {type: string}\n        resultId: {type: string, format: uuid}\n",
     );
     let root = tempfile::tempdir().unwrap();
     project(
         root.path(),
         &[
-            ("    onTimeout: withdraw\n", ""),
+            ("      onTimeout: withdraw\n", ""),
             (withdraw.0, &withdraw.1),
             (outcome.0, &outcome.1),
         ],
@@ -139,7 +141,7 @@ fn a_wait_without_on_timeout_explains_that_the_run_fails() {
     assert!(output.status.success(), "{text}");
     assert!(
         text.contains(
-            "await-review: wait for the review-result of submit-review, at most 1209600 seconds, then decide; on timeout the run fails with wait-timed-out; on cancel the run stops with ordinary cancellation"
+            "await-review: wait for the result of submit-review, at most 1209600 seconds, then decide; on timeout the run fails with wait-timed-out; on cancel the run stops with ordinary cancellation"
         ),
         "{text}"
     );
@@ -151,8 +153,8 @@ fn an_authored_cancel_route_checks_and_is_explained_separately() {
     project(
         root.path(),
         &[(
-            "    onTimeout: withdraw\n",
-            "    onTimeout: withdraw\n    onCancel: withdraw\n",
+            "      onTimeout: withdraw\n",
+            "      onTimeout: withdraw\n      onCancel: withdraw\n",
         )],
     );
     let directory = root.path().to_str().unwrap();
@@ -182,25 +184,31 @@ fn an_authored_cancel_route_checks_and_is_explained_separately() {
 
 #[test]
 fn a_wait_naming_an_undeclared_step_lists_the_review_requests() {
-    let findings = checked(&[("request: submit-review}", "request: submit-reveiw}")]);
+    let findings = checked(&[(
+        "step: submit-review, name: result}",
+        "step: submit-reveiw, name: result}",
+    )]);
     assert_eq!(findings.len(), 1, "{findings:#?}");
     finding(
         &findings,
-        "/steps/await-review/event/request",
+        "/workflow/steps/await-review/completion",
         "coordinator.definition.wait",
-        &["submit-reveiw", "not declared", "submit-review"],
+        &["completion", "call step"],
     );
 }
 
 #[test]
 fn a_wait_naming_another_call_names_the_operation_it_needs() {
-    let findings = checked(&[("request: submit-review}", "request: withdraw}")]);
+    let findings = checked(&[(
+        "step: submit-review, name: result}",
+        "step: withdraw, name: result}",
+    )]);
     assert_eq!(findings.len(), 1, "{findings:#?}");
     finding(
         &findings,
-        "/steps/await-review/event/request",
+        "/workflow/steps/await-review/completion",
         "coordinator.definition.wait",
-        &["withdraw", "submit-review-request", "submit-review"],
+        &["completion", "call step"],
     );
 }
 
@@ -209,13 +217,13 @@ fn a_wait_whose_request_is_not_submitted_on_every_route_is_refused() {
     let findings = checked(&[
         ("start: submit-review", "start: route"),
         (
-            "steps:\n  submit-review:\n",
-            "steps:\n  route:\n    type: choose\n    choose: {type: literal, value: review}\n    cases: {review: submit-review, skip: await-review}\n  submit-review:\n",
+            "steps:\n    submit-review:\n",
+            "steps:\n    route:\n      type: choose\n      choose: {type: literal, value: review}\n      cases: {review: submit-review, skip: await-review}\n    submit-review:\n",
         ),
     ]);
     finding(
         &findings,
-        "/steps/await-review/event/request",
+        "/workflow/steps/await-review/completion/step",
         "coordinator.definition.wait",
         &["submit-review", "every route"],
     );
@@ -230,7 +238,7 @@ fn the_wait_output_is_not_available_on_its_timeout_route() {
     assert_eq!(findings.len(), 1, "{findings:#?}");
     finding(
         &findings,
-        "/steps/withdraw/input/fields/reason",
+        "/workflow/steps/withdraw/input/fields/reason",
         "coordinator.mapping.dominance",
         &["not available on every incoming path"],
     );
@@ -238,26 +246,29 @@ fn the_wait_output_is_not_available_on_its_timeout_route() {
 
 #[test]
 fn an_unknown_event_type_is_refused_where_it_is_written() {
-    let findings = checked(&[("{type: review-result,", "{type: review-decision,")]);
+    let findings = checked(&[(
+        "completion: {step: submit-review, name: result}",
+        "completion: {step: submit-review, name: unknown}",
+    )]);
     assert_eq!(findings.len(), 1, "{findings:#?}");
     let found = &findings[0];
-    assert_eq!(found["path"], "/steps/await-review/event/type", "{found}");
-    assert_eq!(found["code"], "config.unknown-variant", "{found}");
+    assert_eq!(
+        found["path"], "/workflow/steps/await-review/completion",
+        "{found}"
+    );
+    assert_eq!(found["code"], "coordinator.definition.wait", "{found}");
     assert!(
-        found["message"]
-            .as_str()
-            .unwrap()
-            .contains("`review-result`"),
+        found["message"].as_str().unwrap().contains("completion"),
         "{found}"
     );
 }
 
 #[test]
 fn a_wait_without_a_timeout_is_refused() {
-    let findings = checked(&[("    timeoutSeconds: 1209600\n", "")]);
+    let findings = checked(&[("      timeoutSeconds: 1209600\n", "")]);
     assert_eq!(findings.len(), 1, "{findings:#?}");
     let found = &findings[0];
-    assert_eq!(found["path"], "/steps/await-review", "{found}");
+    assert_eq!(found["path"], "/workflow/steps/await-review", "{found}");
     assert!(
         found["message"]
             .as_str()
@@ -273,9 +284,9 @@ fn a_timeout_that_cannot_end_before_the_deadline_is_refused() {
     assert_eq!(findings.len(), 1, "{findings:#?}");
     let found = finding(
         &findings,
-        "/steps/await-review/timeoutSeconds",
+        "/workflow/steps/await-review/timeoutSeconds",
         "coordinator.definition.wait",
-        &["2592000", "deadline"],
+        &["seconds", "deadline"],
     );
     assert!(found["suggestedAction"]
         .as_str()
@@ -289,7 +300,7 @@ fn a_timeout_naming_an_undeclared_step_is_refused_at_on_timeout() {
     assert_eq!(findings.len(), 1, "{findings:#?}");
     finding(
         &findings,
-        "/steps/await-review/onTimeout",
+        "/workflow/steps/await-review/onTimeout",
         "coordinator.definition.target",
         &["withdrew"],
     );
@@ -298,13 +309,13 @@ fn a_timeout_naming_an_undeclared_step_is_refused_at_on_timeout() {
 #[test]
 fn a_cancel_route_naming_an_undeclared_step_is_refused_at_on_cancel() {
     let findings = checked(&[(
-        "    onTimeout: withdraw\n",
-        "    onTimeout: withdraw\n    onCancel: withdrew\n",
+        "      onTimeout: withdraw\n",
+        "      onTimeout: withdraw\n      onCancel: withdrew\n",
     )]);
     assert_eq!(findings.len(), 1, "{findings:#?}");
     finding(
         &findings,
-        "/steps/await-review/onCancel",
+        "/workflow/steps/await-review/onCancel",
         "coordinator.definition.target",
         &["withdrew"],
     );
@@ -312,11 +323,11 @@ fn a_cancel_route_naming_an_undeclared_step_is_refused_at_on_cancel() {
 
 #[test]
 fn a_choice_on_the_review_status_covers_every_status() {
-    let findings = checked(&[("      superseded: not-decided\n", "")]);
+    let findings = checked(&[("        superseded: not-decided\n", "")]);
     assert_eq!(findings.len(), 1, "{findings:#?}");
     finding(
         &findings,
-        "/steps/decide/cases",
+        "/workflow/steps/decide/cases",
         "coordinator.mapping.cases",
         &["superseded"],
     );
@@ -324,13 +335,16 @@ fn a_choice_on_the_review_status_covers_every_status() {
 
 #[test]
 fn a_reader_of_the_review_result_uses_only_declared_members() {
-    let findings = checked(&[("path: /status}\n    cases", "path: /verdict}\n    cases")]);
+    let findings = checked(&[(
+        "path: /status}\n      cases",
+        "path: /verdict}\n      cases",
+    )]);
     assert_eq!(findings.len(), 1, "{findings:#?}");
     finding(
         &findings,
-        "/steps/decide/choose/path",
+        "/workflow/steps/decide/choose/path",
         "coordinator.mapping.path",
-        &["review-result", "await-review", "/verdict"],
+        &["result", "await-review", "/verdict"],
     );
 }
 
@@ -340,10 +354,10 @@ fn a_review_wait_survives_its_snapshot() {
     project(root.path(), &[]);
     let definition = Definition::load(root.path()).unwrap();
     let snapshot = definition.snapshot().unwrap();
-    assert!(snapshot.contains("\"waitFor\""), "{snapshot}");
+    assert!(snapshot.contains("\"completion\""), "{snapshot}");
     assert!(
         !snapshot.contains("\"onCancel\""),
-        "legacy snapshots omit the optional edge: {snapshot}"
+        "snapshots omit the absent optional edge: {snapshot}"
     );
     let restored = Definition::from_snapshot(&snapshot).unwrap();
     assert_eq!(restored.workflow, definition.workflow);
@@ -356,8 +370,8 @@ fn an_authored_cancel_route_survives_its_snapshot() {
     project(
         root.path(),
         &[(
-            "    onTimeout: withdraw\n",
-            "    onTimeout: withdraw\n    onCancel: withdraw\n",
+            "      onTimeout: withdraw\n",
+            "      onTimeout: withdraw\n      onCancel: withdraw\n",
         )],
     );
     let definition = Definition::load(root.path()).unwrap();
@@ -558,8 +572,8 @@ fn a_scenario_exercises_authored_operator_cancellation_separately_from_timeout()
     );
     let (code, report, _) = tested(
         &[(
-            "    onTimeout: withdraw\n",
-            "    onTimeout: withdraw\n    onCancel: withdraw\n",
+            "      onTimeout: withdraw\n",
+            "      onTimeout: withdraw\n      onCancel: withdraw\n",
         )],
         &case(
             "operator-cancelled",
@@ -591,17 +605,17 @@ fn a_scenario_cancel_without_an_authored_route_stops_as_cancelled() {
 fn a_timeout_without_a_timeout_route_stops_the_run_as_timed_out() {
     let withdraw = cut(
         WORKFLOW,
-        "  withdraw:\n",
-        "status: {type: step, step: withdraw, path: /result/status}\n        resultId: {type: step, step: withdraw, path: /result/resultId}\n",
+        "    withdraw:\n",
+        "status: {type: step, step: withdraw, path: /result/status}\n          resultId: {type: step, step: withdraw, path: /result/resultId}\n",
     );
     let outcome = cut(
         WORKFLOW,
-        "  withdrawn:\n    type: object",
-        "      status: {type: string}\n      resultId: {type: string, format: uuid}\n",
+        "    withdrawn:\n      type: object",
+        "        status: {type: string}\n        resultId: {type: string, format: uuid}\n",
     );
     let (code, report, _) = tested(
         &[
-            ("    onTimeout: withdraw\n", ""),
+            ("      onTimeout: withdraw\n", ""),
             (withdraw.0, &withdraw.1),
             (outcome.0, &outcome.1),
         ],
@@ -622,8 +636,8 @@ fn a_timeout_the_deadline_passes_first_stops_the_run_at_the_deadline() {
         &[
             ("start: submit-review", "start: hold"),
             (
-                "steps:\n  submit-review:\n",
-                "steps:\n  hold:\n    type: wait-until\n    waitUntil: {type: literal, value: '2026-11-01T09:00:00Z'}\n    next: submit-review\n  submit-review:\n",
+                "steps:\n    submit-review:\n",
+                "steps:\n    hold:\n      type: wait-until\n      waitUntil: {type: literal, value: '2026-11-01T09:00:00Z'}\n      next: submit-review\n    submit-review:\n",
             ),
         ],
         &case(

@@ -134,17 +134,17 @@ fn a_function_returning_an_undeclared_label_is_reported_at_its_step_by_check_and
     let findings = check["diagnostics"].as_array().unwrap();
     assert_eq!(findings.len(), 1, "{check}");
     let finding = &findings[0];
-    assert_eq!(finding["code"], "coordinator.mapping.branch");
-    assert_eq!(finding["path"], "/steps/permission/choose");
+    assert_eq!(finding["code"], "coordinator.function.output");
+    assert_eq!(finding["path"], "/workflow/steps/permission/choose");
     assert!(finding["source"]["file"]
         .as_str()
         .unwrap()
         .ends_with("workflow.yaml"));
-    assert_eq!(finding["source"]["line"], workflow_line("choose: {type"));
+    assert_eq!(finding["source"]["line"], workflow_line("choose:") + 1);
     let message = finding["message"].as_str().unwrap();
     for expected in [
-        "function notice_route returned a value of class string",
-        "expected one of the case labels: send, skip",
+        "function notice-route returned a value of class string",
+        "declared output schema refuses it",
     ]
     .into_iter()
     .chain(CASES)
@@ -178,13 +178,13 @@ fn a_rhai_failure_names_its_kind_and_position_offline() {
     assert_eq!(check["diagnostics"], test["diagnostics"], "{check}\n{test}");
     let finding = &check["diagnostics"][0];
     assert_eq!(finding["code"], "coordinator.function.execution");
-    assert_eq!(finding["path"], "/steps/permission/choose");
-    assert_eq!(finding["source"]["line"], workflow_line("choose: {type"));
+    assert_eq!(finding["path"], "/workflow/steps/permission/choose");
+    assert_eq!(finding["source"]["line"], workflow_line("choose:") + 1);
     let message = finding["message"].as_str().unwrap();
     // The kind of failure and its position in functions.rhai, never the
     // engine's own words, which may repeat the values it was given.
     assert!(
-        message.contains("function notice_route failed: a property is missing in function notice_route at line 4, column "),
+        message.contains("function notice-route failed: a property is missing in function notice_route at line 6, column "),
         "{message}"
     );
     assert!(!message.contains("member"), "{message}");
@@ -210,7 +210,7 @@ fn a_thrown_rhai_error_names_its_kind_and_position_but_no_value() {
     assert_eq!(finding["code"], "coordinator.function.execution");
     let message = finding["message"].as_str().unwrap();
     assert!(
-        message.contains("function notice_route failed: an error was thrown in function notice_route at line 4, column "),
+        message.contains("function notice-route failed: an error was thrown in function notice_route at line 6, column "),
         "{message}"
     );
     assert_unrepeated(&root, &[MARKER, RECORD_ID]);
@@ -235,7 +235,7 @@ fn a_failure_in_a_called_function_is_placed_in_that_function() {
     let message = check["diagnostics"][0]["message"].as_str().unwrap();
     assert!(
         message.contains(
-            "function notice_route failed: an error was thrown in function helper at line 8, column 5"
+            "function notice-route failed: an error was thrown in function helper at line 10, column 5"
         ),
         "{message}"
     );
@@ -256,7 +256,14 @@ fn a_failing_expectation_names_the_case_and_the_expected_and_observed_state() {
     let finding = &check["diagnostics"][0];
     assert_eq!(finding["code"], "coordinator.scenario.expectation");
     assert_eq!(finding["path"], "/cases/0/expect/state");
-    assert_eq!(finding["source"]["line"], 40);
+    assert_eq!(
+        finding["source"]["line"],
+        (SCENARIOS
+            .lines()
+            .position(|line| line.contains("state: completed"))
+            .unwrap()
+            + 1) as u64
+    );
     assert_eq!(
         finding["message"],
         format!(
@@ -490,56 +497,55 @@ fn a_case_lists_at_most_twenty_differences_and_counts_the_rest() {
 
 #[test]
 fn a_refused_step_value_is_named_by_its_class_and_rule_never_by_value() {
-    let instant = format!("fn send_after(input) {{ \"{MARKER}\" + input.applicationId }}\n");
-    let output = format!(
-        "fn accepted_output(input) {{ #{{ messageId: \"{MARKER}\" + input.applicationId }} }}\n"
-    );
-    for (name, workflow, functions, scenarios, message) in [
-        (
-            "wait",
-            vec![(
-                "waitUntil: {type: input, path: /sendAfter}",
-                "waitUntil: {type: function, function: send_after, arguments: [{type: input}]}",
-            )],
-            instant.as_str(),
-            vec![],
-            "function send_after returned a value of class string; expected an RFC 3339 instant with an offset",
-        ),
-        (
-            "finish",
-            vec![(
-                "    output:\n      type: fields\n      fields:\n        messageId: {type: step, step: notify, path: /id}\n",
-                "    output: {type: function, function: accepted_output, arguments: [{type: input}]}\n",
-            )],
-            output.as_str(),
-            vec![],
-            "function accepted_output returned a value of class object; the message-accepted outcome schema refuses it at /messageId by its rule /properties/messageId/format",
-        ),
-        (
-            "input",
-            vec![],
-            "",
-            vec![("    sendAfter: '2026-10-09T09:16:00Z'\n", "    sendAfter: 7654321\n")],
-            "the workflow input schema refuses the case input at /sendAfter by its rule /properties/sendAfter/type",
-        ),
-    ] {
+    for kind in ["wait", "finish", "input"] {
         let root = tempfile::tempdir().unwrap();
         let root = root.path().canonicalize().unwrap();
         project(&root, ("", ""), ("", ""));
-        fs::write(root.join("workflow.yaml"), replaced(WORKFLOW, &workflow)).unwrap();
-        fs::write(root.join("functions.rhai"), format!("{FUNCTIONS}\n{functions}")).unwrap();
-        fs::write(root.join("scenarios.yaml"), replaced(SCENARIOS, &scenarios)).unwrap();
+        let mut workflow = authored_value();
+        let mut functions = FUNCTIONS.to_owned();
+        let expected = match kind {
+            "wait" => {
+                workflow["functions"]["send-after"] = json!({"runtime":"rhai","source":"functions.rhai","entrypoint":"send_after","inputs":{"input":{"typeRef":"workflow-input"}},"output":{"type":"string"}});
+                workflow["workflow"]["steps"]["due"]["waitUntil"] = json!({"type":"function","function":"send-after","inputs":{"input":{"type":"input"}}});
+                functions.push_str(&format!(
+                    "\nfn send_after(args) {{ \"{MARKER}\" + args.input.applicationId }}"
+                ));
+                "function send-after returned a value of class string; expected an RFC 3339 instant with an offset"
+            }
+            "finish" => {
+                workflow["functions"]["accepted-output"] = json!({"runtime":"rhai","source":"functions.rhai","entrypoint":"accepted_output","inputs":{"input":{"typeRef":"workflow-input"}},"output":{"type":"object"}});
+                workflow["workflow"]["steps"]["accepted"]["output"] = json!({"type":"function","function":"accepted-output","inputs":{"input":{"type":"input"}}});
+                functions.push_str(&format!("\nfn accepted_output(args) {{ #{{messageId: \"{MARKER}\" + args.input.applicationId}} }}"));
+                "function accepted-output returned a value of class object; the message-accepted outcome schema refuses it at /messageId by its rule /properties/messageId/format"
+            }
+            _ => {
+                fs::write(
+                    root.join("scenarios.yaml"),
+                    SCENARIOS.replacen(
+                        "sendAfter: '2026-10-09T09:16:00Z'",
+                        "sendAfter: 7654321",
+                        1,
+                    ),
+                )
+                .unwrap();
+                "the workflow input schema refuses the case input at /sendAfter by its rule /properties/sendAfter/type"
+            }
+        };
+        fs::write(
+            root.join("workflow.yaml"),
+            serde_json::to_string_pretty(&workflow).unwrap(),
+        )
+        .unwrap();
+        fs::write(root.join("functions.rhai"), functions).unwrap();
         let (check, test) = refused(&root);
-        assert_eq!(check["diagnostics"], test["diagnostics"], "{name}: {check}\n{test}");
-        let messages = check["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|finding| finding["message"].as_str().unwrap())
-            .collect::<Vec<_>>();
+        assert_eq!(check["diagnostics"], test["diagnostics"]);
         assert!(
-            messages.iter().any(|found| found.contains(message)),
-            "{name}: {messages:#?}"
+            check["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| finding["message"].as_str().unwrap().contains(expected)),
+            "{kind}: {check}"
         );
         assert_unrepeated(&root, &[MARKER, RECORD_ID, "7654321"]);
     }
@@ -600,18 +606,22 @@ fn a_passing_test_reports_each_case_and_the_tally() {
     );
 }
 
-/// The delayed follow-up example with replacements in its workflow, and the
-/// findings `check` reports for it.
-fn checked_workflow(replacements: &[(&str, &str)]) -> Vec<Value> {
+fn authored_value() -> Value {
+    registry_platform_yaml::Reader::new("workflow.yaml")
+        .scan(WORKFLOW.as_bytes())
+        .unwrap()
+        .unwrap()
+        .to_json_value()
+}
+fn checked_value(workflow: Value) -> Vec<Value> {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
     project(&root, ("", ""), ("", ""));
-    let mut workflow = WORKFLOW.to_owned();
-    for (from, to) in replacements {
-        assert!(workflow.contains(from), "{from}");
-        workflow = workflow.replacen(from, to, 1);
-    }
-    fs::write(root.join("workflow.yaml"), workflow).unwrap();
+    fs::write(
+        root.join("workflow.yaml"),
+        serde_json::to_string_pretty(&workflow).unwrap(),
+    )
+    .unwrap();
     let output = cli(&[
         "--format",
         "json",
@@ -644,93 +654,93 @@ fn finding<'a>(findings: &'a [Value], path: &str, code: &str, expected: &[&str])
 }
 
 #[test]
-fn an_unknown_operation_lists_the_operations_its_connection_offers() {
-    let findings = checked_workflow(&[("operation: read-record", "operation: read-recrod")]);
-    assert_eq!(findings.len(), 1, "{findings:#?}");
-    let found = finding(
+fn an_unknown_operation_lists_the_declared_aliases() {
+    let mut workflow = authored_value();
+    workflow["workflow"]["steps"]["read-application"]["operation"] = json!("read-recrod");
+    let findings = checked_value(workflow);
+    assert_eq!(findings.len(), 1);
+    finding(
         &findings,
-        "/steps/read-application/operation",
+        "/workflow/steps/read-application/operation",
         "coordinator.definition.operation",
         &[
             "read-recrod",
-            "applications",
-            "breg",
-            "read-record, invoke-breg-action",
-        ],
-    );
-    assert!(!found["message"]
-        .as_str()
-        .unwrap()
-        .contains("submit-message"));
-}
-
-#[test]
-fn an_operation_of_another_product_names_the_operations_the_connection_offers() {
-    let findings = checked_workflow(&[("operation: read-record", "operation: submit-message")]);
-    assert_eq!(findings.len(), 1, "{findings:#?}");
-    finding(
-        &findings,
-        "/steps/read-application/operation",
-        "coordinator.definition.operation",
-        &[
-            "submit-message",
-            "messaging",
-            "applications",
-            "breg",
-            "read-record, invoke-breg-action",
+            "applications-read-record",
+            "notices-submit-message",
         ],
     );
 }
 
 #[test]
-fn an_unknown_connection_lists_the_declared_connections() {
-    let findings = checked_workflow(&[("connection: notices", "connection: notice")]);
-    assert_eq!(findings.len(), 1, "{findings:#?}");
+fn a_call_to_another_product_must_fit_that_alias_input_schema() {
+    let mut workflow = authored_value();
+    workflow["workflow"]["steps"]["read-application"]["operation"] =
+        json!("notices-submit-message");
+    let findings = checked_value(workflow);
     finding(
         &findings,
-        "/steps/notify/connection",
-        "coordinator.definition.connection",
-        &["notice", "applications, notices"],
+        "/workflow/steps/read-application/input/fields/collection",
+        "coordinator.mapping.field",
+        &["messaging.submit-message/v1", "collection"],
+    );
+}
+
+#[test]
+fn a_connection_name_is_bound_at_deployment_and_changes_the_semantic_revision() {
+    let root = tempfile::tempdir().unwrap();
+    project(root.path(), ("", ""), ("", ""));
+    let initial = registry_coordinator::definition::Definition::load(root.path()).unwrap();
+    let mut workflow = authored_value();
+    workflow["operations"]["notices-submit-message"]["connection"] = json!("notice");
+    fs::write(root.path().join("workflow.yaml"), workflow.to_string()).unwrap();
+    assert_ne!(
+        initial.digest,
+        registry_coordinator::definition::Definition::load(root.path())
+            .unwrap()
+            .digest
     );
 }
 
 #[test]
 fn an_unknown_function_is_reported_at_its_step_with_the_declared_functions() {
-    let findings = checked_workflow(&[("function: notice_request", "function: notice_reqest")]);
-    assert_eq!(findings.len(), 1, "{findings:#?}");
+    let mut workflow = authored_value();
+    workflow["workflow"]["steps"]["notify"]["input"]["function"] = json!("notice-reqest");
+    let findings = checked_value(workflow);
+    assert_eq!(findings.len(), 1);
     finding(
         &findings,
-        "/steps/notify/input/function",
-        "coordinator.function.definition",
-        &["notice_reqest", "notify", "notice_request, notice_route"],
+        "/workflow/steps/notify/input/function",
+        "coordinator.mapping.function",
+        &["notice-reqest", "notice-request", "notice-route"],
     );
 }
 
 #[test]
-fn a_function_called_with_the_wrong_arguments_is_reported_at_its_step() {
-    let findings = checked_workflow(&[(
-        "arguments: [{type: input}, {type: step, step: read-application}]",
-        "arguments: [{type: input}]",
-    )]);
-    assert_eq!(findings.len(), 1, "{findings:#?}");
+fn a_function_called_with_the_wrong_inputs_is_reported_at_its_step() {
+    let mut workflow = authored_value();
+    workflow["workflow"]["steps"]["notify"]["input"]["inputs"]
+        .as_object_mut()
+        .unwrap()
+        .remove("record");
+    let findings = checked_value(workflow);
+    assert_eq!(findings.len(), 1);
     finding(
         &findings,
-        "/steps/notify/input/function",
-        "coordinator.function.definition",
-        &["notice_request", "1 argument", "2 parameters"],
+        "/workflow/steps/notify/input/inputs",
+        "coordinator.mapping.function",
+        &["named Function inputs", "signature"],
     );
 }
 
 #[test]
 fn a_cycle_names_its_members() {
-    let findings = checked_workflow(&[(
-        "cases: {send: notify, skip: skipped}",
-        "cases: {send: notify, skip: skipped, again: due}",
-    )]);
-    assert_eq!(findings.len(), 1, "{findings:#?}");
+    let mut workflow = authored_value();
+    workflow["workflow"]["steps"]["permission"]["cases"]["again"] = json!("due");
+    let findings = checked_value(workflow);
+    assert_eq!(findings.len(), 1);
     finding(
         &findings,
-        "/steps/permission/cases",
+        "/workflow/steps/permission/cases",
         "coordinator.definition.cycle",
         &["due -> read-application -> permission -> due"],
     );
@@ -738,11 +748,16 @@ fn a_cycle_names_its_members() {
 
 #[test]
 fn a_finish_naming_an_undeclared_outcome_is_reported_at_its_step() {
-    let findings = checked_workflow(&[("  no-current-permission:\n    type: \"null\"\n", "")]);
-    assert_eq!(findings.len(), 1, "{findings:#?}");
+    let mut workflow = authored_value();
+    workflow["workflow"]["outcomes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("no-current-permission");
+    let findings = checked_value(workflow);
+    assert_eq!(findings.len(), 1);
     finding(
         &findings,
-        "/steps/skipped/outcome",
+        "/workflow/steps/skipped/outcome",
         "coordinator.definition.outcome",
         &["no-current-permission", "message-accepted"],
     );
@@ -750,12 +765,11 @@ fn a_finish_naming_an_undeclared_outcome_is_reported_at_its_step() {
 
 #[test]
 fn check_reports_every_independent_error_in_one_run() {
-    let findings = checked_workflow(&[
-        ("connection: notices", "connection: notice"),
-        ("function: notice_route", "function: notice_rout"),
-        ("outcome: no-current-permission", "outcome: no-permission"),
-        ("start: due", "start: begin"),
-    ]);
+    let mut workflow = authored_value();
+    workflow["workflow"]["start"] = json!("begin");
+    workflow["workflow"]["steps"]["permission"]["choose"]["function"] = json!("notice-rout");
+    workflow["workflow"]["steps"]["skipped"]["outcome"] = json!("no-permission");
+    let findings = checked_value(workflow);
     let mut paths = findings
         .iter()
         .map(|finding| finding["path"].as_str().unwrap())
@@ -764,29 +778,27 @@ fn check_reports_every_independent_error_in_one_run() {
     assert_eq!(
         paths,
         [
-            "/outcomes/no-current-permission",
-            "/start",
-            "/steps/notify/connection",
-            "/steps/permission/choose/function",
-            "/steps/skipped/outcome",
+            "/workflow/outcomes/no-current-permission",
+            "/workflow/start",
+            "/workflow/steps/permission/choose/function",
+            "/workflow/steps/skipped/outcome"
         ],
         "{findings:#?}"
     );
 }
 
 #[test]
-fn a_casework_connection_offers_the_review_producer_operations() {
-    let findings = checked_workflow(&[("applications: breg", "applications: casework")]);
-    assert!(!findings.is_empty(), "{findings:#?}");
-    let found = findings
+fn the_catalog_exposes_the_casework_review_producer_operations() {
+    let offers = registry_coordinator::operations::descriptors()
         .iter()
-        .find(|finding| finding["path"] == "/steps/read-application/operation")
-        .unwrap_or_else(|| panic!("{findings:#?}"));
-    let message = found["message"].as_str().unwrap();
-    for expected in ["casework", "submit-review-request", "cancel-review-request"] {
-        assert!(message.contains(expected), "{expected}: {message}");
-    }
-    assert!(findings
-        .iter()
-        .all(|finding| finding["code"] != "config.unknown-variant"));
+        .filter(|operation| operation.product == "casework")
+        .map(|operation| operation.id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        offers,
+        [
+            "casework.submit-review-request/v1",
+            "casework.cancel-review-request/v1"
+        ]
+    );
 }

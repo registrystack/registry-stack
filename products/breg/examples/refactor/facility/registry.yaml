@@ -262,6 +262,7 @@ accessProfiles:
                 - {field: jurisdiction, claim: jurisdiction, operator: equals}
           results: [facility, assignment]
   - id: facility-correction-author
+    actorKind: human
     principalClaim: registry_principal
     requiredScopes: ["registry:facility:correction:submit"]
     requiredPurposes: [facility-administration]
@@ -299,6 +300,7 @@ accessProfiles:
               rowBoundaries:
                 - {field: jurisdiction, claim: jurisdiction, operator: equals}
   - id: facility-correction-applier
+    actorKind: human
     principalClaim: registry_principal
     requiredScopes: ["registry:facility:correction:apply"]
     requiredPurposes: [facility-administration]

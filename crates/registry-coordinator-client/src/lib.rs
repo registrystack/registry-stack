@@ -7,7 +7,7 @@
 //! is unknown under the caller's same key and body, at most
 //! `CoordinatorClientConfig::with_max_mutation_retries` times. The caller
 //! chooses the key and, after an error whose outcome is unknown, must retain
-//! the same verified issuer, subject, client, flow, input and key to recover.
+//! the same verified issuer, subject, client, workflow, input and key to recover.
 //! A service-owned run never becomes citizen-owned because its input names a
 //! citizen's record. Authorize the source record independently before
 //! disclosing an application-level correlation.
@@ -37,9 +37,9 @@ pub use client::{CoordinatorClient, CoordinatorComplete};
 pub use config::CoordinatorClientConfig;
 pub use error::{CoordinatorClientError, CoordinatorProtocolFailure};
 pub use model::{
-    EffectKind, KeyRequirement, OperationIdentity, RecoverySemantics, RecoveryStatus,
-    RetryBlockReason, RetryScheduled, RunInspection, RunList, RunListQuery, RunListState,
-    RunStatus, StartRunRequest, StepStatus,
+    EffectKind, EffectState, EffectStatus, KeyRequirement, OperationIdentity, RecoverySemantics,
+    RecoveryStatus, RetryBlockReason, RetryScheduled, RunInspection, RunList, RunListQuery,
+    RunListState, RunStatus, StartRunRequest, StepStatus, WaitStatus, WorkflowContract,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
 pub use uuid::Uuid;

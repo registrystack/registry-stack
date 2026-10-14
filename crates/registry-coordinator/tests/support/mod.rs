@@ -8,9 +8,8 @@ pub mod postgres_tool;
 
 use std::{collections::BTreeMap, path::Path};
 
-use registry_coordinator::adapters::{
-    AuthorizationConfig, ConnectionConfig, Product, RuntimeConfig,
-};
+use registry_coordinator::adapters::{AuthorizationConfig, ConnectionConfig, RuntimeConfig};
+use registry_coordinator::runtime::{BregConnectionConfig, MessagingConnectionConfig};
 use registry_platform_config::{
     EnvironmentSecretProviderConfig, FileSecretProviderConfig, SecretProvidersConfig,
     SecretReference,
@@ -72,8 +71,7 @@ pub fn config(
         scopes: vec![scope.to_owned()],
     };
     RuntimeConfig {
-        decision_connections: BTreeMap::new(),
-        external_http_connections: BTreeMap::new(),
+        minimum_observation_interval_seconds: registry_platform_yaml::BoundedU32::new(30).unwrap(),
         deployment: None,
         secret_providers: SecretProvidersConfig {
             file: Some(FileSecretProviderConfig {
@@ -91,37 +89,26 @@ pub fn config(
         connections: BTreeMap::from([
             (
                 "applications".to_owned(),
-                ConnectionConfig {
-                    observation_authorization: None,
-                    product: Product::Breg,
+                ConnectionConfig::Breg(BregConnectionConfig {
                     base_url: Url::parse(breg).unwrap(),
                     authorization: authorization(
                         "application-reader",
                         "urn:example:applications",
                         "applications:read",
                     ),
-                    profile: Some("follow-up-reader".to_owned()),
-                    producer: None,
-                    completion: None,
-                    result_check_seconds: None,
-                },
+                    profile: "follow-up-reader".to_owned(),
+                }),
             ),
             (
                 "notices".to_owned(),
-                ConnectionConfig {
-                    observation_authorization: None,
-                    product: Product::Messaging,
+                ConnectionConfig::Messaging(MessagingConnectionConfig {
                     base_url: Url::parse(messaging).unwrap(),
                     authorization: authorization(
                         "case-system",
                         "urn:example:messaging",
                         "messaging:send",
                     ),
-                    profile: None,
-                    producer: None,
-                    completion: None,
-                    result_check_seconds: None,
-                },
+                }),
             ),
         ]),
     }

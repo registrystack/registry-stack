@@ -157,26 +157,45 @@ impl CaseworkClient {
         auth: CaseworkAuth<'_>,
         expected: &ReviewRequestAccepted,
     ) -> Result<ReviewResultResponse, CaseworkClientError> {
-        reject_source_profile(&auth)?;
-        let response = self
+        self.review_result_observation(auth, expected).await.outcome
+    }
+
+    pub async fn review_result_observation(
+        &self,
+        auth: CaseworkAuth<'_>,
+        expected: &ReviewRequestAccepted,
+    ) -> crate::ReviewResultObservation {
+        if let Err(error) = reject_source_profile(&auth) {
+            return crate::ReviewResultObservation {
+                outcome: Err(error),
+                retry_after: RetryAfter::Absent,
+            };
+        }
+        let observation = self
             .review
-            .result(ProducerReviewAuth::new(auth.token, auth.profile), expected)
-            .await
-            .map_err(CaseworkClientError::from_review)?;
-        Ok(match response {
-            ProducerReviewResultResponse::Available(complete) => {
-                ReviewResultResponse::Available(Box::new(CaseworkComplete::from(*complete)))
-            }
-            ProducerReviewResultResponse::Pending { trace_id } => {
-                ReviewResultResponse::Pending { trace_id }
-            }
-            ProducerReviewResultResponse::ConcealedOrUnknown { trace_id } => {
-                ReviewResultResponse::ConcealedOrUnknown { trace_id }
-            }
-            ProducerReviewResultResponse::Expired { trace_id } => {
-                ReviewResultResponse::Expired { trace_id }
-            }
-        })
+            .result_observation(ProducerReviewAuth::new(auth.token, auth.profile), expected)
+            .await;
+        let outcome = observation
+            .outcome
+            .map_err(CaseworkClientError::from_review)
+            .map(|response| match response {
+                ProducerReviewResultResponse::Available(complete) => {
+                    ReviewResultResponse::Available(Box::new(CaseworkComplete::from(*complete)))
+                }
+                ProducerReviewResultResponse::Pending { trace_id } => {
+                    ReviewResultResponse::Pending { trace_id }
+                }
+                ProducerReviewResultResponse::ConcealedOrUnknown { trace_id } => {
+                    ReviewResultResponse::ConcealedOrUnknown { trace_id }
+                }
+                ProducerReviewResultResponse::Expired { trace_id } => {
+                    ReviewResultResponse::Expired { trace_id }
+                }
+            });
+        crate::ReviewResultObservation {
+            outcome,
+            retry_after: observation.retry_after,
+        }
     }
 
     pub async fn review_results(

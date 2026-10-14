@@ -7,30 +7,27 @@ use serde_json::{json, Value};
 use std::{collections::BTreeMap, fs};
 
 const FUNCTIONS: &str = r#"
-fn due(input) { add_seconds(input.at, input.seconds) }
-fn elapsed(input) { seconds_between(input.at, input.other) }
-fn clock(input) { timestamp() }
+fn due(inputs) { add_seconds(inputs.request.at, inputs.request.seconds) }
+fn elapsed(inputs) { seconds_between(inputs.request.at, inputs.request.other) }
+fn clock(inputs) { timestamp() }
 "#;
 
 fn definition() -> Definition {
     let workflow = json!({
         "apiVersion": authoring::API_VERSION, "kind": authoring::KIND,
         "project": {"id": "instants", "version": "1"},
-        "input": {"type": "object"},
-        "connections": {},
-        "functionsFile": "functions.rhai", "deadlineSeconds": 86400,
-        "start": "due",
-        "steps": {
-            "due": {"type": "wait-until",
-                "waitUntil": {"type": "function", "function": "due", "arguments": [{"type": "input"}]},
-                "next": "clock"},
-            "clock": {"type": "wait-until",
-                "waitUntil": {"type": "function", "function": "clock", "arguments": [{"type": "input"}]},
-                "next": "done"},
-            "done": {"type": "finish", "outcome": "measured",
-                "output": {"type": "function", "function": "elapsed", "arguments": [{"type": "input"}]}}
+        "functions": {
+            "due": {"runtime":"rhai","source":"functions.rhai","entrypoint":"due","inputs":{"request":{"type":"object"}},"output":{"type":"string","format":"date-time"}},
+            "clock": {"runtime":"rhai","source":"functions.rhai","entrypoint":"clock","inputs":{"request":{"type":"object"}},"output":{"type":"string","format":"date-time"}},
+            "elapsed": {"runtime":"rhai","source":"functions.rhai","entrypoint":"elapsed","inputs":{"request":{"type":"object"}},"output":{"type":"integer"}}
         },
-        "outcomes": {"measured": {"type": "integer"}}
+        "workflow": {"input": {"type": "object"}, "deadlineSeconds": 86400, "start": "due",
+            "steps": {
+                "due": {"type": "wait-until", "waitUntil": {"type": "function", "function": "due", "inputs": {"request":{"type": "input"}}}, "next": "clock"},
+                "clock": {"type": "wait-until", "waitUntil": {"type": "function", "function": "clock", "inputs": {"request":{"type": "input"}}}, "next": "done"},
+                "done": {"type": "finish", "outcome": "measured", "output": {"type": "function", "function": "elapsed", "inputs": {"request":{"type": "input"}}}}
+            }, "outcomes": {"measured": {"type": "integer"}}
+        }
     });
     let root = tempfile::tempdir().unwrap();
     fs::write(

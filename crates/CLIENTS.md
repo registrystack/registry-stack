@@ -77,8 +77,9 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   semantics: the closed problem catalogue and the hold, appointment, and
   availability documents come from the Rust client unchanged.
 - Coordinator run admission takes a caller-chosen idempotency key and
-  `{flow, input}`; a binding never generates the key and never interprets the
-  flow or its input. Only the Rust client's bounded same-key retry resends an
+  `{workflow, workflowRevision, input}`; a binding never generates the key.
+  Workflow discovery reads the permitted active contract. Fresh starts pin its revision;
+  unknown-admission recovery retains the original revision even after activation changes. Only the Rust client's bounded same-key retry resends an
   admission; listing, status, inspection, reconciliation, same-command retry,
   and cancellation are sent once, and the last two take no key. The
   Coordinator's problem vocabulary is closed but lives in its runtime, which
@@ -87,7 +88,7 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   unchanged instead of checking it against a catalogue, and the run status and
   inspection documents come from the Rust client unchanged. A run is owned by
   the caller that started it; the client grants no access to the product
-  records a flow touches.
+  records a workflow touches.
 - Preserve strict duplicate-member rejection, bounded responses, product media
   types, trace/Problem validation, and value-free errors. Bindings must not
   expose URLs, headers, payloads, selectors, credentials, or transport chains

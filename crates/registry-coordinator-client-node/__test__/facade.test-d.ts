@@ -7,6 +7,7 @@ import {
   type RunList,
   type RunStatus,
   type StepStatus,
+  type WorkflowContract,
 } from '../client'
 
 const client = new CoordinatorClient({
@@ -17,7 +18,7 @@ const client = new CoordinatorClient({
 const started: Promise<CoordinatorOutcome<RunStatus>> = client.start(
   'header.payload.signature',
   'admission 42',
-  { flow: 'decision-follow-up', input: { caseId: 'case-42' } },
+  { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: { caseId: 'case-42' } },
 )
 const status: Promise<CoordinatorOutcome<RunStatus>> = client.status(
   'header.payload.signature',
@@ -61,8 +62,13 @@ if (error.kind === 'problem') {
 }
 
 // @ts-expect-error Coordinator start requires a caller-selected idempotency key.
-client.start('header.payload.signature', { flow: 'decision-follow-up', input: {} })
+client.start('header.payload.signature', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: {} })
 const once = new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maxMutationRetries: 0 })
 void once
 // @ts-expect-error The retry count is a number, never a string.
 new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maxMutationRetries: '2' })
+
+const workflow: Promise<CoordinatorOutcome<WorkflowContract>> = client.workflow('token', 'decision-follow-up')
+// @ts-expect-error a new admission always pins the computed workflow revision
+client.start('token', 'key', { workflow: 'decision-follow-up', input: {} })
+void workflow

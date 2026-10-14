@@ -59,6 +59,7 @@ pub enum ProblemCode {
     ReviewInitiatorRequired,
     ReviewResultExpired,
     ReviewSubmissionConflict,
+    ReviewPolicyMismatch,
     ReviewTaskNotHeld,
     RuntimeFailure,
     ServiceUnavailable,
@@ -110,6 +111,7 @@ impl ProblemCode {
         Self::ReviewInitiatorRequired,
         Self::ReviewResultExpired,
         Self::ReviewSubmissionConflict,
+        Self::ReviewPolicyMismatch,
         Self::ReviewTaskNotHeld,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
@@ -161,6 +163,7 @@ impl ProblemCode {
             Self::ReviewInitiatorRequired => "review.initiator-required",
             Self::ReviewResultExpired => "review.result-expired",
             Self::ReviewSubmissionConflict => "review.submission-conflict",
+            Self::ReviewPolicyMismatch => "review.policy-mismatch",
             Self::ReviewTaskNotHeld => "review.task-not-held",
             Self::RuntimeFailure => RUNTIME_FAILURE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
@@ -209,6 +212,7 @@ impl ProblemCode {
             | Self::WorkItemNotVisible => StatusCode::NOT_FOUND,
             Self::RequestMethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::IdempotencyKeyReused
+            | Self::ReviewPolicyMismatch
             | Self::ReviewSubmissionConflict
             | Self::ReviewTaskNotHeld
             | Self::WorkItemAlreadyClaimed
@@ -265,6 +269,7 @@ impl ProblemCode {
             Self::ReviewInitiatorRequired => "Review initiator required",
             Self::ReviewResultExpired => "Review result expired",
             Self::ReviewSubmissionConflict => "Review submission conflict",
+            Self::ReviewPolicyMismatch => "Review policy changed",
             Self::ReviewTaskNotHeld => "Review task not held",
             Self::RuntimeFailure => "Casework runtime failure",
             Self::ServiceUnavailable => "Casework service unavailable",
@@ -346,6 +351,7 @@ impl ProblemCode {
             Self::ReviewResultExpired => {
                 "The retained review result is no longer available. Reconcile through the producer's retained source correlation."
             }
+            Self::ReviewPolicyMismatch => "Discover the active review policy and submit its exact identifier, version, and digest with a new command identity.",
             Self::ReviewSubmissionConflict => {
                 "The same producer, source subject, version, and policy were already submitted with different canonical content."
             }
@@ -445,6 +451,7 @@ const REVIEW_REQUEST_CREATE: &[ProblemCode] = &[
     ProblemCode::ReviewInitiatorRequired,
     ProblemCode::ReviewResultExpired,
     ProblemCode::ReviewSubmissionConflict,
+    ProblemCode::ReviewPolicyMismatch,
     ProblemCode::ServiceUnavailable,
     ProblemCode::SourceProfileNotApplicable,
     ProblemCode::WorkItemNotVisible,

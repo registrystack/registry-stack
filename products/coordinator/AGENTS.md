@@ -19,19 +19,26 @@ receives the call, which decides it under its own authorization.
   way, through its built executable and public HTTP contract, never through a
   runtime dev-dependency.
 - The Coordinator inherits no authorization. A caller allowed to start a run
-  is not thereby allowed the effects its flow requests: every product decides
+  is not thereby allowed the effects its workflow requests: every product decides
   each call it receives under its own policy, and a wait never renews an
   approval or creates downstream authority. A run belongs to the caller that
   started it, and status and inspection follow that ownership and operator
   policy. Status, inspection, and every run action also check the run's own
-  flow: a run of a flow the caller's policy does not list reads as
+  workflow: a run of a workflow the caller's policy does not list reads as
   `run.not-visible`, and `list` leaves it out.
-- A run waits either until an instant or for a Casework review result, and
-  the completion event only brings the next result read forward. A run starts
-  only from an explicit caller request, never from a product event. Describe
-  the Coordinator as running reviewed sequences of product calls across those
-  waits, never as the way products connect to one another, until event-started
-  runs ship.
+- A `wait-for` observes a named completion exposed by an accepted Operation, using
+  `completion: {step, name}`. Casework results, exact BReg Proposal application,
+  and bounded external reads share that contract. Wake-ups only advance an eligible
+  authoritative read and start no run. Keep the durable observation floor, budget,
+  correlation, and original deadline intact across recovery.
+- Keep the canonical authoring separation: contracts, types, named pure Functions,
+  local exact Operation aliases, and one Workflow graph. Functions take one typed
+  object of named inputs and gain no I/O capability. Runtime uses one tagged
+  connections map. Caller policies are keyed by exact verified client identity and
+  scope run actions through workflows. Start requires the expected workflowRevision.
+- A BReg Proposal draft, frozen submission, review, application, and optional notice
+  are separate owner-authorized stages. Only exact application evidence can release
+  an application completion. Blocked or uncertain evidence stays held.
 - No product crate depends on a Coordinator crate. The only allowed dependents
   are `registry-stack-client`, on `registry-coordinator-client`, and
   `registry-cli-docs`, on `registry-coordinator` for the published CLI

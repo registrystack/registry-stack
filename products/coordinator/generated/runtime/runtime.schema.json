@@ -4,18 +4,6 @@
       "additionalProperties": false,
       "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
       "properties": {
-        "allowedClients": {
-          "$ref": "#/$defs/OidcAllowedClients",
-          "description": "List one to sixty-four distinct admitted OAuth client IDs. Coordinator refuses omission, an empty list and unrestricted.",
-          "items": {
-            "$ref": "#/$defs/ExternalId",
-            "maxLength": 128
-          },
-          "maxItems": 64,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
         "assertionIssuers": {
           "additionalProperties": {
             "items": {
@@ -55,12 +43,16 @@
           "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
         },
         "policies": {
-          "items": {
+          "additionalProperties": {
             "$ref": "#/$defs/ClientPolicy"
           },
-          "maxItems": 64,
-          "minItems": 1,
-          "type": "array"
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
+          },
+          "type": "object"
         },
         "scopeClaim": {
           "$ref": "#/$defs/ExternalId",
@@ -71,7 +63,6 @@
       "required": [
         "issuer",
         "audience",
-        "allowedClients",
         "policies"
       ],
       "type": "object"
@@ -136,28 +127,44 @@
     },
     "ClientPolicy": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "required": [
+              "workflows"
+            ]
+          },
+          "if": {
+            "properties": {
+              "actions": {
+                "items": {
+                  "enum": [
+                    "doctor",
+                    "restore-hold",
+                    "release-restore-hold",
+                    "release-admission-hold",
+                    "complete-execution-recovery",
+                    "retain"
+                  ]
+                }
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "workflows"
+              ]
+            }
+          }
+        }
+      ],
       "properties": {
         "actions": {
           "items": {
             "$ref": "#/$defs/Action"
           },
           "maxItems": 12,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
-        "clientId": {
-          "$ref": "#/$defs/ExternalId",
-          "maxLength": 128
-        },
-        "flows": {
-          "description": "The flows this policy's run actions reach: start, status, inspect,\nretry-same, cancel and reconcile. Required when the policy lists a run\naction and refused when it lists none.",
-          "items": {
-            "$ref": "#/$defs/ExternalId",
-            "maxLength": 64,
-            "pattern": "^[A-Za-z0-9_-]+$"
-          },
-          "maxItems": 64,
           "minItems": 1,
           "type": "array",
           "uniqueItems": true
@@ -174,138 +181,289 @@
           "minItems": 1,
           "type": "array",
           "uniqueItems": true
+        },
+        "workflows": {
+          "description": "The workflows this policy's run actions reach: start, status, inspect,\nretry-same, cancel and reconcile. Required when the policy lists a run\naction and refused when it lists none.",
+          "items": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "required": [
-        "clientId",
         "requiredScopes",
         "actions"
       ],
       "type": "object"
     },
     "ConnectionConfig": {
-      "additionalProperties": false,
-      "allOf": [
+      "description": "One logical connection namespace. The discriminator selects its complete\ndeployment contract; a connection cannot borrow another variant's authority.",
+      "oneOf": [
         {
-          "else": {
-            "not": {
-              "required": [
-                "observationAuthorization"
-              ]
+          "additionalProperties": false,
+          "properties": {
+            "authorization": {
+              "$ref": "#/$defs/AuthorizationConfig"
+            },
+            "baseUrl": {
+              "$ref": "#/$defs/Url"
+            },
+            "profile": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "type": {
+              "const": "breg",
+              "type": "string"
             }
           },
-          "if": {
-            "properties": {
-              "authorization": {
+          "required": [
+            "type",
+            "baseUrl",
+            "authorization",
+            "profile"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authorization": {
+              "$ref": "#/$defs/AuthorizationConfig"
+            },
+            "baseUrl": {
+              "$ref": "#/$defs/Url"
+            },
+            "completion": {
+              "$ref": "#/$defs/ReviewCompletionConfig",
+              "description": "Authenticated minimized wake-ups; omission uses polling only."
+            },
+            "producer": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "profile": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "resultCheckSeconds": {
+              "default": 900,
+              "format": "uint32",
+              "maximum": 86400,
+              "minimum": 60,
+              "type": "integer"
+            },
+            "type": {
+              "const": "casework-review-producer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "baseUrl",
+            "authorization",
+            "profile",
+            "producer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authorization": {
+              "$ref": "#/$defs/AuthorizationConfig"
+            },
+            "baseUrl": {
+              "$ref": "#/$defs/Url"
+            },
+            "type": {
+              "const": "messaging",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "baseUrl",
+            "authorization"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "else": {
+                "not": {
+                  "required": [
+                    "observationAuthorization"
+                  ]
+                }
+              },
+              "if": {
                 "properties": {
-                  "taskAuthority": {
-                    "type": "object"
+                  "authorization": {
+                    "properties": {
+                      "taskAuthority": {
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "taskAuthority"
+                    ]
                   }
-                },
+                }
+              },
+              "then": {
+                "required": [
+                  "observationAuthorization"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "authorization": {
+              "$ref": "#/$defs/AuthorizationConfig"
+            },
+            "baseUrl": {
+              "$ref": "#/$defs/Url"
+            },
+            "observationAuthorization": {
+              "$ref": "#/$defs/AuthorizationConfig",
+              "description": "Ordinary receipt reads under the original owner, without taskAuthority."
+            },
+            "type": {
+              "const": "scheduling",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "baseUrl",
+            "authorization"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The reviewed directory contract and environment-specific destination.",
+          "properties": {
+            "attemptTimeoutMilliseconds": {
+              "default": 2000,
+              "format": "uint64",
+              "maximum": 2000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "authorization": {
+              "$ref": "#/$defs/AuthorizationConfig",
+              "description": "Omission makes the configured read public; it never inherits a caller token.",
+              "not": {
                 "required": [
                   "taskAuthority"
                 ]
+              }
+            },
+            "baseUrl": {
+              "$ref": "#/$defs/Url",
+              "pattern": "^[^\\s\\\\]+$"
+            },
+            "maximumResponseBytes": {
+              "default": 65536,
+              "format": "uint64",
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "paths": {
+              "items": {
+                "$ref": "#/$defs/ExternalId"
               },
-              "product": {
-                "const": "scheduling"
-              }
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
             },
-            "required": [
-              "product",
-              "authorization"
-            ]
-          },
-          "then": {
-            "properties": {
-              "observationAuthorization": {
-                "type": "object"
-              }
+            "queryParameters": {
+              "description": "Omission permits no query parameters.",
+              "items": {
+                "$ref": "#/$defs/ExternalId"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
             },
-            "required": [
-              "observationAuthorization"
-            ]
-          }
-        },
-        {
-          "else": {
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "producer"
-                  ]
-                },
-                {
-                  "required": [
-                    "completion"
-                  ]
-                },
-                {
-                  "required": [
-                    "resultCheckSeconds"
-                  ]
-                }
-              ]
+            "responseSchema": {
+              "description": "Local JSON Schema for the complete {status, body} response.",
+              "x-registry-foreign": "json-schema-2020-12"
+            },
+            "type": {
+              "const": "external-http",
+              "type": "string"
             }
           },
-          "if": {
-            "properties": {
-              "product": {
-                "const": "casework"
-              }
+          "required": [
+            "type",
+            "baseUrl",
+            "paths",
+            "responseSchema"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attemptTimeoutMilliseconds": {
+              "default": 8000,
+              "format": "uint64",
+              "maximum": 8000,
+              "minimum": 1,
+              "type": "integer"
             },
-            "required": [
-              "product"
-            ]
+            "authorization": {
+              "$ref": "#/$defs/DecisionAuthorization"
+            },
+            "baseUrl": {
+              "$ref": "#/$defs/Url",
+              "pattern": "^[^\\s\\\\]+$"
+            },
+            "maximumRequestBytes": {
+              "default": 65536,
+              "format": "uint64",
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maximumResponseBytes": {
+              "default": 65536,
+              "format": "uint64",
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "model": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "protocol": {
+              "$ref": "#/$defs/DecisionProtocol"
+            },
+            "type": {
+              "const": "evaluation",
+              "type": "string"
+            }
           },
-          "then": {
-            "required": [
-              "producer",
-              "profile"
-            ]
-          }
+          "required": [
+            "type",
+            "protocol",
+            "baseUrl",
+            "model",
+            "authorization"
+          ],
+          "type": "object"
         }
-      ],
-      "properties": {
-        "authorization": {
-          "$ref": "#/$defs/AuthorizationConfig"
-        },
-        "baseUrl": {
-          "$ref": "#/$defs/Url"
-        },
-        "completion": {
-          "$ref": "#/$defs/ReviewCompletionConfig",
-          "description": "Casework connections only. Omitted means Casework sends this\nCoordinator no completion events, and a review wait learns the result\nonly from its result checks."
-        },
-        "observationAuthorization": {
-          "$ref": "#/$defs/AuthorizationConfig",
-          "description": "Required for Scheduling connections with taskAuthority. Uses ordinary\nread scopes under the original receipt owner, without taskAuthority."
-        },
-        "producer": {
-          "$ref": "#/$defs/LocalId",
-          "description": "Required for Casework connections and refused for every other product:\nthe review producer id the Casework project lists under\nreviewProducers. Casework binds every submission to it."
-        },
-        "product": {
-          "$ref": "#/$defs/Product"
-        },
-        "profile": {
-          "$ref": "#/$defs/ExternalId"
-        },
-        "resultCheckSeconds": {
-          "default": 900,
-          "description": "Casework connections only: the seconds between two result checks while\na review wait is open, whether or not a completion event arrives.",
-          "format": "uint32",
-          "maximum": 86400,
-          "minimum": 60,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "product",
-        "baseUrl",
-        "authorization"
-      ],
-      "type": "object"
+      ]
     },
     "DatabaseConfig": {
       "additionalProperties": false,
@@ -378,52 +536,6 @@
         }
       ]
     },
-    "DecisionConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "attemptTimeoutMilliseconds": {
-          "default": 8000,
-          "format": "uint64",
-          "maximum": 8000,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "authorization": {
-          "$ref": "#/$defs/DecisionAuthorization"
-        },
-        "baseUrl": {
-          "$ref": "#/$defs/Url",
-          "pattern": "^[^\\s\\\\]+$"
-        },
-        "maximumRequestBytes": {
-          "default": 65536,
-          "format": "uint64",
-          "maximum": 65536,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "maximumResponseBytes": {
-          "default": 65536,
-          "format": "uint64",
-          "maximum": 65536,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "model": {
-          "$ref": "#/$defs/ExternalId"
-        },
-        "protocol": {
-          "$ref": "#/$defs/DecisionProtocol"
-        }
-      },
-      "required": [
-        "protocol",
-        "baseUrl",
-        "model",
-        "authorization"
-      ],
-      "type": "object"
-    },
     "DecisionProtocol": {
       "enum": [
         "system-one",
@@ -465,7 +577,7 @@
           "description": "The operator-private socket `/metrics` is served on. When it is\nomitted, no metrics are served."
         },
         "packages": {
-          "description": "One pinned package per flow; the flow is the package's workflow id. List each package root and digest once.",
+          "description": "One pinned package per workflow. List each package root and digest once.",
           "items": {
             "allOf": [
               {
@@ -533,68 +645,6 @@
     "EnvironmentSecretProviderConfig": {
       "additionalProperties": false,
       "description": "The environment secret provider. It takes no settings.",
-      "type": "object"
-    },
-    "ExternalHttpConfig": {
-      "additionalProperties": false,
-      "description": "The reviewed directory contract and environment-specific destination.",
-      "properties": {
-        "attemptTimeoutMilliseconds": {
-          "default": 2000,
-          "format": "uint64",
-          "maximum": 2000,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "authorization": {
-          "$ref": "#/$defs/AuthorizationConfig",
-          "description": "Omission makes the configured read public; it never inherits a caller token.",
-          "not": {
-            "required": [
-              "taskAuthority"
-            ]
-          }
-        },
-        "baseUrl": {
-          "$ref": "#/$defs/Url",
-          "pattern": "^[^\\s\\\\]+$"
-        },
-        "maximumResponseBytes": {
-          "default": 65536,
-          "format": "uint64",
-          "maximum": 65536,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "paths": {
-          "items": {
-            "$ref": "#/$defs/ExternalId"
-          },
-          "maxItems": 16,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
-        "queryParameters": {
-          "description": "Omission permits no query parameters.",
-          "items": {
-            "$ref": "#/$defs/ExternalId"
-          },
-          "maxItems": 16,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
-        "responseSchema": {
-          "description": "Local JSON Schema for the complete {status, body} response.",
-          "x-registry-foreign": "json-schema-2020-12"
-        }
-      },
-      "required": [
-        "baseUrl",
-        "paths",
-        "responseSchema"
-      ],
       "type": "object"
     },
     "ExternalId": {
@@ -706,25 +756,6 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
-    "OidcAllowedClients": {
-      "anyOf": [
-        {
-          "const": "unrestricted",
-          "description": "Admit a token from every client the issuer verifies.",
-          "type": "string"
-        },
-        {
-          "description": "Admit a token only from a listed client.",
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        }
-      ],
-      "description": "How `allowedClients` is written (CFG-EMPTY-2): the keyword `unrestricted`,\nor a list of at least one client. An empty list is refused, because it\nreads as both \"none\" and \"any\"."
-    },
     "PackageConfig": {
       "additionalProperties": false,
       "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
@@ -764,15 +795,6 @@
         "tlsTermination"
       ],
       "type": "object"
-    },
-    "Product": {
-      "enum": [
-        "breg",
-        "casework",
-        "messaging",
-        "scheduling"
-      ],
-      "type": "string"
     },
     "ReviewCompletionConfig": {
       "additionalProperties": false,
@@ -897,42 +919,6 @@
   "$id": "https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "allOf": [
-    {
-      "anyOf": [
-        {
-          "properties": {
-            "connections": {
-              "minProperties": 1
-            }
-          },
-          "required": [
-            "connections"
-          ]
-        },
-        {
-          "properties": {
-            "externalHttpConnections": {
-              "minProperties": 1
-            }
-          },
-          "required": [
-            "externalHttpConnections"
-          ]
-        },
-        {
-          "properties": {
-            "decisionConnections": {
-              "minProperties": 1
-            }
-          },
-          "required": [
-            "decisionConnections"
-          ]
-        }
-      ]
-    }
-  ],
   "properties": {
     "apiVersion": {
       "const": "id.registrystack.org/formats/coordinator/runtime/v1alpha1",
@@ -942,9 +928,9 @@
       "additionalProperties": {
         "$ref": "#/$defs/ConnectionConfig"
       },
-      "default": {},
-      "description": "Omitted means no product bindings; at least one product, external HTTP or decision connection is required.",
+      "description": "Named deployment bindings with one explicit type per connection.",
       "maxProperties": 16,
+      "minProperties": 1,
       "propertyNames": {
         "$ref": "#/$defs/LocalId"
       },
@@ -965,36 +951,20 @@
       ],
       "unevaluatedProperties": false
     },
-    "decisionConnections": {
-      "additionalProperties": {
-        "$ref": "#/$defs/DecisionConfig"
-      },
-      "default": {},
-      "description": "Omitted means decision evaluation is unavailable. Names must be distinct from product and external HTTP connections.",
-      "maxProperties": 16,
-      "propertyNames": {
-        "$ref": "#/$defs/LocalId"
-      },
-      "type": "object"
-    },
     "deployment": {
       "$ref": "#/$defs/DeploymentConfig"
-    },
-    "externalHttpConnections": {
-      "additionalProperties": {
-        "$ref": "#/$defs/ExternalHttpConfig"
-      },
-      "default": {},
-      "description": "Omitted means external HTTP is unavailable. Names must be distinct from product connections.",
-      "maxProperties": 16,
-      "propertyNames": {
-        "$ref": "#/$defs/LocalId"
-      },
-      "type": "object"
     },
     "kind": {
       "const": "CoordinatorRuntimeConfig",
       "type": "string"
+    },
+    "minimumObservationIntervalSeconds": {
+      "default": 30,
+      "description": "Stricter deployment spacing for every product completion observation.",
+      "format": "uint32",
+      "maximum": 86400,
+      "minimum": 30,
+      "type": "integer"
     },
     "namespace": {
       "maxLength": 60,
@@ -1009,6 +979,7 @@
     "secretProviders",
     "database",
     "namespace",
+    "connections",
     "apiVersion",
     "kind"
   ],

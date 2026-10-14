@@ -2,13 +2,27 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartRunRequest {
-    pub flow: String,
+    pub workflow: String,
+    #[serde(deserialize_with = "revision")]
+    pub workflow_revision: String,
     pub input: Value,
+}
+
+/// The active compiled contract visible to a caller allowed to start it.
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowContract {
+    pub workflow: String,
+    #[serde(deserialize_with = "revision")]
+    pub workflow_revision: String,
+    pub input: Value,
+    pub outcomes: BTreeMap<String, Value>,
 }
 
 /// The authenticated runtime's progress, not authorization to source records.
@@ -16,9 +30,10 @@ pub struct StartRunRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunStatus {
     pub run_id: Uuid,
-    pub workflow_id: String,
-    pub workflow_version: String,
-    pub definition_digest: String,
+    pub workflow: String,
+    #[serde(deserialize_with = "revision")]
+    pub workflow_revision: String,
+
     pub binding_digest: String,
     pub step: String,
     pub state: String,
@@ -112,11 +127,46 @@ pub struct RecoveryStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationIdentity>,
 }
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffectState {
+    Accepted,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EffectStatus {
+    pub step: String,
+    pub operation: OperationIdentity,
+    #[serde(deserialize_with = "revision")]
+    pub operation_revision: String,
+    pub state: EffectState,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WaitStatus {
+    pub step: String,
+    pub accepted_step: String,
+    pub completion: String,
+    #[serde(deserialize_with = "revision")]
+    pub completion_revision: String,
+    pub timeout_at: DateTime<Utc>,
+    pub next_observation_at: Option<DateTime<Utc>>,
+    pub not_before: DateTime<Utc>,
+    pub minimum_interval_seconds: u32,
+    pub observations: u32,
+    pub observation_limit: u32,
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunInspection {
     pub run: RunStatus,
     pub steps: Vec<StepStatus>,
+    pub effects: Vec<EffectStatus>,
+    pub waits: Vec<WaitStatus>,
     pub recovery: RecoveryStatus,
 }
 
@@ -191,3 +241,19 @@ pub struct RetryScheduled {
 
 // Inputs and authored outputs can carry protected source values. Debug is
 // intentionally not derived for those documents.
+
+fn revision<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    if value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+    }) {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(
+            "expected a computed workflow contract revision",
+        ))
+    }
+}

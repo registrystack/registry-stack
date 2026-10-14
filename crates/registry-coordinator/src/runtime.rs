@@ -176,59 +176,233 @@ impl AuthorizationConfig {
     }
 }
 
+/// One logical connection namespace. The discriminator selects its complete
+/// deployment contract; a connection cannot borrow another variant's authority.
+#[derive(Clone, Deserialize)]
+#[serde(remote = "Self", rename_all = "kebab-case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum ConnectionConfig {
+    Breg(BregConnectionConfig),
+    CaseworkReviewProducer(CaseworkConnectionConfig),
+    Messaging(MessagingConnectionConfig),
+    Scheduling(Box<SchedulingConnectionConfig>),
+    ExternalHttp(crate::external_http::ExternalHttpConfig),
+    Evaluation(crate::decision::DecisionConfig),
+}
+registry_platform_yaml::tagged_union!(ConnectionConfig);
+
 #[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConnectionConfig {
-    pub product: Product,
+pub struct BregConnectionConfig {
     #[serde(deserialize_with = "endpoint")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub base_url: Url,
     pub authorization: AuthorizationConfig,
-    /// Required for Scheduling connections with taskAuthority. Uses ordinary
-    /// read scopes under the original receipt owner, without taskAuthority.
+    #[serde(deserialize_with = "external")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::ExternalId")
+    )]
+    pub profile: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MessagingConnectionConfig {
+    #[serde(deserialize_with = "endpoint")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub base_url: Url,
+    pub authorization: AuthorizationConfig,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchedulingConnectionConfig {
+    #[serde(deserialize_with = "endpoint")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub base_url: Url,
+    pub authorization: AuthorizationConfig,
+    /// Ordinary receipt reads under the original owner, without taskAuthority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_authorization: Option<AuthorizationConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(deserialize_with = "optional_external")]
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CaseworkConnectionConfig {
+    #[serde(deserialize_with = "endpoint")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub base_url: Url,
+    pub authorization: AuthorizationConfig,
+    #[serde(deserialize_with = "external")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::ExternalId>")
+        schemars(with = "registry_platform_yaml::ExternalId")
     )]
-    pub profile: Option<String>,
-    /// Required for Casework connections and refused for every other product:
-    /// the review producer id the Casework project lists under
-    /// reviewProducers. Casework binds every submission to it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(deserialize_with = "optional_local")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::LocalId>")
-    )]
-    pub producer: Option<String>,
-    /// Casework connections only. Omitted means Casework sends this
-    /// Coordinator no completion events, and a review wait learns the result
-    /// only from its result checks.
+    pub profile: String,
+    #[serde(deserialize_with = "local")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub producer: String,
+    /// Authenticated minimized wake-ups; omission uses polling only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<ReviewCompletionConfig>,
-    /// Casework connections only: the seconds between two result checks while
-    /// a review wait is open, whether or not a completion event arrives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(extend("default" = DEFAULT_RESULT_CHECK_SECONDS)))]
     pub result_check_seconds: Option<registry_platform_yaml::BoundedU32<60, 86_400>>,
 }
 
-/// The seconds between two result checks of an open review wait when
-/// resultCheckSeconds is omitted.
 pub const DEFAULT_RESULT_CHECK_SECONDS: u32 = 900;
 
+/// A borrowed adapter view, never a second decoded configuration model.
+pub struct ProductBinding<'a> {
+    pub product: Product,
+    pub base_url: &'a Url,
+    pub authorization: &'a AuthorizationConfig,
+    pub observation_authorization: Option<&'a AuthorizationConfig>,
+    pub profile: Option<&'a String>,
+    pub producer: Option<&'a String>,
+    pub completion: Option<&'a ReviewCompletionConfig>,
+    pub result_check_seconds: Option<registry_platform_yaml::BoundedU32<60, 86_400>>,
+}
+
 impl ConnectionConfig {
-    /// The seconds between two result checks of an open review wait.
+    pub fn product_binding(&self) -> Option<ProductBinding<'_>> {
+        let (
+            product,
+            base_url,
+            authorization,
+            observation_authorization,
+            profile,
+            producer,
+            completion,
+            result_check_seconds,
+        ) = match self {
+            Self::Breg(c) => (
+                Product::Breg,
+                &c.base_url,
+                &c.authorization,
+                None,
+                Some(&c.profile),
+                None,
+                None,
+                None,
+            ),
+            Self::Messaging(c) => (
+                Product::Messaging,
+                &c.base_url,
+                &c.authorization,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            Self::Scheduling(c) => (
+                Product::Scheduling,
+                &c.base_url,
+                &c.authorization,
+                c.observation_authorization.as_ref(),
+                None,
+                None,
+                None,
+                None,
+            ),
+            Self::CaseworkReviewProducer(c) => (
+                Product::Casework,
+                &c.base_url,
+                &c.authorization,
+                None,
+                Some(&c.profile),
+                Some(&c.producer),
+                c.completion.as_ref(),
+                c.result_check_seconds,
+            ),
+            Self::ExternalHttp(_) | Self::Evaluation(_) => return None,
+        };
+        Some(ProductBinding {
+            product,
+            base_url,
+            authorization,
+            observation_authorization,
+            profile,
+            producer,
+            completion,
+            result_check_seconds,
+        })
+    }
+
+    pub fn external_http(&self) -> Option<&crate::external_http::ExternalHttpConfig> {
+        match self {
+            Self::ExternalHttp(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn decision(&self) -> Option<&crate::decision::DecisionConfig> {
+        match self {
+            Self::Evaluation(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn authorization(&self) -> Option<&AuthorizationConfig> {
+        self.product_binding().map(|b| b.authorization)
+    }
+
+    pub fn authorization_mut(&mut self) -> Option<&mut AuthorizationConfig> {
+        match self {
+            Self::Breg(c) => Some(&mut c.authorization),
+            Self::Messaging(c) => Some(&mut c.authorization),
+            Self::Scheduling(c) => Some(&mut c.authorization),
+            Self::CaseworkReviewProducer(c) => Some(&mut c.authorization),
+            Self::ExternalHttp(_) | Self::Evaluation(_) => None,
+        }
+    }
+
     pub fn result_check_seconds(&self) -> u32 {
-        self.result_check_seconds.map_or(
-            DEFAULT_RESULT_CHECK_SECONDS,
-            registry_platform_yaml::BoundedU32::get,
-        )
+        self.product_binding()
+            .and_then(|b| b.result_check_seconds)
+            .map_or(
+                DEFAULT_RESULT_CHECK_SECONDS,
+                registry_platform_yaml::BoundedU32::get,
+            )
+    }
+
+    fn interface(&self) -> &'static str {
+        match self {
+            Self::Breg(_) => "breg",
+            Self::CaseworkReviewProducer(_) => "casework",
+            Self::Messaging(_) => "messaging",
+            Self::Scheduling(_) => "scheduling",
+            Self::ExternalHttp(_) => "external-http",
+            Self::Evaluation(_) => "evaluation",
+        }
+    }
+}
+
+impl Serialize for ConnectionConfig {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        let (kind, value) = match self {
+            Self::Breg(c) => ("breg", serde_json::to_value(c)),
+            Self::CaseworkReviewProducer(c) => {
+                ("casework-review-producer", serde_json::to_value(c))
+            }
+            Self::Messaging(c) => ("messaging", serde_json::to_value(c)),
+            Self::Scheduling(c) => ("scheduling", serde_json::to_value(c)),
+            Self::ExternalHttp(c) => ("external-http", serde_json::to_value(c)),
+            Self::Evaluation(c) => ("evaluation", serde_json::to_value(c)),
+        };
+        let mut value = value.map_err(serde::ser::Error::custom)?;
+        value["type"] = json!(kind);
+        value.serialize(serializer)
     }
 }
 
@@ -276,34 +450,19 @@ pub struct RuntimeConfig {
     pub database: DatabaseConfig,
     #[cfg_attr(feature="schema", schemars(extend("pattern"="^coordinator_[a-z0-9_]*$", "maxLength"=60)))]
     pub namespace: String,
-    /// Omitted means no product bindings; external-only deployments may omit it.
-    #[serde(
-        default,
-        skip_serializing_if = "BTreeMap::is_empty",
-        deserialize_with = "connection_keys"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::LocalId, ConnectionConfig>", extend("maxProperties" = 16)))]
+    /// Stricter deployment spacing for every product completion observation.
+    #[serde(default = "minimum_observation_interval")]
+    pub minimum_observation_interval_seconds: registry_platform_yaml::BoundedU32<30, 86_400>,
+    /// One to sixteen named bindings, each selecting its own typed interface.
+    #[serde(deserialize_with = "connection_keys")]
+    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::LocalId, ConnectionConfig>", extend("minProperties" = 1, "maxProperties" = 16)))]
     pub connections: BTreeMap<String, ConnectionConfig>,
-    /// Omitted means external HTTP is unavailable. Names share the product
-    /// connection namespace and never provide authority to select other origins.
-    #[serde(
-        default,
-        skip_serializing_if = "BTreeMap::is_empty",
-        deserialize_with = "external_connection_keys"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::LocalId, crate::external_http::ExternalHttpConfig>", extend("maxProperties" = 16)))]
-    pub external_http_connections: BTreeMap<String, crate::external_http::ExternalHttpConfig>,
-    /// Omitted means decision evaluation is unavailable. Logical names share
-    /// the product and external HTTP connection namespace.
-    #[serde(
-        default,
-        skip_serializing_if = "BTreeMap::is_empty",
-        deserialize_with = "decision_connection_keys"
-    )]
-    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::LocalId, crate::decision::DecisionConfig>", extend("maxProperties" = 16)))]
-    pub decision_connections: BTreeMap<String, crate::decision::DecisionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment: Option<crate::deployment::DeploymentConfig>,
+}
+
+fn minimum_observation_interval() -> registry_platform_yaml::BoundedU32<30, 86_400> {
+    registry_platform_yaml::BoundedU32::new(30).expect("bounded default")
 }
 
 /// The shared reader checks the envelope before directly decoding RuntimeConfig.
@@ -404,13 +563,11 @@ impl RuntimeConfig {
                 "use a coordinator_ namespace with lowercase letters, digits or underscores",
             ));
         }
-        let connection_count = self.connections.len()
-            + self.external_http_connections.len()
-            + self.decision_connections.len();
+        let connection_count = self.connections.len();
         if connection_count == 0 || connection_count > 16 {
             errors.push(config_error(
                 "connections",
-                "declare between one and sixteen product, external HTTP or decision connections",
+                "declare between one and sixteen typed connections",
             ));
         }
         if let Some(deployment) = &self.deployment {
@@ -425,7 +582,31 @@ impl RuntimeConfig {
                 ));
             }
             let field = format!("connections.{name}");
-            check_endpoint(&binding.base_url).map_err(|_| config_error(&format!("{field}.baseUrl"), "use an HTTPS endpoint or explicit loopback HTTP IP URL without credentials, query or fragment")).map(|_| ()).unwrap_or_else(|error| errors.push(error));
+            let Some(binding) = binding.product_binding() else {
+                if let Some(binding) = binding.external_http() {
+                    errors.extend(binding.findings(&field));
+                    if let Some(auth) = &binding.authorization {
+                        errors.extend(auth.secret_reference_finding(
+                            &format!("{field}.authorization"),
+                            &self.secret_providers,
+                        ));
+                    }
+                } else if let Some(binding) = binding.decision() {
+                    errors.extend(binding.findings(&field));
+                    if let Some(reference) = binding.token_ref() {
+                        let member = format!("{field}.authorization.bearer.tokenRef");
+                        if self
+                            .secret_providers
+                            .check_reference(&member, reference.as_str())
+                            .is_err()
+                        {
+                            errors.push(config_error(&member, "enable the shared secret provider named by the evaluation credential reference"));
+                        }
+                    }
+                }
+                continue;
+            };
+            check_endpoint(binding.base_url).map_err(|_| config_error(&format!("{field}.baseUrl"), "use an HTTPS endpoint or explicit loopback HTTP IP URL without credentials, query or fragment")).map(|_| ()).unwrap_or_else(|error| errors.push(error));
             ServiceBaseUrl::new(binding.base_url.clone())
                 .map(|_| ())
                 .map_err(|_| {
@@ -536,7 +717,9 @@ impl RuntimeConfig {
             match binding.product {
                 Product::Breg
                     if binding.profile.as_ref().is_none_or(|p| {
-                        BRegRecordOptions::default().access_profile(p).is_err()
+                        BRegRecordOptions::default()
+                            .access_profile(p.as_str())
+                            .is_err()
                     }) =>
                 {
                     errors.push(config_error(
@@ -547,7 +730,6 @@ impl RuntimeConfig {
                 Product::Casework => {
                     if binding
                         .profile
-                        .as_deref()
                         .is_none_or(|profile| !valid_casework_profile(profile))
                     {
                         errors.push(config_error(
@@ -587,129 +769,22 @@ impl RuntimeConfig {
                         }
                     }
                 }
-                Product::Messaging | Product::Scheduling if binding.profile.is_some() => {
-                    errors.push(config_error(
-                        &format!("{field}.profile"),
-                        "remove profile; this product applies its own access policy",
-                    ));
-                }
                 _ => {}
-            }
-            if binding.product != Product::Casework {
-                for (member, present) in [
-                    ("producer", binding.producer.is_some()),
-                    ("completion", binding.completion.is_some()),
-                    ("resultCheckSeconds", binding.result_check_seconds.is_some()),
-                ] {
-                    if present {
-                        errors.push(config_error(
-                            &format!("{field}.{member}"),
-                            &format!("remove {member}; only Casework connections submit and wait for review requests"),
-                        ));
-                    }
-                }
-            }
-        }
-        for (name, binding) in &self.external_http_connections {
-            let field = format!("externalHttpConnections.{name}");
-            if name.parse::<registry_platform_yaml::LocalId>().is_err()
-                || self.connections.contains_key(name)
-            {
-                errors.push(config_error(
-                    &field,
-                    "use a valid logical connection name not already declared in connections",
-                ));
-            }
-            errors.extend(binding.findings(&field));
-            if let Some(auth) = &binding.authorization {
-                errors.extend(auth.secret_reference_finding(
-                    &format!("{field}.authorization"),
-                    &self.secret_providers,
-                ));
-            }
-        }
-        for (name, binding) in &self.decision_connections {
-            let field = format!("decisionConnections.{name}");
-            if name.parse::<registry_platform_yaml::LocalId>().is_err()
-                || self.connections.contains_key(name)
-                || self.external_http_connections.contains_key(name)
-            {
-                errors.push(config_error(
-                    &field,
-                    "use a valid logical connection name not already declared in another connection map",
-                ));
-            }
-            errors.extend(binding.findings(&field));
-            if let Some(reference) = binding.token_ref() {
-                let member = format!("{field}.authorization.bearer.tokenRef");
-                if self
-                    .secret_providers
-                    .check_reference(&member, reference.as_str())
-                    .is_err()
-                {
-                    errors.push(config_error(
-                        &member,
-                        "enable the shared secret provider named by the decision credential reference",
-                    ));
-                }
             }
         }
         errors
     }
 
     pub fn validate_workflow(&self, workflow: &crate::definition::Workflow) -> Result<()> {
-        for (name, product) in &workflow.connections {
-            if product == "decision" {
-                if !self.decision_connections.contains_key(name) {
-                    return Err(CoordinatorError::new(
-                        "workflow-binding",
-                        "the declared workflow connection has no matching decision binding",
-                    )
-                    .at("runtime.yaml", format!("decisionConnections.{name}"))
-                    .suggest(format!(
-                        "Configure decisionConnections.{name} in runtime.yaml using the workflow's logical connection name.",
-                    )));
-                }
-                continue;
-            }
-            if product == "external-http" {
-                if !self.external_http_connections.contains_key(name) {
-                    return Err(CoordinatorError::new(
-                        "workflow-binding",
-                        "the declared workflow connection has no matching external HTTP binding",
-                    )
-                    .at("runtime.yaml", format!("externalHttpConnections.{name}"))
-                    .suggest(format!(
-                        "Configure externalHttpConnections.{name} in runtime.yaml using the workflow's logical connection name.",
-                    )));
-                }
-                continue;
-            }
-            let expected = match product.as_str() {
-                "breg" => Product::Breg,
-                "casework" => Product::Casework,
-                "messaging" => Product::Messaging,
-                "scheduling" => Product::Scheduling,
-                _ => {
-                    return Err(config_error(
-                        "connections",
-                        "use a supported workflow product",
-                    ));
-                }
-            };
-            if !self
+        for (name, interface) in &workflow.connections {
+            if self
                 .connections
                 .get(name)
-                .is_some_and(|b| b.product == expected)
+                .is_none_or(|binding| binding.interface() != interface)
             {
-                return Err(CoordinatorError::new(
-                    "workflow-binding",
-                    "the declared workflow connection has no matching product binding",
-                )
-                .at("workflow.yaml", format!("connections.{name}"))
-                .suggest(
-                    "Configure the same logical name and product in runtime.yaml before admission.",
-                ));
+                return Err(CoordinatorError::new("workflow-binding", "the declared workflow connection has no matching interface binding")
+                    .at("runtime.yaml", pointer(&format!("connections.{name}")))
+                    .suggest("Configure the same logical name and required connection type in runtime.yaml before admission."));
             }
         }
         for (name, step) in &workflow.steps {
@@ -718,7 +793,11 @@ impl RuntimeConfig {
                     && self
                         .connections
                         .get(&call.connection)
-                        .is_some_and(|binding| binding.authorization.task_authority.is_some())
+                        .is_some_and(|binding| {
+                            binding
+                                .authorization()
+                                .is_some_and(|auth| auth.task_authority.is_some())
+                        })
                 {
                     return Err(CoordinatorError::new("workflow-binding", "governed action invocation requires an explicitly permitted BReg service profile")
                         .at("workflow.yaml", format!("steps.{name}.call"))
@@ -728,7 +807,11 @@ impl RuntimeConfig {
                     && self
                         .connections
                         .get(&call.connection)
-                        .is_some_and(|binding| binding.authorization.task_authority.is_none())
+                        .is_some_and(|binding| {
+                            binding
+                                .authorization()
+                                .is_some_and(|auth| auth.task_authority.is_none())
+                        })
                 {
                     return Err(CoordinatorError::new(
                         "workflow-binding",
@@ -747,13 +830,7 @@ impl RuntimeConfig {
 
     /// Configured semantic identity only. No secret is resolved or endpoint contacted.
     pub fn binding_digest(&self) -> Result<String> {
-        self.binding_digest_names(
-            self.connections
-                .keys()
-                .chain(self.external_http_connections.keys())
-                .chain(self.decision_connections.keys())
-                .map(String::as_str),
-        )
+        self.binding_digest_names(self.connections.keys().map(String::as_str))
     }
 
     /// Hash only this workflow's bindings. Unrelated deployment additions are compatible.
@@ -766,9 +843,13 @@ impl RuntimeConfig {
         self.validate()?;
         let mut identities = BTreeMap::new();
         for name in names {
-            if let Some(binding) = self.decision_connections.get(name) {
+            if let Some(binding) = self
+                .connections
+                .get(name)
+                .and_then(ConnectionConfig::decision)
+            {
                 let mut identity = serde_json::to_value(binding).map_err(|_| {
-                    config_error("decisionConnections", "correct the decision binding model")
+                    config_error("connections", "correct the evaluation binding model")
                 })?;
                 if let Some(bearer) = identity["authorization"]
                     .get_mut("bearer")
@@ -781,12 +862,13 @@ impl RuntimeConfig {
                 identities.insert(name, identity);
                 continue;
             }
-            if let Some(binding) = self.external_http_connections.get(name) {
+            if let Some(binding) = self
+                .connections
+                .get(name)
+                .and_then(ConnectionConfig::external_http)
+            {
                 let mut identity = serde_json::to_value(binding).map_err(|_| {
-                    config_error(
-                        "externalHttpConnections",
-                        "correct the external binding model",
-                    )
+                    config_error("connections", "correct the external binding model")
                 })?;
                 if let Some(auth) = identity
                     .get_mut("authorization")
@@ -818,7 +900,9 @@ impl RuntimeConfig {
                 identities.insert(name, identity);
                 continue;
             }
-            let binding = &self.connections[name];
+            let binding = self.connections[name]
+                .product_binding()
+                .expect("validated product binding");
             let auth = &binding.authorization;
             let mut scopes = auth.scopes.clone();
             scopes.sort();
@@ -834,8 +918,7 @@ impl RuntimeConfig {
             }
             identities.insert(name, identity);
         }
-        let value = serde_json::to_value(identities)
-            .map_err(|_| config_error("connections", "correct the binding model"))?;
+        let value = json!({"connections":identities,"minimumObservationIntervalSeconds":self.minimum_observation_interval_seconds});
         let bytes = registry_platform_canonical_json::canonicalize_json(&value)
             .map_err(|_| config_error("connections", "correct the binding model"))?;
         Ok(registry_platform_config::sha256_uri(&bytes))
@@ -918,20 +1001,9 @@ pub fn runtime_schema() -> Result<String> {
         ),
     )
     .map_err(|_| config_error("", "restore the identifier schema generator"))?;
-    schema["properties"]["connections"] = json!({"type":"object", "default":{}, "maxProperties":16,
-        "description":"Omitted means no product bindings; at least one product, external HTTP or decision connection is required.",
+    schema["properties"]["connections"] = json!({"type":"object", "minProperties":1, "maxProperties":16,
+        "description":"Named deployment bindings with one explicit type per connection.",
         "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/ConnectionConfig"}});
-    schema["properties"]["externalHttpConnections"] = json!({"type":"object", "default":{}, "maxProperties":16,
-        "description":"Omitted means external HTTP is unavailable. Names must be distinct from product connections.",
-        "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/ExternalHttpConfig"}});
-    schema["properties"]["decisionConnections"] = json!({"type":"object", "default":{}, "maxProperties":16,
-        "description":"Omitted means decision evaluation is unavailable. Names must be distinct from product and external HTTP connections.",
-        "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/DecisionConfig"}});
-    schema["allOf"] = json!([{"anyOf":[
-        {"required":["connections"],"properties":{"connections":{"minProperties":1}}},
-        {"required":["externalHttpConnections"],"properties":{"externalHttpConnections":{"minProperties":1}}},
-        {"required":["decisionConnections"],"properties":{"decisionConnections":{"minProperties":1}}}
-    ]}]);
     schema["properties"]["database"] = json!({"allOf":[
         {"$ref":"#/$defs/DatabaseConfig"},
         {"properties":{"testOnlyPlaintext":{"const":false}}}
@@ -939,36 +1011,30 @@ pub fn runtime_schema() -> Result<String> {
     // Distinct roots and digests per pin, and one package per workflow id, are
     // load-time checks: JSON Schema compares whole items only.
     schema["$defs"]["DeploymentConfig"]["properties"]["packages"] = json!({
-        "type":"array", "minItems":1, "maxItems":crate::deployment::MAX_FLOWS, "uniqueItems":true,
-        "description":"One pinned package per flow; the flow is the package's workflow id. List each package root and digest once.",
+        "type":"array", "minItems":1, "maxItems":crate::deployment::MAX_WORKFLOWS, "uniqueItems":true,
+        "description":"One pinned package per workflow. List each package root and digest once.",
         "items":{"allOf":[
             {"$ref":"#/$defs/PackageConfig"},
             {"required":["expectedDigest"], "properties":{"expectedDigest":{"$ref":"#/$defs/Digest"}}}
         ], "unevaluatedProperties":false}
     });
-    schema["$defs"]["ClientPolicy"]["properties"]["flows"]["items"] = json!({
+    schema["$defs"]["ClientPolicy"]["properties"]["workflows"]["items"] = json!({
         "$ref":"#/$defs/ExternalId", "maxLength":64, "pattern":"^[A-Za-z0-9_-]+$"
     });
-    schema["$defs"]["ClientPolicy"]["properties"]["clientId"]["maxLength"] = json!(128);
     schema["$defs"]["AuthorizationConfig"]["properties"]["clientId"]["maxLength"] = json!(256);
     schema["$defs"]["AccessConfig"]["properties"]["scopeClaim"]["maxLength"] = json!(128);
-    // Admission policy requires a closed list, even though the reusable
-    // shared client block leaves the product to decide whether unrestricted
-    // admission is acceptable. Narrow the use without changing the shared type.
-    let access = &mut schema["$defs"]["AccessConfig"];
-    let required = access["required"].as_array_mut().unwrap();
-    if !required.contains(&json!("allowedClients")) {
-        required.push(json!("allowedClients"));
-    }
-    let clients = &mut access["properties"]["allowedClients"];
-    clients.as_object_mut().unwrap().remove("default");
-    clients["description"] = json!("List one to sixty-four distinct admitted OAuth client IDs. Coordinator refuses omission, an empty list and unrestricted.");
-    clients["type"] = json!("array");
-    clients["minItems"] = json!(1);
-    clients["maxItems"] = json!(64);
-    clients["uniqueItems"] = json!(true);
-    clients["items"] = json!({"$ref":"#/$defs/ExternalId", "maxLength":128});
-
+    schema["$defs"]["AccessConfig"]["properties"]["policies"] = json!({
+        "type":"object", "minProperties":1, "maxProperties":64,
+        "propertyNames":{"$ref":"#/$defs/ExternalId", "maxLength":128},
+        "additionalProperties":{"$ref":"#/$defs/ClientPolicy"}
+    });
+    schema["$defs"]["AccessConfig"]["properties"]["assertionIssuers"] =
+        shared["$defs"]["OidcClientsConfig"]["properties"]["assertionIssuers"].clone();
+    schema["$defs"]["ClientPolicy"]["allOf"] = json!([{
+        "if":{"properties":{"actions":{"items":{"enum":["doctor", "restore-hold", "release-restore-hold", "release-admission-hold", "complete-execution-recovery", "retain"]}}}},
+        "then":{"not":{"required":["workflows"]}},
+        "else":{"required":["workflows"]}
+    }]);
     schema["$id"] = json!(
         "https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json"
     );
@@ -978,38 +1044,22 @@ pub fn runtime_schema() -> Result<String> {
         .as_array_mut()
         .unwrap()
         .extend([json!("apiVersion"), json!("kind")]);
-    // Only task-bound Scheduling consumes an observation identity, and it
-    // must remain observable after the grant ends.
-    schema
-        .get_mut("$defs")
-        .ok_or_else(|| config_error("/", "restore the runtime schema generator"))?
-        ["ConnectionConfig"]["allOf"] = json!([{
-        "if": {
-            "required": ["product", "authorization"],
-            "properties": {
-                "product": {"const": "scheduling"},
-                "authorization": {
-                    "required": ["taskAuthority"],
-                    "properties": {"taskAuthority": {"type": "object"}}
-                }
-            }
-        },
-        "then": {
-            "required": ["observationAuthorization"],
-            "properties": {"observationAuthorization": {"type": "object"}}
-        },
+    // Only task-bound Scheduling consumes an observation identity. Its
+    // ordinary receipt read remains available after the original grant expires.
+    let scheduling = schema["$defs"]["ConnectionConfig"]["oneOf"]
+        .as_array_mut()
+        .and_then(|variants| {
+            variants
+                .iter_mut()
+                .find(|variant| variant["properties"]["type"]["const"] == "scheduling")
+        })
+        .ok_or_else(|| config_error("", "restore the typed connection schema"))?;
+    scheduling["allOf"] = json!([{
+        "if": {"properties": {"authorization": {
+            "required": ["taskAuthority"], "properties": {"taskAuthority": {"type": "object"}}
+        }}},
+        "then": {"required": ["observationAuthorization"]},
         "else": {"not": {"required": ["observationAuthorization"]}}
-    }, {
-        "if": {
-            "required": ["product"],
-            "properties": {"product": {"const": "casework"}}
-        },
-        "then": {"required": ["producer", "profile"]},
-        "else": {"not": {"anyOf": [
-            {"required": ["producer"]},
-            {"required": ["completion"]},
-            {"required": ["resultCheckSeconds"]}
-        ]}}
     }]);
     let mut text = serde_json::to_string_pretty(&schema)
         .map_err(|_| config_error("/", "restore the runtime schema generator"))?;
@@ -1034,23 +1084,6 @@ pub(crate) fn unique_strings<'de, D: Deserializer<'de>>(
                 .collect()
         },
     )
-}
-
-fn external_connection_keys<'de, D: Deserializer<'de>>(
-    d: D,
-) -> std::result::Result<BTreeMap<String, crate::external_http::ExternalHttpConfig>, D::Error> {
-    BTreeMap::<registry_platform_yaml::LocalId, crate::external_http::ExternalHttpConfig>::deserialize(d).map(|map| map.into_iter().map(|(key, value)| (key.into_string(), value)).collect())
-}
-
-fn decision_connection_keys<'de, D: Deserializer<'de>>(
-    d: D,
-) -> std::result::Result<BTreeMap<String, crate::decision::DecisionConfig>, D::Error> {
-    BTreeMap::<registry_platform_yaml::LocalId, crate::decision::DecisionConfig>::deserialize(d)
-        .map(|map| {
-            map.into_iter()
-                .map(|(key, value)| (key.into_string(), value))
-                .collect()
-        })
 }
 
 fn connection_keys<'de, D: Deserializer<'de>>(
@@ -1107,10 +1140,9 @@ fn optional_external<'de, D: Deserializer<'de>>(
 ) -> std::result::Result<Option<String>, D::Error> {
     external(d).map(Some)
 }
-fn optional_local<'de, D: Deserializer<'de>>(
-    d: D,
-) -> std::result::Result<Option<String>, D::Error> {
-    registry_platform_yaml::LocalId::deserialize(d).map(|id| Some(id.into_string()))
+fn local<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
+    registry_platform_yaml::LocalId::deserialize(d)
+        .map(registry_platform_yaml::LocalId::into_string)
 }
 
 #[cfg(feature = "schema")]

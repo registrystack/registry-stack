@@ -17,7 +17,7 @@ use std::{
 use tokio::sync::{Notify, Semaphore};
 use uuid::Uuid;
 
-const MESSAGE: &str = r#"fn message(record) { #{ senderProfile: "reminders", to: #{ email: record.contact }, content: #{ text: "Synthetic appointment reminder" } } }"#;
+const MESSAGE: &str = r#"fn message(args) { let record = args.record;  #{ senderProfile: "reminders", to: #{ email: record.data.domainData.contact }, content: #{ text: "Synthetic appointment reminder" } } }"#;
 static POOL_SATURATION_TEST: Semaphore = Semaphore::const_new(1);
 /// A fixed input each mutating operation's contract accepts.
 fn command(kind: &str) -> &'static str {
@@ -26,7 +26,7 @@ fn command(kind: &str) -> &'static str {
             r#"#{ appointment: #{ admission: #{ offering: "synthetic-offering", start: "2026-10-11T09:00:00Z", party: #{ recipients: 1, attendees: 1 }, policyRevision: 1, capabilities: [], prerequisites: [] } }, grant: #{ id: "00000000-0000-4000-8000-000000000000", expiresAt: 1 } }"#
         }
         "action" => {
-            r#"#{ action: "send-reminder", input: #{ destination: "synthetic@example.invalid" } }"#
+            r#"#{ input: #{ applicationId: "00000000-0000-4000-8000-000000000001", reason: "Synthetic recovery proof" } }"#
         }
         _ => {
             r#"#{ senderProfile: "reminders", to: #{ email: "synthetic@example.invalid" }, content: #{ text: "Synthetic appointment reminder" } }"#
@@ -34,75 +34,106 @@ fn command(kind: &str) -> &'static str {
     }
 }
 const FUNCTIONS: &str = r#"
-fn timer(input) { input.at }
-fn record(input) { #{ collection: "people", recordId: input.id } }
-fn permission(record) { if record.allowed { "yes" } else { "no" } }
-fn message(record) { #{ senderProfile: "reminders", to: #{ email: record.contact }, content: #{ text: "Synthetic appointment reminder" } } }
-fn receipt(message) { #{ messageId: message.messageId } }
+fn timer(args) { let input = args.input;  input.at }
+fn record(args) { let input = args.input;  #{ collection: "people", recordId: input.id } }
+fn permission(args) { let record = args.record;  if record.data.domainData.allowed { "yes" } else { "no" } }
+fn message(args) { let record = args.record;  #{ senderProfile: "reminders", to: #{ email: record.data.domainData.contact }, content: #{ text: "Synthetic appointment reminder" } } }
+fn receipt(args) { let message = args.message;  #{ messageId: message.id } }
 "#;
 
 const DECLARED_REFUSAL_WORKFLOW: &str = r#"
 apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project: {id: synthetic-declared-refusal, version: v1}
-input: {type: object}
-connections: {source: breg}
-functionsFile: functions.rhai
-deadlineSeconds: 3600
-start: action
-steps:
+contracts:
+  facilities: {type: breg, source: facilities.json}
+functions:
   action:
-    type: call
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: action
+    inputs: {input: {type: object}}
+    output: {operationInput: invoke-breg-action}
+  keep:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: keep
+    inputs: {value: {operationRefusal: invoke-breg-action}}
+    output: {operationRefusal: invoke-breg-action}
+operations:
+  invoke-breg-action:
+    uses: breg.invoke-action/v1
     connection: source
-    operation: invoke-breg-action
-    input: {type: function, function: action, arguments: [{type: input}]}
-    next: applied
-    onDeclaredRefusal: refused
-  applied: {type: finish, outcome: applied}
-  refused:
-    type: finish
-    outcome: refused
-    output: {type: function, function: keep, arguments: [{type: step, step: action}]}
-outcomes:
-  applied: {type: 'null'}
-  refused:
-    type: object
-    additionalProperties: false
-    required: [refusalCode]
-    properties: {refusalCode: {type: string, minLength: 1, maxLength: 128}}
+    action: {contract: facilities, id: correct-address}
+workflow:
+  input: {type: object}
+  deadlineSeconds: 3600
+  start: action
+  steps:
+    action:
+      type: call
+      operation: invoke-breg-action
+      input: {type: function, function: action, inputs: {input: {type: input}}}
+      next: applied
+      onDeclaredRefusal: refused
+    applied: {type: finish, outcome: applied}
+    refused:
+      type: finish
+      outcome: refused
+      output: {type: function, function: keep, inputs: {value: {type: step, step: action}}}
+  outcomes:
+    applied: {type: 'null'}
+    refused: {operationRefusal: invoke-breg-action}
 "#;
 
 const DECLARED_REFUSAL_FUNCTIONS: &str = r#"
-fn action(input) { #{action: "synthetic-action", input: #{subject: input.id}} }
-fn keep(value) { value }
+fn action(args) { #{input: #{facilityId: "00000000-0000-4000-8000-000000000001", addressLine: "1 Example Road", city: "Test City", postalCode: "invalid"}} }
+fn keep(args) { let value = args.value;  value }
 "#;
 
 const DECLARED_REFUSAL_THEN_CALL_WORKFLOW: &str = r#"
 apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project: {id: synthetic-declared-refusal-deadline, version: v1}
-input: {type: object}
-connections: {source: breg}
-functionsFile: functions.rhai
-deadlineSeconds: 3600
-start: action
-steps:
+contracts:
+  facilities: {type: breg, source: facilities.json}
+functions:
   action:
-    type: call
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: action
+    inputs: {input: {type: object}}
+    output: {operationInput: invoke-breg-action}
+  keep:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: keep
+    inputs: {value: {operationRefusal: invoke-breg-action}}
+    output: {operationRefusal: invoke-breg-action}
+operations:
+  invoke-breg-action:
+    uses: breg.invoke-action/v1
     connection: source
-    operation: invoke-breg-action
-    input: {type: function, function: action, arguments: [{type: input}]}
-    next: applied
-    onDeclaredRefusal: later
-  later:
-    type: call
-    connection: source
-    operation: invoke-breg-action
-    input: {type: function, function: action, arguments: [{type: input}]}
-    next: applied
-  applied: {type: finish, outcome: applied}
-outcomes:
-  applied: {type: 'null'}
+    action: {contract: facilities, id: correct-address}
+workflow:
+  input: {type: object}
+  deadlineSeconds: 3600
+  start: action
+  steps:
+    action:
+      type: call
+      operation: invoke-breg-action
+      input: {type: function, function: action, inputs: {input: {type: input}}}
+      next: applied
+      onDeclaredRefusal: later
+    later:
+      type: call
+      operation: invoke-breg-action
+      input: {type: function, function: action, inputs: {input: {type: input}}}
+      next: applied
+    applied: {type: finish, outcome: applied}
+  outcomes:
+    applied: {type: 'null'}
 "#;
 const WORKFLOW: &str = r#"
 apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
@@ -110,45 +141,147 @@ kind: CoordinatorProject
 project:
   id: synthetic-reminder
   version: v1
-input: {type: object}
-connections: { source: breg, messages: messaging }
-functionsFile: functions.rhai
-deadlineSeconds: 3600
-start: wait
-steps:
-  wait:
-    type: wait-until
-    waitUntil: {type: function, function: timer, arguments: [{type: input}]}
-    next: read
-  read:
-    type: call
-    connection: source
-    operation: read-record
-    input: {type: function, function: record, arguments: [{type: input}]}
-    next: choose
-  choose:
-    type: choose
-    choose: {type: function, function: permission, arguments: [{type: step, step: read}]}
-    cases: {yes: message, no: withdrawn}
+functions:
+  timer:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: timer
+    inputs:
+      input:
+        type: object
+    output:
+      type: string
+      format: date-time
+  record:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: record
+    inputs:
+      input:
+        type: object
+    output:
+      operationInput: read-record
+  permission:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: permission
+    inputs:
+      record:
+        operationOutput: read-record
+    output:
+      type: string
+      enum:
+      - 'yes'
+      - 'no'
   message:
-    type: call
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: message
+    inputs:
+      record:
+        operationOutput: read-record
+    output:
+      operationInput: submit-message
+  receipt:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: receipt
+    inputs:
+      message:
+        operationOutput: submit-message
+    output:
+      type: object
+      properties:
+        messageId:
+          type: string
+      required:
+      - messageId
+      additionalProperties: false
+operations:
+  read-record:
+    uses: breg.read-record/v1
+    connection: source
+  submit-message:
+    uses: messaging.submit-message/v1
     connection: messages
-    operation: submit-message
-    input: {type: function, function: message, arguments: [{type: step, step: read}]}
-    next: done
-  done:
-    type: finish
-    outcome: sent
-    output: {type: function, function: receipt, arguments: [{type: step, step: message}]}
-  withdrawn: {type: finish, outcome: withdrawn}
-outcomes:
-  sent:
-    type: object
-    properties: {messageId: {type: string}}
-    required: [messageId]
-    additionalProperties: false
-  withdrawn: {type: 'null'}
+workflow:
+  input: {type: object}
+  deadlineSeconds: 3600
+  start: wait
+  steps:
+    wait:
+      type: wait-until
+      waitUntil:
+        type: function
+        function: timer
+        inputs:
+          input:
+            type: input
+      next: read
+    read:
+      type: call
+      operation: read-record
+      input:
+        type: function
+        function: record
+        inputs:
+          input:
+            type: input
+      next: choose
+    choose:
+      type: choose
+      choose:
+        type: function
+        function: permission
+        inputs:
+          record:
+            type: step
+            step: read
+      cases:
+        'yes': message
+        'no': withdrawn
+    message:
+      type: call
+      operation: submit-message
+      input:
+        type: function
+        function: message
+        inputs:
+          record:
+            type: step
+            step: read
+      next: done
+    done:
+      type: finish
+      outcome: sent
+      output:
+        type: function
+        function: receipt
+        inputs:
+          message:
+            type: step
+            step: message
+    withdrawn:
+      type: finish
+      outcome: withdrawn
+  outcomes:
+    sent:
+      type: object
+      properties:
+        messageId: {type: string}
+      required: [messageId]
+      additionalProperties: false
+    withdrawn:
+      type: 'null'
 "#;
+
+fn record(allowed: bool, contact: &str) -> Value {
+    json!({"meta":{"registryIdentifier":"fixture","datasetIdentifier":"people","entityTypeIdentifier":"person"},
+        "data":{"recordIdentifier":"synthetic-contact-canary","revisionIdentifier":"1","domainData":{"allowed":allowed,"contact":contact}}})
+}
+fn receipt() -> Value {
+    json!({"id":"00000000-0000-4000-8000-000000000101","status":"queued","links":{"self":"/v1/messages/00000000-0000-4000-8000-000000000101","cancel":"/v1/messages/00000000-0000-4000-8000-000000000101/cancel"}})
+}
 
 struct Harness {
     url: String,
@@ -169,6 +302,8 @@ async fn harness() -> Harness {
     );
     store.migrate().await.expect("isolated migration");
     let project = tempfile::tempdir().expect("project");
+    std::fs::write(project.path().join("facilities.json"), include_str!("../../../products/coordinator/examples/proposal-follow-up/generated/facilities.contract.json")).unwrap();
+    std::fs::write(project.path().join("applications.json"), include_str!("../../../products/coordinator/examples/governed-action-follow-up/generated/applications.contract.json")).unwrap();
     std::fs::write(project.path().join("workflow.yaml"), WORKFLOW).expect("workflow");
     std::fs::write(project.path().join("functions.rhai"), FUNCTIONS).expect("functions");
     let definition = Definition::load(project.path()).expect("valid synthetic definition");
@@ -327,9 +462,10 @@ impl AdapterSet for Fake {
             .expect("requests")
             .push(request.clone());
         if request.operation == Operation::ReadRecord {
-            return CallOutcome::Success(
-                json!({"allowed":self.allowed,"contact":"synthetic-destination-canary"}),
-            );
+            return CallOutcome::Success(record(
+                self.allowed,
+                "synthetic-destination-canary@example.invalid",
+            ));
         }
         if let Some(release) = &self.release {
             self.entered.notify_one();
@@ -340,9 +476,7 @@ impl AdapterSet for Fake {
             .lock()
             .expect("outcomes")
             .pop_front()
-            .unwrap_or_else(|| {
-                CallOutcome::Success(json!({"messageId":"synthetic-original-receipt"}))
-            })
+            .unwrap_or_else(|| CallOutcome::Success(receipt()))
     }
 }
 async fn reach_message(worker: &Worker) {
@@ -358,7 +492,7 @@ fn uncertain() -> CallOutcome {
 
 fn declared_refusal() -> CallOutcome {
     CallOutcome::DeclaredRefusal(
-        DeclaredRefusal::new("synthetic-not-eligible").expect("bounded synthetic refusal"),
+        DeclaredRefusal::new("invalid-postal-code").expect("bounded synthetic refusal"),
     )
 }
 
@@ -396,7 +530,7 @@ impl AdapterSet for PreparedFake {
             request.operation.is_read(),
             "mutations require persisted preparation"
         );
-        CallOutcome::Success(json!({"allowed":true,"contact":"synthetic@example.invalid"}))
+        CallOutcome::Success(record(true, "synthetic@example.invalid"))
     }
 
     async fn call_prepared(&self, request: &CallRequest, bytes: Option<&[u8]>) -> CallOutcome {
@@ -408,7 +542,9 @@ impl AdapterSet for PreparedFake {
         if calls.len() == 1 {
             uncertain()
         } else {
-            CallOutcome::Success(json!({"messageId":"original-action-receipt"}))
+            CallOutcome::Success(
+                json!({"action":"request-information","applicationId":"00000000-0000-4000-8000-000000000101","results":{"application":{"recordType":"application","recordId":"00000000-0000-4000-8000-000000000001","revision":2}}}),
+            )
         }
     }
 }
@@ -481,10 +617,10 @@ async fn declared_refusal_is_checkpointed_and_prior_uncertainty_cannot_take_its_
     assert!(!routed.uncertain);
     assert_eq!(
         h.output_values(run).await["action"],
-        json!({"refusalCode":"synthetic-not-eligible"})
+        json!({"refusalCode":"invalid-postal-code"})
     );
     assert!(
-        !h.durable_rows(run).await.contains("synthetic-not-eligible"),
+        !h.durable_rows(run).await.contains("invalid-postal-code"),
         "the branch code is sealed at rest"
     );
     h.sql("UPDATE {schema}.runs SET deadline_at=clock_timestamp()-interval '1 second'")
@@ -501,7 +637,7 @@ async fn declared_refusal_is_checkpointed_and_prior_uncertainty_cannot_take_its_
     assert_eq!(finished.outcome.as_deref(), Some("refused"));
     assert_eq!(
         finished.output,
-        Some(json!({"refusalCode":"synthetic-not-eligible"}))
+        Some(json!({"refusalCode":"invalid-postal-code"}))
     );
     assert_eq!(fake.calls.lock().unwrap().len(), 1);
 
@@ -574,7 +710,7 @@ async fn cancellation_racing_a_declared_refusal_records_no_external_effect() {
     assert_eq!(status.step, "action");
     assert_eq!(
         h.output_values(run).await["action"],
-        json!({"refusalCode":"synthetic-not-eligible"})
+        json!({"refusalCode":"invalid-postal-code"})
     );
     assert!(
         !Worker::new(h.store.clone(), fake.clone())
@@ -745,7 +881,8 @@ async fn external_directory() -> ExternalDirectory {
             "migrationUrlRef":"secret:env/COORDINATOR_EXTERNAL_TEST_UNRESOLVED_DATABASE"
         },
         "namespace":h.namespace,
-        "externalHttpConnections":{"directory":{
+        "connections":{"directory":{
+            "type":"external-http",
             "baseUrl":server.uri(),
             "paths":["offices"],
             "queryParameters":["district"],
@@ -911,17 +1048,20 @@ async fn prepared_command_survives_restart_without_refreshing_conditions_or_key(
     let mut h = harness().await;
     std::fs::write(
         h.project.path().join("workflow.yaml"),
-        WORKFLOW
-            .replace("messages: messaging", "messages: breg")
-            .replace("operation: submit-message", "operation: invoke-breg-action"),
+        &prepared_action_workflow(),
     )
     .unwrap();
     std::fs::write(
         h.project.path().join("functions.rhai"),
-        FUNCTIONS.replace(
-            MESSAGE,
-            &format!("fn message(record) {{ {} }}", command("action")),
-        ),
+        FUNCTIONS
+            .replace(
+                MESSAGE,
+                &format!(
+                    "fn message(args) {{ let record = args.record; {} }}",
+                    command("action")
+                ),
+            )
+            .replace("message.id", "message.applicationId"),
     )
     .unwrap();
     h.definition = Definition::load(h.project.path()).unwrap();
@@ -968,17 +1108,20 @@ async fn refused_preparation_never_dispatches_or_claims_an_uncertain_mutation() 
     let mut h = harness().await;
     std::fs::write(
         h.project.path().join("workflow.yaml"),
-        WORKFLOW
-            .replace("messages: messaging", "messages: breg")
-            .replace("operation: submit-message", "operation: invoke-breg-action"),
+        &prepared_action_workflow(),
     )
     .unwrap();
     std::fs::write(
         h.project.path().join("functions.rhai"),
-        FUNCTIONS.replace(
-            MESSAGE,
-            &format!("fn message(record) {{ {} }}", command("action")),
-        ),
+        FUNCTIONS
+            .replace(
+                MESSAGE,
+                &format!(
+                    "fn message(args) {{ let record = args.record; {} }}",
+                    command("action")
+                ),
+            )
+            .replace("message.id", "message.applicationId"),
     )
     .unwrap();
     h.definition = Definition::load(h.project.path()).unwrap();
@@ -1091,10 +1234,7 @@ async fn withdrawn_permission_produces_no_message() {
 async fn same_key_retry_uses_original_command_and_safe_status() {
     let h = harness().await;
     let run = h.admit().await;
-    let fake = Fake::new(vec![
-        uncertain(),
-        CallOutcome::Success(json!({"messageId":"synthetic-original-receipt"})),
-    ]);
+    let fake = Fake::new(vec![uncertain(), CallOutcome::Success(receipt())]);
     let worker = Worker::new(h.store.clone(), fake.clone());
     reach_message(&worker).await;
     assert!(worker.tick().await.expect("ambiguous mutation"));
@@ -1125,7 +1265,7 @@ async fn same_key_retry_uses_original_command_and_safe_status() {
     assert_eq!(h.store.status(run).await.expect("status").state, "finished");
     assert_eq!(
         h.store.status(run).await.expect("status").output,
-        Some(json!({"messageId":"synthetic-original-receipt"}))
+        Some(json!({"messageId":"00000000-0000-4000-8000-000000000101"}))
     );
     let requests = fake.requests.lock().expect("requests");
     let messages = requests
@@ -1213,7 +1353,7 @@ async fn deadline_stops_first_effect_and_same_key_mutation_retry() {
 }
 
 #[tokio::test]
-async fn immutable_versions_and_per_run_retry_bindings_are_preserved() {
+async fn immutable_revisions_and_per_run_retry_bindings_are_preserved() {
     let h = harness().await;
     let run = h.admit().await;
     h.store
@@ -1233,13 +1373,18 @@ async fn immutable_versions_and_per_run_retry_bindings_are_preserved() {
     .unwrap();
     let changed = Definition::load(h.project.path()).unwrap();
     assert_ne!(changed.digest, h.definition.digest);
+    let next = h
+        .store
+        .admit(&changed, input(Utc::now()), "p", "another", "binding-a")
+        .await
+        .unwrap();
     assert_eq!(
-        h.store
-            .admit(&changed, input(Utc::now()), "p", "another", "binding-a")
-            .await
-            .expect_err("definition conflict")
-            .code,
-        "workflow-version-conflict"
+        h.store.status(next).await.unwrap().workflow_revision,
+        changed.digest
+    );
+    assert_eq!(
+        h.store.status(run).await.unwrap().workflow_revision,
+        h.definition.digest
     );
     assert_eq!(
         h.store
@@ -1421,7 +1566,10 @@ async fn occupied_namespace_is_refused_without_touching_existing_tables() {
 #[tokio::test]
 async fn over_budget_mapping_stops_before_the_next_mutation() {
     let h = harness().await;
-    let source = FUNCTIONS.replace(MESSAGE, "fn message(record) { loop { } }");
+    let source = FUNCTIONS.replace(
+        MESSAGE,
+        "fn message(args) { let record = args.record;  loop { } }",
+    );
     std::fs::write(h.project.path().join("functions.rhai"), source).unwrap();
     let definition = Definition::load(h.project.path())
         .expect("bounded interpreter accepts valid function syntax");
@@ -1455,13 +1603,13 @@ async fn over_budget_mapping_stops_before_the_next_mutation() {
 async fn a_call_input_outside_the_operation_input_is_refused_before_dispatch_with_its_path() {
     for (message, path) in [
         (
-            "fn message(record) { #{ senderProfile: 7, to: #{ email: record.contact }, content: #{ text: \"Synthetic appointment reminder\" } } }",
+            "fn message(args) { let record = args.record;  #{ senderProfile: 7, to: #{ email: record.data.domainData.contact }, content: #{ text: \"Synthetic appointment reminder\" } } }",
             "/senderProfile",
         ),
         // An unexpected member is recorded at the object that holds it, so a
         // member name computed from source data is never stored.
         (
-            "fn message(record) { #{ senderProfile: \"reminders\", to: #{ email: record.contact }, synthetic_member_canary: record.contact } }",
+            "fn message(args) { let record = args.record;  #{ senderProfile: \"reminders\", to: #{ email: record.data.domainData.contact }, synthetic_member_canary: record.data.domainData.contact } }",
             "",
         ),
     ] {
@@ -1471,6 +1619,11 @@ async fn a_call_input_outside_the_operation_input_is_refused_before_dispatch_wit
             FUNCTIONS.replace(MESSAGE, message),
         )
         .unwrap();
+        // A permissive Function result still cannot bypass the host's exact
+        // Operation contract or freeze an invalid command.
+        let mut workflow = authored_workflow_value(WORKFLOW);
+        workflow["functions"]["message"]["output"] = json!({"type":"object"});
+        std::fs::write(h.project.path().join("workflow.yaml"), workflow.to_string()).unwrap();
         let definition = Definition::load(h.project.path()).unwrap();
         let run = h
             .store
@@ -1547,7 +1700,7 @@ async fn pure_steps_finalize_a_predeadline_receipt_but_never_start_a_late_mutati
     assert_eq!(status.state, "finished");
     assert_eq!(
         status.output,
-        Some(json!({"messageId":"synthetic-original-receipt"}))
+        Some(json!({"messageId":"00000000-0000-4000-8000-000000000101"}))
     );
     assert_eq!(
         fake.requests
@@ -1620,15 +1773,17 @@ async fn immutable_versions_coexist_and_waiting_v1_uses_its_pinned_source() {
         assert!(worker.tick().await.unwrap());
     }
     assert_eq!(h.store.status(v2).await.unwrap().state, "finished");
-    assert_eq!(h.store.status(v2).await.unwrap().workflow_version, "v2");
+    assert_eq!(
+        h.store.status(v2).await.unwrap().workflow_revision,
+        definition_v2.digest
+    );
     let listed = h.store.list_runs(100).await.unwrap();
     assert_eq!(listed.len(), 2);
     assert_eq!(listed[0].run_id, v2);
     assert_eq!(listed[1].run_id, v1);
     let waiting = h.store.status(v1).await.unwrap();
     assert_eq!(waiting.next_due_at, v1_due);
-    assert_eq!(waiting.workflow_version, "v1");
-    assert_eq!(waiting.definition_digest, h.definition.digest);
+    assert_eq!(waiting.workflow_revision, h.definition.digest);
     assert_eq!(waiting.state, "running");
     h.sql(&format!(
         "UPDATE {{schema}}.jobs SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE run_id='{v1}' AND state='pending'"
@@ -1651,12 +1806,19 @@ async fn immutable_versions_coexist_and_waiting_v1_uses_its_pinned_source() {
 }
 
 #[tokio::test]
-async fn an_idempotency_key_returns_its_original_version_before_new_schema_validation() {
+async fn an_idempotency_key_recovers_its_original_revision_before_active_schema_validation() {
     let h = harness().await;
+    let owner = actor("owner", false);
     let original = input(Utc::now() + Duration::minutes(1));
     let first = h
         .store
-        .admit(&h.definition, original.clone(), "p", "stable", "binding-a")
+        .admit_owned(
+            &h.definition,
+            original.clone(),
+            &owner,
+            "stable",
+            "binding-a",
+        )
         .await
         .unwrap();
     std::fs::write(
@@ -1669,28 +1831,89 @@ async fn an_idempotency_key_returns_its_original_version_before_new_schema_valid
     .unwrap();
     let v2 = Definition::load(h.project.path()).unwrap();
     assert!(v2.validate_input(&original).is_err());
+    let runtime_path = h
+        .project
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("runtime.yaml");
+    std::fs::write(
+        &runtime_path,
+        include_str!("../../../products/coordinator/examples/delayed-follow-up/runtime.yaml"),
+    )
+    .unwrap();
+    let runtime = registry_coordinator::runtime::RuntimeConfig::load(&runtime_path).unwrap();
     let repeated = h
         .store
-        .admit(&v2, original.clone(), "p", "stable", "binding-a")
+        .admit_runtime_owned(
+            &v2,
+            original.clone(),
+            &owner,
+            "stable",
+            "binding-a",
+            &runtime,
+            &h.definition.digest,
+        )
         .await
         .unwrap();
     assert_eq!(first, repeated);
-    let status = h.store.status(repeated).await.unwrap();
-    assert_eq!(status.workflow_version, "v1");
-    assert_eq!(status.definition_digest, h.definition.digest);
+    assert_eq!(
+        h.store.status(repeated).await.unwrap().workflow_revision,
+        h.definition.digest
+    );
     assert_eq!(
         h.store
-            .admit(&v2, original.clone(), "p", "new", "binding-a")
+            .admit_owned(&v2, original.clone(), &owner, "new", "binding-a")
             .await
             .unwrap_err()
             .code,
         "definition.input"
     );
+    assert_eq!(
+        h.store
+            .admit_runtime_owned(
+                &v2,
+                original.clone(),
+                &owner,
+                "new",
+                "binding-a",
+                &runtime,
+                &h.definition.digest
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "workflow-revision-mismatch"
+    );
+    assert_eq!(
+        h.store
+            .admit_runtime_owned(
+                &v2,
+                original.clone(),
+                &owner,
+                "stable",
+                "binding-a",
+                &runtime,
+                &v2.digest
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "start-conflict"
+    );
     let mut changed = original.clone();
     changed["id"] = json!("changed");
     assert_eq!(
         h.store
-            .admit(&v2, changed, "p", "stable", "binding-a")
+            .admit_runtime_owned(
+                &v2,
+                changed,
+                &owner,
+                "stable",
+                "binding-a",
+                &runtime,
+                &h.definition.digest
+            )
             .await
             .unwrap_err()
             .code,
@@ -1698,7 +1921,15 @@ async fn an_idempotency_key_returns_its_original_version_before_new_schema_valid
     );
     assert_eq!(
         h.store
-            .admit(&v2, original, "p", "stable", "binding-b")
+            .admit_runtime_owned(
+                &v2,
+                original,
+                &owner,
+                "stable",
+                "binding-b",
+                &runtime,
+                &h.definition.digest
+            )
             .await
             .unwrap(),
         first
@@ -1706,7 +1937,7 @@ async fn an_idempotency_key_returns_its_original_version_before_new_schema_valid
 }
 
 #[tokio::test]
-async fn same_version_mutation_is_refused_after_completion_and_on_a_duplicate_key() {
+async fn changed_revision_cannot_reuse_an_old_key_but_can_start_under_the_same_label() {
     let h = harness().await;
     let original = input(Utc::now() - Duration::seconds(1));
     let run = h
@@ -1725,16 +1956,28 @@ async fn same_version_mutation_is_refused_after_completion_and_on_a_duplicate_ke
     )
     .unwrap();
     let changed = Definition::load(h.project.path()).unwrap();
-    for key in ["stable", "new"] {
-        assert_eq!(
-            h.store
-                .admit(&changed, original.clone(), "p", key, "binding-a")
-                .await
-                .unwrap_err()
-                .code,
-            "workflow-version-conflict"
-        );
-    }
+    assert_ne!(changed.digest, h.definition.digest);
+    assert_eq!(
+        h.store
+            .admit(&changed, original.clone(), "p", "stable", "binding-a")
+            .await
+            .unwrap_err()
+            .code,
+        "start-conflict"
+    );
+    let next = h
+        .store
+        .admit(&changed, original, "p", "new", "binding-a")
+        .await
+        .unwrap();
+    assert_eq!(
+        h.store.status(next).await.unwrap().workflow_revision,
+        changed.digest
+    );
+    assert_eq!(
+        h.store.status(run).await.unwrap().workflow_revision,
+        h.definition.digest
+    );
 }
 
 #[tokio::test]
@@ -2448,9 +2691,7 @@ impl AdapterSet for ReceiptObservation {
     ) -> registry_coordinator::protocol::ReconciliationOutcome {
         assert_eq!(request.operation, Operation::SubmitMessage);
         assert!(request.idempotency_key.is_some());
-        registry_coordinator::protocol::ReconciliationOutcome::Confirmed(
-            json!({"messageId":"synthetic-original-receipt"}),
-        )
+        registry_coordinator::protocol::ReconciliationOutcome::Confirmed(receipt())
     }
 }
 
@@ -2523,9 +2764,7 @@ impl AdapterSet for OriginalReceiptObservation {
             self.entered.notify_one();
             release.acquire().await.unwrap().forget();
         }
-        registry_coordinator::protocol::ReconciliationOutcome::Confirmed(
-            json!({"messageId":"synthetic-original-receipt"}),
-        )
+        registry_coordinator::protocol::ReconciliationOutcome::Confirmed(receipt())
     }
 }
 
@@ -3155,24 +3394,58 @@ async fn paged_run_listing_finds_old_attention_and_binds_authorization_and_filte
     }
 }
 
+fn authored_workflow_value(source: &str) -> Value {
+    registry_platform_yaml::Reader::new("workflow.yaml")
+        .scan(source.as_bytes())
+        .unwrap()
+        .unwrap()
+        .to_json_value()
+}
+
+fn prepared_action_workflow() -> String {
+    let mut workflow = authored_workflow_value(WORKFLOW);
+    workflow["contracts"] = json!({"applications":{"type":"breg","source":"applications.json"}});
+    workflow["operations"]["submit-message"] = json!({"uses":"breg.invoke-action/v1","connection":"messages","action":{"contract":"applications","id":"request-information"}});
+    workflow.to_string()
+}
+
 async fn invalid_following_wait(prior: &str, body: &str) -> Harness {
     let mut h = harness().await;
-    let (start, steps) = match prior {
-        "read" => ("read", "  read:\n    type: call\n    connection: source\n    operation: read-record\n    input: {type: function, function: record, arguments: [{type: input}]}\n    next: later\n"),
-        "choose" => ("choose", "  choose:\n    type: choose\n    choose: {type: function, function: choose_input, arguments: [{type: input}]}\n    cases: {yes: later}\n"),
-        "wait" => ("wait", "  wait:\n    type: wait-until\n    waitUntil: {type: function, function: timer, arguments: [{type: input}]}\n    next: later\n"),
-        "message" => ("read", "  read:\n    type: call\n    connection: source\n    operation: read-record\n    input: {type: function, function: record, arguments: [{type: input}]}\n    next: message\n  message:\n    type: call\n    connection: messages\n    operation: submit-message\n    input: {type: function, function: message, arguments: [{type: step, step: read}]}\n    next: later\n"),
+    let mut workflow = authored_workflow_value(WORKFLOW);
+    let mut steps = serde_json::Map::new();
+    let input_mapping =
+        json!({"type":"function","function":"record","inputs":{"input":{"type":"input"}}});
+    let start = match prior {
+        "read" => {
+            steps.insert("read".into(),json!({"type":"call","operation":"read-record","input":input_mapping,"next":"later"}));
+            "read"
+        }
+        "choose" => {
+            steps.insert("choose".into(),json!({"type":"choose","choose":{"type":"function","function":"choose-input","inputs":{"input":{"type":"input"}}},"cases":{"yes":"later"}}));
+            "choose"
+        }
+        "wait" => {
+            steps.insert("wait".into(),json!({"type":"wait-until","waitUntil":{"type":"function","function":"timer","inputs":{"input":{"type":"input"}}},"next":"later"}));
+            "wait"
+        }
+        "message" => {
+            steps.insert("read".into(),json!({"type":"call","operation":"read-record","input":input_mapping,"next":"message"}));
+            steps.insert("message".into(),json!({"type":"call","operation":"submit-message","input":{"type":"function","function":"message","inputs":{"record":{"type":"step","step":"read"}}},"next":"later"}));
+            "read"
+        }
         _ => panic!("unknown test prior step"),
     };
-    let workflow=format!("apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1\nkind: CoordinatorProject\nproject:\n  id: synthetic-reminder\n  version: v1\ninput: {{type: object}}\nconnections: {{source: breg, messages: messaging}}\nfunctionsFile: functions.rhai\ndeadlineSeconds: 3600\nstart: {start}\nsteps:\n{steps}  later:\n    type: wait-until\n    waitUntil: {{type: function, function: broken_wait, arguments: [{{type: input}}]}}\n    next: future-read\n  future-read:\n    type: call\n    connection: source\n    operation: read-record\n    input: {{type: function, function: record, arguments: [{{type: input}}]}}\n    next: done\n  done: {{type: finish, outcome: done}}\noutcomes: {{done: {{type: 'null'}}}}\n");
-    std::fs::write(h.project.path().join("workflow.yaml"), workflow).unwrap();
-    std::fs::write(
-        h.project.path().join("functions.rhai"),
-        format!(
-            "{FUNCTIONS}\nfn choose_input(input) {{ \"yes\" }}\nfn broken_wait(input) {{ {body} }}"
-        ),
-    )
-    .unwrap();
+    steps.insert("later".into(),json!({"type":"wait-until","waitUntil":{"type":"function","function":"broken-wait","inputs":{"input":{"type":"input"}}},"next":"future-read"}));
+    steps.insert(
+        "future-read".into(),
+        json!({"type":"call","operation":"read-record","input":input_mapping,"next":"done"}),
+    );
+    steps.insert("done".into(), json!({"type":"finish","outcome":"done"}));
+    workflow["workflow"] = json!({"input":{"type":"object"},"deadlineSeconds":3600,"start":start,"steps":steps,"outcomes":{"done":{"type":"null"}}});
+    workflow["functions"]["choose-input"] = json!({"runtime":"rhai","source":"functions.rhai","entrypoint":"choose_input","inputs":{"input":{"type":"object"}},"output":{"type":"string","enum":["yes"]}});
+    workflow["functions"]["broken-wait"] = json!({"runtime":"rhai","source":"functions.rhai","entrypoint":"broken_wait","inputs":{"input":{"type":"object"}},"output":{}});
+    std::fs::write(h.project.path().join("workflow.yaml"), workflow.to_string()).unwrap();
+    std::fs::write(h.project.path().join("functions.rhai"),format!("{FUNCTIONS}\nfn choose_input(args) {{ \"yes\" }}\nfn broken_wait(args) {{let input=args.input; {body}}}")).unwrap();
     h.definition = Definition::load(h.project.path()).unwrap();
     h
 }
@@ -3277,7 +3550,10 @@ async fn known_step_success_commits_when_following_wait_mapping_is_invalid() {
                 let output = h.output_values(run).await;
                 assert!(output.contains_key("read"));
                 if prior == "message" {
-                    assert_eq!(output["message"]["messageId"], "synthetic-original-receipt");
+                    assert_eq!(
+                        output["message"]["id"],
+                        "00000000-0000-4000-8000-000000000101"
+                    );
                 }
             }
             assert_eq!(
@@ -3381,8 +3657,8 @@ async fn original_receipt_commits_known_effect_despite_invalid_following_wait() 
         1
     );
     assert_eq!(
-        h.output_values(run).await["message"]["messageId"],
-        "synthetic-original-receipt"
+        h.output_values(run).await["message"]["id"],
+        "00000000-0000-4000-8000-000000000101"
     );
     assert!(
         !h.store
@@ -3504,8 +3780,8 @@ async fn cancelled_original_receipt_does_not_evaluate_invalid_following_wait() {
         "delivered"
     );
     assert_eq!(
-        h.output_values(run).await["message"]["messageId"],
-        "synthetic-original-receipt"
+        h.output_values(run).await["message"]["id"],
+        "00000000-0000-4000-8000-000000000101"
     );
     assert!(!worker.tick().await.unwrap());
     assert_eq!(
@@ -3533,8 +3809,8 @@ async fn safe_restored_lease(kind: &str) -> (Harness, Uuid) {
         .unwrap()
         .1
         .to_json_value();
-        document["start"] = json!("done");
-        document["steps"] = json!({"done":{"type":"finish","outcome":"done"}});
+        document["workflow"]["start"] = json!("done");
+        document["workflow"]["steps"] = json!({"done":{"type":"finish","outcome":"done"}});
         std::fs::write(&path, serde_norway::to_string(&document).unwrap()).unwrap();
         h.definition = Definition::load(h.project.path()).unwrap();
     }
@@ -3740,7 +4016,7 @@ async fn pre_io_control_refusals_and_deadlines_still_prevent_mutation_intent() {
             Arc::new(
                 (*h.store)
                     .clone()
-                    .with_flows_digest("original-flows".into()),
+                    .with_workflows_digest("original-flows".into()),
             )
         } else {
             h.store.clone()
@@ -3776,7 +4052,7 @@ impl AdapterSet for PausedRecoveryRead {
         self.requests.lock().unwrap().push(request.clone());
         self.entered.notify_one();
         self.release.acquire().await.unwrap().forget();
-        CallOutcome::Success(json!({"allowed":false,"contact":"synthetic-read-only"}))
+        CallOutcome::Success(record(false, "synthetic-read-only@example.invalid"))
     }
 }
 
@@ -3858,20 +4134,27 @@ async fn interrupted_mutation(kind: &str, prepared: bool) -> (Harness, Uuid, Arc
     .unwrap()
     .1
     .to_json_value();
-    document["start"] = json!("message");
-    document["steps"].as_object_mut().unwrap().remove("read");
-    document["steps"]["message"]["input"] =
-        json!({"type":"function","function":"pre_io_command","arguments":[{"type":"input"}]});
+    document["workflow"]["start"] = json!("message");
+    document["workflow"]["steps"]
+        .as_object_mut()
+        .unwrap()
+        .remove("read");
+    document["workflow"]["steps"]["message"]["input"] =
+        json!({"type":"function","function":"pre-io-command","inputs":{"input":{"type":"input"}}});
+    document["functions"]["pre-io-command"] = json!({"runtime":"rhai","source":"functions.rhai","entrypoint":"pre_io_command","inputs":{"input":{"type":"object"}},"output":{"operationInput":"submit-message"}});
     if kind == "appointment" {
-        document["connections"]["messages"] = json!("scheduling");
-        document["steps"]["message"]["operation"] = json!("create-appointment");
+        document["operations"]["submit-message"]["uses"] =
+            json!("scheduling.create-appointment/v1");
     }
     std::fs::write(&path, serde_norway::to_string(&document).unwrap()).unwrap();
     let functions = h.project.path().join("functions.rhai");
     let body = std::fs::read_to_string(&functions).unwrap();
     std::fs::write(
         functions,
-        format!("{body}\nfn pre_io_command(input) {{ {} }}", command(kind)),
+        format!(
+            "{body}\nfn pre_io_command(args) {{ let input = args.input; {} }}",
+            command(kind)
+        ),
     )
     .unwrap();
     h.definition = Definition::load(h.project.path()).unwrap();
@@ -3999,13 +4282,17 @@ async fn prepared_pending_mutation(kind: &str) -> (Harness, Uuid, Arc<Fake>, Cal
         .unwrap()
         .1
         .to_json_value();
-        document["connections"]["messages"] = json!("scheduling");
-        document["steps"]["message"]["operation"] = json!("create-appointment");
+        document["operations"]["submit-message"]["uses"] =
+            json!("scheduling.create-appointment/v1");
+
         std::fs::write(&path, serde_norway::to_string(&document).unwrap()).unwrap();
         let functions = h.project.path().join("functions.rhai");
         let source = std::fs::read_to_string(&functions).unwrap().replace(
             MESSAGE,
-            &format!("fn message(record) {{ {} }}", command("appointment")),
+            &format!(
+                "fn message(args) {{ let record = args.record; {} }}",
+                command("appointment")
+            ),
         );
         std::fs::write(functions, source).unwrap();
         h.definition = Definition::load(h.project.path()).unwrap();

@@ -115,6 +115,7 @@ class CoordinatorClient {
 
 for (const [method, jsonIndexes] of [
   ['start', [2]],
+  ['workflow', []],
   ['status', []],
   ['inspect', []],
   ['reconcile', []],

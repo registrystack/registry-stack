@@ -18,7 +18,7 @@ coordinatorctl test --project products/coordinator/examples/approved-record-chec
 The start input carries `collection`, `recordId`, `notBefore` and a `grant`
 with the approval's `id` and its original `expiresAt` Unix timestamp. Copy those
 two grant values from the Casework approval unchanged; the input carries no
-assertion or token. The `read` step passes the grant to `read-record`.
+assertion or token. The `read` step passes the grant to `breg.read-record/v1`.
 
 The `source` connection declares `authorization.taskAuthority`, so it accepts
 only grant-bound reads. A read without `grant` is refused with
@@ -61,7 +61,7 @@ For a deployment, the institution must supply these prerequisites:
 - Casework, at `taskAuthority.baseUrl`, holds the approved grant for the
   registered agent subject `registered-agent-subject` and issues its task
   assertions as `https://casework.local.example`.
-- Callers hold a Coordinator access token for the `approved-record-check` flow,
+- Callers hold a Coordinator access token for the `approved-record-check` workflow,
   and an explicit operator policy grants inspection and recovery separately.
 
 The runtime template uses loopback endpoints and secret references only, and

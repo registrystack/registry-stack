@@ -24,16 +24,16 @@ use registry_breg::package::PackageError;
 use registry_breg::runtime_config::check_runtime_config;
 use registry_breg::{CompiledRegistry, DiagnosticSeverity};
 use registry_platform_yaml::{
-    escape_pointer_segment, Diagnostic, Document, Node, NodeValue, Report, Severity, Source,
-    MAXIMUM_DOCUMENT_BYTES,
+    Diagnostic, Document, MAXIMUM_DOCUMENT_BYTES, Node, NodeValue, Report, Severity, Source,
+    escape_pointer_segment,
 };
 use serde::Serialize;
 
 use super::{
-    capture_project_source, compile_captured_project, ensure_source_entry_identity, file_check,
-    has_parent_component, inspect_package_integrity, path_diagnostic, read_module_directory_names,
-    write_ctl_report, OutputFormat, ProfileArg, SafeDir, SafeEntry, SafePathError,
-    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
+    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, OutputFormat, ProfileArg, SafeDir, SafeEntry,
+    SafePathError, capture_project_source, compile_captured_project, ensure_source_entry_identity,
+    file_check, has_parent_component, inspect_package_integrity, path_diagnostic,
+    read_module_directory_names, write_ctl_report,
 };
 
 /// The registered kind of `registry.yaml`, named as the `artifact` of a
@@ -44,16 +44,14 @@ const MODULE_ARTIFACT: &str = registry_breg::contract::MODULE_FORMAT.kind;
 
 const CORRECT_SOURCE: &str =
     "Correct the source at this path so it meets the rule the message states.";
-const WRITE_REQUIRED_ROW_BOUNDARY: &str =
-    "Write a rowBoundaries list on this permission with one entry for each boundary the entity's accessRequirements declare (field, claim, and operator); the unrestricted sentinel does not satisfy a requirement.";
+const WRITE_REQUIRED_ROW_BOUNDARY: &str = "Write a rowBoundaries list on this permission with one entry for each boundary the entity's accessRequirements declare (field, claim, and operator); the unrestricted sentinel does not satisfy a requirement.";
 const REVIEW_FINDING: &str =
     "Review the finding, and change the source if the behavior it describes is not intended.";
 const RUN_SCHEMA_TEST: &str =
     "Run bregctl test against a disposable PostgreSQL database to verify the pattern.";
 const LOCK_MODULES: &str =
     "Run bregctl project lock against this project, then review the module lock change it records.";
-const FIND_PROJECT: &str =
-    "Point bregctl check at a readable project directory that holds registry.yaml, or create one with bregctl init.";
+const FIND_PROJECT: &str = "Point bregctl check at a readable project directory that holds registry.yaml, or create one with bregctl init.";
 const REBUILD_PACKAGE: &str = "Rebuild the package with bregctl package PROJECT --test-receipt RECEIPT --output BUILD; a package is checked as the build wrote it, unmodified.";
 
 /// What `bregctl check` was asked to check.
@@ -681,10 +679,18 @@ fn package_code(error: &PackageError) -> &'static str {
 
 fn package_action(error: &PackageError) -> &'static str {
     match error {
-        PackageError::UnsafePath => "Point --package at the package directory itself, by a path without symbolic links.",
-        PackageError::Permissions => "Remove group and other write permission from the package directory and its files (chmod -R go-w), then check again.",
-        PackageError::Read => "Point --package at a readable package directory that bregctl package wrote.",
-        PackageError::RetiredApiVersion => "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD.",
+        PackageError::UnsafePath => {
+            "Point --package at the package directory itself, by a path without symbolic links."
+        }
+        PackageError::Permissions => {
+            "Remove group and other write permission from the package directory and its files (chmod -R go-w), then check again."
+        }
+        PackageError::Read => {
+            "Point --package at a readable package directory that bregctl package wrote."
+        }
+        PackageError::RetiredApiVersion => {
+            "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD."
+        }
         _ => REBUILD_PACKAGE,
     }
 }
@@ -716,7 +722,7 @@ fn place(
     match path {
         "project" => return file_level(project.to_path_buf(), Some(PROJECT_ARTIFACT)),
         "registry.yaml" => {
-            return file_level(project.join("registry.yaml"), Some(PROJECT_ARTIFACT))
+            return file_level(project.join("registry.yaml"), Some(PROJECT_ARTIFACT));
         }
         "modules" => return file_level(project.join("modules"), None),
         "arguments" => {
@@ -837,18 +843,27 @@ fn alternatives(steps: &[Step]) -> Vec<Vec<Step>> {
         vec![permission]
     };
     match steps {
-        [Step::Member(entities), Step::Select { value: entity, .. }, Step::Member(profiles), Step::Select { value: profile, .. }, rest @ ..]
-            if entities == "recordTypes" && profiles == "accessProfiles" =>
-        {
+        [
+            Step::Member(entities),
+            Step::Select { value: entity, .. },
+            Step::Member(profiles),
+            Step::Select { value: profile, .. },
+            rest @ ..,
+        ] if entities == "recordTypes" && profiles == "accessProfiles" => {
             under_profile("records", "recordType", entity, profile, rest)
         }
-        [Step::Member(actions), Step::Select { value: action, .. }, Step::Member(permissions), Step::Select {
-            key,
-            value: profile,
-        }, rest @ ..]
-            if actions == "actions"
-                && permissions == "permissions"
-                && key.as_deref() == Some("profile") =>
+        [
+            Step::Member(actions),
+            Step::Select { value: action, .. },
+            Step::Member(permissions),
+            Step::Select {
+                key,
+                value: profile,
+            },
+            rest @ ..,
+        ] if actions == "actions"
+            && permissions == "permissions"
+            && key.as_deref() == Some("profile") =>
         {
             under_profile("actions", "action", action, profile, rest)
         }

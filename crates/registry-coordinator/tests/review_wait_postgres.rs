@@ -11,8 +11,8 @@ use chrono::Utc;
 use registry_coordinator::{
     completion::receive_review_completion,
     definition::Definition,
-    protocol::{AdapterSet, CallOutcome, CallRequest, Operation, ReviewRead},
-    store::{Actor, RetryBlockReason, Store},
+    protocol::{AdapterSet, CallOutcome, CallRequest, CompletionObservation, Operation},
+    store::{Actor, Store},
     worker::Worker,
 };
 use serde_json::{json, Value};
@@ -36,195 +36,47 @@ const APPLICATION: &str = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
 const TOKEN: &str = "synthetic-completion-token-canary-0123456789abcdef";
 const RECIPIENT: &str = "coordinator-v1";
 
-const FUNCTIONS: &str = r#"fn review_request(input) {
-    #{
-        kind: "application-review",
-        subject: #{
-            source: "applications",
-            type: "application",
-            id: input.applicationId,
-            version: input.applicationVersion,
-            digest: input.applicationDigest
-        },
-        requesterReference: input.applicationId,
-        context: #{ strategy: "source", binding: #{ reference: input.applicationId } }
-    }
-}
+const FUNCTIONS: &str = include_str!("fixtures/review-wait/functions.rhai");
 
-fn notice_request(input, result) {
-    #{
-        senderProfile: "transactional",
-        to: #{ email: input.email },
-        template: #{ id: "application-approved", version: "1" },
-        locale: "en",
-        data: #{ applicationReference: input.applicationId, reviewResult: result.resultId }
-    }
-}
-"#;
-
-/// The reviewed-notice workflow. Without `on_timeout` the wait has no
-/// timeout route, so a timeout fails the run.
+/// Variants of the same canonical fixture exercise cleanup and timeout races.
 fn workflow_with_cancel(on_timeout: bool, on_cancel: bool, cleanup_wait: bool) -> String {
-    let mut workflow = String::from(
-        r#"apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
-kind: CoordinatorProject
-project:
-  id: reviewed-notice
-  version: "1"
-input:
-  type: object
-  additionalProperties: false
-  required: [applicationId, applicationVersion, applicationDigest, email]
-  properties:
-    applicationId: {type: string, format: uuid}
-    applicationVersion: {type: string, minLength: 1, maxLength: 64}
-    applicationDigest: {type: string, pattern: "^sha256:[0-9a-f]{64}$"}
-    email: {type: string, format: email}
-connections:
-  review: casework
-  notices: messaging
-functionsFile: functions.rhai
-deadlineSeconds: 2592000
-start: submit-review
-steps:
-  submit-review:
-    type: call
-    connection: review
-    operation: submit-review-request
-    input: {type: function, function: review_request, arguments: [{type: input}]}
-    next: await-review
-  await-review:
-    type: wait-for
-    event: {type: review-result, request: submit-review}
-    timeoutSeconds: 1209600
-    next: decide
-"#,
-    );
+    let mut project: Value =
+        serde_norway::from_str(include_str!("fixtures/review-wait/workflow.yaml")).unwrap();
+    let workflow = &mut project["workflow"];
+    let steps = workflow["steps"].as_object_mut().unwrap();
+    steps.remove("confirm-withdrawal");
+    steps.remove("decided-late");
     if on_timeout {
-        workflow.push_str("    onTimeout: withdraw\n");
-    }
-    if on_cancel {
-        workflow.push_str("    onCancel: withdraw\n");
-    }
-    workflow.push_str(
-        r#"  decide:
-    type: choose
-    choose: {type: step, step: await-review, path: /status}
-    cases:
-      approved: notify
-      rejected: rejected
-      changes-requested: not-decided
-      answered: not-decided
-      cancelled: not-decided
-      superseded: not-decided
-  notify:
-    type: call
-    connection: notices
-    operation: submit-message
-    input: {type: function, function: notice_request, arguments: [{type: input}, {type: step, step: await-review}]}
-    next: notice-sent
-  notice-sent:
-    type: finish
-    outcome: notice-sent
-    output:
-      type: fields
-      fields:
-        messageId: {type: step, step: notify, path: /id}
-        resultId: {type: step, step: await-review, path: /resultId}
-  rejected:
-    type: finish
-    outcome: rejected
-    output:
-      type: fields
-      fields:
-        resultId: {type: step, step: await-review, path: /resultId}
-  not-decided:
-    type: finish
-    outcome: not-decided
-    output:
-      type: fields
-      fields:
-        status: {type: step, step: await-review, path: /status}
-"#,
-    );
-    if on_timeout {
-        let withdraw_next = if cleanup_wait {
+        steps.get_mut("withdraw").unwrap()["next"] = json!(if cleanup_wait {
             "cleanup-wait"
         } else {
             "withdrawn"
-        };
-        workflow.push_str(
-            r#"  withdraw:
-    type: call
-    connection: review
-    operation: cancel-review-request
-    input:
-      type: fields
-      fields:
-        request: {type: step, step: submit-review}
-        reason: {type: literal, value: "No decision within fourteen days."}
-    next: WITHDRAW_NEXT
-"#
-            .replace("WITHDRAW_NEXT", withdraw_next)
-            .as_str(),
-        );
+        });
+        steps.insert("withdrawn".into(),json!({"type":"finish","outcome":"withdrawn","output":{"type":"fields","fields":{"cancellation":{"type":"step","step":"withdraw","path":"/outcome"}}}}));
         if cleanup_wait {
-            workflow.push_str(
-                r#"  cleanup-wait:
-    type: wait-for
-    event: {type: review-result, request: submit-review}
-    timeoutSeconds: 1209600
-    next: withdrawn
-    onCancel: withdrawn
-"#,
-            );
+            steps.insert("cleanup-wait".into(),json!({"type":"wait-for","completion":{"step":"submit-review","name":"result"},"timeoutSeconds":1209600,"next":"withdrawn","onCancel":"withdrawn"}));
         }
-        workflow.push_str(
-            r#"  withdrawn:
-    type: finish
-    outcome: withdrawn
-    output:
-      type: fields
-      fields:
-        cancellation: {type: step, step: withdraw, path: /outcome}
-"#,
-        );
+    } else {
+        steps
+            .get_mut("await-review")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("onTimeout");
+        steps.remove("withdraw");
+        steps.remove("withdrawn");
     }
-    workflow.push_str(
-        r#"outcomes:
-  notice-sent:
-    type: object
-    additionalProperties: false
-    required: [messageId, resultId]
-    properties:
-      messageId: {type: string, format: uuid}
-      resultId: {type: string, format: uuid}
-  rejected:
-    type: object
-    additionalProperties: false
-    required: [resultId]
-    properties:
-      resultId: {type: string, format: uuid}
-  not-decided:
-    type: object
-    additionalProperties: false
-    required: [status]
-    properties:
-      status: {type: string}
-"#,
-    );
+    if on_cancel {
+        steps.get_mut("await-review").unwrap()["onCancel"] = json!("withdraw");
+    }
+    let outcomes = workflow["outcomes"].as_object_mut().unwrap();
+    outcomes.remove("decided-late");
     if on_timeout {
-        workflow.push_str(
-            r#"  withdrawn:
-    type: object
-    additionalProperties: false
-    required: [cancellation]
-    properties:
-      cancellation: {type: string}
-"#,
-        );
+        outcomes.insert("withdrawn".into(),json!({"type":"object","additionalProperties":false,"required":["cancellation"],"properties":{"cancellation":{"type":"string"}}}));
+    } else {
+        outcomes.remove("withdrawn");
     }
-    workflow
+    serde_norway::to_string(&project).unwrap()
 }
 
 fn subject() -> Value {
@@ -261,7 +113,7 @@ fn result(status: &str) -> Value {
 }
 
 struct Fake {
-    reads: Mutex<VecDeque<ReviewRead>>,
+    reads: Mutex<VecDeque<CompletionObservation>>,
     cancel_results: Mutex<VecDeque<CallOutcome>>,
     read_count: AtomicUsize,
     calls: Mutex<Vec<CallRequest>>,
@@ -271,16 +123,19 @@ struct Fake {
 }
 
 impl Fake {
-    fn new(reads: Vec<ReviewRead>) -> Arc<Self> {
+    fn new(reads: Vec<CompletionObservation>) -> Arc<Self> {
         Arc::new(Self::with(reads, vec![], false, None))
     }
 
-    fn with_cancel(reads: Vec<ReviewRead>, cancel_results: Vec<CallOutcome>) -> Arc<Self> {
+    fn with_cancel(
+        reads: Vec<CompletionObservation>,
+        cancel_results: Vec<CallOutcome>,
+    ) -> Arc<Self> {
         Arc::new(Self::with(reads, cancel_results, false, None))
     }
 
     fn with(
-        reads: Vec<ReviewRead>,
+        reads: Vec<CompletionObservation>,
         cancel_results: Vec<CallOutcome>,
         malformed_acceptance: bool,
         release: Option<Semaphore>,
@@ -314,6 +169,20 @@ impl Fake {
     }
 }
 
+fn observation_failure(outcome: CallOutcome) -> CompletionObservation {
+    match outcome {
+        CallOutcome::Retryable { code, retry_after } => {
+            CompletionObservation::Retryable { code, retry_after }
+        }
+        CallOutcome::Refused { code } | CallOutcome::Uncertain { code } => {
+            CompletionObservation::Hold { code }
+        }
+        _ => CompletionObservation::Hold {
+            code: "invalid-response".into(),
+        },
+    }
+}
+
 #[async_trait]
 impl AdapterSet for Fake {
     fn binding_digest(&self) -> &str {
@@ -339,12 +208,20 @@ impl AdapterSet for Fake {
                         )
                     })
             }
-            Operation::SubmitMessage => CallOutcome::Success(json!({"id": MESSAGE})),
+            Operation::SubmitMessage => CallOutcome::Success(
+                json!({"id": MESSAGE,"status":"queued","links":{"self":format!("/v1/messages/{MESSAGE}"),"cancel":format!("/v1/messages/{MESSAGE}/cancel")}}),
+            ),
             operation => panic!("unexpected operation {}", operation.as_str()),
         }
     }
 
-    async fn read_review_result(&self, connection: &str, accepted_request: &Value) -> ReviewRead {
+    async fn observe_completion(
+        &self,
+        request: &CallRequest,
+        accepted_request: &Value,
+        _completion: &registry_coordinator::definition::CompletionDefinition,
+    ) -> CompletionObservation {
+        let connection = request.connection.as_str();
         assert_eq!(connection, "review");
         assert_eq!(accepted_request, &accepted());
         self.read_count.fetch_add(1, Ordering::SeqCst);
@@ -356,10 +233,14 @@ impl AdapterSet for Fake {
             .lock()
             .unwrap()
             .pop_front()
-            .unwrap_or(ReviewRead::Pending)
+            .unwrap_or(CompletionObservation::Pending { retry_after: None })
     }
 
-    fn result_check_seconds(&self, connection: &str) -> u32 {
+    fn observation_interval(
+        &self,
+        connection: &str,
+        _completion: &registry_coordinator::definition::CompletionDefinition,
+    ) -> u32 {
         assert_eq!(connection, "review");
         900
     }
@@ -482,6 +363,7 @@ impl Harness {
 
     /// Make the waiting step due now, as the passing of its recheck time would.
     async fn make_due(&self, run: Uuid) {
+        self.client().await.execute(&format!("UPDATE {}.completion_waits SET not_before=clock_timestamp()-interval '1 second' WHERE run_id=$1",self.namespace),&[&run]).await.unwrap();
         let changed = self
             .client()
             .await
@@ -498,7 +380,7 @@ impl Harness {
         self.client()
             .await
             .query_opt(
-                &format!("SELECT woken_at IS NOT NULL, read_at IS NOT NULL, position($2 in wait_key)>0 FROM {}.review_waits WHERE run_id=$1", self.namespace),
+                &format!("SELECT woken_at IS NOT NULL, read_at IS NOT NULL, position($2 in wait_key)>0 FROM {}.completion_waits WHERE run_id=$1", self.namespace),
                 &[&run, &REQUEST.replace('-', "")],
             )
             .await
@@ -586,7 +468,7 @@ async fn status(h: &Harness, run: Uuid) -> (String, Option<String>, Option<Strin
 #[tokio::test]
 async fn the_first_read_catches_a_result_completed_before_the_wait_started() {
     let h = harness(true).await;
-    let fake = Fake::new(vec![ReviewRead::Settled(result("approved"))]);
+    let fake = Fake::new(vec![CompletionObservation::Settled(result("approved"))]);
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     // The event arrives before any wait for its request exists: it is
@@ -623,8 +505,8 @@ async fn the_first_read_catches_a_result_completed_before_the_wait_started() {
 async fn a_scheduled_read_settles_a_result_without_any_event() {
     let h = harness(true).await;
     let fake = Fake::new(vec![
-        ReviewRead::Pending,
-        ReviewRead::Settled(result("rejected")),
+        CompletionObservation::Pending { retry_after: None },
+        CompletionObservation::Settled(result("rejected")),
     ]);
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
@@ -815,7 +697,7 @@ async fn a_timeout_continues_at_its_timeout_route_and_withdraws_the_request() {
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     h.drain(&worker).await;
-    h.sql("UPDATE {schema}.review_waits SET timeout_at=clock_timestamp()-interval '1 second'")
+    h.sql("UPDATE {schema}.completion_waits SET timeout_at=clock_timestamp()-interval '1 second', started_at=clock_timestamp()-interval '1209601 seconds'")
         .await;
     h.make_due(run).await;
     h.drain(&worker).await;
@@ -838,13 +720,13 @@ async fn a_timeout_continues_at_its_timeout_route_and_withdraws_the_request() {
 async fn a_result_found_by_the_last_read_wins_over_the_timeout() {
     let h = harness(true).await;
     let fake = Fake::new(vec![
-        ReviewRead::Pending,
-        ReviewRead::Settled(result("approved")),
+        CompletionObservation::Pending { retry_after: None },
+        CompletionObservation::Settled(result("approved")),
     ]);
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     h.drain(&worker).await;
-    h.sql("UPDATE {schema}.review_waits SET timeout_at=clock_timestamp()-interval '1 second'")
+    h.sql("UPDATE {schema}.completion_waits SET timeout_at=clock_timestamp()-interval '1 second', started_at=clock_timestamp()-interval '1209601 seconds'")
         .await;
     h.make_due(run).await;
     h.drain(&worker).await;
@@ -861,8 +743,10 @@ async fn a_read_shortly_before_the_timeout_schedules_the_last_read_at_the_timeou
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     h.drain(&worker).await;
-    h.sql("UPDATE {schema}.review_waits SET timeout_at=clock_timestamp()+interval '10 seconds'")
-        .await;
+    h.sql(
+        "UPDATE {schema}.completion_waits SET timeout_at=clock_timestamp()+interval '10 seconds'",
+    )
+    .await;
     h.make_due(run).await;
     h.drain(&worker).await;
     assert_eq!(fake.reads(), 2);
@@ -880,7 +764,7 @@ async fn a_timeout_without_a_timeout_route_fails_the_run() {
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     h.drain(&worker).await;
-    h.sql("UPDATE {schema}.review_waits SET timeout_at=clock_timestamp()-interval '1 second'")
+    h.sql("UPDATE {schema}.completion_waits SET timeout_at=clock_timestamp()-interval '1 second', started_at=clock_timestamp()-interval '1209601 seconds'")
         .await;
     h.make_due(run).await;
     h.drain(&worker).await;
@@ -893,10 +777,20 @@ async fn a_timeout_without_a_timeout_route_fails_the_run() {
 }
 
 #[tokio::test]
-async fn a_request_casework_no_longer_knows_or_an_expired_result_fails_with_its_own_code() {
+async fn concealed_or_expired_results_hold_without_inventing_a_terminal_outcome() {
     for (read, code) in [
-        (ReviewRead::Unknown, "review-request-unknown"),
-        (ReviewRead::Expired, "review-result-expired"),
+        (
+            CompletionObservation::Hold {
+                code: "review-request-unknown".into(),
+            },
+            "review-request-unknown",
+        ),
+        (
+            CompletionObservation::Hold {
+                code: "review-result-expired".into(),
+            },
+            "review-result-expired",
+        ),
     ] {
         let h = harness(true).await;
         let fake = Fake::new(vec![read]);
@@ -905,17 +799,20 @@ async fn a_request_casework_no_longer_knows_or_an_expired_result_fails_with_its_
         h.drain(&worker).await;
         assert_eq!(
             status(&h, run).await,
-            ("failed".into(), None, Some(code.into()))
+            ("attention".into(), None, Some(code.into()))
         );
-        assert!(h.wait_row(run).await.is_none(), "{code}");
+        assert!(h.wait_row(run).await.is_some(), "{code}");
         let inspection = h.store.inspect(run, "binding-a").await.unwrap();
-        assert_eq!(
-            inspection.recovery.reason,
-            Some(RetryBlockReason::NotRecoverable),
-            "{code}: an ended wait cannot read again"
+        assert!(
+            inspection.recovery.retry_allowed,
+            "{code}: exact read-only recovery remains available"
         );
-        let refused = h.store.retry_same(run, "binding-a").await.unwrap_err();
-        assert_eq!(refused.code, "retry-refused", "{code}");
+        assert!(
+            !inspection.run.uncertain,
+            "missing observation is not dispatch ambiguity"
+        );
+        h.store.retry_same(run, "binding-a").await.unwrap();
+        h.drain(&worker).await;
         assert_eq!(fake.reads(), 1, "{code}");
     }
 }
@@ -923,7 +820,7 @@ async fn a_request_casework_no_longer_knows_or_an_expired_result_fails_with_its_
 #[tokio::test]
 async fn a_failing_read_without_a_pause_waits_the_retry_ceiling_and_keeps_its_row() {
     let h = harness(true).await;
-    let fake = Fake::new(vec![ReviewRead::Failed(CallOutcome::Retryable {
+    let fake = Fake::new(vec![observation_failure(CallOutcome::Retryable {
         code: "transport-unavailable".into(),
         retry_after: None,
     })]);
@@ -947,14 +844,14 @@ async fn a_failing_read_without_a_pause_waits_the_retry_ceiling_and_keeps_its_ro
 async fn failing_reads_before_the_timeout_keep_waiting_and_an_event_still_wakes_the_wait() {
     let h = harness(true).await;
     let unavailable = |retry_after| {
-        ReviewRead::Failed(CallOutcome::Retryable {
+        observation_failure(CallOutcome::Retryable {
             code: "transport-unavailable".into(),
             retry_after,
         })
     };
-    let mut reads: Vec<ReviewRead> = (0..10).map(|_| unavailable(None)).collect();
+    let mut reads: Vec<CompletionObservation> = (0..10).map(|_| unavailable(None)).collect();
     reads.push(unavailable(Some(std::time::Duration::from_secs(600))));
-    reads.push(ReviewRead::Settled(result("approved")));
+    reads.push(CompletionObservation::Settled(result("approved")));
     let fake = Fake::new(reads);
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
@@ -984,8 +881,8 @@ async fn failing_reads_before_the_timeout_keep_waiting_and_an_event_still_wakes_
     );
     let due = h.due_in(run).await.unwrap();
     assert!(
-        (25.0..=30.5).contains(&due),
-        "a completion event brings the read forward after a failure: {due}"
+        (595.0..=600.5).contains(&due),
+        "a completion event cannot bypass Retry-After: {due}"
     );
     h.make_due(run).await;
     h.drain(&worker).await;
@@ -1001,22 +898,25 @@ async fn failing_reads_before_the_timeout_keep_waiting_and_an_event_still_wakes_
 async fn a_refused_read_holds_the_wait_for_an_operator_and_keeps_its_row() {
     let h = harness(true).await;
     let fake = Fake::new(vec![
-        ReviewRead::Failed(CallOutcome::Refused {
+        observation_failure(CallOutcome::Refused {
             code: "product-forbidden".into(),
         }),
-        ReviewRead::Settled(result("approved")),
+        CompletionObservation::Settled(result("approved")),
     ]);
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     h.drain(&worker).await;
     assert_eq!(
         status(&h, run).await,
-        ("failed".into(), None, Some("product-forbidden".into()))
+        ("attention".into(), None, Some("product-forbidden".into()))
     );
     assert!(h.wait_row(run).await.is_some());
     let inspection = h.store.inspect(run, "binding-a").await.unwrap();
     assert!(inspection.recovery.retry_allowed);
     h.store.retry_same(run, "binding-a").await.unwrap();
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 1, "operator retry preserves the read floor");
+    h.make_due(run).await;
     h.drain(&worker).await;
     assert_eq!(
         status(&h, run).await,
@@ -1160,7 +1060,7 @@ async fn authored_wait_cancellation_refuses_a_corrupted_snapshot_without_stoppin
 async fn authored_cancellation_fences_an_inflight_result_read() {
     let h = harness_with_cancel(true, true).await;
     let fake = Arc::new(Fake::with(
-        vec![ReviewRead::Settled(result("approved"))],
+        vec![CompletionObservation::Settled(result("approved"))],
         vec![],
         false,
         Some(Semaphore::new(0)),
@@ -1198,7 +1098,7 @@ async fn authored_cancellation_fences_an_inflight_result_read() {
 #[tokio::test]
 async fn a_result_that_advances_first_keeps_the_truthful_non_wait_cancellation_semantics() {
     let h = harness_with_cancel(true, true).await;
-    let fake = Fake::new(vec![ReviewRead::Settled(result("approved"))]);
+    let fake = Fake::new(vec![CompletionObservation::Settled(result("approved"))]);
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     assert!(worker.tick().await.unwrap(), "submit the review request");
@@ -1266,13 +1166,13 @@ async fn authored_cleanup_survives_restart_lost_reply_retry_and_repeated_cancel(
 #[tokio::test]
 async fn cancelling_a_held_wait_ends_its_row() {
     let h = harness(true).await;
-    let fake = Fake::new(vec![ReviewRead::Failed(CallOutcome::Refused {
+    let fake = Fake::new(vec![observation_failure(CallOutcome::Refused {
         code: "product-forbidden".into(),
     })]);
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     h.drain(&worker).await;
-    assert_eq!(status(&h, run).await.0, "failed");
+    assert_eq!(status(&h, run).await.0, "attention");
     assert!(h.wait_row(run).await.is_some());
     let cancelled = h
         .store
@@ -1327,7 +1227,7 @@ async fn a_wait_that_reaches_the_run_deadline_expires_and_ends_its_row() {
 #[tokio::test]
 async fn retention_erases_a_row_that_outlived_its_run() {
     let h = harness(true).await;
-    let fake = Fake::new(vec![ReviewRead::Settled(result("rejected"))]);
+    let fake = Fake::new(vec![CompletionObservation::Settled(result("rejected"))]);
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     h.drain(&worker).await;
@@ -1335,7 +1235,7 @@ async fn retention_erases_a_row_that_outlived_its_run() {
     assert!(h.wait_row(run).await.is_none());
     // No current transition leaves a row behind a terminal run; retention
     // still erases one with the run's payload.
-    h.sql("INSERT INTO {schema}.review_waits(run_id,step,wait_key,timeout_at) SELECT run_id,'await-review','outlived',clock_timestamp() FROM {schema}.runs")
+    h.sql("INSERT INTO {schema}.completion_waits(run_id,step,wait_key,timeout_at) SELECT run_id,'await-review','outlived',clock_timestamp() FROM {schema}.runs")
         .await;
     assert!(h.wait_row(run).await.is_some());
     let cutoff = database_clock::retention_cutoff(&h.client().await).await;
@@ -1391,7 +1291,10 @@ async fn attested_recovery_holds_a_waiting_run_and_ends_its_row_once_the_deadlin
                 .unwrap();
             h.store.retry_same(run, "binding-a").await.unwrap();
             h.drain(&worker).await;
-            assert_eq!(fake.reads(), 2, "the retried wait reads again");
+            assert_eq!(fake.reads(), 1, "recovery cannot bypass the read floor");
+            h.make_due(run).await;
+            h.drain(&worker).await;
+            assert_eq!(fake.reads(), 2, "the retried wait reads again when due");
             assert_eq!(status(&h, run).await.0, "running");
             assert!(h.wait_row(run).await.is_some());
         }
@@ -1399,7 +1302,7 @@ async fn attested_recovery_holds_a_waiting_run_and_ends_its_row_once_the_deadlin
 }
 
 #[tokio::test]
-async fn an_acceptance_that_cannot_be_correlated_fails_the_run_before_any_wait() {
+async fn a_malformed_mutation_acceptance_holds_an_unknown_command_before_any_wait() {
     let h = harness(true).await;
     let fake = Arc::new(Fake::with(vec![], vec![], true, None));
     let worker = Worker::new(h.store.clone(), fake.clone());
@@ -1407,11 +1310,7 @@ async fn an_acceptance_that_cannot_be_correlated_fails_the_run_before_any_wait()
     h.drain(&worker).await;
     assert_eq!(
         status(&h, run).await,
-        (
-            "failed".into(),
-            None,
-            Some("protected-state-invalid".into())
-        )
+        ("attention".into(), None, Some("invalid-response".into()))
     );
     assert!(h.wait_row(run).await.is_none());
     assert_eq!(fake.reads(), 0);

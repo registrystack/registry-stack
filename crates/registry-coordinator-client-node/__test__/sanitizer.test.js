@@ -55,11 +55,11 @@ test('cyclic and oversized start input is refused before the native call', async
     const input = {};
     input.self = input;
     assert.throws(
-      () => client.start('secret', 'key', { flow: 'example', input }),
+      () => client.start('secret', 'key', { workflow: 'example', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input }),
       (error) => error instanceof loaded.CoordinatorClientError && error.kind === 'invalid-request',
     );
     assert.throws(
-      () => client.start('secret', 'key', { flow: 'example', input: 'x'.repeat(1024 * 1024 + 1) }),
+      () => client.start('secret', 'key', { workflow: 'example', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: 'x'.repeat(1024 * 1024 + 1) }),
       (error) => error instanceof loaded.CoordinatorClientError && error.kind === 'invalid-request',
     );
     assert.equal(calls, 0);
@@ -90,7 +90,7 @@ test('sparse and accessor-bearing arrays are refused without executing user code
 
     for (const input of [new Array(20_001), indexedGetter, customMap]) {
       assert.throws(
-        () => client.start('secret', 'key', { flow: 'example', input }),
+        () => client.start('secret', 'key', { workflow: 'example', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input }),
         (error) => error instanceof loaded.CoordinatorClientError && error.kind === 'invalid-request',
       );
     }

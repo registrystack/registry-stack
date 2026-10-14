@@ -34,12 +34,12 @@ pub struct DeploymentConfig {
     pub database_id: String,
     #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^[a-z_][a-z0-9_]{0,62}$", "maxLength" = 63)))]
     pub runtime_role: String,
-    /// One pinned package per flow; the flow is the package's workflow id.
+    /// One pinned package per workflow; the workflow is the package's workflow id.
     pub packages: Vec<PackageConfig>,
     pub listener: PrivateListenerConfig,
     /// The operator-private socket `/metrics` is served on. When it is
     /// omitted, no metrics are served.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_listener: Option<ListenerConfig>,
     pub authentication: AccessConfig,
     #[serde(rename = "auditFile")]
@@ -116,10 +116,10 @@ impl DeploymentConfig {
     }
     pub(crate) fn findings(&self, secrets: &SecretProvidersConfig) -> Vec<CoordinatorError> {
         let mut errors = Vec::new();
-        if self.packages.is_empty() || self.packages.len() > MAX_FLOWS {
+        if self.packages.is_empty() || self.packages.len() > MAX_WORKFLOWS {
             errors.push(config_fail(
                 "deployment.packages",
-                "list one pinned package per flow, at most sixteen",
+                "list one pinned package per workflow, at most sixteen",
             ));
         }
         let mut roots = BTreeSet::new();
@@ -140,14 +140,14 @@ impl DeploymentConfig {
                 )),
                 Some(digest) if !digests.insert(digest) => errors.push(config_fail(
                     &format!("{field}.expectedDigest"),
-                    "list each package once; one package serves one flow",
+                    "list each package once; one package serves one workflow",
                 )),
                 Some(_) => {}
             }
             if !roots.insert(&package.root) {
                 errors.push(config_fail(
                     &format!("{field}.root"),
-                    "list each package directory once; one package serves one flow",
+                    "list each package directory once; one package serves one workflow",
                 ));
             }
         }
@@ -221,9 +221,9 @@ impl DeploymentConfig {
         errors
     }
 }
-/// The most flows one deployment serves, so the worker's definition cache
-/// and every per-flow plan stay bounded.
-pub const MAX_FLOWS: usize = 16;
+/// The most workflows one deployment serves, so the worker's definition cache
+/// and every per-workflow plan stay bounded.
+pub const MAX_WORKFLOWS: usize = 16;
 fn valid_identifier(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 63
@@ -281,15 +281,15 @@ pub struct LoadedPackage {
     pub definition: Arc<Definition>,
     pub digest: String,
 }
-/// The verified packages one deployment serves, keyed by flow (the package's
+/// The verified packages one deployment serves, keyed by workflow (the package's
 /// workflow id), and the digest that identifies the whole set.
-pub struct Flows {
+pub struct Workflows {
     packages: BTreeMap<String, Arc<LoadedPackage>>,
     digest: String,
 }
-impl Flows {
-    pub fn get(&self, flow: &str) -> Option<&Arc<LoadedPackage>> {
-        self.packages.get(flow)
+impl Workflows {
+    pub fn get(&self, workflow: &str) -> Option<&Arc<LoadedPackage>> {
+        self.packages.get(workflow)
     }
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Arc<LoadedPackage>)> {
         self.packages.iter()
@@ -307,10 +307,10 @@ impl Flows {
     pub fn package_digests(&self) -> BTreeMap<String, String> {
         self.packages
             .iter()
-            .map(|(flow, package)| (flow.clone(), package.digest.clone()))
+            .map(|(workflow, package)| (workflow.clone(), package.digest.clone()))
             .collect()
     }
-    /// Every flow's workflow must bind to configured connections.
+    /// Every workflow's workflow must bind to configured connections.
     pub fn validate(&self, runtime: &RuntimeConfig) -> Result<()> {
         for package in self.packages.values() {
             runtime.validate_workflow(&package.definition.workflow)?;
@@ -319,14 +319,14 @@ impl Flows {
     }
 }
 /// The order-independent identity of a set of package digests. A package
-/// digest fixes its workflow id, so this also identifies the flows served.
+/// digest fixes its workflow id, so this also identifies the workflows served.
 fn set_digest<'a>(digests: impl IntoIterator<Item = &'a str>) -> String {
     let sorted: BTreeSet<&str> = digests.into_iter().collect();
     let bytes = serde_json::to_vec(&sorted).expect("a list of strings encodes as JSON");
     registry_platform_config::sha256_uri(&bytes)
 }
 /// The set digest of the configured pins, without reading the packages.
-pub fn flows_digest(config: &DeploymentConfig) -> Result<String> {
+pub fn workflows_digest(config: &DeploymentConfig) -> Result<String> {
     let digests = config
         .packages
         .iter()
@@ -336,30 +336,30 @@ pub fn flows_digest(config: &DeploymentConfig) -> Result<String> {
     Ok(set_digest(digests))
 }
 /// Verify every pinned package and key it by its workflow id.
-pub fn load_flows(config: &DeploymentConfig) -> Result<Flows> {
+pub fn load_workflows(config: &DeploymentConfig) -> Result<Workflows> {
     if config.packages.is_empty() {
         return Err(config_fail(
             "deployment.packages",
-            "list one pinned package per flow, at most sixteen",
+            "list one pinned package per workflow, at most sixteen",
         ));
     }
     let mut packages = BTreeMap::new();
     for (index, pin) in config.packages.iter().enumerate() {
         let field = crate::runtime::pointer(&format!("deployment.packages.{index}"));
         let package = load_package(pin).map_err(|error| error.at("runtime.yaml", field.clone()))?;
-        let flow = package.definition.workflow.id.clone();
-        if packages.contains_key(&flow) {
+        let workflow = package.definition.workflow.id.clone();
+        if packages.contains_key(&workflow) {
             return Err(config_fail(
                 &field,
                 &format!(
-                    "list one package per flow; an earlier package already serves flow {flow}"
+                    "list one package per workflow; an earlier package already serves workflow {workflow}"
                 ),
             ));
         }
-        packages.insert(flow, Arc::new(package));
+        packages.insert(workflow, Arc::new(package));
     }
     let digest = set_digest(packages.values().map(|package| package.digest.as_str()));
-    Ok(Flows { packages, digest })
+    Ok(Workflows { packages, digest })
 }
 /// Write a checked project as a package into a new directory. A project
 /// with a scenarios file is packaged only when every case passes.
@@ -525,7 +525,7 @@ async fn open_named(
     let store = if migration {
         store
     } else {
-        store.with_flows_digest(flows_digest(d)?)
+        store.with_workflows_digest(workflows_digest(d)?)
     };
     Ok(Arc::new(store))
 }
@@ -573,7 +573,7 @@ fn layout() -> Result<Layout> {
     .map_err(|_| fail("restore the activation layout"))
 }
 fn extras(namespace: &str) -> Vec<String> {
-    ["runs", "jobs", "admission_lock", "review_waits"]
+    ["runs", "jobs", "admission_lock", "completion_waits"]
         .into_iter()
         .map(|s| format!("{namespace}.{s}"))
         .collect()
@@ -660,7 +660,7 @@ pub async fn check_serving(
     store.check_runtime_bindings(runtime).await?;
     Ok(active)
 }
-/// What one plan or apply does to one flow's active package.
+/// What one plan or apply does to one workflow's active package.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Change {
@@ -681,47 +681,47 @@ impl Change {
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FlowChange {
-    pub flow: String,
+pub struct WorkflowChange {
+    pub workflow: String,
     pub change: Change,
-    /// The package this flow serves after the change; absent for a removal.
+    /// The package this workflow serves after the change; absent for a removal.
     pub package_digest: Option<String>,
-    /// The package this flow served before the change; absent for an install.
+    /// The package this workflow served before the change; absent for an install.
     pub active_package_digest: Option<String>,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Applied {
     pub activation: activation::Activation,
-    pub flows_digest: String,
-    pub flows: Vec<FlowChange>,
+    pub workflows_digest: String,
+    pub workflows: Vec<WorkflowChange>,
 }
-/// Compare the listed flows with the active ones. An active flow missing from
+/// Compare the listed workflows with the active ones. An active workflow missing from
 /// the list is removed only when named, so editing the list never silently
-/// retires a flow.
-fn flow_changes(
-    flows: &Flows,
+/// retires a workflow.
+fn workflow_changes(
+    workflows: &Workflows,
     active: &BTreeMap<String, String>,
     remove: &[String],
-) -> Result<Vec<FlowChange>> {
+) -> Result<Vec<WorkflowChange>> {
     let remove: BTreeSet<&str> = remove.iter().map(String::as_str).collect();
-    for flow in &remove {
-        if flows.get(flow).is_some() {
+    for workflow in &remove {
+        if workflows.get(workflow).is_some() {
             return Err(fail(&format!(
-                "flow {flow} is still listed in deployment.packages; drop its package from the list to remove it"
+                "workflow {workflow} is still listed in deployment.packages; drop its package from the list to remove it"
             )));
         }
-        if !active.contains_key(*flow) {
+        if !active.contains_key(*workflow) {
             return Err(fail(&format!(
-                "flow {flow} is not active; name only active flows with --remove-flow"
+                "workflow {workflow} is not active; name only active workflows with --remove-workflow"
             )));
         }
     }
     let mut changes = Vec::new();
-    for (flow, package) in flows.iter() {
-        let active = active.get(flow);
-        changes.push(FlowChange {
-            flow: flow.clone(),
+    for (workflow, package) in workflows.iter() {
+        let active = active.get(workflow);
+        changes.push(WorkflowChange {
+            workflow: workflow.clone(),
             change: match active {
                 None => Change::Install,
                 Some(digest) if *digest == package.digest => Change::Unchanged,
@@ -731,31 +731,31 @@ fn flow_changes(
             active_package_digest: active.cloned(),
         });
     }
-    for (flow, digest) in active {
-        if flows.get(flow).is_some() {
+    for (workflow, digest) in active {
+        if workflows.get(workflow).is_some() {
             continue;
         }
-        if !remove.contains(flow.as_str()) {
+        if !remove.contains(workflow.as_str()) {
             return Err(CoordinatorError::new(
-                "deployment.flow-unlisted",
-                "an active flow is missing from deployment.packages",
+                "deployment.workflow-unlisted",
+                "an active workflow is missing from deployment.packages",
             )
             .suggest(format!(
-                "list flow {flow}'s package again, or pass --remove-flow {flow} to retire it once its runs are terminal"
+                "list workflow {workflow}'s package again, or pass --remove-workflow {workflow} to retire it once its runs are terminal"
             )));
         }
-        changes.push(FlowChange {
-            flow: flow.clone(),
+        changes.push(WorkflowChange {
+            workflow: workflow.clone(),
             change: Change::Remove,
             package_digest: None,
             active_package_digest: Some(digest.clone()),
         });
     }
-    changes.sort_by(|a, b| a.flow.cmp(&b.flow));
+    changes.sort_by(|a, b| a.workflow.cmp(&b.workflow));
     Ok(changes)
 }
-/// The flows the control row records as active, or none before the first apply.
-async fn active_flows(
+/// The workflows the control row records as active, or none before the first apply.
+async fn active_workflows(
     client: &impl tokio_postgres::GenericClient,
     namespace: &str,
 ) -> Result<BTreeMap<String, String>> {
@@ -776,65 +776,42 @@ async fn active_flows(
             &[],
         )
         .await
-        .map_err(|_| fail("restore the active flow record"))?
+        .map_err(|_| fail("restore the active workflow record"))?
     else {
         return Ok(BTreeMap::new());
     };
     serde_json::from_value(row.get::<_, serde_json::Value>(0))
-        .map_err(|_| fail("restore the active flow record"))
+        .map_err(|_| fail("restore the active workflow record"))
 }
-/// Refuse to retire a flow while any of its runs could still act or needs review.
+/// Refuse to retire a workflow while any of its runs could still act or needs review.
 async fn check_removals(
     store: &Store,
     client: &impl tokio_postgres::GenericClient,
-    changes: &[FlowChange],
+    changes: &[WorkflowChange],
 ) -> Result<()> {
     for change in changes.iter().filter(|c| c.change == Change::Remove) {
-        let live = store.live_runs(client, &change.flow).await?;
+        let live = store.live_runs(client, &change.workflow).await?;
         if live > 0 {
             return Err(CoordinatorError::new(
-                "deployment.flow-live-runs",
-                "a flow with runs that are not terminal cannot be removed",
+                "deployment.workflow-live-runs",
+                "a workflow with runs that are not terminal cannot be removed",
             )
             .suggest(format!(
-                "flow {} has {live} runs that are not terminal; let them settle or cancel them, or keep its package listed",
-                change.flow
+                "workflow {} has {live} runs that are not terminal; let them settle or cancel them, or keep its package listed",
+                change.workflow
             )));
         }
-    }
-    Ok(())
-}
-/// Refuse a listed package whose workflow version already names another
-/// definition in run history, naming the flow to fix.
-async fn check_versions(
-    store: &Store,
-    client: &impl tokio_postgres::GenericClient,
-    flows: &Flows,
-) -> Result<()> {
-    for (flow, package) in flows.iter() {
-        store
-            .check_definition_history(client, &package.definition)
-            .await
-            .map_err(|error| {
-                if error.code == "workflow-version-conflict" {
-                    error.suggest(format!(
-                        "give flow {flow}'s changed definition a new project.version in its workflow.yaml, then package it and list that package"
-                    ))
-                } else {
-                    error
-                }
-            })?;
     }
     Ok(())
 }
 pub async fn plan(
     store: &Store,
     runtime: &RuntimeConfig,
-    flows: &Flows,
+    workflows: &Workflows,
     remove: &[String],
 ) -> Result<serde_json::Value> {
     let d = config(runtime)?;
-    flows.validate(runtime)?;
+    workflows.validate(runtime)?;
     let client = store
         .client()
         .await
@@ -846,44 +823,33 @@ pub async fn plan(
     let schema = activation::schema_state(&*client, &l, &[SCHEMA_VERSION])
         .await
         .map_err(|_| fail("restore the migration ledger"))?;
-    let changes = flow_changes(
-        flows,
-        &active_flows(&*client, &runtime.namespace).await?,
+    let changes = workflow_changes(
+        workflows,
+        &active_workflows(&*client, &runtime.namespace).await?,
         remove,
     )?;
     check_removals(store, &*client, &changes).await?;
-    let history: bool = client
-        .query_one(
-            "SELECT to_regclass($1) IS NOT NULL",
-            &[&format!("{}.runs", runtime.namespace)],
-        )
-        .await
-        .map_err(|_| fail("restore database connectivity"))?
-        .get(0);
-    if history {
-        check_versions(store, &*client, flows).await?;
-    }
     Ok(
-        serde_json::json!({"databaseId":d.database_id,"flowsDigest":flows.digest(),"flows":changes,"active":active,"schema":{"applied":schema.applied,"pending":schema.pending},"runtimeRole":d.runtime_role}),
+        serde_json::json!({"databaseId":d.database_id,"workflowsDigest":workflows.digest(),"workflows":changes,"active":active,"minimumObservationIntervalSeconds":runtime.minimum_observation_interval_seconds,"schema":{"applied":schema.applied,"pending":schema.pending},"runtimeRole":d.runtime_role}),
     )
 }
-/// Activate the listed flows in one transaction. Each flow's package is
-/// installed, replaced or kept on its own; a flow is removed only when named
+/// Activate the listed workflows in one transaction. Each workflow's package is
+/// installed, replaced or kept on its own; a workflow is removed only when named
 /// in `remove` and has no run that is not terminal.
 pub async fn apply(
     store: &Store,
     runtime: &RuntimeConfig,
-    flows: &Flows,
+    workflows: &Workflows,
     remove: &[String],
 ) -> Result<Applied> {
     let d = config(runtime)?;
-    flows.validate(runtime)?;
+    workflows.validate(runtime)?;
     let audit = store
         .audit_writer()
         .begin(
             AUDIT_SCHEMA,
             Uuid::new_v4().to_string(),
-            serde_json::json!({"action":"activation.apply","flowsDigest":flows.digest(),"flows":flows.package_digests(),"removeFlows":remove}),
+            serde_json::json!({"action":"activation.apply","workflowsDigest":workflows.digest(),"workflows":workflows.package_digests(),"removeWorkflows":remove}),
             serde_json::json!({"outcome":"unknown"}),
         )
         .await
@@ -928,10 +894,13 @@ pub async fn apply(
     {
         return Err(fail("use the deployment's recorded database identity"));
     }
-    let changes = flow_changes(flows, &active_flows(&tx, &runtime.namespace).await?, remove)?;
+    let changes = workflow_changes(
+        workflows,
+        &active_workflows(&tx, &runtime.namespace).await?,
+        remove,
+    )?;
     store.check_live_bindings(&tx, runtime).await?;
     check_removals(store, &tx, &changes).await?;
-    check_versions(store, &tx, flows).await?;
     activation::grant_runtime_role(&tx, &l, &d.runtime_role, &extras(&runtime.namespace))
         .await
         .map_err(|_| fail("grant the configured runtime role"))?;
@@ -949,7 +918,7 @@ pub async fn apply(
     }
     let request = NewActivation {
         activation_id: Uuid::new_v4(),
-        package_digest: flows.digest(),
+        package_digest: workflows.digest(),
         database_id: &d.database_id,
         operator_reference_hash: None,
         backup_references: &[],
@@ -959,22 +928,22 @@ pub async fn apply(
     let active = activation::append_activation(&tx, &l, &request)
         .await
         .map_err(|_| fail("restore activation ledger"))?;
-    let active_flows = serde_json::to_value(flows.package_digests())
-        .map_err(|_| fail("encode the active flow record"))?;
+    let active_workflows = serde_json::to_value(workflows.package_digests())
+        .map_err(|_| fail("encode the active workflow record"))?;
     tx.execute(
         "UPDATE control SET active_flows_digest=$1,active_flows=$2 WHERE id",
-        &[&flows.digest(), &active_flows],
+        &[&workflows.digest(), &active_workflows],
     )
     .await
-    .map_err(|_| fail("restore active flow control identity"))?;
+    .map_err(|_| fail("restore active workflow control identity"))?;
     tx.commit().await.map_err(|_| {
         fail("activation commit is unknown; inspect deployment status before repeating apply")
     })?;
-    audit.finish(serde_json::json!({"outcome":"applied","activationId":active.activation_id,"flowsDigest":active.package_digest,"flows":changes})).await.map_err(|_|fail("activation committed but audit outcome is unavailable; inspect deployment status before continuing"))?;
+    audit.finish(serde_json::json!({"outcome":"applied","activationId":active.activation_id,"workflowsDigest":active.package_digest,"workflows":changes})).await.map_err(|_|fail("activation committed but audit outcome is unavailable; inspect deployment status before continuing"))?;
     Ok(Applied {
         activation: active,
-        flows_digest: flows.digest().to_owned(),
-        flows: changes,
+        workflows_digest: workflows.digest().to_owned(),
+        workflows: changes,
     })
 }
 

@@ -67,6 +67,7 @@ async fn breg_transient_http_failures_are_retryable_without_retrying_inside_an_a
             HttpAdapters::new(&config(root.path(), &issuer, &server.uri(), &server.uri())).unwrap();
         let outcome = adapters
             .call(&CallRequest {
+                operation_contract: None,
                 connection: "applications".into(),
                 operation: Operation::ReadRecord,
                 input: json!({"collection":"applications", "recordId":RECORD}),
@@ -137,6 +138,7 @@ async fn breg_malformed_success_and_product_refusals_remain_permanent() {
             HttpAdapters::new(&config(root.path(), &issuer, &server.uri(), &server.uri())).unwrap();
         let outcome = adapters
             .call(&CallRequest {
+                operation_contract: None,
                 connection: "applications".into(),
                 operation: Operation::ReadRecord,
                 input: json!({"collection":"applications", "recordId":RECORD}),
@@ -179,6 +181,7 @@ async fn maintained_clients_acquire_credentials_and_decode_product_responses() {
         HttpAdapters::new(&config(root.path(), &issuer, &breg.uri(), &messaging.uri())).unwrap();
     let read = adapters
         .call(&CallRequest {
+            operation_contract: None,
             connection: "applications".into(),
             operation: Operation::ReadRecord,
             input: json!({"collection":"applications", "recordId":RECORD}),
@@ -192,6 +195,7 @@ async fn maintained_clients_acquire_credentials_and_decode_product_responses() {
     assert_eq!(contract(Operation::ReadRecord).check_output(&read), Ok(()));
     let send = adapters
         .call(&CallRequest {
+            operation_contract: None,
             connection: "notices".into(),
             operation: Operation::SubmitMessage,
             input: submission(),
@@ -242,6 +246,7 @@ async fn one_dispatch_attempt_does_not_retry_or_expose_remote_error_values() {
         HttpAdapters::new(&config(root.path(), &issuer, &server.uri(), &server.uri())).unwrap();
     let outcome = adapters
         .call(&CallRequest {
+            operation_contract: None,
             connection: "notices".into(),
             operation: Operation::SubmitMessage,
             input: submission(),
@@ -285,6 +290,7 @@ async fn a_messaging_rate_limit_carries_its_bounded_pause_to_the_retry_schedule(
             HttpAdapters::new(&config(root.path(), &issuer, &server.uri(), &server.uri())).unwrap();
         let outcome = adapters
             .call(&CallRequest {
+                operation_contract: None,
                 connection: "notices".into(),
                 operation: Operation::SubmitMessage,
                 input: submission(),
@@ -324,7 +330,8 @@ async fn binding_identity_excludes_secret_path_but_pins_destination_and_authorit
         .connections
         .get_mut("notices")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .signing_key_ref =
         registry_platform_config::SecretReference::parse("secret:file/rotated-key").unwrap();
     assert_eq!(HttpAdapters::new(&config).unwrap().binding_digest(), first);
@@ -332,11 +339,16 @@ async fn binding_identity_excludes_secret_path_but_pins_destination_and_authorit
         .connections
         .get_mut("notices")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .client_id = "another-sender".into();
     assert_ne!(HttpAdapters::new(&config).unwrap().binding_digest(), first);
-    config.connections.get_mut("notices").unwrap().base_url =
-        url::Url::parse("http://sensitive-host-canary.invalid").unwrap();
+    let registry_coordinator::runtime::ConnectionConfig::Messaging(binding) =
+        config.connections.get_mut("notices").unwrap()
+    else {
+        panic!("Messaging binding")
+    };
+    binding.base_url = url::Url::parse("http://sensitive-host-canary.invalid").unwrap();
     let error = HttpAdapters::new(&config).err().unwrap();
     assert!(!error.to_string().contains("sensitive-host-canary"));
     issuer.stop().await;
@@ -352,10 +364,12 @@ async fn declined_credentials_and_invalid_commands_never_reach_the_product() {
         .connections
         .get_mut("notices")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .client_id = "unregistered-client-canary".into();
     let adapters = HttpAdapters::new(&config).unwrap();
     let mut request = CallRequest {
+        operation_contract: None,
         connection: "notices".into(),
         operation: Operation::SubmitMessage,
         input: submission(),
@@ -379,8 +393,9 @@ async fn workflow_connections_are_checked_without_product_calls() {
     let definition =
         registry_coordinator::definition::Definition::load(&support::project()).unwrap();
     config.validate_workflow(&definition.workflow).unwrap();
-    config.connections.get_mut("notices").unwrap().product =
-        registry_coordinator::adapters::Product::Breg;
+    config
+        .connections
+        .insert("notices".into(), config.connections["applications"].clone());
     assert_eq!(
         config
             .validate_workflow(&definition.workflow)
@@ -409,6 +424,7 @@ async fn task_binding_requires_an_unexpired_approval_and_never_uses_standing_aut
     let mut config = config(root.path(), &issuer, &server.uri(), &server.uri());
     let standing = HttpAdapters::new(&config).unwrap();
     let mut request = CallRequest {
+        operation_contract: None,
         connection: "applications".into(),
         operation: Operation::ReadRecord,
         input: json!({"collection":"applications","recordId":RECORD,
@@ -422,7 +438,8 @@ async fn task_binding_requires_an_unexpired_approval_and_never_uses_standing_aut
         .connections
         .get_mut("applications")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .task_authority = Some(TaskAuthorityConfig {
         base_url: server.uri().parse().unwrap(),
         issuer: "https://casework.example".into(),
@@ -459,7 +476,8 @@ async fn authority_deadline_mismatch_and_revocation_never_reach_breg() {
         .connections
         .get_mut("applications")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .task_authority = Some(TaskAuthorityConfig {
         base_url: authority.uri().parse().unwrap(),
         issuer: "https://casework.example".into(),
@@ -470,6 +488,7 @@ async fn authority_deadline_mismatch_and_revocation_never_reach_breg() {
     let grant = uuid::Uuid::new_v4();
     let expiry = chrono::Utc::now().timestamp() + 120;
     let request = CallRequest {
+        operation_contract: None,
         connection: "applications".into(),
         operation: Operation::ReadRecord,
         input: json!({"collection":"applications","recordId":RECORD,"grant":{"id":grant,"expiresAt":expiry}}),
@@ -544,6 +563,7 @@ async fn message_reconciliation_requires_original_command_receipt_instead_of_ope
         .mount(&server)
         .await;
     let command = CallRequest {
+        operation_contract: None,
         connection: "notices".into(),
         operation: Operation::SubmitMessage,
         input: submission(),

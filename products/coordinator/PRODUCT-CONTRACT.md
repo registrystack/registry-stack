@@ -1,170 +1,140 @@
 # Coordinator product contract
 
-Registry Coordinator is an optional Rust service. It executes reviewed, finite,
-acyclic YAML workflows using bounded pure Rhai functions and maintained product
-clients. One service and PostgreSQL 17 or
-newer are sufficient. Receiving products retain authorization and ownership of
-their effects.
+Registry Coordinator is an optional Rust service for explicit, authorized starts of reviewed,
+finite, acyclic workflows. One service and PostgreSQL 17 or newer are sufficient. Maintained
+public clients reach downstream products over HTTP; each product retains its authorization,
+data, and effect ownership. Coordinator owns durable progress, prepared commands, waits, and audit.
 
 ## Execution and authority
 
-A workflow can read current records, wait durably until an instant or for a
-review result, choose a branch, call an approved product operation and finish
-with a declared outcome. The authored
-package contains the graph, functions and schemas; deployment configuration
-binds its logical connections to endpoints and identities.
+A `CoordinatorProject` has one `workflow` and optional reusable `contracts`, `types`, `functions`,
+and `operations` assets. `project.id` names the Workflow and `project.version` is its human release
+label. A compiled `workflowRevision` pins execution semantics independently of presentation titles
+and descriptions. Imported contracts are local generated public artifacts, not runtime discovery.
 
-YAML owns the finite graph, waits and the references that carry values between
-steps; pure Rhai computes values and selects an authored branch. `coordinatorctl
-check` fits every reference, literal and `fields` mapping to the schemas it reads
-and feeds before any run. Functions cannot make calls, acquire credentials or add
-runtime steps.
-They read no clock: `add_seconds` and `seconds_between` compute only over the
-RFC 3339 instants they are given.
+A Function declares `runtime`, `source`, `entrypoint`, named `inputs`, and `output`. The bounded
+pure Rhai profile takes one typed object of named inputs and returns one typed value. The host
+checks both schemas and enforces operation, call, expression, string, array, map, and source limits.
+Explicit limits can only narrow those ceilings. Functions cannot obtain credentials, access a
+clock, filesystem, network, or database, or construct additional workflow steps.
 
-The ten supported operations are `read-record`, `submit-message`,
-`read-scheduling`, `read-availability`, `create-appointment`, `invoke-breg-action`,
-`external-get`, `evaluate-decision`, `submit-review-request` and
-`cancel-review-request`.
-Messaging submission and Scheduling appointment creation support same-command
-recovery and read-only original-key receipts. Base Registry Engine (BReg) action
-invocation and the two Casework review operations support same-command recovery
-without a read-only receipt. The four read operations can be read again.
+An Operation alias binds one exact versioned host operation to a logical runtime connection.
+The [generated operation catalog](generated/operations/README.md) owns transport, preparation,
+effect classification, recovery, and completion contracts. A Workflow sequences `call`, `choose`,
+`wait-until`, `wait-for`, and `finish` steps with typed mappings. Mappings read input, available
+prior step output, or literals; construct fields; or invoke a named Function with `inputs`.
+The compiler resolves schema references and proves data availability on every route. Computed
+commands are validated again before preparation, saving, or dispatch. Invalid commands report a
+bounded `failurePath` without the submitted value.
 
-`submit-review-request` and `cancel-review-request` act as one Casework review
-producer, named by the connection, under that producer's own service identity
-and with no task authority. A submission names the review kind, the subject
-record with its version and digest, the context a reviewer sees and the requester's
-reference; its output is Casework's acceptance. Casework decides who reviews,
-what outcomes a kind allows and whether a request supersedes another; the
-Coordinator adds no review semantics. A cancellation reports `cancelled`, or
-`already-terminal` with the result that ended the review first; a workflow
-routes on the cancel step's `/outcome`, since only `cancelled` means the
-cancellation ended the review.
+Runtime connections form one tagged `connections` map. Supported types are `breg`,
+`casework-review-producer`, `messaging`, `scheduling`, `external-http`, and `evaluation`.
+Each variant owns its complete authority contract. A caller allowed to start a Workflow gains no
+downstream authority. Credentials are acquired for each attempt, and each receiver checks its own
+current policy. Waits, retries, restarts, and recovery never renew an approval or alter its original
+principal, resource, scopes, bounds, or deadline.
 
-A `wait-for` step waits for the result of a review request an earlier
-`submit-review-request` step submitted on every route to it. `timeoutSeconds`
-is required and shorter than the run deadline. The step reads the result with
-the producer identity when it starts, every `resultCheckSeconds` of the
-connection while the review is open, and once more at the timeout. A read
-that cannot get an answer before the timeout leaves the wait open and spends
-no attempt; its next read follows Casework's `Retry-After`, from 30 seconds up
-to `resultCheckSeconds`, and without one comes five minutes later, or after
-`resultCheckSeconds` when that is shorter. A settled
-result continues the run at `next` as the step's output after it matches the
-accepted request, subject, policy and submission digest. The timeout continues
-the run at `onTimeout`, or fails it with `wait-timed-out`. An unknown request
-fails with `review-request-unknown` and an expired result with
-`review-result-expired`; the run deadline still ends the run as it ends any
-step. Casework may supersede a request still under review when the same
-producer submits another for the same subject record and kind; the waiting
-run then reads the result `superseded`.
+## Governed Actions and Proposals
 
-An optional `onCancel` edge takes a durable authored forward path when an authorized
-caller cancels a parked review wait. An active read records intent and routes it
-when it settles or its lease expires, before applying that read's result.
-The path can withdraw the accepted request with `cancel-review-request`, subject
-to the run's original deadline and current producer authority. Repeated cancellation
-preserves cleanup; public `authoredCancelRequested` records that intent separately
-from ordinary stop cancellation. The intent applies to the original wait only.
-A wait without the edge, or a run that already advanced past the wait, uses ordinary
-cancellation. No cancellation reverses an accepted product effect.
+`breg.invoke-action/v1` imports an exact BReg Action using `action.contract` and `action.id`.
+Compilation pins the generated Action revision, mode, review policy, application policy, input,
+output, and declared refusals. The maintained BReg client verifies current metadata without
+silently replacing a saved command or condition. Immediate Actions return exact application
+results. Proposal Actions create a draft and return it under `proposal`.
 
-Casework's completion event for a request reaches `POST /v1/review-completions`
-on the service listener with a configured bearer token and recipient binding.
-The event is a wake-up only: it brings forward the next result read of a run
-waiting on that request, never sooner than 30 seconds after the previous read,
-and carries no result the Coordinator acts on. Every authentic event is
-acknowledged alike, whether or not a run waits on its request. No event starts
-a run.
+Starting a draft, submitting a Proposal, and applying a submission are separate effects.
+`breg.submit-proposal/v1` freezes the selected draft and exposes the named `application` completion.
+The observer correlates the exact Proposal ID, Action ID and revision, submission version, and
+effect digest. Only authoritative application evidence settles `applied`; review approval is not
+application evidence. A closed Proposal settles `closed`. Blocked, mismatched, unknown, or
+uncertain application state holds the wait and cannot become a terminal business-failure branch.
+The original prepared command and submission identity stay fixed across recovery.
 
-`invoke-breg-action` uses a standing BReg service identity and an explicitly
-permitted profile for an immediate governed action. Its input contains `action`
-and an `input` object, with no grant field or task-authority fallback. The maintained
-BReg client prepares the conditional request without mutation. Coordinator saves
-that preparation and original key before dispatch. Recovery checks current
-metadata and fresh authority while retaining the saved request and condition
-ETags. Changed contracts, stale conditions and revoked authority do not silently
-produce a replacement command. An ambiguous response remains uncertain; a
-record read or operator assertion cannot establish action success.
+`breg.apply-proposal/v1`, `breg.retry-proposal/v1`, and `breg.cancel-proposal/v1` are explicit calls
+subject to the receiving BReg policy. Coordinator neither approves a Proposal nor changes its
+application policy. A notice after application is a separate `messaging.submit-message/v1` call,
+authorized by Messaging. A refused notice leaves the registry application intact.
 
-An `invoke-breg-action` call may declare `onDeclaredRefusal`. BReg returns the
-typed `422 action.refused` response only after validating the code against the
-active package's declared refusal catalogue and guaranteeing that the refusal
-had no action effect. The maintained adapter accepts the branch outcome only
-for that exact problem class with a bounded refusal code. The branch output is
-exactly `{refusalCode}`. It carries no problem detail, field path,
-submitted value or raw response. The call's successful receipt remains the
-output on `next`. A mapping may read the receipt only on routes reached through
-`next`, and the refusal object only on routes reached through
-`onDeclaredRefusal`; after those routes join, the call output is unavailable
-because its shape is ambiguous. Authentication, authorization, transport,
-protocol and preparation failures remain call failures. Without the optional
-edge, a declared refusal also stops the run as refused.
+An Action call may declare `onDeclaredRefusal`. Only a validated owner-declared no-effect refusal
+routes there, as `{refusalCode}`. Authentication, authorization, transport, protocol, and
+preparation failures stay operational failures. A later refusal cannot settle an earlier uncertain
+attempt. Success and refusal outputs are available only on their respective routes; after a join
+reachable from both, the call output has no unambiguous schema and is unavailable.
 
-A declared refusal is checkpointed atomically with its branch target. If a
-prior attempt has an unknown effect, a later refusal cannot settle that
-attempt, so the original command remains uncertain and the refusal branch is
-not taken. The original command and workflow deadline remain fixed. A
-checkpointed result retains the existing rule that following pure `choose` and
-`finish` steps may complete, while a later call or wait still observes expiry.
-If cancellation wins before the refusal checkpoint, the worker records the
-completion as no-effect and leaves the run cancelled.
+## Standalone review and named completions
 
-`external-get` is a configured read boundary: operators bind a base URL, exact
-paths, allowed query parameter names, optional service authorization and a local
-response schema through `runtime.externalHttpConnections`. Calls can supply only
-a permitted path and query values. The adapter sends GET, refuses redirects and
-validates the complete `{status, body}` response. Status 429, 502, 503 and 504
-are retried within the run deadline, and the workflow sees one only after the
-retries run out. It provides no external write operation or receipt. Omitted
-authorization means a public read.
+`casework.submit-review-request/v1` and `casework.cancel-review-request/v1` use one configured
+Casework review producer under its own service identity, with no task authority. Submission carries
+the expected `PolicyBinding`, subject, bounded reviewer context, and requester reference. Accepted
+requests and results must match that exact policy, subject, and submission digest. Casework owns
+reviewer authority and outcomes. This standalone review path needs no BReg connection and confers
+no registry mutation authority.
 
-Each run keeps its original definition and prepared commands. A repeated
-idempotency key under the same verified issuer, subject and flow returns its
-original run when the input matches. A conflicting input is refused. New compatible package
-versions apply to new starts; existing runs keep their pinned definitions.
-A workflow ID and version identify one definition throughout retained run
-history, including payload-erased tombstones. Apply refuses a changed definition
-under a previously used version; give that definition a new version.
+Submission exposes the named `result` completion. Cancellation reports `cancelled`, or
+`already-terminal` with the result that won the race; only `cancelled` establishes withdrawal.
+Both mutations recover with the same saved request and key, without a read-only original-key
+receipt. A `wait-for` names `completion: {step, name}` from an earlier accepted call on every route.
+Its required `timeoutSeconds` is shorter than the run deadline. A settled result takes `next`;
+timeout takes `onTimeout`, or reports `wait-timed-out`.
 
-Snapshots pin the capabilities of every used operation. A changed definition
-digest may require a new authoring version under the same history rule.
+An optional `onCancel` takes a durable authored cleanup path. A leased read records intent and
+routes when the read settles or the lease expires. Repeated cancellation preserves cleanup under
+the original deadline and current downstream authority. Without that path, or after the wait
+advances, ordinary cancellation stops future calls where possible. Cancellation never reverses an
+accepted effect or implicitly withdraws a downstream request.
 
-Credentials are acquired when a call is attempted. A wait, retry or restart
-cannot extend a Casework approval deadline or change its principal, resource,
-scopes or bounds. Receiving products verify current authority. Standing read
-authority and read-only receipt observation cannot authorize a commitment.
-Preparation and dispatch remain subject to cancellation, recovery holds and the
-original workflow deadline. A retry cannot renew an original approval deadline.
+A configured Casework completion event reaches `POST /v1/review-completions`, authenticated by its
+bearer token and recipient binding. The event only advances an eligible authoritative result read.
+Every authentic well-formed event is acknowledged alike, regardless of a waiting run. It carries
+no result authority and starts no run.
 
-An accepted Messaging submission is distinct from provider delivery. A failed
-connection or lost response after sending may leave the effect unknown. The
-original command and idempotency key are retained for bounded recovery.
-If evaluating the following wait fails, the successful call and its output stay
-recorded. The run fails with `mapping-invalid`; the accepted call cannot be
-replayed to repair the mapping.
-A computed call input is held to its operation's input contract before it is
-prepared, saved or sent. An input outside it fails the run with
-`invalid-command`, and the run and step status name where in `failurePath`, an
-RFC 6901 pointer into the input. The computed value is not recorded, and an
-unexpected member is reported at the object that holds it.
+An `external.get/v1` alias can specialize its validated response and declare a named
+`bounded-poll` completion. Its typed pure interpreter receives the original saved command and
+latest validated response and returns `pending`, `complete` with a typed result, or a declared
+`refused` code. The host owns GET transport, credentials, permitted destinations, scheduling,
+correlation, and durable read budgets. External polling is independent of Casework and BReg.
+There is no external write operation, arbitrary HTTP method, or dynamic destination.
 
-`evaluate-decision` uses an explicitly configured System One or OpenAI Decisions
-protocol binding, bounded state and typed questions. Preparation is inert; the
-exact request is saved before dispatch and the validated result is committed
-with the next checkpoint. Evaluation is neither a repeatable read nor a Registry
-mutation. Possible dispatch marks the result uncertain. Without proven provider
-replay or original-result lookup, automatic and operator replay are refused.
-A completed result is reused on restart. OpenAI per-question refusal is a typed
-answer. A System One HTTP refusal stops
-the call; it is not a negative answer or a typed review result. A malformed or
-lost reply remains an uncertain call. HTTP 429 also remains held, including a
-temporary rate limit with `Retry-After`; it does not permit automatic resend.
-Accepted responses require the returned model and valid provider usage metadata.
-Pure workflow policy interprets results before a separately authorized effect.
-Model identity and native confidence are retained without claiming immutable
-weights, determinism, accuracy or interchangeable confidence calibration.
+## Observation and uncertainty
+
+Read observations have a persistent floor of at least 30 seconds, including after restarts,
+wake-ups, retry, and timeout. `minimumObservationIntervalSeconds` can raise that deployment-wide
+floor, up to 86,400 seconds. Casework and BReg pending reads default to 900 seconds. Casework
+`resultCheckSeconds` accepts 60 to 86,400. An external completion's `intervalSeconds` is constrained
+by the operation and deployment floor. Retry hints can postpone observations within the host's
+86,400-second ceiling. Invalid or excessive retry hints hold the wait instead of accelerating it.
+Inspection exposes timing and observation count/limit, without protected correlation values.
+
+Unavailable reads remain pending within the original budget. A refusal, invalid correlation, or
+blocked source state stays held for investigation and recovery. None is evidence of a negative
+business decision. A Coordinator timeout means the workflow stopped waiting; source-owned work
+can continue. The timeout and run deadline do not reset during recovery.
+
+Definite retryable effect responses can resend the durable original command under bounded retry
+and deadline rules. An ambiguous mutation stays uncertain. Messaging and Scheduling support
+original-key receipt reads; BReg Action and Casework mutations do not gain receipt evidence from
+record reads or operator assertions. Lost, missing, or expired receipts never establish absence.
+`evaluation.evaluate/v1` freezes one potentially billable request. After possible dispatch,
+automatic retry, same-command retry, and reconciliation cannot replay it. A completed evaluation
+is reused; a pure policy interprets it before a separately authorized effect. Model confidence
+is not calibrated across providers or a guarantee of correctness.
+
+## Admission and integration
+
+`POST /v1/runs` requires `workflow`, expected `workflowRevision`, `input`, and an idempotency key.
+A fresh start must match the active computed revision. Recovery of an unknown admission retains
+the original verified identity, key, revision, and input even after activation changes. Conflicting
+reuse is refused. Existing runs retain their original protected definitions and prepared commands.
+A changed definition under an ID and human version already used by retained history is refused.
+
+`GET /v1/workflows/{workflow}` discovers the permitted active typed contract. Generated TypeScript
+and Python wrappers provide typed `start`, `get`, and `cancel` through maintained public generic
+clients, pin the revision, and check returned identity and declared outcome names. They add no
+transport or authorization semantics. The server remains responsible for runtime schema checks.
+
+Inspection adds accepted/unknown effects and named completion waits to step and recovery state.
+Inputs, raw product responses, prepared requests, and correlation values stay protected. Public
+terminal output is only the projection the reviewed Workflow declares.
 
 ## Deployment and custody
 
@@ -193,24 +163,24 @@ keyed audit handles, never raw operator text. Retention erases eligible terminal
 payloads while keeping spent-key tombstones. Live, uncertain and restore-review
 work cannot be silently erased.
 
-A deployment serves up to sixteen flows, each from its own pinned package,
+A deployment serves up to sixteen workflows, each from its own pinned package,
 which is applied, upgraded, rolled back and explicitly removed on its own. One
-deployment is one trust domain, so flows that must not share connections run in
-separate deployments. A start names its flow and is admitted under that flow's active definition, while
-retained runs use their original versions. A flow with runs that are not
-terminal cannot be removed. A caller policy's `flows` scopes its run actions
-only. Deployment-wide operator actions reach every served flow, including flows
-added later, and require `operator: true` instead of a flow list.
+deployment is one trust domain, so workflows that must not share connections run in
+separate deployments. A start names its workflow and is admitted under that workflow's active definition, while
+retained runs use their original versions. A workflow with runs that are not
+terminal cannot be removed. A caller policy's `workflows` scopes its run actions
+only. Deployment-wide operator actions reach every served workflow, including workflows
+added later, and require `operator: true` instead of a workflow list.
 `GET /v1/runs` returns at most 100 of the caller's most recently admitted runs,
-newest first, from the flows its policy lists; an operator policy lists every
-owner's runs in those flows. `limit` takes 1 to 100 and defaults to 20. The list supports `state` and `attention` filters and returns `nextCursor` when there
+newest first, from the workflows its policy lists; an operator policy lists every
+owner's runs in those workflows. `limit` takes 1 to 100 and defaults to 20. The list supports `state` and `attention` filters and returns `nextCursor` when there
 may be another page. `attention=true` selects effective states `attention` and `failed`;
 `attention=false` excludes both. Continue with the same filters and cursor; each page
 reapplies the caller's current authority. Applications use
 the authenticated HTTP API, through the maintained Coordinator client where one
 fits: `registry_stack_client::coordinator` in Rust or the `coordinator`
 namespace of the unified Node.js and Python clients.
-Every refusal of that API, the request edge and the review-completion route
+Every refusal of that API, the request edge and the Casework wake-up route
 included, is an RFC 9457 problem document whose `code` comes from one closed
 `family.reason` vocabulary with one status each. A refusal names no submitted
 value, a missing run and a run the caller may not see are the same
@@ -262,75 +232,20 @@ retaining `uncertain`, `cancelRequested`, the original request and spent start
 identity. It never resumes the cancelled run or establishes its remote outcome.
 Unknown product mutations do not qualify for this exception.
 
-`coordinatorctl check --project DIRECTORY` checks `workflow.yaml` and
-`functions.rhai`, plus optional `runtime.yaml` and `scenarios.yaml` companions.
-Every YAML or YML file in the project root must have its supported envelope
-and owned filename. The check aggregates companion errors and executes valid
-scenarios against the loaded workflow. It reads only the root, with at most
-1024 entries; other child directories produce an incomplete-check warning.
-The owned `.coordinator` state and secret directory is never traversed.
-Runtime checks remain offline unless `--environment` is selected and never
-resolve secret values. An explicitly supplied runtime is checked once.
 
-Scenario files use `kind: CoordinatorScenarios` and the API version
-`id.registrystack.org/formats/coordinator/scenarios/v1alpha1`. Each case has a unique local `id`. Replies name their `type`: `success` carries a
-foreign JSON `value`; `retryable`, `refused` and `uncertain` carry a `code`;
-`declared-refusal` carries a non-empty `refusalCode` of at most 128 characters
-without control characters; `receipt-expired` has no additional members. A
-declared-refusal reply is accepted only for `invoke-breg-action`. It takes the
-authored refusal edge, stops as refused when that edge is absent, and leaves a
-prior unknown attempt uncertain. `waits` states what each
-`wait-for` step the run reaches receives: `{type: event, value}` delivers the
-event when the wait starts, and `{type: timeout}` moves the virtual clock by
-the step's `timeoutSeconds`. A run without `onTimeout` stops as `timed-out`,
-and one whose deadline passes first as `deadline-exceeded`. Inputs, successful replies and
-expected outputs are foreign JSON values, including explicit nulls, while
-ordinary scenario configuration follows the shared reader rules. An omitted
-expected outcome is not checked; `{type: none}` checks its absence and
-`{type: named, value: outcome-id}` checks a declared outcome.
-`workflowElapsedSeconds` checks elapsed workflow virtual time.
+## Compatibility and verification
 
-Deterministic scenario tests use the same graph and function semantics with a
-virtual clock and fake product replies. They complement PostgreSQL, process
-restart and native-service tests; they do not prove actual downstream effects.
-After a simulated receipt expiry, the run stays uncertain. Neither `retry-same`
-nor `reconcile` can consume another reply, since the supported products cannot
-confirm an original command through an expired receipt. Before receipt expiry,
-a successful, explicitly declared reconciliation represents authoritative
-confirmation of a Messaging or Scheduling command, never a new submission.
-BReg action scenarios cannot declare successful reconciliation without a
-read-only action receipt contract. Reconciliation can resolve an uncertain
-outcome; a definite retryable reply requires
-same-command retry.
+Protected state schema version 3 directly replaces earlier pilot layouts. Apply and runtime access
+refuse incompatible namespaces. Settle old work with its matching binary and preserve original
+packages, keys, and audit until retention allows erasure, then provision a fresh namespace and
+database identity. There are no legacy authoring aliases or automatic state conversions.
 
-The governed-action adapter has both mock HTTP checks and explicit native
-acceptance checks. The first native check observes a committed patch after response
-loss, reconstructs the adapters from saved preparation, and recovers with the
-same body, key and conditions. It verifies one applied record revision, the same
-application receipt, fresh metadata, a real read-only profile refusal and no
-receipt lookup. The second uses actual `Worker` and `Store` objects with a real
-BReg action and Messaging notice. It drops the accepted notice reply, reconstructs
-the objects, and resolves the notice through its exact original receipt lookup.
-Neither action nor notice is repeated; duplicate start admission returns the
-original run. Acceptance does not establish provider delivery. Object
-reconstruction is distinct from OS-process restart, which retains separate
-`process_restart` coverage. PostgreSQL worker checks separately exercise
-preparation and crash durability. The separate `scripts/test-real-services.py`
-journey composes BReg, Casework, Scheduling and Messaging with a persisted wait
-and an actual worker restart. It also runs the reviewed-notice flow against a
-real Casework review producer whose completion events wake the waiting runs;
-its timeout route is proven by scenarios only.
-See [the contributor checks](README.md#verify-a-change)
-for the explicit helper and its two distinct disposable loopback databases.
-Successful runs clean up UUID-owned fixture resources; assertion failures may
-retain diagnostic Coordinator and Messaging schemas. This explicit contributor
-check is not a CI gate.
-Native Casework and BReg applications may compose a governed application action
-with a separate optional notice through their owning APIs.
+Offline checking and deterministic scenarios prove graph, mapping, schema, Function, and branch
+behavior. Adapter HTTP checks, PostgreSQL state checks, and native service journeys establish their
+own separately scoped assertions. Mock replies never prove human review or registry application.
+The reviewed BReg Proposal path still requires an owning Casework/BReg checkpoint integration to
+establish a complete native acceptance journey. See [contributor checks](README.md#verify-a-change).
 
-Coordinator does not add language builders, a WASM toolchain, dynamic fan-out,
-arbitrary HTTP methods or SQL steps, automatic compensation, or a visual editor.
-It does not promise atomic distributed revocation or rollback of accepted
-effects. Existing hooks and APIs remain available to external orchestrators.
-Coordinator is pre-1.0: this contract, the workflow format, the HTTP API and
-the runtime configuration may still change between releases.
+Coordinator does not provide SQL steps, dynamic fan-out, arbitrary HTTP methods, automatic
+compensation, or distributed rollback. Existing hooks and APIs remain available to external
+orchestrators. The project, API, runtime, and deployment contracts are pre-1.0.

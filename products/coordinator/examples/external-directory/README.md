@@ -14,9 +14,9 @@ coordinatorctl check --project products/coordinator/examples/external-directory 
 coordinatorctl test --project products/coordinator/examples/external-directory
 ```
 
-The `lookup` step calls `external-get` on the logical `directory` connection.
+The `lookup` step calls `external.get/v1` on the logical `directory` connection.
 `lookup_request` supplies only the path `offices` and the query value
-`district`. The runtime's `externalHttpConnections.directory` fixes the base
+`district`. The runtime's `connections.directory` fixes the base
 URL, the permitted path and query names, and the `responseSchema` that the
 reply `{status, body}` must match. A path or query name outside those lists is
 refused with `external-invalid-command`.
@@ -65,10 +65,10 @@ For a deployment, the institution must supply these prerequisites:
   with an empty body; the adapter reads that body only on the final attempt.
 - The endpoint uses HTTPS. Plain HTTP is accepted only on an explicit numeric
   loopback address, as in this template.
-- Callers hold a Coordinator access token for the `external-directory` flow,
+- Callers hold a Coordinator access token for the `external-directory` workflow,
   and an explicit operator policy grants inspection and recovery separately.
 
-The runtime template has no product connections, uses a loopback endpoint, and
+The runtime template binds `directory` as `type: external-http`, uses a loopback endpoint, and
 contains secret references only. Copy it outside the package and adapt its
 endpoint, response schema, PostgreSQL identity and roles, and package pin.
 Follow [the deployment runbook](../../DEPLOYMENT.md) for installation and apply.

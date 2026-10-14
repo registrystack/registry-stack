@@ -1,6 +1,6 @@
 ---
 title: Registry Coordinator API
-description: Bearer authentication, caller policies, run admission and ownership, recovery requests, review completion events, problem codes, and routes for the generated Registry Coordinator OpenAPI operations.
+description: Bearer authentication, caller policies, run admission and ownership, recovery requests, Casework completion wake-ups, problem codes, and routes for the generated Registry Coordinator OpenAPI operations.
 status: draft
 owner: registry-docs
 source_repos:
@@ -14,8 +14,8 @@ standards_referenced:
 
 import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
 
-Registry Coordinator serves one HTTP surface for starting a run of a served flow, following and
-recovering that run, operating the deployment, and taking Casework's review completion events.
+Registry Coordinator serves one HTTP surface for starting a run of a served workflow, following and
+recovering that run, operating the deployment, and taking Casework's Casework completion wake-ups.
 Every route except liveness, readiness, and completion events presents a bearer access token, and
 the caller policy that token resolves to decides what the caller may do. The contract is pre-1.0 and
 carries no frozen compatibility promise.
@@ -28,41 +28,55 @@ recovery rules those operations assume.
 
 Every caller request presents `Authorization: Bearer <token>` holding an RFC 9068 access token,
 `typ: at+jwt`, signed with RS256 or ES256 by the one issuer the deployment names, for its audience,
-to a client listed in its `allowedClients`, with a lifetime of at most one hour. The token's scopes
+to an exact client keyed in `authentication.policies`, with a lifetime of at most one hour. The token's scopes
 are read from `registry_scopes` unless the deployment sets `scopeClaim`. A missing, malformed, or
 unverified token answers `401 authentication.refused` with `WWW-Authenticate: Bearer`.
 
-{/* Evidence: crates/registry-coordinator/src/access.rs, access_token_typ_set, scope_claim;
+{/* Evidence: crates/registry-coordinator/src/access.rs, access_token_typ_set, scopeClaim;
     products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
 
-Each verified client resolves one caller policy, which lists the scopes it requires and the actions
+Each exact verified client identity resolves its keyed caller policy, which lists the scopes it requires and the actions
 it allows:
 
 - The run actions `start`, `status`, `inspect`, `retry-same`, `cancel`, and `reconcile` reach only
-  the flows the policy lists in `flows`.
+  the workflows the policy lists in `workflows`.
 - The deployment-wide actions `doctor`, `restore-hold`, `release-restore-hold`,
-  `release-admission-hold`, `complete-execution-recovery`, and `retain` act on every flow at once
+  `release-admission-hold`, `complete-execution-recovery`, and `retain` act on every workflow at once
   and need `operator: true` on the policy.
 
 A resolved caller refused an action answers `403 operation.not-authorized`. Run ownership and the
 idempotency scope come from the token's exact verified `iss` and `sub`, never from input fields;
 input identifiers and grant references manufacture no caller authority. A caller allowed to start
-a run gains no authority over the products its flow calls: each call uses the identity the operator
+a run gains no authority over the products its workflow calls: each call uses the identity the operator
 configured for that connection, and the receiving product decides it.
 
 {/* Evidence: products/coordinator/DEPLOYMENT.md, Configure the deployment;
     products/coordinator/README.md, Package and deploy;
     products/coordinator/PRODUCT-CONTRACT.md, Execution and authority. */}
 
+## Discover a workflow
+
+`GET /v1/workflows/{workflow}` returns the active permitted contract, including `workflowRevision`,
+input, and declared outcomes. It requires the caller's `start` action for that Workflow.
+Use that revision for fresh starts or a generated revision-pinned TypeScript/Python wrapper.
+Generated wrappers provide typed `start`, `get`, and `cancel` over the maintained public generic
+clients; they validate returned workflow identity and declared outcome names. They add no authority.
+
+{/* Evidence: crates/registry-coordinator/src/http.rs, workflow_contract;
+    crates/registry-coordinator/src/sdk.rs;
+    crates/registry-coordinator/tests/sdk_generation.rs. */}
+
 ## Start a run
 
-`POST /v1/runs` takes a `Start` body with exactly two members: `flow`, the served flow's name of 1
-to 128 characters, and `input`, which the flow's declared input schema checks. It requires an
+`POST /v1/runs` takes a `Start` body with exactly three members: `workflow`, its name of 1 to 128 characters;
+`workflowRevision`, the expected computed revision; and `input`, checked against the declared schema. It requires an
 `Idempotency-Key` header of 1 to 256 bytes. An admitted start answers `200` with the run's status,
-admitted under the named flow's active definition.
+admitted under the named workflow's active definition only when its revision matches.
 
-The same key from the same issuer and subject returns the original run rather than creating new
-work, and the same key with different input answers `409 idempotency.key-reused`. A new flow version
+The same key from the same verified issuer and subject returns the original run for the
+same workflow revision and input. A conflicting revision or input answers
+`409 idempotency.key-reused`. Retain the exact original revision during unknown-admission recovery,
+even if activation changes. A new workflow version
 cannot reinterpret a repeated key. A fresh key is a fresh run, so a client that does not know
 whether a start was admitted resends it under its original key.
 
@@ -73,25 +87,26 @@ whether a start was admitted resends it under its original key.
 
 A start is refused before admission when:
 
-- the caller's policy does not list the flow, with `403 operation.not-authorized`;
-- the policy lists the flow but the deployment does not serve it, with `404 flow.not-served`;
-- the input does not satisfy the flow's input schema and value bounds, with `400 input.invalid`;
+- the caller's policy does not list the workflow, with `403 operation.not-authorized`;
+- the policy lists the workflow but the deployment does not serve it, with `404 workflow.not-served`;
+- the expected revision differs from the active revision, with `409 workflow.revision-mismatch`;
+- the input does not satisfy the workflow's input schema and value bounds, with `400 input.invalid`;
 - the instance runs in recovery-only mode, with `409 admission.recovery-only`;
 - a restore left admissions held, with `409 admission.held`.
 
 ## Read and inspect runs
 
-`GET /v1/runs/{run}` answers the run's `RunStatus`: its workflow ID and version, its
-`definitionDigest` and `bindingDigest`, its current step and state, when it was admitted and when
+`GET /v1/runs/{run}` answers the run's `RunStatus`: its `workflow`, computed `workflowRevision`,
+`bindingDigest`, its current step and state, when it was admitted and when
 its deadline falls, whether an effect is `uncertain`, and whether it needs restore review.
 `cancelRequested` records ordinary stop cancellation; `authoredCancelRequested` records cancellation
-that took a review wait's authored cleanup path. A finished run adds its `outcome` and the reviewed `output` its
-flow declares. A failed run adds its `failureCode`, and `failurePath` when the failure concerns a
+that took a completion wait's authored cleanup path. A finished run adds its `outcome` and the reviewed `output` its
+workflow declares. A failed run adds its `failureCode`, and `failurePath` when the failure concerns a
 call input: an RFC 6901 pointer into that input, never the value.
 
-A run that does not exist, a run another caller owns, and a run in a flow the caller's policy does
+A run that does not exist, a run another caller owns, and a run in a workflow the caller's policy does
 not list all answer the same `404 run.not-visible`. An operator policy reaches every owner's runs
-in the flows it lists.
+in the workflows it lists.
 
 {/* Evidence: products/coordinator/generated/openapi/coordinator.openapi.json, RunStatus;
     crates/registry-coordinator/src/http.rs, run_caller, run-absent;
@@ -104,7 +119,7 @@ first. `limit` takes 1 to 100 and defaults to 20; any other value answers
 `attention=true` selects effective states `attention` and `failed`; `attention=false` excludes both.
 Filters compose. Results are ordered by admission time and run ID, newest first. When the response
 includes `nextCursor`, pass it as `cursor` with the same filters to continue. Every page reapplies
-current caller and flow permissions. An invalid cursor or one from a different caller or filter
+current caller and workflow permissions. An invalid cursor or one from a different caller or filter
 answers `400 request.invalid`. Keep the run ID a start returns for direct status lookup.
 
 `GET /v1/runs/{run}/inspect` answers the run, one entry per step with its state, attempt count,
@@ -113,11 +128,21 @@ and a `recovery` block. `recovery.retryAllowed` and `recovery.reason` describe w
 be scheduled again. For a compatible current call, `recovery.operation` names the pinned operation's
 ID, version, product, effect, key and preparation requirements, recovery semantics, and
 `readReceipt` capability. Neither proves current product authority or that an original-key receipt
-exists. No status, list, or inspection answer carries a run's input, a product response, or a
-prepared command.
+exists. No status, list, or inspection answer carries original inputs, raw product responses, or prepared
+commands. Terminal output is only the authored outcome projection.
 
 {/* Evidence: products/coordinator/generated/openapi/coordinator.openapi.json, RunInspection,
     StepStatus, OperationIdentity; products/coordinator/README.md, Observe and recover. */}
+
+Inspection also includes `effects` with accepted or unknown state and pinned Operation revisions,
+and `waits` with their accepted step, named completion, completion revision, timeout, next
+observation, durable floor, observation count, and limit. Protected correlation values and
+commands remain absent. A wait's blocked or uncertain evidence cannot become a business-failure
+outcome. Persistent read floors and original deadlines survive wake-up, restart, and recovery.
+
+{/* Evidence: crates/registry-coordinator/src/store.rs, EffectStatus, WaitStatus;
+    crates/registry-coordinator/tests/external_wait_postgres.rs;
+    crates/registry-coordinator/tests/review_wait_postgres.rs. */}
 
 ## Recovery and operator requests
 
@@ -136,7 +161,7 @@ Every recovery and operator `POST` carries a JSON body:
 
 The attestations are audited operator statements, not automated proof. A cancel answers the run's
 status, a reconcile its inspection, and a retry-same the run ID and its scheduled status.
-An authorized cancellation of a parked review wait with `onCancel` takes that authored path
+An authorized cancellation of a parked completion wait with `onCancel` takes that authored path
 durably. A leased result read settles or expires before the path advances. Repeating cancellation
 preserves the cleanup, which can withdraw the original Casework request under current producer
 authority and the original deadline. Without that edge, or after the wait advanced, ordinary
@@ -243,6 +268,6 @@ paths. The rest of this page is maintained by hand against the cited source.
 ## Next
 
 - [Registry Coordinator API operations](../coordinator/) for every route, parameter, and schema.
-- [Author a Coordinator flow](../../../configure/coordinator/) for the flows a deployment serves.
+- [Author a Coordinator workflow](../../../configure/coordinator/) for the workflows a deployment serves.
 - [Deploy Registry Coordinator](../../../operate/coordinator/) for the runtime, its database, its
   caller policies, and the operator commands.

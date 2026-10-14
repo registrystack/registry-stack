@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The ordinary package/apply/service path against real PostgreSQL and OIDC.
 #![cfg(feature = "postgres-test")]
+#[path = "support/failed_fixture.rs"]
+mod failed_fixture;
 use chrono::Utc;
 use registry_coordinator::{
     adapters::HttpAdapters,
@@ -79,7 +81,7 @@ async fn assert_status_audit(
     let body: Value = response.json().await.unwrap();
     if expected_status == 200 {
         assert_eq!(body["runId"], run);
-        assert_eq!(body["workflowId"], "delayed-follow-up");
+        assert_eq!(body["workflow"], "delayed-follow-up");
     } else {
         assert_eq!(body["code"], "run.not-visible");
         assert_eq!(
@@ -529,7 +531,7 @@ async fn assert_reapply_preserves_schema_and_work(
     namespace: &str,
     migration: &registry_coordinator::store::Store,
     runtime: &RuntimeConfig,
-    flows: &deployment::Flows,
+    workflows: &deployment::Workflows,
     store: &registry_coordinator::store::Store,
 ) {
     let rows_sql = format!(
@@ -561,13 +563,13 @@ async fn assert_reapply_preserves_schema_and_work(
         .get(0);
     assert!(!before["runs"].as_array().unwrap().is_empty());
     assert!(!before["jobs"].as_array().unwrap().is_empty());
-    assert_eq!(before["ledger"], json!([2]));
-    assert_eq!(before["schemaVersion"], 2);
+    assert_eq!(before["ledger"], json!([3]));
+    assert_eq!(before["schemaVersion"], 3);
     for _ in 0..2 {
-        deployment::apply(migration, runtime, flows, &[])
+        deployment::apply(migration, runtime, workflows, &[])
             .await
             .unwrap();
-        deployment::check(store, runtime, flows.digest())
+        deployment::check(store, runtime, workflows.digest())
             .await
             .unwrap();
         let after: Value = admin.query_one(&rows_sql, &[]).await.unwrap().get(0);
@@ -768,22 +770,24 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     d["stateKeys"] = json!({"1":{"keyRef":"secret:file/state-key"}});
     d["admissionKeyRef"] = json!("secret:file/admission-key");
     d["auditKeyRef"] = json!("secret:file/audit-key");
-    d["authentication"] = json!({"issuer":issuer.issuer(),"audience":"urn:coordinator:test","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"allowedClients":["producer","operator"],"policies":[{"clientId":"producer","requiredScopes":["coordinator:start"],"flows":["delayed-follow-up"],"actions":["start","status"]},{"clientId":"operator","requiredScopes":["coordinator:operate"],"flows":["delayed-follow-up"],"actions":["status","inspect","retry-same","cancel","reconcile","doctor","restore-hold","release-restore-hold","release-admission-hold","complete-execution-recovery","retain"],"operator":true}]});
+    d["authentication"] = json!({"issuer":issuer.issuer(),"audience":"urn:coordinator:test","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"policies":{"producer":{"requiredScopes":["coordinator:start"],"workflows":["delayed-follow-up"],"actions":["start","status"]},"operator":{"requiredScopes":["coordinator:operate"],"workflows":["delayed-follow-up"],"actions":["status","inspect","retry-same","cancel","reconcile","doctor","restore-hold","release-restore-hold","release-admission-hold","complete-execution-recovery","retain"],"operator":true}}});
     fs::write(&path, serde_norway::to_string(&doc).unwrap()).unwrap();
     let runtime = Arc::new(RuntimeConfig::load(&path).unwrap());
-    let flows = Arc::new(deployment::load_flows(deployment::config(&runtime).unwrap()).unwrap());
-    let package = flows.get("delayed-follow-up").unwrap().clone();
-    let flows_digest = flows.digest().to_owned();
+    let workflows =
+        Arc::new(deployment::load_workflows(deployment::config(&runtime).unwrap()).unwrap());
+    let package = workflows.get("delayed-follow-up").unwrap().clone();
+    let workflow_revision = package.definition.digest.clone();
+    let workflows_digest = workflows.digest().to_owned();
     assert_ne!(
-        flows_digest, digest,
-        "the set digest names the flows, not one package"
+        workflows_digest, digest,
+        "the set digest names the workflows, not one package"
     );
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    let applied = deployment::apply(&migration, &runtime, &flows, &[])
+    let applied = deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
-    assert_eq!(applied.flows_digest, flows_digest);
-    assert_eq!(applied.activation.package_digest, flows_digest);
+    assert_eq!(applied.workflows_digest, workflows_digest);
+    assert_eq!(applied.activation.package_digest, workflows_digest);
     assert_eq!(
         changes(&applied),
         pairs(&[("delayed-follow-up", "install")])
@@ -806,14 +810,16 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     }
     drop(migration);
     let store = deployment::open(&runtime, false).await.unwrap();
-    deployment::check(&store, &runtime, &flows_digest)
+    deployment::check(&store, &runtime, &workflows_digest)
         .await
         .unwrap();
     let mut wrong_identity = (*runtime).clone();
     wrong_identity.deployment.as_mut().unwrap().database_id = "wrong-database".into();
-    assert!(deployment::check(&store, &wrong_identity, &flows_digest)
-        .await
-        .is_err());
+    assert!(
+        deployment::check(&store, &wrong_identity, &workflows_digest)
+            .await
+            .is_err()
+    );
     // Status validates with runtime credentials only; even an absent migration
     // credential must not affect it. Plan remains a non-validating observation.
     let status_path = root_path.join("status-runtime.yaml");
@@ -837,9 +843,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .unwrap()
         .get(0);
     let planned = local_cli(&status_path, "plan", true);
-    assert_eq!(planned["flowsDigest"], flows_digest);
-    assert_eq!(planned["flows"][0]["change"], "unchanged");
-    assert_eq!(planned["flows"][0]["packageDigest"], digest);
+    assert_eq!(planned["workflowsDigest"], workflows_digest);
+    assert_eq!(planned["workflows"][0]["change"], "unchanged");
+    assert_eq!(planned["workflows"][0]["packageDigest"], digest);
     status_doc["deployment"]["databaseId"] = json!("wrong-database");
     fs::write(&status_path, serde_norway::to_string(&status_doc).unwrap()).unwrap();
     assert_eq!(
@@ -855,9 +861,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     let checked = local_cli(&status_path, "deployment-status", true);
     assert_eq!(checked["status"], "checked");
     assert_eq!(checked["databaseId"], "router-test");
-    assert_eq!(checked["flowsDigest"], flows_digest);
-    assert_eq!(checked["flows"], json!({"delayed-follow-up": digest}));
-    assert_eq!(checked["schemaVersion"], 2);
+    assert_eq!(checked["workflowsDigest"], workflows_digest);
+    assert_eq!(checked["workflows"], json!({"delayed-follow-up": digest}));
+    assert_eq!(checked["schemaVersion"], 3);
     assert_eq!(checked["runtimeRole"], role);
     assert_eq!(checked["active"]["roleMode"], "split");
     status_doc["deployment"]["runtimeRole"] = json!("wrong_runtime_role");
@@ -959,9 +965,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         json!([{"root":other_package,"expectedDigest":other_digest}]);
     fs::write(&status_path, serde_norway::to_string(&status_doc).unwrap()).unwrap();
     let planned = local_cli(&status_path, "plan", true);
-    assert_eq!(planned["flows"][0]["change"], "replace");
-    assert_eq!(planned["flows"][0]["packageDigest"], other_digest);
-    assert_eq!(planned["flows"][0]["activePackageDigest"], digest);
+    assert_eq!(planned["workflows"][0]["change"], "replace");
+    assert_eq!(planned["workflows"][0]["packageDigest"], other_digest);
+    assert_eq!(planned["workflows"][0]["activePackageDigest"], digest);
     assert_eq!(
         local_cli(&status_path, "deployment-status", false)["diagnostics"][0]["code"],
         "coordinator.deployment.refused"
@@ -985,8 +991,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     );
     admin
         .batch_execute(&format!(
-            "UPDATE {namespace}.control SET schema_version=2;
-             ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=2)"
+            "UPDATE {namespace}.control SET schema_version=3;
+             ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=3)"
         ))
         .await
         .unwrap();
@@ -995,8 +1001,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     // write authority all refuse status while plan still reports observation.
     for (damage, repair) in [
         (
-            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(3)"),
-            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=3"),
+            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(4)"),
+            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=4"),
         ),
         (
             format!("REVOKE SELECT ON {namespace}.jobs FROM {role}"),
@@ -1084,7 +1090,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     let recovery_store = store.clone();
     let recovery_runtime = runtime.clone();
     let recovery_package = package.clone();
-    let recovery_flows = flows.clone();
+    let recovery_flows = workflows.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
@@ -1094,7 +1100,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                 recovery_only: false,
                 store,
                 runtime,
-                flows,
+                workflows,
                 authenticator,
                 adapters,
             }),
@@ -1115,6 +1121,41 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     let a = token("producer", "owner-a", "coordinator:start");
     let b = token("producer", "owner-b", "coordinator:start");
     let op = token("operator", "operator-1", "coordinator:operate");
+    let contract: Value = http
+        .get(format!("{origin}/v1/workflows/delayed-follow-up"))
+        .bearer_auth(&a)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(contract["workflow"], "delayed-follow-up");
+    assert_eq!(contract["workflowRevision"], workflow_revision);
+    assert_eq!(
+        contract["input"],
+        recovery_package.definition.workflow.input
+    );
+    assert_eq!(
+        contract["outcomes"],
+        serde_json::to_value(&recovery_package.definition.workflow.outcomes).unwrap()
+    );
+    for (workflow, credential, expected) in
+        [("delayed-follow-up", &op, 403), ("not-permitted", &a, 403)]
+    {
+        let response = http
+            .get(format!("{origin}/v1/workflows/{workflow}"))
+            .bearer_auth(credential)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["code"],
+            "operation.not-authorized"
+        );
+    }
+
     assert_authenticated_run_validation(&http, &origin, &database, &namespace, &op, &a).await;
     let input = json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()});
     assert_bounded_readiness(&http, &origin, &database, &namespace).await;
@@ -1127,7 +1168,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         ] {
             let mut request = http
                 .post(format!("{origin}/v1/runs"))
-                .json(&json!({"flow":"delayed-follow-up","input":input}));
+                .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}));
             if let Some(key) = key {
                 request = request.header("Idempotency-Key", key);
             }
@@ -1158,8 +1199,12 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     // A different config is initially compatible with an empty deployment.
     // Another old-config instance may admit work after this startup check.
     let mut drift = (*recovery_runtime).clone();
-    drift.connections.get_mut("applications").unwrap().base_url =
-        "http://127.0.0.1:48888".parse().unwrap();
+    let registry_coordinator::runtime::ConnectionConfig::Breg(bound_config) =
+        drift.connections.get_mut("applications").unwrap()
+    else {
+        panic!("BReg binding")
+    };
+    bound_config.base_url = "http://127.0.0.1:48888".parse().unwrap();
     deployment::check_serving(&recovery_store, &drift, recovery_flows.digest())
         .await
         .unwrap();
@@ -1174,7 +1219,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             .post(format!("{origin}/v1/runs"))
             .bearer_auth(&a)
             .header("Idempotency-Key", key)
-            .json(&json!({"flow":"delayed-follow-up","input":invalid}))
+            .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":invalid}))
             .send()
             .await
             .unwrap();
@@ -1188,7 +1233,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     }
     let unauthorized = http
         .post(format!("{origin}/v1/runs"))
-        .json(&json!({"flow":"delayed-follow-up","input":input}))
+        .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}))
         .send()
         .await
         .unwrap();
@@ -1197,7 +1242,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     // even when the unsupported body is malformed. Refusals create no work.
     for content_type in [None, Some("text/plain"), Some("application/xml")] {
         for body in [
-            json!({"flow":"delayed-follow-up","input":input}).to_string(),
+            json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}).to_string(),
             "{".to_string(),
         ] {
             for (credential, expected, code) in [
@@ -1243,7 +1288,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .post(format!("{origin}/v1/runs"))
         .bearer_auth(&a)
         .header("Idempotency-Key", "flow-refusal")
-        .json(&json!({"flow":"other-flow","input":input}))
+        .json(&json!({"workflow":"other-flow","workflowRevision":workflow_revision,"input":input}))
         .send()
         .await
         .unwrap();
@@ -1309,13 +1354,13 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             )
             .await
             .unwrap()
-            .with_flows_digest(recovery_flows.digest().to_owned()),
+            .with_workflows_digest(recovery_flows.digest().to_owned()),
         );
         let (failing_origin, failing_task) = serve_fixture(HttpState {
             recovery_only: false,
             store: failing,
             runtime: recovery_runtime.clone(),
-            flows: recovery_flows.clone(),
+            workflows: recovery_flows.clone(),
             authenticator: recovery_authenticator.clone(),
             adapters: recovery_adapters.clone(),
         })
@@ -1326,7 +1371,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             .post(format!("{failing_origin}/v1/runs"))
             .bearer_auth(&bearer)
             .header("Idempotency-Key", &boundary_key)
-            .json(&json!({"flow":"delayed-follow-up","input":input}))
+            .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}))
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
@@ -1358,7 +1403,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             .post(format!("{origin}/v1/runs"))
             .bearer_auth(&bearer)
             .header("Idempotency-Key", &boundary_key)
-            .json(&json!({"flow":"delayed-follow-up","input":input}))
+            .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}))
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
@@ -1399,13 +1444,13 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             )
             .await
             .unwrap()
-            .with_flows_digest(recovery_flows.digest().to_owned()),
+            .with_workflows_digest(recovery_flows.digest().to_owned()),
         );
         let (status_origin, status_task) = serve_fixture(HttpState {
             recovery_only: false,
             store: failing_status,
             runtime: recovery_runtime.clone(),
-            flows: recovery_flows.clone(),
+            workflows: recovery_flows.clone(),
             authenticator: recovery_authenticator.clone(),
             adapters: recovery_adapters.clone(),
         })
@@ -1440,7 +1485,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             .send()
             .await
             .unwrap();
-        assert_eq!(cancelled.status(), 200);
+        let cancel_status = cancelled.status();
+        let cancelled: Value = cancelled.json().await.unwrap();
+        assert_eq!(cancel_status, 200, "{cancelled}");
         // Fixture-owner cleanup isolates this completed regression from the
         // later retention/history assertions. Production recovery above kept
         // the admission identity; no runtime API removes it.
@@ -1475,7 +1522,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .post(format!("{origin}/v1/runs"))
         .bearer_auth(&a)
         .header("Idempotency-Key", "stable-key")
-        .json(&json!({"flow":"delayed-follow-up","input":input}))
+        .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}))
         .send()
         .await
         .unwrap();
@@ -1508,15 +1555,15 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .unwrap()
         .authentication
         .policies;
-    let run_actions = policies[1]
+    let run_actions = policies["operator"]
         .actions
         .iter()
         .copied()
         .filter(|action| !action.is_deployment_wide())
         .collect();
-    policies[0].actions = run_actions;
-    for policy in policies {
-        policy.flows = vec!["other-flow".into()];
+    policies.get_mut("producer").unwrap().actions = run_actions;
+    for policy in policies.values_mut() {
+        policy.workflows = vec!["other-flow".into()];
     }
     let denied_flow_authenticator = Arc::new(
         denied_flow_runtime
@@ -1532,7 +1579,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         recovery_only: false,
         store: recovery_store.clone(),
         runtime: recovery_runtime.clone(),
-        flows: recovery_flows.clone(),
+        workflows: recovery_flows.clone(),
         authenticator: denied_flow_authenticator,
         adapters: recovery_adapters.clone(),
     })
@@ -1726,7 +1773,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         recovery_only: false,
         store: recovery_store.clone(),
         runtime: Arc::new(drift.clone()),
-        flows: recovery_flows.clone(),
+        workflows: recovery_flows.clone(),
         authenticator: recovery_authenticator.clone(),
         adapters: recovery_adapters.clone(),
     })
@@ -1740,7 +1787,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .post(format!("{drift_origin}/v1/runs"))
         .bearer_auth(&a)
         .header("Idempotency-Key", "drift-new-work")
-        .json(&json!({"flow":"delayed-follow-up","input":input}))
+        .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}))
         .send()
         .await
         .unwrap();
@@ -1784,11 +1831,12 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             .retry_allowed
     );
     let mut changed_binding = (*recovery_runtime).clone();
-    changed_binding
-        .connections
-        .get_mut("applications")
-        .unwrap()
-        .base_url = "http://127.0.0.1:48888".parse().unwrap();
+    let registry_coordinator::runtime::ConnectionConfig::Breg(bound_config) =
+        changed_binding.connections.get_mut("applications").unwrap()
+    else {
+        panic!("BReg binding")
+    };
+    bound_config.base_url = "http://127.0.0.1:48888".parse().unwrap();
     // Real service processes refuse each supported binding drift before opening
     // their listener. None acquires product authority or dispatches a job.
     let service_path = root_path.join("service-runtime.yaml");
@@ -1876,7 +1924,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .post(format!("{service_origin}/v1/runs"))
         .bearer_auth(&a)
         .header("Idempotency-Key", "recovery-new-work")
-        .json(&json!({"flow":"delayed-follow-up","input":input}))
+        .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}))
         .send()
         .await
         .unwrap();
@@ -1977,7 +2025,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .post(format!("{origin}/v1/runs"))
         .bearer_auth(&a)
         .header("Idempotency-Key", "stable-key")
-        .json(&json!({"flow":"delayed-follow-up","input":input}))
+        .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}))
         .send()
         .await
         .unwrap()
@@ -2096,7 +2144,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .post(format!("{origin}/v1/runs"))
         .bearer_auth(&a)
         .header("Idempotency-Key", "terminal-key")
-        .json(&json!({"flow":"delayed-follow-up","input":input}))
+        .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}))
         .send()
         .await
         .unwrap()
@@ -2209,6 +2257,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             "retired-history",
             &retired_binding,
             &original_retired_runtime,
+            &retired_definition.digest,
         )
         .await
         .unwrap();
@@ -2343,7 +2392,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .post(format!("{origin}/v1/runs"))
         .bearer_auth(&a)
         .header("Idempotency-Key", "another")
-        .json(&json!({"flow":"delayed-follow-up","input":input}))
+        .json(&json!({"workflow":"delayed-follow-up","workflowRevision":workflow_revision,"input":input}))
         .send()
         .await
         .unwrap();
@@ -2364,8 +2413,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(missing_execution.status(), 409);
     task.abort();
     let _ = task.await;
-    // Terminal tombstones still pin workflow id/version to their original
-    // artifact. Apply must refuse reuse before appending an activation.
+    // Terminal tombstones retain the original computed revision. An authored
+    // version label cannot block activation of a different reviewed revision.
     let erased: bool=admin.query_one(&format!("SELECT snapshot IS NULL AND payload_erased_at IS NOT NULL FROM {namespace}.runs WHERE run_id=$1"),&[&terminal_uuid]).await.unwrap().get(0);
     assert!(erased);
     let count_before: i64 = admin
@@ -2397,9 +2446,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         expected_digest: Some(changed_digest),
     }];
     let changed_definition_flows =
-        deployment::load_flows(deployment::config(&changed_definition_runtime).unwrap()).unwrap();
-    // Plan reports the refusal apply gives, with the same code and fix, so a
-    // reviewer sees it before apply.
+        deployment::load_workflows(deployment::config(&changed_definition_runtime).unwrap())
+            .unwrap();
     let planned = deployment::plan(
         &recovery_store,
         &changed_definition_runtime,
@@ -2407,24 +2455,16 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         &[],
     )
     .await
-    .unwrap_err();
-    let applied = deployment::apply(
+    .unwrap();
+    assert_eq!(planned["workflows"][0]["change"], "replace");
+    deployment::apply(
         &migration,
         &changed_definition_runtime,
         &changed_definition_flows,
         &[],
     )
     .await
-    .unwrap_err();
-    for refused in [&planned, &applied] {
-        assert_eq!(refused.code, "workflow-version-conflict");
-        let action = refused.suggested_action.as_deref().unwrap();
-        assert!(
-            action.contains("delayed-follow-up") && action.contains("project.version"),
-            "{action}"
-        );
-    }
-    assert_eq!(planned.suggested_action, applied.suggested_action);
+    .unwrap();
     let count_after: i64 = admin
         .query_one(
             &format!("SELECT count(*) FROM {namespace}.coordinator_activations"),
@@ -2434,8 +2474,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .unwrap()
         .get(0);
     assert_eq!(
-        count_before, count_after,
-        "refused activation appends no ledger entry"
+        count_before + 1,
+        count_after,
+        "a changed revision appends one activation without reinterpreting history"
     );
     let active: Option<String> = admin
         .query_one(
@@ -2445,7 +2486,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .await
         .unwrap()
         .get(0);
-    assert_eq!(active.as_deref(), Some(recovery_flows.digest()));
+    assert_eq!(active.as_deref(), Some(changed_definition_flows.digest()));
     let workflow_path = project_path.join("workflow.yaml");
     let mut workflow: Value = yaml_value(
         &fs::read_to_string(&workflow_path).unwrap(),
@@ -2466,7 +2507,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         expected_digest: Some(next_digest),
     }];
     let next_flows =
-        deployment::load_flows(deployment::config(&changed_definition_runtime).unwrap()).unwrap();
+        deployment::load_workflows(deployment::config(&changed_definition_runtime).unwrap())
+            .unwrap();
     let next_package = next_flows.get("delayed-follow-up").unwrap().clone();
     let planned = deployment::plan(
         &recovery_store,
@@ -2476,7 +2518,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     )
     .await
     .unwrap();
-    assert_eq!(planned["flows"][0]["change"], "replace", "{planned}");
+    assert_eq!(planned["workflows"][0]["change"], "replace", "{planned}");
     deployment::apply(&migration, &changed_definition_runtime, &next_flows, &[])
         .await
         .unwrap();
@@ -2485,7 +2527,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     let next_store = recovery_store
         .as_ref()
         .clone()
-        .with_flows_digest(next_flows.digest().to_owned());
+        .with_workflows_digest(next_flows.digest().to_owned());
     next_store
         .complete_execution_recovery(&operator, "complete-fenced-history", true, true)
         .await
@@ -2498,6 +2540,35 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .release_admission_hold(&operator, "complete-fenced-history", true, true)
         .await
         .unwrap();
+    let next_binding = changed_definition_runtime
+        .binding_digest_for(&next_package.definition.workflow)
+        .unwrap();
+    let recovered_tombstone = next_store
+        .admit_runtime_owned(
+            &next_package.definition,
+            input.clone(),
+            &owner,
+            "terminal-key",
+            &next_binding,
+            &changed_definition_runtime,
+            &workflow_revision,
+        )
+        .await
+        .unwrap();
+    assert_eq!(recovered_tombstone, terminal_uuid);
+    let reinterpreted = next_store
+        .admit_runtime_owned(
+            &next_package.definition,
+            input.clone(),
+            &owner,
+            "terminal-key",
+            &next_binding,
+            &changed_definition_runtime,
+            &next_package.definition.digest,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(reinterpreted.code, "start-conflict");
     next_store
         .admit_owned(
             &next_package.definition,
@@ -2566,11 +2637,11 @@ const GOVERNED: &str = "governed-action-follow-up";
 const ROTATED_STATE_KEY: [u8; 32] = [84; 32];
 
 /// One disposable namespace, role, key set and issuer for a deployment that
-/// serves the delayed and governed follow-up example flows side by side.
+/// serves the delayed and governed follow-up example workflows side by side.
 struct TwoFlowFixture {
     admin: tokio_postgres::Client,
     database: String,
-    _root: tempfile::TempDir,
+    _root: failed_fixture::FixtureDirectory,
     root_path: std::path::PathBuf,
     role: String,
     namespace: String,
@@ -2589,7 +2660,7 @@ impl TwoFlowFixture {
         tokio::spawn(async move {
             let _ = connection.await;
         });
-        let root = tempfile::tempdir().unwrap();
+        let root = failed_fixture::FixtureDirectory::new(tempfile::tempdir().unwrap());
         let root_path = root.path().canonicalize().unwrap();
         let suffix = Uuid::new_v4().simple().to_string();
         let role = format!("coord_{suffix}");
@@ -2649,22 +2720,21 @@ impl TwoFlowFixture {
         d["stateKeys"] = json!({"1":{"keyRef":"secret:file/state-key"}});
         d["admissionKeyRef"] = json!("secret:file/admission-key");
         d["auditKeyRef"] = json!("secret:file/audit-key");
-        let producer = |client: &str, flows: Value| json!({"clientId":client,"requiredScopes":["coordinator:start"],"flows":flows,"actions":["start","status"]});
-        let operator = |client: &str, flows: Value| json!({"clientId":client,"requiredScopes":["coordinator:operate"],"flows":flows,"actions":OPERATOR_ACTIONS,"operator":true});
+        let producer = |workflows: Value| json!({"requiredScopes":["coordinator:start"],"workflows":workflows,"actions":["start","status"]});
+        let operator = |workflows: Value| json!({"requiredScopes":["coordinator:operate"],"workflows":workflows,"actions":OPERATOR_ACTIONS,"operator":true});
         d["authentication"] = json!({
             "issuer": issuer.issuer(),
             "audience": "urn:coordinator:test",
             "scopeClaim": "scope",
             "jwksSource": {"type": "uri", "uri": issuer.jwks_uri()},
-            "allowedClients": clients,
-            "policies": [
-                producer("producer-a", json!([DELAYED])),
-                producer("producer-b", json!([GOVERNED])),
-                producer("producer-wide", json!([DELAYED, GOVERNED, "retired-flow"])),
-                operator("operator-a", json!([DELAYED])),
-                operator("operator", json!([DELAYED, GOVERNED])),
-                json!({"clientId":"deployment-operator","requiredScopes":["coordinator:operate"],"actions":DEPLOYMENT_ACTIONS,"operator":true}),
-            ],
+            "policies": {
+                "producer-a": producer(json!([DELAYED])),
+                "producer-b": producer(json!([GOVERNED])),
+                "producer-wide": producer(json!([DELAYED, GOVERNED, "retired-flow"])),
+                "operator-a": operator(json!([DELAYED])),
+                "operator": operator(json!([DELAYED, GOVERNED])),
+                "deployment-operator": {"requiredScopes":["coordinator:operate"],"actions":DEPLOYMENT_ACTIONS,"operator":true},
+            },
         });
         let delayed_project = root_path.join("delayed-project");
         project::init(&delayed_project, Some("delayed-follow-up")).unwrap();
@@ -2694,7 +2764,7 @@ impl TwoFlowFixture {
             .join(GOVERNED)
     }
 
-    /// Write one runtime document listing `packages` and load it with its flows.
+    /// Write one runtime document listing `packages` and load it with its workflows.
     fn runtime(
         &self,
         name: &str,
@@ -2702,16 +2772,16 @@ impl TwoFlowFixture {
     ) -> (
         std::path::PathBuf,
         Arc<RuntimeConfig>,
-        Arc<deployment::Flows>,
+        Arc<deployment::Workflows>,
     ) {
         let mut doc = self.doc.clone();
         doc["deployment"]["packages"] = packages;
         let path = self.root_path.join(name);
         fs::write(&path, serde_norway::to_string(&doc).unwrap()).unwrap();
         let runtime = Arc::new(RuntimeConfig::load(&path).unwrap());
-        let flows =
-            Arc::new(deployment::load_flows(deployment::config(&runtime).unwrap()).unwrap());
-        (path, runtime, flows)
+        let workflows =
+            Arc::new(deployment::load_workflows(deployment::config(&runtime).unwrap()).unwrap());
+        (path, runtime, workflows)
     }
 
     fn token(&self, client: &str, subject: &str, scope: &str) -> String {
@@ -2813,9 +2883,9 @@ impl TwoFlowFixture {
 
 fn changes(applied: &deployment::Applied) -> Vec<(String, String)> {
     applied
-        .flows
+        .workflows
         .iter()
-        .map(|change| (change.flow.clone(), change.change.as_str().to_owned()))
+        .map(|change| (change.workflow.clone(), change.change.as_str().to_owned()))
         .collect()
 }
 
@@ -2834,11 +2904,23 @@ async fn start_run(
     flow: &str,
     input: Value,
 ) -> (u16, Value) {
+    let contract: Value = http
+        .get(format!("{origin}/v1/workflows/{flow}"))
+        .bearer_auth(credential)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let revision = contract["workflowRevision"]
+        .as_str()
+        .unwrap_or("sha256:0000000000000000000000000000000000000000000000000000000000000000");
     let response = http
         .post(format!("{origin}/v1/runs"))
         .bearer_auth(credential)
         .header("Idempotency-Key", key)
-        .json(&json!({"flow": flow, "input": input}))
+        .json(&json!({"workflow": flow, "workflowRevision":revision, "input": input}))
         .send()
         .await
         .unwrap();
@@ -2856,20 +2938,20 @@ async fn list_flows(http: &reqwest::Client, origin: &str, credential: &str) -> V
         .json()
         .await
         .unwrap();
-    let mut flows: Vec<String> = listed["runs"]
+    let mut workflows: Vec<String> = listed["runs"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|run| run["workflowId"].as_str().unwrap().to_owned())
+        .map(|run| run["workflow"].as_str().unwrap().to_owned())
         .collect();
-    flows.sort();
-    flows
+    workflows.sort();
+    workflows
 }
 
 /// Serve one runtime file's router in process, as its service would.
 async fn serve_runtime(
     runtime: &Arc<RuntimeConfig>,
-    flows: &Arc<deployment::Flows>,
+    workflows: &Arc<deployment::Workflows>,
 ) -> (String, tokio::task::JoinHandle<()>) {
     let authenticator = Arc::new(
         deployment::config(runtime)
@@ -2883,7 +2965,7 @@ async fn serve_runtime(
         recovery_only: false,
         store: deployment::open(runtime, false).await.unwrap(),
         runtime: runtime.clone(),
-        flows: flows.clone(),
+        workflows: workflows.clone(),
         authenticator,
         adapters: Arc::new(HttpAdapters::new(runtime).unwrap()),
     })
@@ -2892,38 +2974,35 @@ async fn serve_runtime(
 
 #[tokio::test]
 async fn plan_refuses_missing_and_wrong_product_bindings_before_reporting_installability() {
-    use registry_coordinator::runtime::Product;
-
     let f = TwoFlowFixture::start().await;
     let delayed = f.pin(&f.delayed_project, "plan-binding-delayed");
-    let (_, runtime, flows) = f.runtime("plan-binding.yaml", json!([delayed]));
+    let (_, runtime, workflows) = f.runtime("plan-binding.yaml", json!([delayed]));
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    deployment::apply(&migration, &runtime, &flows, &[])
+    deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
-    deployment::plan(&migration, &runtime, &flows, &[])
+    deployment::plan(&migration, &runtime, &workflows, &[])
         .await
         .expect("a plan with its declared binding remains usable");
 
     let mut wrong_product = runtime.as_ref().clone();
-    wrong_product
-        .connections
-        .get_mut("notices")
-        .unwrap()
-        .product = Product::Breg;
-    let wrong = deployment::plan(&migration, &wrong_product, &flows, &[])
+    wrong_product.connections.insert(
+        "notices".into(),
+        runtime.connections["applications"].clone(),
+    );
+    let wrong = deployment::plan(&migration, &wrong_product, &workflows, &[])
         .await
         .expect_err("plan must validate the product bound to each logical connection");
     assert_eq!(wrong.code, "workflow-binding");
-    assert_eq!(wrong.field.as_deref(), Some("connections.notices"));
+    assert_eq!(wrong.field.as_deref(), Some("/connections/notices"));
 
     let mut missing = runtime.as_ref().clone();
     missing.connections.remove("notices");
-    let missing = deployment::plan(&migration, &missing, &flows, &[])
+    let missing = deployment::plan(&migration, &missing, &workflows, &[])
         .await
         .expect_err("plan must validate that every logical connection is configured");
     assert_eq!(missing.code, "workflow-binding");
-    assert_eq!(missing.field.as_deref(), Some("connections.notices"));
+    assert_eq!(missing.field.as_deref(), Some("/connections/notices"));
 
     drop(migration);
     f.stop().await;
@@ -2942,39 +3021,44 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     )
     .unwrap();
     workflow["project"]["version"] = json!("2");
+    let deadline = workflow["workflow"]["deadlineSeconds"].as_u64().unwrap();
+    workflow["workflow"]["deadlineSeconds"] = json!(deadline + 1);
     fs::write(&workflow_path, serde_norway::to_string(&workflow).unwrap()).unwrap();
     let delayed_v2 = f.pin(&f.delayed_project, "delayed-v2");
     let digest = |pin: &Value| pin["expectedDigest"].as_str().unwrap().to_owned();
 
-    // Install both flows in one activation.
-    let (both_path, runtime, flows) = f.runtime("both.yaml", json!([delayed_v1, governed_v1]));
+    // Install both workflows in one activation.
+    let (both_path, runtime, workflows) = f.runtime("both.yaml", json!([delayed_v1, governed_v1]));
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    let applied = deployment::apply(&migration, &runtime, &flows, &[])
+    let applied = deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
     assert_eq!(
         changes(&applied),
         pairs(&[(DELAYED, "install"), (GOVERNED, "install")])
     );
-    assert_eq!(applied.flows_digest, flows.digest());
-    assert_eq!(applied.activation.package_digest, flows.digest());
+    assert_eq!(applied.workflows_digest, workflows.digest());
+    assert_eq!(applied.activation.package_digest, workflows.digest());
     let installed = json!({DELAYED: digest(&delayed_v1), GOVERNED: digest(&governed_v1)});
     assert_eq!(f.active_flows().await, installed);
     let planned = local_cli(&both_path, "plan", true);
-    assert_eq!(planned["flowsDigest"], flows.digest());
+    assert_eq!(planned["workflowsDigest"], workflows.digest());
     for (index, flow, pin) in [(0, DELAYED, &delayed_v1), (1, GOVERNED, &governed_v1)] {
-        assert_eq!(planned["flows"][index]["flow"], flow);
-        assert_eq!(planned["flows"][index]["change"], "unchanged");
-        assert_eq!(planned["flows"][index]["packageDigest"], digest(pin));
-        assert_eq!(planned["flows"][index]["activePackageDigest"], digest(pin));
+        assert_eq!(planned["workflows"][index]["workflow"], flow);
+        assert_eq!(planned["workflows"][index]["change"], "unchanged");
+        assert_eq!(planned["workflows"][index]["packageDigest"], digest(pin));
+        assert_eq!(
+            planned["workflows"][index]["activePackageDigest"],
+            digest(pin)
+        );
     }
     let checked = local_cli(&both_path, "deployment-status", true);
-    assert_eq!(checked["flowsDigest"], flows.digest());
-    assert_eq!(checked["flows"], installed);
+    assert_eq!(checked["workflowsDigest"], workflows.digest());
+    assert_eq!(checked["workflows"], installed);
 
-    // One service and one HTTP surface serve both flows.
+    // One service and one HTTP surface serve both workflows.
     let store = deployment::open(&runtime, false).await.unwrap();
-    deployment::check(&store, &runtime, flows.digest())
+    deployment::check(&store, &runtime, workflows.digest())
         .await
         .unwrap();
     let d = deployment::config(&runtime).unwrap();
@@ -2989,7 +3073,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
         recovery_only: false,
         store: store.clone(),
         runtime: runtime.clone(),
-        flows: flows.clone(),
+        workflows: workflows.clone(),
         authenticator: authenticator.clone(),
         adapters: adapters.clone(),
     })
@@ -3012,8 +3096,9 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     )
     .await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["workflowId"], DELAYED);
+    assert_eq!(body["workflow"], DELAYED);
     let delayed_run = body["runId"].as_str().unwrap().to_owned();
+    let delayed_revision = body["workflowRevision"].as_str().unwrap().to_owned();
     let (status, body) = start_run(
         &http,
         &origin,
@@ -3024,7 +3109,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     )
     .await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["workflowId"], GOVERNED);
+    assert_eq!(body["workflow"], GOVERNED);
     let governed_run = body["runId"].as_str().unwrap().to_owned();
 
     // A caller allowed only flow A is refused on flow B, and a flow the caller
@@ -3055,8 +3140,8 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
         (status, body["code"].as_str(), body["detail"].as_str()),
         (
             404,
-            Some("flow.not-served"),
-            Some("This deployment does not serve the named flow.")
+            Some("workflow.not-served"),
+            Some("This deployment does not serve the named workflow.")
         )
     );
     assert!(body.get("suggestedAction").is_none());
@@ -3068,7 +3153,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
         .get(0);
     assert_eq!(admitted, 2, "refused starts admit nothing");
 
-    // Read and list routes cross flows only as far as the caller's policy.
+    // Read and list routes cross workflows only as far as the caller's policy.
     assert_eq!(
         list_flows(&http, &origin, &operator).await,
         [DELAYED, GOVERNED]
@@ -3172,7 +3257,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
         assert_eq!(response.status(), expected);
     }
 
-    // A deployment-wide action is an operator's, whichever flows its policy
+    // A deployment-wide action is an operator's, whichever workflows its policy
     // lists for run actions. A policy without the action is refused, and the
     // refusal changes nothing.
     for (credential, expected) in [(&operator_a, 200), (&operator, 200), (&producer_a, 403)] {
@@ -3238,13 +3323,16 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     let (upgrade_path, upgraded_runtime, upgraded) =
         f.runtime("upgrade.yaml", json!([delayed_v2, governed_v1]));
     let planned = local_cli(&upgrade_path, "plan", true);
-    assert_eq!(planned["flows"][0]["change"], "replace");
-    assert_eq!(planned["flows"][0]["packageDigest"], digest(&delayed_v2));
+    assert_eq!(planned["workflows"][0]["change"], "replace");
     assert_eq!(
-        planned["flows"][0]["activePackageDigest"],
+        planned["workflows"][0]["packageDigest"],
+        digest(&delayed_v2)
+    );
+    assert_eq!(
+        planned["workflows"][0]["activePackageDigest"],
         digest(&delayed_v1)
     );
-    assert_eq!(planned["flows"][1]["change"], "unchanged");
+    assert_eq!(planned["workflows"][1]["change"], "unchanged");
     let applied = deployment::apply(&migration, &upgraded_runtime, &upgraded, &[])
         .await
         .unwrap();
@@ -3259,7 +3347,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     assert_eq!(f.run_rows(GOVERNED).await, governed_before);
     assert_eq!(f.run_rows(DELAYED).await, delayed_before);
     // Every apply fences services started under the previous set.
-    assert!(deployment::check(&store, &runtime, flows.digest())
+    assert!(deployment::check(&store, &runtime, workflows.digest())
         .await
         .is_err());
     let (status, _) = start_run(
@@ -3279,7 +3367,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
         store
             .as_ref()
             .clone()
-            .with_flows_digest(upgraded.digest().to_owned()),
+            .with_workflows_digest(upgraded.digest().to_owned()),
     );
     deployment::check(&upgraded_store, &upgraded_runtime, upgraded.digest())
         .await
@@ -3292,11 +3380,57 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
         recovery_only: false,
         store: upgraded_store.clone(),
         runtime: upgraded_runtime.clone(),
-        flows: upgraded.clone(),
+        workflows: upgraded.clone(),
         authenticator: authenticator.clone(),
         adapters: adapters.clone(),
     })
     .await;
+    let active_revision = &upgraded.get(DELAYED).unwrap().definition.digest;
+    assert_ne!(&delayed_revision, active_revision);
+    let before = f.run_rows(DELAYED).await;
+    let stale = http
+        .post(format!("{origin}/v1/runs"))
+        .bearer_auth(&producer_a)
+        .header("Idempotency-Key", "stale-new-key")
+        .json(
+            &json!({"workflow":DELAYED,"workflowRevision":delayed_revision,"input":delayed_input}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), 409);
+    assert_eq!(
+        stale.json::<Value>().await.unwrap()["code"],
+        "workflow.revision-mismatch"
+    );
+    assert_eq!(f.run_rows(DELAYED).await, before);
+    let recovered = http
+        .post(format!("{origin}/v1/runs"))
+        .bearer_auth(&producer_a)
+        .header("Idempotency-Key", "a-1")
+        .json(
+            &json!({"workflow":DELAYED,"workflowRevision":delayed_revision,"input":delayed_input}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(recovered.status(), 200);
+    let recovered: Value = recovered.json().await.unwrap();
+    assert_eq!(recovered["runId"], delayed_run);
+    assert_eq!(recovered["workflowRevision"], delayed_revision);
+    let reinterpreted = http
+        .post(format!("{origin}/v1/runs"))
+        .bearer_auth(&producer_a)
+        .header("Idempotency-Key", "a-1")
+        .json(&json!({"workflow":DELAYED,"workflowRevision":active_revision,"input":delayed_input}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reinterpreted.status(), 409);
+    assert_eq!(
+        reinterpreted.json::<Value>().await.unwrap()["code"],
+        "idempotency.key-reused"
+    );
     let (status, body) = start_run(
         &http,
         &origin,
@@ -3307,12 +3441,15 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     )
     .await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["workflowVersion"], "2");
+    assert_eq!(
+        body["workflowRevision"],
+        upgraded.get(DELAYED).unwrap().definition.digest
+    );
     server.abort();
 
     // Rolling flow A back leaves flow B where it was.
     let governed_before = f.run_rows(GOVERNED).await;
-    let applied = deployment::apply(&migration, &runtime, &flows, &[])
+    let applied = deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
     assert_eq!(
@@ -3320,7 +3457,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
         pairs(&[(DELAYED, "replace"), (GOVERNED, "unchanged")])
     );
     assert_eq!(f.active_flows().await, installed);
-    assert_eq!(applied.activation.package_digest, flows.digest());
+    assert_eq!(applied.activation.package_digest, workflows.digest());
     assert_eq!(
         applied.activation.predecessor_package_digest.as_deref(),
         Some(upgraded.digest())
@@ -3332,8 +3469,8 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     let (only_path, only_delayed_runtime, only_delayed) =
         f.runtime("only-delayed.yaml", json!([delayed_v1]));
     for (remove, code) in [
-        (vec![], "deployment.flow-unlisted"),
-        (vec![GOVERNED.to_owned()], "deployment.flow-live-runs"),
+        (vec![], "deployment.workflow-unlisted"),
+        (vec![GOVERNED.to_owned()], "deployment.workflow-live-runs"),
         (vec![DELAYED.to_owned()], "deployment.refused"),
         (vec!["retired-flow".to_owned()], "deployment.refused"),
     ] {
@@ -3345,12 +3482,12 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     let refused = local_cli(&only_path, "plan", false);
     assert_eq!(
         refused["diagnostics"][0]["code"],
-        "coordinator.deployment.flow-unlisted"
+        "coordinator.deployment.workflow-unlisted"
     );
     assert!(refused["diagnostics"][0]["suggestedAction"]
         .as_str()
         .unwrap()
-        .contains("--remove-flow"));
+        .contains("--remove-workflow"));
     assert_eq!(f.activations().await, 3);
     assert_eq!(f.active_flows().await, installed);
     assert_eq!(f.run_rows(GOVERNED).await, governed_before);
@@ -3360,9 +3497,9 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     let governed_id: Uuid = governed_run.parse().unwrap();
     f.admin.execute(&format!("UPDATE {}.runs SET state='cancelled',cancel_requested=true,restore_review_required=false WHERE run_id=$1", f.namespace), &[&governed_id]).await.unwrap();
     fixture_job_state(&f.admin, &f.namespace, governed_id, "dead-lettered", false).await;
-    let planned = local_cli_args(&only_path, &["plan", "--remove-flow", GOVERNED], true);
-    assert_eq!(planned["flows"][1]["flow"], GOVERNED);
-    assert_eq!(planned["flows"][1]["change"], "remove");
+    let planned = local_cli_args(&only_path, &["plan", "--remove-workflow", GOVERNED], true);
+    assert_eq!(planned["workflows"][1]["workflow"], GOVERNED);
+    assert_eq!(planned["workflows"][1]["change"], "remove");
     let applied = deployment::apply(
         &migration,
         &only_delayed_runtime,
@@ -3382,7 +3519,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     let remaining = store
         .as_ref()
         .clone()
-        .with_flows_digest(only_delayed.digest().to_owned());
+        .with_workflows_digest(only_delayed.digest().to_owned());
     deployment::check(&remaining, &only_delayed_runtime, only_delayed.digest())
         .await
         .unwrap();
@@ -3402,9 +3539,9 @@ async fn deployment_operators_act_on_every_flow_without_a_flow_list() {
     let f = TwoFlowFixture::start().await;
     let delayed = f.pin(&f.delayed_project, "delayed");
     let governed = f.pin(&TwoFlowFixture::governed_project(), "governed");
-    let (_, runtime, flows) = f.runtime("delayed.yaml", json!([delayed.clone()]));
+    let (_, runtime, workflows) = f.runtime("delayed.yaml", json!([delayed.clone()]));
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    deployment::apply(&migration, &runtime, &flows, &[])
+    deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
     let store = deployment::open(&runtime, false).await.unwrap();
@@ -3433,7 +3570,7 @@ async fn deployment_operators_act_on_every_flow_without_a_flow_list() {
         recovery_only: false,
         store: store.clone(),
         runtime: runtime.clone(),
-        flows: flows.clone(),
+        workflows: workflows.clone(),
         authenticator: authenticator.clone(),
         adapters: adapters.clone(),
     })
@@ -3454,7 +3591,7 @@ async fn deployment_operators_act_on_every_flow_without_a_flow_list() {
     server.abort();
 
     // Add the governed flow. No policy changes, and the deployment operator
-    // still takes every deployment-wide action against both flows.
+    // still takes every deployment-wide action against both workflows.
     let (_, both_runtime, both) = f.runtime("both.yaml", json!([delayed, governed]));
     deployment::apply(&migration, &both_runtime, &both, &[])
         .await
@@ -3464,13 +3601,13 @@ async fn deployment_operators_act_on_every_flow_without_a_flow_list() {
         store
             .as_ref()
             .clone()
-            .with_flows_digest(both.digest().to_owned()),
+            .with_workflows_digest(both.digest().to_owned()),
     );
     let (origin, server) = serve_fixture(HttpState {
         recovery_only: false,
         store: both_store.clone(),
         runtime: both_runtime.clone(),
-        flows: both.clone(),
+        workflows: both.clone(),
         authenticator: authenticator.clone(),
         adapters: adapters.clone(),
     })
@@ -3519,7 +3656,7 @@ async fn deployment_operators_act_on_every_flow_without_a_flow_list() {
         assert_eq!(response.json::<Value>().await.unwrap(), answer, "{path}");
     }
 
-    // Run actions stay scoped by flows, and this policy lists none: no run of
+    // Run actions stay scoped by workflows, and this policy lists none: no run of
     // either flow is readable or listable through it, and it starts nothing.
     for request in [
         http.get(format!("{origin}/v1/runs/{delayed_run}")),
@@ -3605,9 +3742,9 @@ async fn the_service_waits_out_an_unreachable_database_and_stops_on_a_moved_acti
     f.doc["deployment"]["auditFile"] = json!(f.root_path.join("service-audit.jsonl"));
     let (service_path, _, _) = f.runtime("service.yaml", json!([delayed.clone()]));
     f.doc["deployment"]["auditFile"] = audit;
-    let (_, runtime, flows) = f.runtime("delayed.yaml", json!([delayed.clone()]));
+    let (_, runtime, workflows) = f.runtime("delayed.yaml", json!([delayed.clone()]));
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    deployment::apply(&migration, &runtime, &flows, &[])
+    deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
     let store = deployment::open(&runtime, false).await.unwrap();
@@ -3635,7 +3772,7 @@ async fn the_service_waits_out_an_unreachable_database_and_stops_on_a_moved_acti
         ))
         .await
         .unwrap();
-    let unreachable = deployment::check(&store, &runtime, flows.digest())
+    let unreachable = deployment::check(&store, &runtime, workflows.digest())
         .await
         .unwrap_err();
     assert_eq!(unreachable.code, "store-unavailable");
@@ -3721,12 +3858,12 @@ async fn the_service_waits_out_an_unreachable_database_and_stops_on_a_moved_acti
 async fn a_rotated_key_set_refuses_starts_and_readiness_on_the_old_runtime_file() {
     let mut f = TwoFlowFixture::start().await;
     let delayed = f.pin(&f.delayed_project, "delayed");
-    let (_, runtime, flows) = f.runtime("delayed.yaml", json!([delayed.clone()]));
+    let (_, runtime, workflows) = f.runtime("delayed.yaml", json!([delayed.clone()]));
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    deployment::apply(&migration, &runtime, &flows, &[])
+    deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
-    let (origin, server) = serve_runtime(&runtime, &flows).await;
+    let (origin, server) = serve_runtime(&runtime, &workflows).await;
     let http = reqwest::Client::new();
     probe_service_readiness(&http, &origin, std::time::Duration::from_secs(10))
         .await
@@ -3842,9 +3979,9 @@ async fn a_rotated_key_set_stops_a_service_on_the_old_runtime_file_before_it_dis
     f.doc["deployment"]["auditFile"] = json!(f.root_path.join("service-audit.jsonl"));
     let (service_path, _, _) = f.runtime("service.yaml", json!([delayed.clone()]));
     f.doc["deployment"]["auditFile"] = audit;
-    let (_, runtime, flows) = f.runtime("delayed.yaml", json!([delayed.clone()]));
+    let (_, runtime, workflows) = f.runtime("delayed.yaml", json!([delayed.clone()]));
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    deployment::apply(&migration, &runtime, &flows, &[])
+    deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
     // The service polls once as it starts and then every five seconds, so no
@@ -3977,9 +4114,9 @@ async fn a_terminated_service_finishes_the_attempt_in_flight_and_leases_nothing_
     f.doc["deployment"]["auditFile"] = json!(f.root_path.join("service-audit.jsonl"));
     let (service_path, _, _) = f.runtime("service.yaml", json!([delayed.clone()]));
     f.doc["deployment"]["auditFile"] = audit;
-    let (_, runtime, flows) = f.runtime("delayed.yaml", json!([delayed]));
+    let (_, runtime, workflows) = f.runtime("delayed.yaml", json!([delayed]));
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    deployment::apply(&migration, &runtime, &flows, &[])
+    deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
     let http = reqwest::Client::new();
@@ -4112,9 +4249,9 @@ async fn the_metrics_listener_counts_closed_series_and_leaves_the_gauge_stale_in
     f.doc["deployment"]["auditFile"] = json!(f.root_path.join("service-audit.jsonl"));
     let (service_path, _, _) = f.runtime("service.yaml", json!([delayed.clone()]));
     f.doc["deployment"]["auditFile"] = audit;
-    let (_, runtime, flows) = f.runtime("delayed.yaml", json!([delayed]));
+    let (_, runtime, workflows) = f.runtime("delayed.yaml", json!([delayed]));
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    deployment::apply(&migration, &runtime, &flows, &[])
+    deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
     let http = reqwest::Client::new();
@@ -4285,9 +4422,9 @@ async fn restoring_a_two_flow_backup_keeps_every_flow_and_its_runs() {
     let f = TwoFlowFixture::start().await;
     let delayed = f.pin(&f.delayed_project, "delayed");
     let governed = f.pin(&TwoFlowFixture::governed_project(), "governed");
-    let (_, runtime, flows) = f.runtime("both.yaml", json!([delayed, governed]));
+    let (_, runtime, workflows) = f.runtime("both.yaml", json!([delayed, governed]));
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    deployment::apply(&migration, &runtime, &flows, &[])
+    deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
     drop(migration);
@@ -4309,7 +4446,7 @@ async fn restoring_a_two_flow_backup_keeps_every_flow_and_its_runs() {
             json!({"applicationId":"00000000-0000-4000-8000-000000000002"}),
         ),
     ] {
-        let package = flows.get(flow).unwrap();
+        let package = workflows.get(flow).unwrap();
         let binding = runtime
             .binding_digest_for(&package.definition.workflow)
             .unwrap();
@@ -4363,7 +4500,7 @@ async fn restoring_a_two_flow_backup_keeps_every_flow_and_its_runs() {
     // The dump carries no grants; applying the same retained packages again
     // restores them without changing either flow.
     let migration = deployment::open_ctl(&runtime, true).await.unwrap();
-    let applied = deployment::apply(&migration, &runtime, &flows, &[])
+    let applied = deployment::apply(&migration, &runtime, &workflows, &[])
         .await
         .unwrap();
     assert_eq!(
@@ -4372,13 +4509,255 @@ async fn restoring_a_two_flow_backup_keeps_every_flow_and_its_runs() {
     );
     drop(migration);
     let restored = deployment::open(&runtime, false).await.unwrap();
-    deployment::check(&restored, &runtime, flows.digest())
+    deployment::check(&restored, &runtime, workflows.digest())
         .await
         .unwrap();
     for (run, flow) in runs.iter().zip([DELAYED, GOVERNED]) {
         let status = restored.status_owned(*run, &owner).await.unwrap();
-        assert_eq!(status.workflow_id, flow);
+        assert_eq!(status.workflow, flow);
         assert_eq!(status.state, "running");
     }
     f.stop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires built Node/Python bindings, TypeScript compiler, and Pyright"]
+async fn generated_typed_clients_start_get_and_cancel_real_runs() {
+    use registry_coordinator::sdk::{generate, Language};
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let examples = repository.join("products/coordinator/examples");
+    for workflow in [
+        "delayed-follow-up",
+        "external-job",
+        "standalone-review",
+        "proposal-follow-up",
+    ] {
+        let mut f = TwoFlowFixture::start().await;
+        let project = if workflow == DELAYED {
+            f.delayed_project.clone()
+        } else {
+            examples.join(workflow)
+        };
+        if workflow == "external-job" {
+            let external =
+                RuntimeConfig::load(&examples.join("external-job/runtime.yaml")).unwrap();
+            f.doc["connections"]["jobs"] =
+                serde_json::to_value(&external.connections["jobs"]).unwrap();
+        }
+        if workflow == "proposal-follow-up" {
+            f.doc["connections"]["facilities"] = f.doc["connections"]["applications"].clone();
+        }
+        if workflow == "standalone-review" {
+            let authorization = f.doc["connections"]["applications"]["authorization"].clone();
+            f.doc["connections"]["review"] = json!({
+                "type":"casework-review-producer", "baseUrl":"http://127.0.0.1:9011",
+                "profile":"coordinator-producer", "producer":"coordinator", "authorization":authorization
+            });
+        }
+        f.doc["deployment"]["authentication"]["policies"]["operator"]["workflows"] =
+            json!([workflow]);
+        f.doc["deployment"]["authentication"]["policies"]["operator"]["actions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("start"));
+        let pin = f.pin(&project, "sdk-package");
+        let (_, runtime, workflows) = f.runtime("sdk-runtime.yaml", json!([pin]));
+        let migration = deployment::open_ctl(&runtime, true).await.unwrap();
+        deployment::apply(&migration, &runtime, &workflows, &[])
+            .await
+            .unwrap();
+        drop(migration);
+        let definition = &workflows.get(workflow).unwrap().definition;
+        let input = match workflow {
+            "delayed-follow-up" => {
+                json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()})
+            }
+            "external-job" => json!({"jobId":"sdk-synthetic-job"}),
+            "standalone-review" | "proposal-follow-up" => serde_json::from_slice(
+                &fs::read(examples.join(workflow).join("input.json")).unwrap(),
+            )
+            .unwrap(),
+            _ => unreachable!(),
+        };
+        let directory = f.root_path.join("sdk");
+        fs::create_dir(&directory).unwrap();
+        fs::write(
+            directory.join("workflow.ts"),
+            generate(definition, Language::Typescript).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            directory.join("workflow.py"),
+            generate(definition, Language::Python).unwrap(),
+        )
+        .unwrap();
+        fs::write(directory.join("typed-input.ts"), format!(
+        "import type {{ Input, Outcome }} from './workflow';\nconst input: Input = {};\nexport const output = (value: Outcome) => value.output;\nvoid input;\n", input
+    )).unwrap();
+        let modules = directory.join("node_modules/@registrystack");
+        fs::create_dir_all(&modules).unwrap();
+        std::os::unix::fs::symlink(
+            repository.join("crates/registry-stack-client-node"),
+            modules.join("client"),
+        )
+        .unwrap();
+        let tsc = std::env::var("COORDINATOR_SDK_TSC")
+            .expect("COORDINATOR_SDK_TSC names the installed TypeScript compiler");
+        let compiled = std::process::Command::new(tsc)
+            .args([
+                "--strict",
+                "--skipLibCheck",
+                "false",
+                "--types",
+                "node",
+                "--typeRoots",
+            ])
+            .arg(repository.join("crates/registry-coordinator-client-node/node_modules/@types"))
+            .args([
+                "--moduleResolution",
+                "node16",
+                "--module",
+                "node16",
+                "--target",
+                "es2022",
+                "--outDir",
+            ])
+            .arg(directory.join("js"))
+            .arg(directory.join("workflow.ts"))
+            .arg(directory.join("typed-input.ts"))
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stdout)
+        );
+        fs::write(directory.join("node.cjs"), r#"
+const assert = require('node:assert/strict');
+const { WorkflowClient, workflow, workflowRevision } = require('./js/workflow.js');
+const { CoordinatorClient } = require(process.env.COORDINATOR_SDK_NODE_CLIENT);
+(async () => {
+  const generic = new CoordinatorClient({baseUrl:process.env.COORDINATOR_SDK_ORIGIN,maxMutationRetries:0});
+  const client = new WorkflowClient(generic);
+  const token = process.env.COORDINATOR_SDK_TOKEN;
+  const contract = (await generic.workflow(token, workflow)).value;
+  assert.equal(contract.workflowRevision, workflowRevision);
+  const started = await client.start(token, 'generated-typescript', JSON.parse(process.env.COORDINATOR_SDK_INPUT));
+  const read = await client.get(token, started.status.runId);
+  assert.equal(read.status.runId, started.status.runId);
+  assert.equal(read.status.workflowRevision, started.status.workflowRevision);
+  await assert.rejects(client.cancel(token, {...read, status:{...read.status, workflowRevision:'sha256:'+'1'.repeat(64)}}, 'wrong-revision'), /Workflow contract mismatch/);
+  assert.equal((await generic.status(token, started.status.runId)).value.cancelRequested, false);
+  const cancelled = await client.cancel(token, read, 'generated-client-regression');
+  assert.equal(cancelled.status.cancelRequested, true);
+  assert.equal(cancelled.status.state, 'cancelled');
+})().catch(() => { console.error('generated TypeScript journey failed'); process.exitCode=1; });
+"#).unwrap();
+        fs::write(
+            directory.join("python.py"),
+            r#"
+import ctypes, glob, json, os
+runtime = os.environ.get('REGISTRY_CARGO_RUNTIME_LIBRARY_PATH')
+if runtime:
+    ctypes.CDLL(glob.glob(runtime + '/libaws_lc_fips*_crypto.dylib')[0], mode=ctypes.RTLD_GLOBAL)
+from registry_coordinator_client import CoordinatorClient
+from workflow import WorkflowClient, WORKFLOW, WORKFLOW_REVISION
+generic = CoordinatorClient(os.environ['COORDINATOR_SDK_ORIGIN'], max_mutation_retries=0)
+client = WorkflowClient(generic)
+token = os.environ['COORDINATOR_SDK_TOKEN']
+contract = generic.workflow(token, WORKFLOW)['value']
+assert contract['workflowRevision'] == WORKFLOW_REVISION
+started = client.start(token, 'generated-python', json.loads(os.environ['COORDINATOR_SDK_INPUT']))
+read = client.get(token, started['status']['runId'])
+assert read['status']['runId'] == started['status']['runId']
+assert read['status']['workflowRevision'] == started['status']['workflowRevision']
+wrong = {**read, 'status':{**read['status'], 'workflowRevision':'sha256:'+'1'*64}}
+try:
+    client.cancel(token, wrong, 'wrong-revision')
+except ValueError as error:
+    assert str(error) == 'Workflow contract mismatch'
+else:
+    raise AssertionError('wrong revision reached cancellation')
+assert generic.status(token, started['status']['runId'])['value']['cancelRequested'] is False
+cancelled = client.cancel(token, read, 'generated-client-regression')
+assert cancelled['status']['cancelRequested'] is True
+assert cancelled['status']['state'] == 'cancelled'
+"#,
+        )
+        .unwrap();
+        let python_types = directory.join("python-types/registry_client/coordinator");
+        fs::create_dir_all(&python_types).unwrap();
+        fs::write(
+            directory.join("python-types/registry_client/__init__.pyi"),
+            "",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            repository.join("crates/registry-coordinator-client-py/python/registry_coordinator_client/__init__.pyi"),
+            python_types.join("__init__.pyi"),
+        ).unwrap();
+        fs::write(directory.join("typed_input.py"), format!(
+            "from workflow import Input, Outcome\nrequest: Input = {}\ndef output(value: Outcome) -> object:\n    return value['output']\n", input
+        )).unwrap();
+        fs::write(
+            directory.join("pyrightconfig.json"),
+            serde_json::to_vec(&json!({
+                "typeCheckingMode":"standard", "pythonVersion":"3.11",
+                "extraPaths":[directory.join("python-types")],
+                "include":["workflow.py","typed_input.py"]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let checked = std::process::Command::new("pyright")
+            .arg("--project")
+            .arg(directory.join("pyrightconfig.json"))
+            .output()
+            .unwrap();
+        assert!(
+            checked.status.success(),
+            "{workflow}: {}",
+            String::from_utf8_lossy(&checked.stdout)
+        );
+        // The exact operator policy explicitly permits start and cancellation of these fixture runs.
+        let credential = f.token("operator", "sdk-owner", "coordinator:operate");
+        let (origin, server) = serve_runtime(&runtime, &workflows).await;
+        let python_root = std::env::var("COORDINATOR_SDK_PYTHON_ROOT")
+            .expect("COORDINATOR_SDK_PYTHON_ROOT names the built Python module import root");
+        for (binary, script) in [("node", "node.cjs"), ("python3", "python.py")] {
+            let origin = origin.clone();
+            let credential = credential.clone();
+            let input = input.to_string();
+            let directory = directory.clone();
+            let python_root = python_root.clone();
+            let repository = repository.to_owned();
+            let output = tokio::task::spawn_blocking(move || {
+                std::process::Command::new(binary)
+                    .arg(directory.join(script))
+                    .env("COORDINATOR_SDK_ORIGIN", origin)
+                    .env("COORDINATOR_SDK_TOKEN", credential)
+                    .env("COORDINATOR_SDK_INPUT", input)
+                    .env(
+                        "COORDINATOR_SDK_NODE_CLIENT",
+                        repository.join("crates/registry-coordinator-client-node/client.js"),
+                    )
+                    .env("PYTHONPATH", python_root)
+                    .output()
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "{workflow} {binary}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        server.abort();
+        f.stop().await;
+    }
 }

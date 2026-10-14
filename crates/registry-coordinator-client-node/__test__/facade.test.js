@@ -8,9 +8,9 @@ const { inspect: inspectValue } = require('node:util');
 const RUN_ID = '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d';
 const STATUS = {
   runId: RUN_ID,
-  workflowId: 'decision-follow-up',
-  workflowVersion: '1',
-  definitionDigest: 'sha256:definition',
+  workflow: 'decision-follow-up',
+  workflowRevision: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+
   bindingDigest: 'sha256:binding',
   step: 'read-record',
   state: 'waiting',
@@ -28,6 +28,8 @@ const STATUS = {
 };
 const INSPECTION = {
   run: STATUS,
+  effects: [],
+  waits: [],
   steps: [{
     step: 'read-record',
     state: 'waiting',
@@ -115,7 +117,7 @@ test('start preserves the caller token, key, and input', async (context) => {
   const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: STATUS }));
   const { CoordinatorClient } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
-  const request = { flow: 'decision-follow-up', input: { record: 'case-42', priority: 2 } };
+  const request = { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: { record: 'case-42', priority: 2 } };
 
   assert.deepEqual(
     await client.start('one-call-secret', 'admission 42', request),
@@ -330,7 +332,7 @@ test('invalid request documents and run identifiers fail before I/O', async (con
   const client = new CoordinatorClient({ baseUrl });
 
   assert.throws(
-    () => client.start('secret', 'admission-42', { flow: 'decision-follow-up', input: { unsafe: 9_007_199_254_740_992 } }),
+    () => client.start('secret', 'admission-42', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: { unsafe: 9_007_199_254_740_992 } }),
     (error) => error instanceof CoordinatorClientError && error.kind === 'invalid-request',
   );
   await assert.rejects(
@@ -369,7 +371,7 @@ test('an unknown admission outcome is resent under the same key and body', async
   const { baseUrl, requests } = await serve(context, scripted([UNAVAILABLE, { status: 200, document: STATUS }]));
   const { CoordinatorClient } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
-  const request = { flow: 'decision-follow-up', input: { record: 'case-42' } };
+  const request = { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: { record: 'case-42' } };
 
   assert.deepEqual(await client.start('one-call-secret', 'admission 42', request), { kind: 'complete', value: STATUS });
   assert.equal(requests.length, 2);
@@ -386,7 +388,7 @@ test('a retry ceiling of zero sends an admission once and reports the outcome un
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
   const client = new CoordinatorClient({ baseUrl, maxMutationRetries: 0 });
 
-  await assert.rejects(client.start('one-call-secret', 'key-1', { flow: 'decision-follow-up', input: {} }), (error) => {
+  await assert.rejects(client.start('one-call-secret', 'key-1', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: {} }), (error) => {
     assert.ok(error instanceof CoordinatorClientError);
     assert.equal(error.kind, 'problem');
     assert.equal(error.status, 503);
@@ -402,7 +404,7 @@ test('a 4xx refusal of an admission is never resent and reports the outcome know
   const { CoordinatorClient } = require('../client');
   const client = new CoordinatorClient({ baseUrl, maxMutationRetries: 2 });
 
-  await assert.rejects(client.start('one-call-secret', 'key-1', { flow: 'decision-follow-up', input: {} }), (error) => {
+  await assert.rejects(client.start('one-call-secret', 'key-1', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: {} }), (error) => {
     assert.equal(error.kind, 'problem');
     assert.equal(error.status, 409);
     assert.equal(error.code, 'idempotency.key-reused');
@@ -412,19 +414,19 @@ test('a 4xx refusal of an admission is never resent and reports the outcome know
   assert.equal(requests.length, 1);
 });
 
-test('a flow the deployment does not serve is refused once with a known outcome', async (context) => {
+test('a workflow the deployment does not serve is refused once with a known outcome', async (context) => {
   const { baseUrl, requests } = await serve(context, scripted([
-    problem(404, 'flow.not-served', { title: 'private runbook', detail: 'canary' }),
+    problem(404, 'workflow.not-served', { title: 'private runbook', detail: 'canary' }),
     { status: 200, document: STATUS },
   ]));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
   const client = new CoordinatorClient({ baseUrl, maxMutationRetries: 2 });
 
-  await assert.rejects(client.start('one-call-secret', 'key-1', { flow: 'decision-follow-up', input: {} }), (error) => {
+  await assert.rejects(client.start('one-call-secret', 'key-1', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: {} }), (error) => {
     assert.ok(error instanceof CoordinatorClientError);
     assert.equal(error.kind, 'problem');
     assert.equal(error.status, 404);
-    assert.equal(error.code, 'flow.not-served');
+    assert.equal(error.code, 'workflow.not-served');
     assert.equal(error.outcomeUnknown, false);
     assert.doesNotMatch(inspectValue(error), /canary|private runbook|one-call-secret/);
     return true;
@@ -432,7 +434,7 @@ test('a flow the deployment does not serve is refused once with a known outcome'
   assert.equal(requests.length, 1);
 });
 
-test('a run of a flow outside the caller policy reads as absent on every run action', async (context) => {
+test('a run of a workflow outside the caller policy reads as absent on every run action', async (context) => {
   const { baseUrl, requests } = await serve(context, () => problem(404, 'run.not-visible'));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
   const client = new CoordinatorClient({ baseUrl, maxMutationRetries: 2 });
@@ -505,4 +507,16 @@ test('a configuration member outside the declared set is a configuration error',
       return true;
     });
   }
+});
+
+test('workflow discovery is a bounded read under the exact client contract', async (context) => {
+  const contract = { workflow: 'decision-follow-up', workflowRevision: STATUS.workflowRevision, input: { type: 'object' }, outcomes: { accepted: { type: 'object' } } };
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: contract }));
+  const { CoordinatorClient } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+  assert.deepEqual(await client.workflow('token', 'decision-follow-up'), { kind: 'complete', value: contract });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'GET');
+  assert.equal(requests[0].path, '/v1/workflows/decision-follow-up');
+  assert.equal(requests[0].headers['idempotency-key'], undefined);
 });

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value};
 
 use crate::{
-    contracts::{contract, event_contract, first_violation, Violation},
+    contracts::{first_violation, Violation},
     definition::{
         authored, compile_schema, output_routes, parse_timestamp, AvailableOutputs, Mapping,
         OutputRoute, Reference, Step, Workflow,
@@ -66,9 +66,64 @@ fn check_step(
             read.insert(member, schema);
         }
     }
+    if let Mapping::Function { function, inputs } = mapping {
+        let signature = workflow.functions.get(function).ok_or_else(|| {
+            authored(
+                "mapping.function",
+                &format!("{base}.function"),
+                "the named Function is not declared",
+                "Name one of the project's declared Functions.",
+            )
+        })?;
+        if inputs.keys().ne(signature.inputs.keys()) {
+            return Err(authored(
+                "mapping.function",
+                &format!("{base}.inputs"),
+                "the named Function inputs must match its declared signature exactly",
+                "Supply every declared input name once and remove undeclared names.",
+            ));
+        }
+        for (name, reference) in inputs {
+            reference_fits(
+                &signature.inputs[name],
+                reference,
+                read.get(&format!(".inputs.{name}")),
+                &format!("{base}.inputs.{name}"),
+            )?;
+        }
+        let result = Read {
+            root: &signature.output,
+            schema: signature.output.clone(),
+        };
+        match step {
+            Step::Call { call, .. } => {
+                schema_fits(&workflow.operation(call).input, &result, &base)?
+            }
+            Step::Finish { finish, .. } => schema_fits(&workflow.outcomes[finish], &result, &base)?,
+            Step::WaitUntil { .. } => {
+                instant_fits(&Reference::Input { path: None }, Some(&result), &base)?
+            }
+            Step::Choose { cases, .. } => label_fits(
+                &Reference::Input { path: None },
+                Some(&result),
+                cases,
+                &base,
+            )?,
+            _ => {}
+        }
+    }
     match (step, mapping) {
+        (Step::Call { call, .. }, Mapping::Reference(reference)) => reference_fits(
+            &workflow.operation(call).input,
+            reference,
+            read.get(""),
+            &base,
+        )?,
+        (Step::Finish { finish, .. }, Mapping::Reference(reference)) => {
+            reference_fits(&workflow.outcomes[finish], reference, read.get(""), &base)?
+        }
         (Step::Call { call, .. }, Mapping::Fields { fields }) => fields_fit(
-            &contract(call.operation).input,
+            &workflow.operation(call).input,
             &format!("the {} input", call.operation.as_str()),
             &base,
             fields,
@@ -99,6 +154,48 @@ struct Read<'a> {
     schema: Value,
 }
 
+fn reference_fits(
+    target: &Value,
+    reference: &Reference,
+    read: Option<&Read<'_>>,
+    field: &str,
+) -> Result<()> {
+    if let Reference::Literal { value } = reference {
+        if let Some(violation) = literal_violation(target, target, value) {
+            return Err(authored(
+                "mapping.literal",
+                &format!("{field}.value"),
+                &format!(
+                    "the literal does not fit its target schema: expected {}",
+                    violation.expected
+                ),
+                "Correct the literal to satisfy the target schema.",
+            ));
+        }
+    } else if let Some(read) = read {
+        schema_fits(target, read, field)?;
+    }
+    Ok(())
+}
+
+fn schema_fits(target: &Value, read: &Read<'_>, field: &str) -> Result<()> {
+    let wanted = facts(target, target, &mut budget());
+    let offered = facts(read.root, &read.schema, &mut budget());
+    if !wanted.accepts(&offered) {
+        return Err(authored(
+            "mapping.type",
+            field,
+            &format!(
+                "expected {}; the producer supplies {}",
+                wanted.describe(),
+                offered.describe()
+            ),
+            "Select a value of the target type, or convert it with a typed Function.",
+        ));
+    }
+    Ok(())
+}
+
 /// Resolve an input or step reference's path in its producer's schema.
 fn source<'a>(
     workflow: &'a Workflow,
@@ -115,13 +212,14 @@ fn source<'a>(
         Reference::Step { step, path } => match workflow.steps.get(step) {
             Some(Step::Call { call, .. }) => match available.get(step) {
                 Some(OutputRoute::CallSuccess) => (
-                    &contract(call.operation).output,
+                    &workflow.operation(call).output,
                     format!("the {} output of step {step}", call.operation.as_str()),
                     path,
                 ),
                 Some(OutputRoute::DeclaredRefusal) => (
-                    contract(call.operation)
-                        .declared_refusal
+                    workflow
+                        .operation(call)
+                        .refusal
                         .as_ref()
                         .expect("a declared-refusal route has a committed contract"),
                     format!(
@@ -133,8 +231,11 @@ fn source<'a>(
                 _ => return Ok(None),
             },
             Some(Step::WaitFor { wait_for, .. }) => (
-                &event_contract(wait_for).output,
-                format!("the {} event of step {step}", wait_for.id()),
+                &workflow
+                    .completion(wait_for)
+                    .expect("the completion was resolved")
+                    .output,
+                format!("the {} completion of step {step}", wait_for.name),
                 path,
             ),
             _ => return Ok(None),

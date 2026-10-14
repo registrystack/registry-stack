@@ -20,9 +20,9 @@ fn document() -> Value {
             "migrationUrlRef":"secret:env/COORDINATOR_EXTERNAL_TEST_UNRESOLVED_DATABASE"
         },
         "namespace":"coordinator_external_test",
-        "externalHttpConnections":{
+        "connections":{
             "office-directory":{
-                "baseUrl":"https://directory.example.test/tenant/v2",
+                "type":"external-http", "baseUrl":"https://directory.example.test/tenant/v2",
                 "paths":["offices","districts"],
                 "queryParameters":["district","language"],
                 "responseSchema":{
@@ -62,7 +62,7 @@ fn protected_document() -> Value {
     // an unprovided signing key or database connection value.
     document["secretProviders"]["file"] =
         json!({"root":"/private/tmp/coordinator-external-unresolved-secrets"});
-    document["externalHttpConnections"]["office-directory"]["authorization"] = authorization();
+    document["connections"]["office-directory"]["authorization"] = authorization();
     document
 }
 
@@ -77,16 +77,21 @@ fn load(document: &Value) -> registry_coordinator::Result<RuntimeConfig> {
 fn external_only_runtime_loads_and_offline_check_never_resolves_secrets() {
     let document = document();
     let config = load(&document).unwrap();
-    assert!(config.connections.is_empty());
-    assert_eq!(config.external_http_connections.len(), 1);
+    assert_eq!(config.connections.len(), 1);
+    assert!(config.connections["office-directory"]
+        .external_http()
+        .is_some());
     let effective = config.document().unwrap();
-    assert!(effective.get("connections").is_none());
     assert_eq!(
-        effective["externalHttpConnections"]["office-directory"]["attemptTimeoutMilliseconds"],
+        effective["connections"]["office-directory"]["type"],
+        "external-http"
+    );
+    assert_eq!(
+        effective["connections"]["office-directory"]["attemptTimeoutMilliseconds"],
         2000
     );
     assert_eq!(
-        effective["externalHttpConnections"]["office-directory"]["maximumResponseBytes"],
+        effective["connections"]["office-directory"]["maximumResponseBytes"],
         65536
     );
 
@@ -111,7 +116,7 @@ fn missing_authorization_providers_and_cross_kind_name_collisions_are_refused() 
         },
         {
             let mut d = original.clone();
-            d["externalHttpConnections"]["office-directory"]["authorization"]["signingKeyRef"] =
+            d["connections"]["office-directory"]["authorization"]["signingKeyRef"] =
                 json!("secret:env/EXTERNAL_TEST_UNRESOLVED_KEY");
             d
         },
@@ -122,26 +127,22 @@ fn missing_authorization_providers_and_cross_kind_name_collisions_are_refused() 
         assert!(error.field.as_deref().unwrap().contains("signingKeyRef"));
         assert!(!error.to_string().contains("EXTERNAL_TEST_UNRESOLVED_KEY"));
     }
-    let mut collision = original.clone();
-    collision["connections"] = json!({"office-directory":{
-        "product":"messaging", "baseUrl":"https://messaging.example.test", "authorization":authorization()
-    }});
-    let error = load(&collision)
-        .err()
-        .expect("connection names have one namespace");
-    assert_eq!(
-        error.field.as_deref(),
-        Some("/externalHttpConnections/office-directory")
+    let duplicate = original.to_string().replacen(
+        "\"office-directory\":",
+        "\"office-directory\":{},\"office-directory\":",
+        1,
     );
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("runtime.yaml");
+    std::fs::write(&path, duplicate).unwrap();
+    let error = RuntimeConfig::load(&path).err().unwrap();
+    assert_eq!(error.code, "yaml.duplicate-key");
     let mut empty = document();
-    empty
-        .as_object_mut()
-        .unwrap()
-        .remove("externalHttpConnections");
+    empty.as_object_mut().unwrap().remove("connections");
     assert!(load(&empty).is_err());
     let mut unsupported_authority = original;
-    unsupported_authority["externalHttpConnections"]["office-directory"]["authorization"]
-        ["taskAuthority"] = task_authority();
+    unsupported_authority["connections"]["office-directory"]["authorization"]["taskAuthority"] =
+        task_authority();
     let error = load(&unsupported_authority)
         .err()
         .expect("external reads cannot acquire task mutation authority");
@@ -153,7 +154,7 @@ fn semantic_binding_digest_survives_secret_rotation_and_set_reordering() {
     let original = protected_document();
     let digest = load(&original).unwrap().binding_digest().unwrap();
     let mut equivalent = original.clone();
-    let binding = &mut equivalent["externalHttpConnections"]["office-directory"];
+    let binding = &mut equivalent["connections"]["office-directory"];
     binding["paths"] = json!(["districts", "offices"]);
     binding["queryParameters"] = json!(["language", "district"]);
     binding["authorization"]["scopes"] = json!(["districts:read", "directory:read"]);
@@ -174,7 +175,7 @@ fn semantic_binding_digest_survives_secret_rotation_and_set_reordering() {
         ("maximumResponseBytes", json!(8192)),
     ] {
         let mut changed = original.clone();
-        changed["externalHttpConnections"]["office-directory"][member] = value;
+        changed["connections"]["office-directory"][member] = value;
         assert_ne!(
             load(&changed).unwrap().binding_digest().unwrap(),
             digest,
@@ -182,14 +183,14 @@ fn semantic_binding_digest_survives_secret_rotation_and_set_reordering() {
         );
     }
     let mut changed_principal = original.clone();
-    changed_principal["externalHttpConnections"]["office-directory"]["authorization"]["clientId"] =
+    changed_principal["connections"]["office-directory"]["authorization"]["clientId"] =
         json!("another-reader");
     assert_ne!(
         load(&changed_principal).unwrap().binding_digest().unwrap(),
         digest
     );
     let mut invalid_schema = original;
-    invalid_schema["externalHttpConnections"]["office-directory"]["responseSchema"] =
+    invalid_schema["connections"]["office-directory"]["responseSchema"] =
         json!({"$ref":"https://schemas.example.test/read"});
     assert!(load(&invalid_schema).is_err());
 }
@@ -216,19 +217,16 @@ fn external_only_runtime_schema_matches_reader_for_defaults_and_closed_scope() {
         ("baseUrl", json!("https://directory.example.test\n")),
     ] {
         let mut invalid = original.clone();
-        invalid["externalHttpConnections"]["office-directory"][member] = value;
+        invalid["connections"]["office-directory"][member] = value;
         assert!(!validator.is_valid(&invalid), "schema refuses {member}");
         assert!(load(&invalid).is_err(), "reader refuses {member}");
     }
     let mut empty = original;
-    empty
-        .as_object_mut()
-        .unwrap()
-        .remove("externalHttpConnections");
+    empty.as_object_mut().unwrap().remove("connections");
     assert!(!validator.is_valid(&empty));
     let mut unsupported_authority = protected_document();
-    unsupported_authority["externalHttpConnections"]["office-directory"]["authorization"]
-        ["taskAuthority"] = task_authority();
+    unsupported_authority["connections"]["office-directory"]["authorization"]["taskAuthority"] =
+        task_authority();
     assert!(!validator.is_valid(&unsupported_authority));
 }
 
@@ -236,11 +234,12 @@ fn external_only_runtime_schema_matches_reader_for_defaults_and_closed_scope() {
 async fn configured_logical_get_reaches_the_real_adapter_and_checks_response_shape() {
     let server = MockServer::start().await;
     let mut document = document();
-    document["externalHttpConnections"]["office-directory"]["baseUrl"] =
+    document["connections"]["office-directory"]["baseUrl"] =
         json!(format!("{}/tenant/v2", server.uri()));
     let config = load(&document).unwrap();
     let adapters = HttpAdapters::new(&config).unwrap();
     let request = CallRequest {
+        operation_contract: None,
         connection: "office-directory".into(),
         operation: Operation::ExternalGet,
         input: json!({"path":"offices","query":{"district":"north"}}),
@@ -274,9 +273,10 @@ async fn configured_logical_get_reaches_the_real_adapter_and_checks_response_sha
 async fn the_adapter_set_delivers_a_busy_status_only_on_the_final_attempt() {
     let server = MockServer::start().await;
     let mut document = document();
-    document["externalHttpConnections"]["office-directory"]["baseUrl"] = json!(server.uri());
+    document["connections"]["office-directory"]["baseUrl"] = json!(server.uri());
     let adapters = HttpAdapters::new(&load(&document).unwrap()).unwrap();
     let request = CallRequest {
+        operation_contract: None,
         connection: "office-directory".into(),
         operation: Operation::ExternalGet,
         input: json!({"path":"offices"}),

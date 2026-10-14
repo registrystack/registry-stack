@@ -99,7 +99,7 @@ fn validate_retained_closure(registry_id: &str, row: &Retained) -> Result<(), Mu
     );
     if authority != &row.authority
         || policy != &row.policy
-        || row.request.kind != policy.id
+        || row.request.policy != *policy
         || row.request.subject.source != *source
         || row.request.subject.subject_type != "proposal"
         || row.request.subject.id != row.id.to_string()

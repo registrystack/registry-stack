@@ -117,6 +117,8 @@ pub enum ReviewRuntimeError {
     Forbidden,
     #[error("the retained submission has different canonical content")]
     SubmissionConflict,
+    #[error("the expected policy binding differs from the active review policy")]
+    PolicyMismatch,
     #[error("the retained review result has expired")]
     ResultExpired,
     #[error("the review task must be held by the caller")]
@@ -293,9 +295,12 @@ impl CaseworkService {
             .project
             .review_kinds
             .iter()
-            .find(|policy| policy.id == request.kind)
+            .find(|policy| policy.id == request.policy.id)
             .ok_or(ReviewRuntimeError::Forbidden)?;
         let snapshot = policy.snapshot().map_err(|_| ReviewRuntimeError::Corrupt)?;
+        if policy_binding(&snapshot) != request.policy {
+            return Err(ReviewRuntimeError::PolicyMismatch);
+        }
         let requires_initiator = snapshot.stages.iter().any(|stage| stage.exclude_initiator);
         // A producer with no trusted initiator issuer submits only kinds that
         // exclude nobody, so an initiator it names is not recorded: storing it
@@ -1485,7 +1490,7 @@ impl CaseworkService {
         request: &ReviewCreateRequest,
     ) -> Result<ProducerAdmission, ReviewRuntimeError> {
         let admission = self.producer_for_actor(actor)?;
-        if !admission.producer.kinds.contains(&request.kind)
+        if !admission.producer.kinds.contains(&request.policy.id)
             || !admission
                 .producer
                 .source_namespaces
@@ -3016,7 +3021,7 @@ impl PostgresStore {
             request.subject.source,
             request.subject.subject_type,
             request.subject.id,
-            request.kind
+            request.policy.id
         );
         transaction
             .query_one(
@@ -3056,7 +3061,7 @@ impl PostgresStore {
                     &request.subject.subject_type,
                     &request.subject.id,
                     &request.subject.version,
-                    &request.kind,
+                    &request.policy.id,
                     &digest.as_str(),
                     &recovery_deadline,
                     &retained_until,
@@ -3121,7 +3126,7 @@ impl PostgresStore {
                     &request.subject.source,
                     &request.subject.subject_type,
                     &request.subject.id,
-                    &request.kind,
+                    &request.policy.id,
                 ],
             )
             .await?;
@@ -6161,7 +6166,7 @@ fn review_submission_binding_digest(producer_id: &str, request: &ReviewCreateReq
             request.subject.subject_type,
             request.subject.id,
             request.subject.version,
-            request.kind
+            request.policy.id
         )
         .as_bytes(),
     )

@@ -37,7 +37,7 @@ The institution must supply these prerequisites:
   version `1`, and locale `en` for the reviewed sender identity. Acceptance
   and provider delivery remain distinct product observations.
 - Institutional producers hold an audience-bound Coordinator access token for
-  the `deferred-appointment` flow. An explicit operator policy grants inspection
+  the `deferred-appointment` workflow. An explicit operator policy grants inspection
   and recovery separately.
 
 Input contains `applicationId`, `bookAfter`, `searchStart`, `searchEnd` and an

@@ -4,7 +4,7 @@
 )]
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use registry_platform_config::{FileSecretProviderConfig, SecretProvidersConfig, SecretReference};
 
 #[test]
@@ -427,9 +427,11 @@ fn access_free_runtime_preserves_the_legacy_registry_principal() {
         runtime["authentication"]["authorityClaims"]["principal"],
         "registry_principal"
     );
-    assert!(runtime["authentication"]["authorityClaims"]
-        .get("purpose")
-        .is_none());
+    assert!(
+        runtime["authentication"]["authorityClaims"]
+            .get("purpose")
+            .is_none()
+    );
 }
 
 #[test]
@@ -587,13 +589,15 @@ fn local_subject_marker_uses_actual_issuer_owner_and_exact_client_binding() {
     assert!(!has_local_subject_marker(&journeys));
     for claim in ["registry_principal", "sub"] {
         let mut misplaced = json!({"journeys":[{"id":"read","steps":[{"id":"ordinary","accessProfile":"operator","claims":{"principal":LOCAL_SUBJECT_MARKER},"other":LOCAL_SUBJECT_MARKER}]}]});
-        assert!(resolve_local_subject_markers(
-            &mut misplaced,
-            &clients,
-            &local_principal_compiled(&local_principal_source(claim)),
-            "owner"
-        )
-        .is_err());
+        assert!(
+            resolve_local_subject_markers(
+                &mut misplaced,
+                &clients,
+                &local_principal_compiled(&local_principal_source(claim)),
+                "owner"
+            )
+            .is_err()
+        );
     }
 }
 
@@ -904,9 +908,11 @@ fn multi_purpose_client_has_one_registration_and_one_bounded_exchange_connection
     assert!(purpose.token_attributes.contains_key("registry_actor_kind"));
     assert!(purpose.token_attributes.contains_key("registry_principal"));
     assert!(purpose.token_attributes.contains_key("registry_purpose"));
-    assert!(purpose
-        .token_attributes
-        .contains_key("registry_record_status"));
+    assert!(
+        purpose
+            .token_attributes
+            .contains_key("registry_record_status")
+    );
     assert!(purpose.token_attributes.contains_key("scope"));
     let runtime: Value = serde_norway::from_slice(
         &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
@@ -1113,11 +1119,13 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
     ungranted.issuer.interactive_applications[0].grants[0]
         .scopes
         .push("undeclared:permission".into());
-    assert!(config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&ungranted).unwrap().into_bytes()
-    )
-    .is_err());
+    assert!(
+        config::clients(
+            "dev-clients.yaml",
+            &serde_norway::to_string(&ungranted).unwrap().into_bytes()
+        )
+        .is_err()
+    );
     config::clients(
         "dev-clients.yaml",
         &serde_norway::to_string(&clients).unwrap().into_bytes(),
@@ -1164,13 +1172,15 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         })
         .unwrap();
     assert_eq!(source_role.permissions[0].0, evidence.id);
-    assert!(description
-        .machine_clients
-        .iter()
-        .find(|client| client.client_id == "source")
-        .unwrap()
-        .token_exchange
-        .is_some());
+    assert!(
+        description
+            .machine_clients
+            .iter()
+            .find(|client| client.client_id == "source")
+            .unwrap()
+            .token_exchange
+            .is_some()
+    );
     assert_eq!(
         description
             .machine_clients
@@ -1215,20 +1225,24 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         &state.audience(),
     )
     .unwrap();
-    assert!(config::check_borrowed_browser_clients(
-        &clients,
-        &["evidence-portal".into()],
-        &state.audience(),
-        &state.audience(),
-    )
-    .is_err());
-    assert!(config::check_borrowed_browser_clients(
-        &clients,
-        &["unknown".into()],
-        &state.audience(),
-        &state.audience(),
-    )
-    .is_err());
+    assert!(
+        config::check_borrowed_browser_clients(
+            &clients,
+            &["evidence-portal".into()],
+            &state.audience(),
+            &state.audience(),
+        )
+        .is_err()
+    );
+    assert!(
+        config::check_borrowed_browser_clients(
+            &clients,
+            &["unknown".into()],
+            &state.audience(),
+            &state.audience(),
+        )
+        .is_err()
+    );
     assert_eq!(description.synthetic_users[0].username, "staff");
     assert_eq!(
         private::read(
@@ -1297,10 +1311,12 @@ fn machine_grant_inventory(mut clients: Clients) -> Clients {
 fn machine_resource_grants_project_exact_permissions_without_changing_bootstrap_or_export() {
     let (_temp, state, base, files) = fixture();
     assert!(base.clients.iter().all(|client| client.grants.is_empty()));
-    assert!(!serde_json::to_value(&base).unwrap()["clients"][0]
-        .as_object()
-        .unwrap()
-        .contains_key("grants"));
+    assert!(
+        !serde_json::to_value(&base).unwrap()["clients"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("grants")
+    );
     let mut clients = machine_grant_inventory(base);
     let grant = config::LocalPermissionGrant {
         audience: None,
@@ -1397,11 +1413,13 @@ fn machine_resource_grants_project_exact_permissions_without_changing_bootstrap_
         &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
     )
     .unwrap();
-    assert!(!runtime["authentication"]["oidc"]["allowedClients"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|id| id == "task-agent"));
+    assert!(
+        !runtime["authentication"]["oidc"]["allowedClients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == "task-agent")
+    );
 }
 
 #[test]
@@ -1437,15 +1455,17 @@ fn machine_resource_grants_refuse_undeclared_broader_duplicate_and_unbounded_per
         .unwrap()
         .scopes
         .push("casework:read".into());
-    assert!(config::clients(
-        "dev-clients.yaml",
-        serde_norway::to_string(&wider_bootstrap)
-            .unwrap()
-            .as_bytes()
-    )
-    .unwrap_err()
-    .to_string()
-    .contains("one exact bootstrap scope"));
+    assert!(
+        config::clients(
+            "dev-clients.yaml",
+            serde_norway::to_string(&wider_bootstrap)
+                .unwrap()
+                .as_bytes()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("one exact bootstrap scope")
+    );
 }
 
 #[test]
@@ -1713,12 +1733,16 @@ clients:
         "    testBindings:\n      - {journeyId: record-lifecycle, stepId: without-purpose-is-concealed}\n",
         "",
     );
-    assert!(config::clients("dev-clients.yaml", duplicate.as_bytes())
-        .unwrap_err()
-        .to_string()
-        .contains("at most one default"));
+    assert!(
+        config::clients("dev-clients.yaml", duplicate.as_bytes())
+            .unwrap_err()
+            .to_string()
+            .contains("at most one default")
+    );
 
-    let duplicate_binding = format!("{bytes}  - id: another-variant\n    accessProfiles: [operator]\n    scopes: [registry:records:write]\n    claims: {{registry_principal: operator}}\n    testBindings:\n      - {{journeyId: record-lifecycle, stepId: without-purpose-is-concealed}}\n");
+    let duplicate_binding = format!(
+        "{bytes}  - id: another-variant\n    accessProfiles: [operator]\n    scopes: [registry:records:write]\n    claims: {{registry_principal: operator}}\n    testBindings:\n      - {{journeyId: record-lifecycle, stepId: without-purpose-is-concealed}}\n"
+    );
     assert!(
         config::clients("dev-clients.yaml", duplicate_binding.as_bytes())
             .unwrap_err()
@@ -1772,10 +1796,12 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200}
 "#;
-    assert!(bind_journey_profiles(journeys, &clients)
-        .unwrap_err()
-        .to_string()
-        .contains("unknown or profile-mismatched"));
+    assert!(
+        bind_journey_profiles(journeys, &clients)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown or profile-mismatched")
+    );
 }
 
 #[test]
@@ -1803,10 +1829,12 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200}
 "#;
-    assert!(bind_journey_profiles(journeys, &clients)
-        .unwrap_err()
-        .to_string()
-        .contains("needs one unambiguous local client for access profile public-reader"));
+    assert!(
+        bind_journey_profiles(journeys, &clients)
+            .unwrap_err()
+            .to_string()
+            .contains("needs one unambiguous local client for access profile public-reader")
+    );
 }
 
 #[test]
@@ -1846,10 +1874,12 @@ journeys:
         "accessProfile: public-reader",
         "accessProfile: other-reader",
     );
-    assert!(bind_journey_profiles(mismatched.as_bytes(), &clients)
-        .unwrap_err()
-        .to_string()
-        .contains("needs one unambiguous local client for access profile other-reader"));
+    assert!(
+        bind_journey_profiles(mismatched.as_bytes(), &clients)
+            .unwrap_err()
+            .to_string()
+            .contains("needs one unambiguous local client for access profile other-reader")
+    );
 }
 
 fn journey_step(
@@ -1926,11 +1956,13 @@ fn rehearsal_tokens_select_distinct_declared_purposes_on_one_logical_client() {
     assert_ne!(change.output_id, read.output_id);
     assert_eq!(change.purpose.as_deref(), Some("record-change"));
     assert_eq!(read.purpose.as_deref(), Some("record-read"));
-    assert!(rehearsal_token(
-        &client,
-        &journey_step(&["registry:read"], Some("undeclared")),
-    )
-    .is_err());
+    assert!(
+        rehearsal_token(
+            &client,
+            &journey_step(&["registry:read"], Some("undeclared")),
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -2297,11 +2329,13 @@ fn saved_state_carries_its_header_and_reads_back() {
     assert_eq!(written["kind"], STATE_KIND);
     assert!(written.get("version").is_none());
     assert!(written.get("containerId").is_none());
-    assert!(written
-        .as_object()
-        .unwrap()
-        .values()
-        .all(|value| !value.is_null()));
+    assert!(
+        written
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|value| !value.is_null())
+    );
     assert_eq!(written["seeded"], json!(["first-record", "second-record"]));
 
     let read = read_state(&root).unwrap();
@@ -2545,9 +2579,11 @@ fn database_roles_have_independent_passwords_and_hmac_files_are_secret_safe() {
     for file in ["audit-key", "cursor-key"] {
         let bytes = private::read(&root.join("secrets").join(file), 64).unwrap();
         assert_eq!(bytes.len(), 43);
-        assert!(bytes
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')));
+        assert!(
+            bytes
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        );
     }
 }
 
@@ -2685,12 +2721,14 @@ fn control_path_is_short_and_bound_to_the_owned_journal() {
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let directory = control_directory(&state.root()).unwrap();
     assert!(directory.join("control.sock").as_os_str().len() < 104);
-    assert!(directory
-        .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .ends_with(&state.owner));
+    assert!(
+        directory
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .ends_with(&state.owner)
+    );
 }
 
 fn doctor_refusal(code: &str, message: &str) -> Vec<u8> {
@@ -2757,8 +2795,7 @@ fn schema_test_refusal(message: &str) -> Vec<u8> {
 
 #[test]
 fn a_refused_native_command_names_its_first_failing_check_within_a_bound() {
-    let message =
-        "the fixture logical reference was refused: the request names a capture no earlier step declares";
+    let message = "the fixture logical reference was refused: the request names a capture no earlier step declares";
     let named =
         refused_check(&schema_test_refusal(message)).expect("the report names its first check");
     assert!(named.contains("test.step.failed"), "{named}");
@@ -3302,10 +3339,12 @@ fn changed_inputs_are_refused_while_the_session_holds_records() {
     let unchanged = read_state(&state.root()).unwrap();
     assert_eq!(unchanged.source_digest, state.source_digest);
     assert_eq!(unchanged.owner, state.owner);
-    assert!(state
-        .root()
-        .join("credentials/operator/assertion-key.jwk")
-        .is_file());
+    assert!(
+        state
+            .root()
+            .join("credentials/operator/assertion-key.jwk")
+            .is_file()
+    );
 }
 
 #[test]
@@ -3500,17 +3539,21 @@ fn export_client_reports_the_registered_external_resource() {
 #[test]
 fn export_client_refuses_missing_session_client_and_incomplete_credentials_before_output() {
     let (_temp, state, clients, files) = fixture();
-    assert!(export_client::run(export_args(&state))
-        .unwrap_err()
-        .to_string()
-        .contains("no retained"));
+    assert!(
+        export_client::run(export_args(&state))
+            .unwrap_err()
+            .to_string()
+            .contains("no retained")
+    );
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let mut args = export_args(&state);
     args.client = "absent".into();
-    assert!(export_client::run(args)
-        .unwrap_err()
-        .to_string()
-        .contains("absent"));
+    assert!(
+        export_client::run(args)
+            .unwrap_err()
+            .to_string()
+            .contains("absent")
+    );
     private::replace(
         &state.root().join("credentials/source/assertion-key.jwk"),
         b"SECRET-CANARY",
@@ -3539,10 +3582,12 @@ fn export_client_preflights_both_outputs_and_preserves_conflicts() {
     );
     let mut args = export_args(&state);
     args.assertion_key_file = args.client_id_file.clone();
-    assert!(export_client::run(args)
-        .unwrap_err()
-        .to_string()
-        .contains("distinct"));
+    assert!(
+        export_client::run(args)
+            .unwrap_err()
+            .to_string()
+            .contains("distinct")
+    );
 }
 
 #[test]
@@ -4286,11 +4331,13 @@ fn local_review_authorities_are_closed_and_bounded() {
             .get_mut("casework-a")
             .unwrap()
             .endpoint = endpoint.into();
-        assert!(config::clients(
-            "dev-clients.yaml",
-            &serde_norway::to_string(&clients).unwrap().into_bytes()
-        )
-        .is_err());
+        assert!(
+            config::clients(
+                "dev-clients.yaml",
+                &serde_norway::to_string(&clients).unwrap().into_bytes()
+            )
+            .is_err()
+        );
     }
     clients
         .review_authorities
@@ -4303,11 +4350,13 @@ fn local_review_authorities_are_closed_and_bounded() {
             .get_mut("casework-a")
             .unwrap()
             .profile = invalid;
-        assert!(config::clients(
-            "dev-clients.yaml",
-            &serde_norway::to_string(&clients).unwrap().into_bytes()
-        )
-        .is_err());
+        assert!(
+            config::clients(
+                "dev-clients.yaml",
+                &serde_norway::to_string(&clients).unwrap().into_bytes()
+            )
+            .is_err()
+        );
     }
     clients
         .review_authorities
@@ -4319,11 +4368,13 @@ fn local_review_authorities_are_closed_and_bounded() {
         .get_mut("casework-a")
         .unwrap()
         .client = "undeclared-producer".into();
-    assert!(config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&clients).unwrap().into_bytes()
-    )
-    .is_err());
+    assert!(
+        config::clients(
+            "dev-clients.yaml",
+            &serde_norway::to_string(&clients).unwrap().into_bytes()
+        )
+        .is_err()
+    );
 
     clients.review_authorities.clear();
     for index in 0..9 {
@@ -4331,11 +4382,13 @@ fn local_review_authorities_are_closed_and_bounded() {
             .review_authorities
             .insert(format!("casework-{index}"), binding.clone());
     }
-    assert!(config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&clients).unwrap().into_bytes()
-    )
-    .is_err());
+    assert!(
+        config::clients(
+            "dev-clients.yaml",
+            &serde_norway::to_string(&clients).unwrap().into_bytes()
+        )
+        .is_err()
+    );
 
     let secrets = secret_root(&state.project, &mut clients);
     let completion = file_secret(
@@ -4481,9 +4534,11 @@ fn local_evidence_provider_refreshing_credentials_preserve_exact_authority() {
     assert_eq!(credential["resource"], "urn:example:evidence");
     assert_eq!(credential["scopes"], json!(["evidence:invoke"]));
     assert_eq!(credential["assertionAudience"], "http://127.0.0.1:18091");
-    assert!(!serde_json::to_string(provider)
-        .unwrap()
-        .contains("secret:file/assertion-key.jwk"));
+    assert!(
+        !serde_json::to_string(provider)
+            .unwrap()
+            .contains("secret:file/assertion-key.jwk")
+    );
     assert_eq!(
         fs::read(
             state
@@ -4493,10 +4548,12 @@ fn local_evidence_provider_refreshing_credentials_preserve_exact_authority() {
         .unwrap(),
         fs::read(key).unwrap()
     );
-    assert!(!state
-        .root()
-        .join("secrets/evidence-token-qualification")
-        .exists());
+    assert!(
+        !state
+            .root()
+            .join("secrets/evidence-token-qualification")
+            .exists()
+    );
 }
 
 #[test]
@@ -4544,16 +4601,20 @@ fn event_free_sessions_keep_working_without_receiver_state() {
 fn fresh_token_rejects_path_clients_and_stopped_sessions_without_network() {
     let (_temp, state, clients, files) = fixture();
     for client in ["../operator", "/operator", "", "operator/header"] {
-        assert!(fresh_token(&state.project, client)
-            .unwrap_err()
-            .to_string()
-            .contains("bounded local client"));
+        assert!(
+            fresh_token(&state.project, client)
+                .unwrap_err()
+                .to_string()
+                .contains("bounded local client")
+        );
     }
     initialize(&state.root(), &state, &clients, &files).unwrap();
-    assert!(fresh_token(&state.project, "operator")
-        .unwrap_err()
-        .to_string()
-        .contains("must be ready"));
+    assert!(
+        fresh_token(&state.project, "operator")
+            .unwrap_err()
+            .to_string()
+            .contains("must be ready")
+    );
     assert!(!state.root().join("secrets/operator.header").exists());
 }
 
@@ -4597,15 +4658,17 @@ fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
         "/tmp/project",
     ];
     assert!(<crate::Cli as clap::Parser>::try_parse_from(args).is_ok());
-    assert!(<crate::Cli as clap::Parser>::try_parse_from([
-        "bregctl",
-        "dev",
-        "grant",
-        "task-agent",
-        "--grant",
-        "01970000-0000-7000-8000-000000000001"
-    ])
-    .is_err());
+    assert!(
+        <crate::Cli as clap::Parser>::try_parse_from([
+            "bregctl",
+            "dev",
+            "grant",
+            "task-agent",
+            "--grant",
+            "01970000-0000-7000-8000-000000000001"
+        ])
+        .is_err()
+    );
     let mut arbitrary = args.to_vec();
     arbitrary.extend(["--purpose", "invented"]);
     assert!(<crate::Cli as clap::Parser>::try_parse_from(arbitrary).is_err());
@@ -4719,10 +4782,12 @@ fn local_task_grant_status_uses_only_the_registered_status_client_and_resource()
                     .unwrap_or_else(|| state.audience())
             );
             assert_eq!(status["privateKeyRef"], format!("secret:file/{key}"));
-            assert!(!runtime["authentication"]["oidc"]["allowedClients"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("source")));
+            assert!(
+                !runtime["authentication"]["oidc"]["allowedClients"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("source"))
+            );
             assert!(!runtime.to_string().contains("\"d\""));
             registry_breg::runtime_config::load_runtime_config(&file).unwrap();
         }
@@ -4761,11 +4826,13 @@ fn local_task_grant_status_refuses_wider_authority_duplicate_sources_and_unsafe_
     ] {
         let mut invalid = valid.clone();
         invalid["taskGrantStatus"]["casework"]["baseUrl"] = json!(base);
-        assert!(config::clients(
-            "dev-clients.yaml",
-            &serde_norway::to_string(&invalid).unwrap().into_bytes()
-        )
-        .is_err());
+        assert!(
+            config::clients(
+                "dev-clients.yaml",
+                &serde_norway::to_string(&invalid).unwrap().into_bytes()
+            )
+            .is_err()
+        );
     }
     for (field, value) in [
         (
@@ -4779,11 +4846,13 @@ fn local_task_grant_status_refuses_wider_authority_duplicate_sources_and_unsafe_
     ] {
         let mut invalid = valid.clone();
         invalid["clients"][1][field] = value;
-        assert!(config::clients(
-            "dev-clients.yaml",
-            &serde_norway::to_string(&invalid).unwrap().into_bytes()
-        )
-        .is_err());
+        assert!(
+            config::clients(
+                "dev-clients.yaml",
+                &serde_norway::to_string(&invalid).unwrap().into_bytes()
+            )
+            .is_err()
+        );
     }
     for (field, value) in [
         ("client", json!("missing")),
@@ -4792,30 +4861,36 @@ fn local_task_grant_status_refuses_wider_authority_duplicate_sources_and_unsafe_
     ] {
         let mut invalid = valid.clone();
         invalid["taskGrantStatus"]["casework"][field] = value;
-        assert!(config::clients(
-            "dev-clients.yaml",
-            &serde_norway::to_string(&invalid).unwrap().into_bytes()
-        )
-        .is_err());
+        assert!(
+            config::clients(
+                "dev-clients.yaml",
+                &serde_norway::to_string(&invalid).unwrap().into_bytes()
+            )
+            .is_err()
+        );
     }
     let mut duplicate = valid.clone();
     duplicate["taskGrantStatus"]["other"] = duplicate["taskGrantStatus"]["casework"].clone();
-    assert!(config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&duplicate).unwrap().into_bytes()
-    )
-    .is_err());
+    assert!(
+        config::clients(
+            "dev-clients.yaml",
+            &serde_norway::to_string(&duplicate).unwrap().into_bytes()
+        )
+        .is_err()
+    );
     let mut oversized = valid.clone();
     for index in 1..9 {
         let mut binding = valid["taskGrantStatus"]["casework"].clone();
         binding["sourceIssuer"] = json!(format!("https://casework-{index}.example"));
         oversized["taskGrantStatus"][format!("casework-{index}")] = binding;
     }
-    assert!(config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&oversized).unwrap().into_bytes()
-    )
-    .is_err());
+    assert!(
+        config::clients(
+            "dev-clients.yaml",
+            &serde_norway::to_string(&oversized).unwrap().into_bytes()
+        )
+        .is_err()
+    );
 }
 
 const CLIENTS_HEADER: &str =

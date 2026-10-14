@@ -22,24 +22,27 @@ async fn pending_work(kind: &str, at: chrono::DateTime<Utc>) -> (Harness, Uuid, 
         .1
         .to_json_value();
         if kind == "finish" {
-            document["start"] = json!("done");
-            document["steps"] = json!({"done":{"type":"finish","outcome":"done"}});
+            document["workflow"]["start"] = json!("done");
+            document["workflow"]["steps"] = json!({"done":{"type":"finish","outcome":"done"}});
         } else {
-            document["start"] = json!("message");
-            document["steps"].as_object_mut().unwrap().remove("read");
-            document["steps"]["message"]["input"] = json!({"type":"function","function":"pending_command","arguments":[{"type":"input"}]});
+            document["workflow"]["start"] = json!("message");
+            document["workflow"]["steps"]
+                .as_object_mut()
+                .unwrap()
+                .remove("read");
+            let operation = "submit-message";
+            document["workflow"]["steps"]["message"]["operation"] = json!(operation);
+            document["workflow"]["steps"]["message"]["input"] = json!({"type":"function","function":"pending-command","inputs":{"input":{"type":"input"}}});
             if kind == "appointment" {
-                document["connections"]["messages"] = json!("scheduling");
-                document["steps"]["message"]["operation"] = json!("create-appointment");
+                document["operations"][operation] =
+                    json!({"uses":"scheduling.create-appointment/v1","connection":"messages"});
             }
+            document["functions"]["pending-command"] = json!({"runtime":"rhai","source":"functions.rhai","entrypoint":"pending_command","inputs":{"input":{"type":"object"}},"output":{"operationInput":operation}});
             let functions = h.project.path().join("functions.rhai");
             let source = std::fs::read_to_string(&functions).unwrap();
             std::fs::write(
                 functions,
-                format!(
-                    "{source}\nfn pending_command(input) {{ {} }}",
-                    command(kind)
-                ),
+                format!("{source}\nfn pending_command(args) {{ {} }}", command(kind)),
             )
             .unwrap();
         }

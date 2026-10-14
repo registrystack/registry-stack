@@ -3,8 +3,8 @@
 
 use crate::{
     authoring,
-    contracts::{contract, event_contract, Violation},
-    definition::{class, parse_timestamp, Definition, Step, WaitEvent},
+    contracts::{completion_contract, Violation},
+    definition::{class, parse_timestamp, CompletionKind, CompletionReference, Definition, Step},
     protocol::{CallRequest, DeclaredRefusal},
     CoordinatorError, Result,
 };
@@ -198,6 +198,13 @@ enum AuthoredWait {
         /// request step accepted.
         value: ForeignValue,
     },
+    /// The host repeats the accepted external read and interprets these
+    /// synthetic typed responses under the completion's named Function.
+    Observations {
+        /// One to 128 bounded response objects in observation order.
+        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
+        responses: Vec<ForeignValue>,
+    },
     /// No event arrives: the clock moves by the step's `timeoutSeconds`, and
     /// the run continues at its `onTimeout`, or stops as `timed-out` when the
     /// step has none. A deadline that passes first stops the run as
@@ -350,6 +357,7 @@ pub enum Reply {
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Wait {
     Event { value: Value },
+    Observations { responses: Vec<Value> },
     Timeout,
     Cancel,
 }
@@ -562,6 +570,12 @@ impl CoordinatorScenarios {
                                 AuthoredWait::Event { value } => Wait::Event {
                                     value: value.into_value(),
                                 },
+                                AuthoredWait::Observations { responses } => Wait::Observations {
+                                    responses: responses
+                                        .into_iter()
+                                        .map(ForeignValue::into_value)
+                                        .collect(),
+                                },
                                 AuthoredWait::Timeout {} => Wait::Timeout,
                                 AuthoredWait::Cancel {} => Wait::Cancel,
                             },
@@ -686,7 +700,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
         for (index, reply) in replies.iter().enumerate() {
             match reply {
                 Reply::Success { success } => {
-                    contract(call.operation)
+                    definition.operation_contract(call)?
                         .check_output(success)
                         .map_err(|violation| {
                             contract_error(
@@ -699,7 +713,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                         })?;
                 }
                 Reply::DeclaredRefusal { declared_refusal } => {
-                    if !call.operation.descriptor().declared_refusal {
+                    if definition.workflow.operation(call).refusal.is_none() {
                         return Err(error(
                             "scenario.reply",
                             format!("/replies/{step}/{index}"),
@@ -707,7 +721,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             "Use declared-refusal only for invoke-breg-action; use refused for an operational or authority refusal.",
                         ));
                     }
-                    if DeclaredRefusal::new(declared_refusal).is_none() {
+                    if !declared_refusal_valid(definition, call, declared_refusal)? {
                         return Err(error(
                             "scenario.reply",
                             format!("/replies/{step}/{index}/refusalCode"),
@@ -753,13 +767,14 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
         // Every stated event is held to its contract, whether or not this
         // run reaches the wait.
         if let Wait::Event { value } = wait {
-            check_event(step, wait_for, value)?;
+            check_event(definition, step, wait_for, value)?;
         }
     }
     let deadline = definition.deadline_at(scenario.admitted_at)?;
     let mut now = scenario.admitted_at;
     let mut step = definition.workflow.start.clone();
     let mut outputs = BTreeMap::new();
+    let mut commands: BTreeMap<String, CallRequest> = BTreeMap::new();
     let mut report = ScenarioReport {
         name: scenario.name.clone(),
         path: Vec::new(),
@@ -817,9 +832,78 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                 })?;
                 match wait {
                     Wait::Event { value } => {
-                        correlate(&step, wait_for, value, &outputs)?;
+                        correlate(definition, &step, wait_for, value, &outputs)?;
                         outputs.insert(step.clone(), value.clone());
                         step = next.clone();
+                    }
+                    Wait::Observations { responses } => {
+                        let completion = definition.completion(wait_for)?;
+                        let CompletionKind::BoundedPoll {
+                            interval_seconds, ..
+                        } = &completion.kind
+                        else {
+                            return Err(error("scenario.wait", format!("/waits/{step}"), "raw observations require a bounded-poll completion", "Use an authoritative event value for this completion, or select a bounded-poll completion."));
+                        };
+                        if responses.is_empty() || responses.len() > 128 {
+                            return Err(error(
+                                "scenario.wait",
+                                format!("/waits/{step}/responses"),
+                                "expected one to 128 synthetic observations",
+                                "Supply one to 128 bounded response objects.",
+                            ));
+                        }
+                        let command = commands.get(&wait_for.step).ok_or_else(|| {
+                            error(
+                                "scenario.wait",
+                                format!("/waits/{step}"),
+                                "the accepted read command is unavailable",
+                                "Make the accepted read call dominate this wait.",
+                            )
+                        })?;
+                        let Some(Step::Call { call, .. }) =
+                            definition.workflow.steps.get(&wait_for.step)
+                        else {
+                            unreachable!("the completion names a call");
+                        };
+                        let contract = definition.operation_contract(call)?;
+                        let timeout_at =
+                            now + chrono::Duration::seconds(i64::from(*timeout_seconds));
+                        let mut terminal = None;
+                        for (index, response) in responses.iter().enumerate() {
+                            if now >= timeout_at || now >= deadline {
+                                break;
+                            }
+                            contract.check_output(response).map_err(|violation| contract_error("scenario.wait-observation", format!("/waits/{step}/responses/{index}{}", violation.path), &violation,
+                                "in the synthetic polling response; it does not match the resolved Operation output", "Correct this response to satisfy the resolved Operation output schema."))?;
+                            match crate::completion::interpret_poll(definition, command, completion, response.clone(), true) {
+                                crate::protocol::CompletionObservation::Settled(value) => { terminal = Some(value); break; },
+                                crate::protocol::CompletionObservation::Pending { .. } => { now += chrono::Duration::seconds(i64::from(*interval_seconds)); },
+                                _ => return Err(error("scenario.wait-observation", format!("/waits/{step}/responses/{index}"), "the pinned polling interpretation did not establish a valid observation", "Correct the interpretation Function and response correlation under the named completion contract.")),
+                            }
+                        }
+                        if let Some(value) = terminal {
+                            outputs.insert(step.clone(), value);
+                            step = next.clone();
+                        } else if now >= timeout_at {
+                            now = timeout_at.min(deadline);
+                            match on_timeout {
+                                Some(target) if now < deadline => step = target.clone(),
+                                _ => {
+                                    report.state = if now >= deadline {
+                                        "deadline-exceeded"
+                                    } else {
+                                        "timed-out"
+                                    }
+                                    .into();
+                                    break;
+                                }
+                            }
+                        } else if now >= deadline {
+                            report.state = "deadline-exceeded".into();
+                            break;
+                        } else {
+                            return Err(error("scenario.wait-observation", format!("/waits/{step}/responses"), "the observations end while the completion is pending", "Add the remaining observations through a terminal result, or state an explicit timeout."));
+                        }
                     }
                     Wait::Timeout => {
                         now = (now + chrono::Duration::seconds(i64::from(*timeout_seconds)))
@@ -894,7 +978,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
             } => {
                 let value = definition.evaluate_synthetic(&step, &scenario.input, &outputs)?;
                 let operation = call.operation.as_str();
-                contract(call.operation)
+                definition.operation_contract(call)?
                     .check_input(&value)
                     .map_err(|violation| {
                         contract_error(
@@ -908,6 +992,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                 let command = CallRequest {
                     connection: call.connection.clone(),
                     operation: call.operation,
+                    operation_contract: definition.workflow.operation(call).action.clone(),
                     input: value,
                     idempotency_key: if call.operation.requires_key() {
                         Some(format!(
@@ -921,6 +1006,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                         None
                     },
                 };
+                commands.insert(step.clone(), command.clone());
                 let replayed = || {
                     error(
                         "scenario.command",
@@ -1121,33 +1207,50 @@ fn wait_steps_action(definition: &Definition, lead: &str) -> String {
 /// and, for a review result, to the review protocol's rules for a result a
 /// producer may return. Refusals name pointers and expectations, never the
 /// stated value.
-fn check_event(step: &str, event: &WaitEvent, value: &Value) -> Result<()> {
-    let pointer = format!("/waits/{step}/value");
-    let kind = event.id();
-    event_contract(event).check(value).map_err(|violation| {
-        contract_error(
-            "scenario.wait-event",
-            format!("{pointer}{}", violation.path),
-            &violation,
-            &format!("in the event stated for step {step}, as the {kind} event declares; the stated value does not match"),
-            &format!("Correct the stated value so it satisfies the {kind} event."),
+fn declared_refusal_valid(
+    definition: &Definition,
+    call: &crate::definition::Call,
+    code: &str,
+) -> Result<bool> {
+    let Some(schema) = &definition.workflow.operation(call).refusal else {
+        return Ok(false);
+    };
+    let Some(refusal) = DeclaredRefusal::new(code) else {
+        return Ok(false);
+    };
+    let value = serde_json::to_value(refusal).map_err(|_| {
+        CoordinatorError::new(
+            "scenario.reply",
+            "the declared refusal could not be encoded",
         )
     })?;
-    match event {
-        WaitEvent::ReviewResult { .. } => {
-            let broken = |rule: String| {
-                error(
-                    "scenario.wait-event",
-                    pointer.clone(),
-                    format!("the review result stated for step {step} breaks a review protocol rule: {rule}"),
-                    "Correct the stated result so the review protocol accepts it; a producer returns no other result.",
-                )
-            };
-            let result = serde_json::from_value::<ReviewResult>(value.clone())
-                .map_err(|_| broken("its members do not form a review result".into()))?;
-            result.check().map_err(|rule| broken(rule.to_string()))
-        }
+    Ok(crate::definition::compile_schema(schema)?.is_valid(&value))
+}
+
+fn check_event(
+    definition: &Definition,
+    step: &str,
+    reference: &CompletionReference,
+    value: &Value,
+) -> Result<()> {
+    let pointer = format!("/waits/{step}/value");
+    let completion = definition.completion(reference)?;
+    completion_contract(completion).check(value).map_err(|violation| {
+        contract_error("scenario.wait-event", format!("{pointer}{}", violation.path), &violation,
+            &format!("in the completion stated for step {step}; the stated value does not match its typed contract"),
+            "Correct the stated value so it satisfies the named completion output.")
+    })?;
+    if matches!(completion.kind, CompletionKind::CaseworkResult {}) {
+        let broken = |rule: String| {
+            error("scenario.wait-event", pointer.clone(),
+            format!("the review result stated for step {step} breaks a review protocol rule: {rule}"),
+            "Correct the stated result so the review protocol accepts it.")
+        };
+        let result = serde_json::from_value::<ReviewResult>(value.clone())
+            .map_err(|_| broken("its members do not form a review result".into()))?;
+        result.check().map_err(|rule| broken(rule.to_string()))?;
     }
+    Ok(())
 }
 
 /// A stated event belongs to the request its wait names. A review result
@@ -1155,13 +1258,16 @@ fn check_event(step: &str, event: &WaitEvent, value: &Value) -> Result<()> {
 /// the request step accepted, as the producer client requires of every
 /// result it reads. A refusal names the member that differs, never a value.
 fn correlate(
+    definition: &Definition,
     step: &str,
-    event: &WaitEvent,
+    reference: &CompletionReference,
     value: &Value,
     outputs: &BTreeMap<String, Value>,
 ) -> Result<()> {
-    match event {
-        WaitEvent::ReviewResult { request } => {
+    let completion = definition.completion(reference)?;
+    let request = &reference.step;
+    match &completion.kind {
+        CompletionKind::CaseworkResult {} => {
             let accepted = outputs.get(request).and_then(|output| {
                 serde_json::from_value::<ReviewRequestAccepted>(output.clone()).ok()
             });
@@ -1195,6 +1301,29 @@ fn correlate(
                 None => Ok(()),
             }
         }
+        CompletionKind::BregApplication {} => {
+            let accepted = outputs.get(request).ok_or_else(|| {
+                error(
+                    "scenario.wait-event",
+                    format!("/waits/{step}/value"),
+                    "the accepted frozen Proposal submission is unavailable",
+                    "Provide the exact accepted submission reply on the preceding call.",
+                )
+            })?;
+            let current = value.get("proposal").ok_or_else(|| {
+                error(
+                    "scenario.wait-event",
+                    format!("/waits/{step}/value/proposal"),
+                    "the application completion carries no Proposal",
+                    "Provide the authoritative Proposal representation.",
+                )
+            })?;
+            match crate::breg_proposal::classify_application(accepted, current) {
+                crate::breg_proposal::ApplicationObservation::Complete(expected) if expected == *value => Ok(()),
+                _ => Err(error("scenario.wait-event", format!("/waits/{step}/value"), "the completion does not prove the exact accepted frozen submission applied or closed", "Retain the accepted Proposal locator, Action revision, submission version, effect digest and durable application evidence.")),
+            }
+        }
+        CompletionKind::BoundedPoll { .. } => Ok(()),
     }
 }
 

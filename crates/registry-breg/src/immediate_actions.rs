@@ -2505,6 +2505,22 @@ fn compile_execution(
             {
                 errors.push(Diagnostic::error("breg.proposal.standing-agent-operation-forbidden", "accessProfiles[].permissions.proposals", "an agent without a task grant can only start and edit caller-owned draft Proposals; other operations require delegated or human authority"));
             }
+            if application.is_automatic()
+                && grant.operations.iter().any(|operation| {
+                    matches!(
+                        operation,
+                        ProposalOperation::Apply | ProposalOperation::Retry
+                    )
+                })
+                && (profile.actor_kind != Some(ActorKindSource::Human)
+                    || profile.task_grant.is_some())
+            {
+                errors.push(Diagnostic::error(
+                    "breg.proposal.automatic-recovery-human-required",
+                    format!("accessProfiles[id={}].permissions.proposals[action={}]", profile.id, action.id),
+                    "automatic Proposal apply and retry recovery require an explicitly human profile without a task grant; use a separate human operator profile",
+                ));
+            }
             if grant.operations.is_empty()
                 || permissions
                     .iter()

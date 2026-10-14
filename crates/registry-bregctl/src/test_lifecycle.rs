@@ -8,26 +8,26 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use registry_breg::fixtures::{
-    execute_schema_test, validate_fixture_journeys, FixtureError, SchemaTestCredentialBinding,
-    SchemaTestCredentialBindings, SchemaTestRuntimeSetupError,
+    FixtureError, SchemaTestCredentialBinding, SchemaTestCredentialBindings,
+    SchemaTestRuntimeSetupError, execute_schema_test, validate_fixture_journeys,
 };
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE};
 use registry_breg::postgres::{
     BaselineFingerprintDrift, MigrationRehearsalError, SuccessorMigrationRehearsal,
 };
-use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
+use registry_breg::runtime_config::{RuntimeConfig, RuntimeConfigError, load_runtime_config};
 use registry_breg::startup;
 use registry_platform_config::SecretReference;
 use registry_platform_yaml::{
-    tagged_union, ApiVersion, Decoded, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec,
-    LocalId, Reader, Report, RetiredApiVersion, Severity,
+    ApiVersion, Decoded, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, LocalId, Reader,
+    Report, RetiredApiVersion, Severity, tagged_union,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::safe_path::{EntryStat, SafeDir, SafeEntry};
 use crate::CapturedPackageCandidate;
+use crate::safe_path::{EntryStat, SafeDir, SafeEntry};
 
 pub(crate) const CREDENTIALS_API_VERSION: &str =
     "id.registrystack.org/formats/breg/schema-test-credentials/v1";

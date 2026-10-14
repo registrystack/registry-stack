@@ -20,24 +20,24 @@ use registry_breg::compiler::module_digest_with_assets;
 use registry_breg::contract::{FieldTypeSource, ModuleAssetSource, ModuleLockSource};
 use registry_breg::migration_plan::{ReviewedMigrationError, ReviewedMigrationRecovery};
 use registry_breg::package::{
-    inspect_package_integrity, CompiledRegistryChangeClass, MigrationInspectionPlanKind,
+    CompiledRegistryChangeClass, FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES,
+    MAX_RHAI_PLANNER_PATH_BYTES, MAX_RHAI_PLANNER_SOURCE_BYTES, MigrationInspectionPlanKind,
     MigrationInspectionSummary, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSourceFile, PreparedPackage, FIXTURE_JOURNEYS_PATH,
-    MAX_PACKAGE_SOURCE_FILE_BYTES, MAX_RHAI_PLANNER_PATH_BYTES, MAX_RHAI_PLANNER_SOURCE_BYTES,
+    PackageModuleSource, PackageSourceFile, PreparedPackage, inspect_package_integrity,
 };
 use registry_breg::postgres::{BaselineFingerprintDrift, MigrationRehearsalError};
 use registry_breg::runtime_config::RuntimeConfigError;
-use registry_breg::tooling::{classify_registry_diff, CompiledRegistryDiff, DiffClassification};
+use registry_breg::tooling::{CompiledRegistryDiff, DiffClassification, classify_registry_diff};
 use registry_breg::{
-    compile_project_with_assets, parse_module_yaml, parse_project_yaml, CompileFailure,
-    CompileProfile, CompiledRegistry, Diagnostic, DiagnosticSeverity, GeneratedArtifact,
-    GeneratedArtifacts, RegistryModule, RegistryProject,
+    CompileFailure, CompileProfile, CompiledRegistry, Diagnostic, DiagnosticSeverity,
+    GeneratedArtifact, GeneratedArtifacts, RegistryModule, RegistryProject,
+    compile_project_with_assets, parse_module_yaml, parse_project_yaml,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_config::PackageDigestMismatch;
 use registry_platform_hooks::HookHandlerSource;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 mod action_handler_test;
 mod active_registry;
@@ -93,8 +93,8 @@ use history_rebaseline_lifecycle::{
 use import_authority_lifecycle::ImportAuthorityCliError;
 use instance_claim_lifecycle::InstanceClaimCliError;
 use package_inspection::{
-    inspect_baseline_package, inspect_baseline_rehearsal, inspect_runtime_package,
-    inspect_runtime_predecessor_rehearsal_baseline, RuntimePackageInspectionError,
+    RuntimePackageInspectionError, inspect_baseline_package, inspect_baseline_rehearsal,
+    inspect_runtime_package, inspect_runtime_predecessor_rehearsal_baseline,
 };
 use package_lifecycle::PackageLifecycleError;
 use proposal_retention::{
@@ -108,7 +108,7 @@ use registry_breg::data::DataError;
 use registry_breg::migration_reconcile::{ReconcileError, ReconcileOutcome};
 use registry_breg_client::{BRegIngestionBlockedReason, BRegReleaseStatus, BRegWithdrawalReason};
 use review_recovery::{ReviewRecoveryCliError, ReviewRecoveryOperation, ReviewRecoveryOutcome};
-use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH};
+use safe_path::{EntryStat, MAX_REMOVE_TREE_DEPTH, SafeDir, SafeEntry, SafePathError};
 use statistics_lifecycle::{
     StatisticsLifecycleError, StatisticsPublishRequest, StatisticsWithdrawRequest,
 };
@@ -2961,12 +2961,14 @@ fn evidence_retention_failure(error: registry_breg::mutation::MutationError) -> 
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::RetryAfterMigrationLockReleases,
         ),
-        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => package_pin_failure(
-            command,
-            "evidence-retention.package.refused",
-            "package",
-            &mismatch,
-        ),
+        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => {
+            package_pin_failure(
+                command,
+                "evidence-retention.package.refused",
+                "package",
+                &mismatch,
+            )
+        }
         _ => source_failure(
             command,
             diagnostic(
@@ -2993,12 +2995,14 @@ fn idempotency_retention_failure(error: registry_breg::mutation::MutationError) 
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::RetryAfterMigrationLockReleases,
         ),
-        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => package_pin_failure(
-            command,
-            "idempotency-retention.package.refused",
-            "package",
-            &mismatch,
-        ),
+        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => {
+            package_pin_failure(
+                command,
+                "idempotency-retention.package.refused",
+                "package",
+                &mismatch,
+            )
+        }
         _ => source_failure(
             command,
             diagnostic(
@@ -3023,7 +3027,7 @@ fn proposal_retention_failure(
                 "proposal-retention.package.refused",
                 "package",
                 &mismatch,
-            )
+            );
         }
         ProposalRetentionCliError::MigrationLockHeld => (
             "proposal-retention.in-progress",
@@ -3200,7 +3204,7 @@ fn import_authority_failure(
                 "import-authority.package.refused",
                 "package",
                 &mismatch,
-            )
+            );
         }
         ImportAuthorityCliError::Authority(ImportAuthorityError::MigrationLockHeld) => (
             diagnostic(
@@ -4312,7 +4316,7 @@ fn unavailable_webhook_event(compiled: &CompiledRegistry) -> FailureReport {
 fn webhook_lifecycle_failure(command: &'static str, error: WebhookLifecycleError) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
         WebhookLifecycleError::PackagePinMismatch(mismatch) => {
-            return package_pin_failure(command, "webhook.package.refused", "package", &mismatch)
+            return package_pin_failure(command, "webhook.package.refused", "package", &mismatch);
         }
         WebhookLifecycleError::Event => (
             "webhook.sample.event-refused",
@@ -4694,14 +4698,18 @@ fn data_lifecycle_failure(
             DiagnosticArtifact::DataCheckpoint,
             SuggestedAction::VerifyDataCheckpoint,
         ),
-        DataLifecycleError::ImportRunBlocked(Some(BRegIngestionBlockedReason::ActivePackageChanged)) => (
+        DataLifecycleError::ImportRunBlocked(Some(
+            BRegIngestionBlockedReason::ActivePackageChanged,
+        )) => (
             format!("{prefix}.ingestion-run.blocked"),
             "ingestionRun",
             "the ingestion run is blocked because the active package changed; the run stays inspectable, and a new import under the active package needs a fresh checkpoint path",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::VerifyDataCheckpoint,
         ),
-        DataLifecycleError::ImportRunBlocked(Some(BRegIngestionBlockedReason::ImportAuthorityClosed)) => (
+        DataLifecycleError::ImportRunBlocked(Some(
+            BRegIngestionBlockedReason::ImportAuthorityClosed,
+        )) => (
             format!("{prefix}.ingestion-run.import-authority-closed"),
             "ingestionRun",
             "the ingestion run is blocked because its import authority closed, expired, or has too little volume left for the next chunk; the committed chunks stay, and the remaining items need a new authority (bregctl import-authority list, then open) and a fresh checkpoint path",
@@ -4715,14 +4723,18 @@ fn data_lifecycle_failure(
             DiagnosticArtifact::DataOperation,
             SuggestedAction::VerifyDataCheckpoint,
         ),
-        DataLifecycleError::IngestionRunPrecondition { through_import: true } => (
+        DataLifecycleError::IngestionRunPrecondition {
+            through_import: true,
+        } => (
             format!("{prefix}.ingestion-run.import-authority-required"),
             "ingestionRun",
             "the ingestion run was refused because no open import authority admits it: none is open for the entity, it names another profile, it expired, it has too little volume left, or it lists other input digests than the one the run announces; check bregctl import-authority list and open one that covers this input",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::CorrectDataBinding,
         ),
-        DataLifecycleError::IngestionRunPrecondition { through_import: false } => (
+        DataLifecycleError::IngestionRunPrecondition {
+            through_import: false,
+        } => (
             format!("{prefix}.ingestion-run.precondition-failed"),
             "ingestionRun",
             "the ingestion run was refused on a failed precondition",
@@ -5396,14 +5408,18 @@ fn status_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             DiagnosticArtifact::PackageActivation,
             SuggestedAction::VerifyMigrationAuthority,
         ),
-        ApplyLifecycleError::Apply(registry_breg::migration::MigrationError::UnrecognizedDatabase) => (
+        ApplyLifecycleError::Apply(
+            registry_breg::migration::MigrationError::UnrecognizedDatabase,
+        ) => (
             "status.database.unrecognized",
             "database",
             "the database holds registry state this release does not recognise, such as state written by a release older than its immediate predecessor: a release reads only the state its predecessor wrote, so upgrade one release at a time",
             DiagnosticArtifact::PackageActivation,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
-        ApplyLifecycleError::Apply(registry_breg::migration::MigrationError::DatabaseUnavailable) => (
+        ApplyLifecycleError::Apply(
+            registry_breg::migration::MigrationError::DatabaseUnavailable,
+        ) => (
             "status.database.unavailable",
             "database",
             "the migration database could not be reached: check database.migrationUrlRef and that the database accepts the migration role, then run `bregctl status` again",
@@ -5596,8 +5612,11 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                 ok: false,
                 command: "test",
                 diagnostics: vec![tool_diagnostic(
-                    diagnostic("breg.field.pattern-syntax-invalid", &format!("recordTypes[{entity_id}].fields[{field_id}].pattern"),
-                        "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test"),
+                    diagnostic(
+                        "breg.field.pattern-syntax-invalid",
+                        &format!("recordTypes[{entity_id}].fields[{field_id}].pattern"),
+                        "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test",
+                    ),
                     DiagnosticArtifact::SchemaTestCandidate,
                     SuggestedAction::CorrectSchemaTestCandidate,
                 )],
@@ -7941,7 +7960,7 @@ fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories,
             return Ok(ModuleDirectories {
                 directory: None,
                 names: Vec::new(),
-            })
+            });
         }
         Err(SafePathError::Unavailable) => return Err(unreadable()),
         Err(error) => {
@@ -7951,7 +7970,7 @@ fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories,
                 "project",
                 "the project directory is not available",
                 "the project directory must be a directory and must not be a symbolic link",
-            ))
+            ));
         }
     };
     let mut names = Vec::new();
@@ -8861,7 +8880,9 @@ impl ArtifactSelector {
                     || path.starts_with("generated/review-context-schemas/")
             }
             ArtifactSelector::Actions => {
-                path == "compiled/actions.json" || path.starts_with("generated/action-schemas/")
+                path == "generated/action-contracts.json"
+                    || path == "generated/action-contracts.schema.json"
+                    || path.starts_with("generated/action-schemas/")
             }
             ArtifactSelector::Manifest => path.starts_with("generated/manifest/"),
             ArtifactSelector::Metadata => path == "generated/metadata/registry.json",
@@ -11265,10 +11286,18 @@ fn write_plan_success(
             .and_then(|()| writeln!(stdout))
     } else {
         let lead = match report.activation {
-            PlanActivation::Initial => "Planned the first activation on this registry; nothing was changed. Run `bregctl apply --initial --package DIR` to activate it.",
-            PlanActivation::Successor => "Planned a successor activation over the active package; nothing was changed. Run `bregctl apply --package DIR` to activate it.",
-            PlanActivation::RoleChange => "Planned activating the active package again with the configured database roles; nothing was changed. Run `bregctl apply --package DIR` to activate it.",
-            PlanActivation::None => "The database already runs this package with the configured database roles; there is nothing to apply.",
+            PlanActivation::Initial => {
+                "Planned the first activation on this registry; nothing was changed. Run `bregctl apply --initial --package DIR` to activate it."
+            }
+            PlanActivation::Successor => {
+                "Planned a successor activation over the active package; nothing was changed. Run `bregctl apply --package DIR` to activate it."
+            }
+            PlanActivation::RoleChange => {
+                "Planned activating the active package again with the configured database roles; nothing was changed. Run `bregctl apply --package DIR` to activate it."
+            }
+            PlanActivation::None => {
+                "The database already runs this package with the configured database roles; there is nothing to apply."
+            }
         };
         let mut lines = report::Lines::new();
         lines.lead(lead);
@@ -12746,25 +12775,35 @@ mod tests {
                         document["refusalCode"] = json!(reason);
                     }
                     let body = serde_json::to_string(&document).unwrap();
-                    format!("HTTP/1.1 {} {}\r\nContent-Type: application/problem+json\r\nCache-Control: no-store\r\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",code.status(),title,body.len(),body)
+                    format!(
+                        "HTTP/1.1 {} {}\r\nContent-Type: application/problem+json\r\nCache-Control: no-store\r\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        code.status(),
+                        title,
+                        body.len(),
+                        body
+                    )
                 } else {
                     "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 7\r\nConnection: close\r\n\r\ninvalid".to_owned()
                 };
-                let server = std::thread::spawn(move || {
-                    let (mut stream, _) = listener.accept().unwrap();
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(5)))
-                        .unwrap();
-                    let mut request = vec![0; 8192];
-                    let count = stream.read(&mut request).unwrap();
-                    let request = String::from_utf8_lossy(&request[..count]);
-                    assert!(request
-                        .starts_with("POST /v1/statistics/population/releases/2025-01/versions"));
-                    assert!(request
-                        .to_ascii_lowercase()
-                        .contains("idempotency-key: statistics-retry-key"));
-                    stream.write_all(response.as_bytes()).unwrap();
-                });
+                let server =
+                    std::thread::spawn(move || {
+                        let (mut stream, _) = listener.accept().unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .unwrap();
+                        let mut request = vec![0; 8192];
+                        let count = stream.read(&mut request).unwrap();
+                        let request = String::from_utf8_lossy(&request[..count]);
+                        assert!(request.starts_with(
+                            "POST /v1/statistics/population/releases/2025-01/versions"
+                        ));
+                        assert!(
+                            request
+                                .to_ascii_lowercase()
+                                .contains("idempotency-key: statistics-retry-key")
+                        );
+                        stream.write_all(response.as_bytes()).unwrap();
+                    });
                 let error = if withdraw {
                     statistics_lifecycle::withdraw(StatisticsWithdrawRequest {
                         breg_url: &url,
@@ -12795,10 +12834,12 @@ mod tests {
                 assert_eq!(rendered["diagnostics"][0]["code"], expected, "{rendered}");
                 assert!(!rendered.to_string().contains("statistics-token-canary"));
                 if reason.is_some() {
-                    assert!(rendered["diagnostics"][0]["message"]
-                        .as_str()
-                        .unwrap()
-                        .contains("publish after"));
+                    assert!(
+                        rendered["diagnostics"][0]["message"]
+                            .as_str()
+                            .unwrap()
+                            .contains("publish after")
+                    );
                 }
                 // A key past its receipt horizon names the key and says the
                 // earlier request committed, so the operator reads rather than retries.
@@ -12807,10 +12848,12 @@ mod tests {
                         rendered["diagnostics"][0]["path"], "--idempotency-key",
                         "{rendered}"
                     );
-                    assert!(rendered["diagnostics"][0]["message"]
-                        .as_str()
-                        .unwrap()
-                        .contains("committed"));
+                    assert!(
+                        rendered["diagnostics"][0]["message"]
+                            .as_str()
+                            .unwrap()
+                            .contains("committed")
+                    );
                 }
             }
         }
@@ -12900,8 +12943,10 @@ mod tests {
                     .unwrap();
                 let mut request = vec![0; 8192];
                 let count = stream.read(&mut request).unwrap();
-                assert!(String::from_utf8_lossy(&request[..count])
-                    .starts_with("POST /v1/statistics/population/releases/2025-01/versions"));
+                assert!(
+                    String::from_utf8_lossy(&request[..count])
+                        .starts_with("POST /v1/statistics/population/releases/2025-01/versions")
+                );
                 stream.write_all(response.as_bytes()).unwrap();
             });
             let error = if withdraw {
@@ -12935,40 +12980,44 @@ mod tests {
 
     #[test]
     fn statistics_withdraw_refuses_zero_version_in_the_parser() {
-        assert!(Cli::try_parse_from([
-            "bregctl",
-            "statistics",
-            "withdraw",
-            "--breg-url",
-            "http://127.0.0.1:8080",
-            "--access-token-file",
-            "/tmp/token",
-            "--dataset",
-            "population",
-            "--period",
-            "2026-09",
-            "--version",
-            "0",
-            "--reason",
-            "disclosure-risk",
-            "--profile",
-            "publisher",
-            "--idempotency-key",
-            "withdraw-v0",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from([
+                "bregctl",
+                "statistics",
+                "withdraw",
+                "--breg-url",
+                "http://127.0.0.1:8080",
+                "--access-token-file",
+                "/tmp/token",
+                "--dataset",
+                "population",
+                "--period",
+                "2026-09",
+                "--version",
+                "0",
+                "--reason",
+                "disclosure-risk",
+                "--profile",
+                "publisher",
+                "--idempotency-key",
+                "withdraw-v0",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
     fn init_template_conflicts_with_every_flag_that_shapes_a_derived_project() {
-        assert!(Cli::try_parse_from([
-            "bregctl",
-            "init",
-            "project",
-            "--template",
-            "minimal-directory"
-        ])
-        .is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "bregctl",
+                "init",
+                "project",
+                "--template",
+                "minimal-directory"
+            ])
+            .is_ok()
+        );
         for conflicting in [
             vec!["--from", "publicschema"],
             vec!["--from", "publicschema", "--selection", "selection.yaml"],
@@ -13081,8 +13130,11 @@ mod tests {
         );
         let encoded = serde_json::to_string(&report).expect("report encodes");
         assert!(encoded.contains("review-recovery.submission.ineligible"));
-        assert!(encoded
-            .contains("reason request-erased, state failed, code result-poll-attempts-exhausted"));
+        assert!(
+            encoded.contains(
+                "reason request-erased, state failed, code result-poll-attempts-exhausted"
+            )
+        );
     }
 
     #[test]
@@ -13385,11 +13437,13 @@ mod tests {
             assert_eq!(action["plan"]["function"]["abi"], "registry.action-plan/v1");
             let evidence = action["dependencies"]["evidence"].as_array().unwrap();
             assert_eq!(evidence.len(), 2);
-            assert!(evidence.iter().all(|binding| binding["contractFingerprint"]
-                .as_str()
-                .unwrap()
-                .starts_with("sha256:")
-                && binding["provider"] == "farmer-registry"));
+            assert!(evidence.iter().all(|binding| {
+                binding["contractFingerprint"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("sha256:")
+                    && binding["provider"] == "farmer-registry"
+            }));
             assert!(action["plan"]["function"]["scriptSource"].is_null());
             assert!(action["revision"].as_str().unwrap().starts_with("sha256:"));
         }
@@ -13408,10 +13462,12 @@ mod tests {
             "data.export.checkpoint.missing"
         );
         assert_eq!(checkpoint["diagnostics"][0]["path"], "checkpoint");
-        assert!(checkpoint["diagnostics"][0]["message"]
-            .as_str()
-            .expect("the message renders")
-            .contains("without the checkpoint"));
+        assert!(
+            checkpoint["diagnostics"][0]["message"]
+                .as_str()
+                .expect("the message renders")
+                .contains("without the checkpoint")
+        );
 
         let output = serde_json::to_value(data_lifecycle_failure(
             "data export",
@@ -13424,10 +13480,12 @@ mod tests {
             "data.export.output.missing"
         );
         assert_eq!(output["diagnostics"][0]["path"], "output");
-        assert!(output["diagnostics"][0]["message"]
-            .as_str()
-            .expect("the message renders")
-            .contains("without the output"));
+        assert!(
+            output["diagnostics"][0]["message"]
+                .as_str()
+                .expect("the message renders")
+                .contains("without the output")
+        );
     }
 
     #[test]
@@ -13796,16 +13854,18 @@ mod tests {
         };
         assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
         assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
-        assert!(Cli::try_parse_from([
-            "bregctl",
-            "history",
-            "rebaseline",
-            "--runtime-config",
-            "/tmp/runtime.yaml",
-            "--record-id",
-            "018feaa0-68f9-4a45-b9e3-58436df07af7",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from([
+                "bregctl",
+                "history",
+                "rebaseline",
+                "--runtime-config",
+                "/tmp/runtime.yaml",
+                "--record-id",
+                "018feaa0-68f9-4a45-b9e3-58436df07af7",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -13830,16 +13890,18 @@ mod tests {
         assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
         assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
         assert!(args.acknowledge_irreversible);
-        assert!(Cli::try_parse_from([
-            "bregctl",
-            "history",
-            "erase",
-            "--runtime-config",
-            "/tmp/runtime.yaml",
-            "--record-id",
-            "018feaa0-68f9-4a45-b9e3-58436df07af7",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from([
+                "bregctl",
+                "history",
+                "erase",
+                "--runtime-config",
+                "/tmp/runtime.yaml",
+                "--record-id",
+                "018feaa0-68f9-4a45-b9e3-58436df07af7",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -14318,15 +14380,17 @@ accessProfiles:
             fs::read(destination.join("preserved.txt")).expect("existing destination is intact"),
             b"preserved"
         );
-        assert!(fs::read_dir(&directory.path)
-            .expect("test directory is readable")
-            .all(|entry| {
-                !entry
-                    .expect("test directory entry is readable")
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".bregctl-stage-")
-            }));
+        assert!(
+            fs::read_dir(&directory.path)
+                .expect("test directory is readable")
+                .all(|entry| {
+                    !entry
+                        .expect("test directory entry is readable")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".bregctl-stage-")
+                })
+        );
     }
 
     #[test]
@@ -15463,8 +15527,8 @@ fn help_requested_matches_bare_help_only_in_the_subcommand_position() {
 #[cfg(all(test, unix))]
 mod field_encryption_keygen_tests {
     use super::*;
-    use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
     use std::os::unix::fs::PermissionsExt as _;
 
     fn keygen_arguments(output: &Path) -> Vec<OsString> {
@@ -15633,18 +15697,20 @@ mod field_encryption_lifecycle_cli_tests {
         assert_eq!(args.package, PathBuf::from("/tmp/successor-package"));
         // The preflight names no records: its scope is the plan itself, and a
         // request file belongs to the erase-history command alone.
-        assert!(Cli::try_parse_from([
-            "bregctl",
-            "field-encryption",
-            "preflight",
-            "--runtime-config",
-            "/tmp/runtime.yaml",
-            "--package",
-            "/tmp/successor-package",
-            "--request-file",
-            "/tmp/request.json",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from([
+                "bregctl",
+                "field-encryption",
+                "preflight",
+                "--runtime-config",
+                "/tmp/runtime.yaml",
+                "--package",
+                "/tmp/successor-package",
+                "--request-file",
+                "/tmp/request.json",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -15667,16 +15733,18 @@ mod field_encryption_lifecycle_cli_tests {
         };
         assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
         assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
-        assert!(Cli::try_parse_from([
-            "bregctl",
-            "field-encryption",
-            "erase-history",
-            "--runtime-config",
-            "/tmp/runtime.yaml",
-            "--record-id",
-            "018feaa0-68f9-4a45-b9e3-58436df07af7",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from([
+                "bregctl",
+                "field-encryption",
+                "erase-history",
+                "--runtime-config",
+                "/tmp/runtime.yaml",
+                "--record-id",
+                "018feaa0-68f9-4a45-b9e3-58436df07af7",
+            ])
+            .is_err()
+        );
     }
 
     fn sample_preflight_report() -> FieldEncryptionPreflightSuccessReport {

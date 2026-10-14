@@ -14,488 +14,265 @@ standards_referenced:
 
 import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 
-Check your Registry Coordinator project and deployment bindings before packaging a workflow.
-The three file formats use the shared [configuration conventions](../configuration-files/).
-Each product that receives a Registry Coordinator call retains authorization and ownership
-of its effects.
-
-{/* Evidence: products/platform/config-formats.yaml;
-    products/coordinator/PRODUCT-CONTRACT.md;
-    crates/registry-coordinator/src/project_check.rs. */}
-
-## Files and boundaries
-
-`workflow.yaml` carries `CoordinatorProject`, with execution bounds, logical connections, and
-finite steps. Its `project` block names the workflow and version. `functionsFile` names `functions.rhai`,
-which supplies bounded pure functions. Project checks validate the graph, function exports,
-references, and input and outcome schemas, and fit every mapping to the schemas it reads and feeds.
-
-`runtime.yaml` carries `CoordinatorRuntimeConfig`. It binds logical connections to product
-endpoints and authority, and declares deployment identities, state keys, audit custody, and
-secret providers. `deployment.packages` lists one pinned package per flow, up to sixteen; each
-entry names the package `root` and its `expectedDigest`, and the flow is the package's workflow ID.
-An offline check validates the configuration without resolving secret material,
-connecting to PostgreSQL, or contacting products.
-
-`scenarios.yaml` carries `CoordinatorScenarios`. Each case names its `id`, workflow input, typed
-fake replies, what each `wait-for` step receives, and expected execution result. `coordinatorctl test` replays these cases with a
-virtual clock; passing scenarios do not prove a live deployment or provider delivery.
-
-JSON Schema fragments and scenario payloads are foreign JSON trees: they can contain null values.
-Ordinary optional configuration members are omitted rather than written as null.
-
-YAML declares the finite graph, calls, durable waits and the references that carry values between steps.
-Use pure Rhai for logic: choosing among those authored branches, building nested requests or computing instants.
-Functions cannot acquire credentials, contact services or add steps to the graph.
+Registry Coordinator uses three pre-1.0 file contracts: `CoordinatorProject`,
+`CoordinatorRuntimeConfig`, and `CoordinatorScenarios`. The maintained generated JSON Schemas and
+owning runtime implementation define accepted fields. This manually maintained reference describes
+their execution and authority rules; use files and binaries from the same source version.
 
 {/* Evidence: crates/registry-coordinator/src/authoring.rs, CoordinatorProject;
     crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
     crates/registry-coordinator/src/scenarios.rs, CoordinatorScenarios;
-    crates/registry-coordinator/src/project_check.rs;
-    crates/registry-platform-yaml/src/types.rs, ForeignValue. */}
+    products/coordinator/generated/project/project.schema.json;
+    products/coordinator/generated/runtime/runtime.schema.json. */}
 
-## Mappings
+## Project assets
 
-A mapping carries values into a step.
-A reference names one value: `{type: input}` reads the workflow input, `{type: step, step: read-application}` reads that earlier call's output, and `{type: literal, value: applications}` supplies an authored JSON value.
-An input or step reference may add an RFC 6901 `path`, such as `/data/recordIdentifier`, to select one member.
-A step reference must name a call that completed on every route into the reading step.
-It may also name a `wait-for` step that every route into the reading step left through its `next`, to read the result the wait received.
-Every mapping names its form with `type`: `fields`, `function`, or one of the reference types.
+`workflow.yaml` has the project API version
+`id.registrystack.org/formats/coordinator/project/v1alpha1` and kind `CoordinatorProject`.
+`project.id` names the Workflow, while `project.version` is a human release label.
+The one `workflow` graph declares `input`, `deadlineSeconds`, `start`, `steps`, and `outcomes`.
+Optional reusable assets are:
 
-| Member | Accepts |
-| --- | --- |
-| Call `input` | `type: fields`, an object of up to 64 named references, or `type: function` with up to 16 reference `arguments` |
-| Finish `output` | `type: fields`, an object of up to 64 named references, or `type: function` with up to 16 reference `arguments` |
-| `waitUntil` | One reference, or `type: function` returning an RFC 3339 instant |
-| `choose` | One reference, or `type: function` returning a case label |
+- `contracts`: Generated local public product contracts, each with `type` and `source`.
+- `types`: Named JSON Schemas.
+- `functions`: Typed bounded pure computations with source assets and entrypoints.
+- `operations`: Local aliases for exact versioned host operations and logical connections.
 
-This call reads an application record without a function:
+Schema positions accept JSON Schema or compile-time references: `typeRef`, `operationInput`,
+`operationOutput`, `operationRefusal`, and `completionOutput`. A `completionOutput` names
+`operation` and `name`. Imports and references resolve locally. Titles and descriptions are
+presentation metadata and do not change the computed execution revision.
+
+JSON Schema fragments and scenario payloads retain foreign JSON value semantics, including nulls.
+Omit ordinary optional configuration members rather than writing null.
+
+{/* Evidence: crates/registry-coordinator/src/authoring.rs;
+    crates/registry-coordinator/src/definition.rs, seal_revisions, semantic_revision;
+    crates/registry-coordinator/tests/canonical_model.rs. */}
+
+## Functions and mappings
+
+A Function declares `runtime: rhai`, a project-relative `source`, `entrypoint`, named `inputs`, and
+`output`. Every entrypoint takes one object whose named members exactly match those inputs.
+The host validates inputs and output and enforces the bounded pure profile. Optional `limits`
+can narrow its ceilings: 100,000 operations, 32 call levels, 64 expression depth, 16,384 string
+bytes, 256 array entries, 256 map entries, and 65,536 source bytes.
+Functions have no clock, credentials, network, database, or filesystem capability.
+`add_seconds` and `seconds_between` compute only over supplied RFC 3339 instants.
+
+A mapping has a `type`. `input` reads workflow input, `step` reads an available prior output,
+and `literal` supplies a JSON value. Input and step references can select an RFC 6901 `path`.
+`fields` constructs up to 64 named members. A `function` mapping names its Function and supplies
+an `inputs` object of up to sixteen references:
 
 ```yaml
-read-application:
-  type: call
-  connection: applications
-  operation: read-record
-  input:
-    type: fields
-    fields:
-      collection: {type: literal, value: applications}
-      recordId: {type: input, path: /applicationId}
-  next: permission
+type: function
+function: notice-route
+inputs:
+  record:
+    type: step
+    step: read-application
 ```
 
-Keep functions for logic: choosing a label from a record, building a nested request, or computing an instant.
-Functions read no clock.
-`add_seconds(instant, seconds)` returns an RFC 3339 instant moved by a signed number of seconds, written in UTC.
-`seconds_between(first, second)` returns the whole seconds from the first instant to the second, truncated toward zero.
-An instant without an offset, or a result outside the years 0000 to 9999, fails the function with `function.execution`.
+A referenced output must exist on every incoming route. A `wait-for` result is available only
+on routes through its `next`. Success and declared-refusal outputs are available only on their
+respective routes. A join reachable from both has no unambiguous output shape.
+Check fits mappings to schemas; runtime validates computed commands before preparation or dispatch.
+Invalid commands report `failurePath`, never their values.
 
-A `wait-until` step holds the run in PostgreSQL until its instant; an instant that has already passed continues at once.
-A wait that wakes at or after the run deadline ends the run `expired` with failure code `deadline-reached`.
-The graph has no cycles, so a run that checks a source repeatedly declares a fixed number of wait, read and choose rounds.
-The maintained [bounded poll project](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/bounded-poll) reads a record at three fixed times and then returns control to the caller.
+{/* Evidence: crates/registry-coordinator/src/authoring.rs, AuthoredFunction;
+    crates/registry-coordinator/src/definition.rs, FunctionLimits, Mapping;
+    crates/registry-coordinator/src/functions.rs;
+    crates/registry-coordinator/src/mapping_check.rs;
+    crates/registry-coordinator/tests/instant_functions.rs. */}
 
-A `wait-for` step holds the run until an event it names, or its timeout.
-`review-result` is the one event type: the result of a review request that an earlier `submit-review-request` call submitted on every route to the wait.
-[Review requests and waits](#review-requests-and-waits) describes it.
+## Operations and governed contracts
 
-`coordinatorctl check` fits every mapping to the schemas it reads and feeds before any run:
+A call step names a local Operation alias. The alias declares exact `uses` and `connection`:
 
-- A path must name a member that the workflow input schema or the called operation's output contract declares. Any path beneath an open member is accepted.
-- A `fields` mapping must set every member that its operation input or outcome requires, and no member it does not declare.
-- A literal must satisfy its member's schema. A reference cannot read a value declared with another type or string format.
-- A `waitUntil` reference must read a date-time or plain string.
-- A `choose` reference must read a string. When its schema lists the values, the cases must match them exactly.
+```yaml
+operations:
+  read-application:
+    uses: breg.read-record/v1
+    connection: applications
+```
 
-Each refusal names the step, the field path, what was expected, and the fix, one mapping at a time in step order.
-The published project schema also holds each `fields` mapping to its operation's member names in your editor.
+The host catalog covers Base Registry Engine (BReg) record reads, exact Actions and Proposal submit/apply/retry/cancel;
+Casework review submit/cancel; Scheduling reads and appointment creation; Messaging submission;
+bounded external GET; and typed evaluation. The generated operation schemas own each input,
+output, effect classification, preparation, and recovery contract.
+There is no arbitrary HTTP method, SQL step, or dynamic call destination.
 
-A function result, or a value read beneath an open member, is known only when the run computes it.
-`coordinatorctl test` holds every computed call input to its operation input contract, and every synthetic success reply to its operation output contract.
-The service checks every computed call input against its operation input contract before preparing, saving or sending the call.
-An input outside the contract fails the run with `invalid-command`.
-The run and step status report the RFC 6901 path into the input as `failurePath`, never the value.
+For `breg.invoke-action/v1`, `action.contract` and `action.id` select an exact Action from an
+imported BReg-generated contract. Compilation pins its revision, mode, review policy,
+application policy, input, output, and declared refusals. Immediate Actions return their exact
+result. Proposal Actions return a draft under `proposal`. `breg.submit-proposal/v1` is a separate
+mutation that freezes the submission and exposes `application` completion.
 
-{/* Evidence: crates/registry-coordinator/src/authoring.rs, Reference, AuthoredInput, AuthoredSelector, operation_input_members;
-    crates/registry-coordinator/src/mapping_check.rs, fields_fit, instant_fits, label_fits;
-    crates/registry-coordinator/src/functions.rs, add_seconds, seconds_between;
-    crates/registry-coordinator/src/store.rs, apply_success;
-    crates/registry-coordinator/tests/support/leased_wait_deadline.rs;
-    products/coordinator/examples/bounded-poll/workflow.yaml;
-    crates/registry-coordinator/src/contracts.rs, OperationContract, check_input;
-    crates/registry-coordinator/src/worker.rs, check_input;
-    crates/registry-coordinator/tests/mapping_checks.rs;
-    crates/registry-coordinator/tests/scenario_contracts.rs;
-    crates/registry-coordinator/tests/instant_functions.rs;
-    crates/registry-coordinator/tests/authored_project.rs, project_schema_holds_each_fields_mapping_to_its_operation_input_members;
-    products/coordinator/generated/operations/README.md. */}
-
-## Supported operations
-
-| Operation | Connection type | Effect | Recovery |
-| --- | --- | --- | --- |
-| `read-record` | `breg` | Read | Read again |
-| `submit-message` | `messaging` | Mutation | Same command and read-only receipt |
-| `read-scheduling` | `scheduling` | Read | Read again |
-| `read-availability` | `scheduling` | Read | Read again |
-| `create-appointment` | `scheduling` | Mutation | Same command and read-only receipt |
-| `invoke-breg-action` | `breg` | Mutation | Same prepared command; no read-only receipt |
-| `external-get` | `external-http` | Read | Read again |
-| `evaluate-decision` | `decision` | Evaluation | Hold after uncertain dispatch |
-| `submit-review-request` | `casework` | Mutation | Same command; no read-only receipt |
-| `cancel-review-request` | `casework` | Mutation | Same command; no read-only receipt |
-
-These ten identifiers are the complete inventory.
-There is no arbitrary HTTP method, SQL step or dynamic call destination.
-
-`invoke-breg-action` accepts `action` and an object-valued `input`.
-Its BReg runtime connection requires a standing service `authorization` and an explicitly permitted `profile` for the immediate action.
-It accepts no grant field and cannot use `authorization.taskAuthority`.
-The maintained Base Registry Engine (BReg) client validates metadata and prepares the conditional request without mutation.
-Coordinator saves the exact preparation and key before dispatch.
-Later attempts check current metadata and fresh authority while retaining the saved conditions and key.
-Changed contracts, stale conditions, denied authority, cancellation, recovery holds and the original deadline stop unsafe dispatch.
-An uncertain result remains unresolved by `reconcile`, because BReg has no read-only action receipt.
-An ordinary record read is not evidence that the original action succeeded.
-Task-bound operations retain their original approval deadlines across waits and retries.
-
-Execution snapshots pin the capabilities of each used operation.
-A changed digest needs a new workflow version when the same ID and version exists in retained history.
+Only exact authoritative evidence for the Proposal, Action revision, submission version, and
+effect digest can settle application. Approval alone is insufficient. Blocked or uncertain
+application state stays held. Apply, retry, cancel, and any later Messaging notice each need the
+receiving product's own current authority. `onDeclaredRefusal` routes only a validated declared
+no-effect refusal as `{refusalCode}`. Operational failures and previous uncertain effects cannot
+enter that branch.
 
 {/* Evidence: crates/registry-coordinator/src/operations.rs, CATALOG;
-    crates/registry-coordinator/src/review.rs;
-    crates/registry-coordinator/src/breg_action.rs, prepare, execute;
-    crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
-    crates/registry-coordinator/src/definition.rs, Definition;
-    crates/registry-coordinator/src/worker.rs;
-    crates/registry-coordinator/tests/authoring.rs. */}
+    crates/registry-coordinator/src/breg_action.rs;
+    crates/registry-coordinator/src/breg_proposal.rs;
+    crates/registry-coordinator/src/contracts.rs;
+    products/coordinator/examples/proposal-follow-up/workflow.yaml;
+    crates/registry-coordinator/tests/breg_proposal_adapter.rs. */}
 
-## External HTTP reads
+## Durable waits and observation budgets
 
-Declare `external-http` as the project's logical connection type, then bind that name under `runtime.externalHttpConnections`.
-Product bindings remain under `runtime.connections`; the names across product, external HTTP, and decision maps must be distinct, with at most 16 connections in total.
-Omitting `externalHttpConnections` disables external reads.
-
-This runtime fragment permits one public directory path and one query parameter:
-
-```yaml
-externalHttpConnections:
-  directory:
-    baseUrl: https://directory.example.org/directory
-    paths: [offices]
-    queryParameters: [district]
-    responseSchema:
-      type: object
-      additionalProperties: false
-      required: [status, body]
-      properties:
-        status:
-          const: 200
-        body:
-          type: object
-```
-
-The call input is an object containing `path` and an optional `query` object of string values.
-Here, the mapped input could select `path: offices` and a `district` query value.
-It cannot supply a URL, method, headers or body.
-The service preserves the configured base path and issues GET with JSON acceptance.
-
-| Runtime member | Contract |
-| --- | --- |
-| `baseUrl` | Required absolute HTTPS URL, or numeric loopback HTTP; no credentials, query or fragment |
-| `paths` | Required 1 to 16 unique exact relative paths; no empty or dot segments, query, fragment or backslashes |
-| `queryParameters` | Optional 1 to 16 unique names; omission permits no query parameters |
-| `authorization` | Optional separately configured service identity; omission means a public read |
-| `responseSchema` | Required local JSON Schema for the complete `{status, body}` response; no external references or schema resource identifiers |
-| `attemptTimeoutMilliseconds` | 1 to 2000, default 2000; covers destination resolution, credentials and HTTP |
-| `maximumResponseBytes` | 1 to 65,536, default 65,536 |
-
-Each query value is at most 1024 bytes and cannot contain control characters.
-Authorization uses the ordinary service fields `tokenEndpoint`, `clientId`, `signingKeyRef`, `resource` and `scopes`.
-The optional `clientAssertionAudience` defaults to the token endpoint.
-It does not accept `taskAuthority`, inherit product authorization or forward the caller's credential.
-
-Redirects and prohibited destinations are refused.
-The adapter accepts an empty response body as null; a nonempty body must be valid JSON within the byte limit.
-The configured schema decides which HTTP statuses and body shapes are accepted, including any permitted non-success statuses.
-An invalid body or schema mismatch stops the read with `external-invalid-response`.
-A timeout or unavailable service is retryable as `external-unavailable` within the existing workflow deadline.
-Status 429 is retryable as `external-rate-limited`, and 502, 503 and 504 as `external-unavailable`, with a `Retry-After` in whole seconds as the floor for the next attempt.
-The last attempt delivers any of these statuses to the workflow under the configured schema, so the workflow sees one only after the retries run out.
-GET endpoints must implement read semantics; there is no external mutation or receipt recovery contract.
-
-The maintained [external directory project](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/external-directory) includes mappings and deterministic scenarios.
-Those scenarios and mock HTTP adapter checks do not prove a live institutional integration.
-
-{/* Evidence: crates/registry-coordinator/src/external_http.rs, ExternalHttpConfig, GetRequest, ExternalHttpConnection;
-    crates/registry-coordinator/src/runtime.rs, AuthorizationConfig, RuntimeConfig;
-    crates/registry-coordinator/tests/external_http.rs;
-    crates/registry-coordinator/tests/external_runtime.rs;
-    crates/registry-coordinator/tests/postgres_state.rs;
-    products/coordinator/examples/external-directory/runtime.yaml. */}
-
-## Typed decision models
-
-Declare a logical `decision` connection in your project and call `evaluate-decision`.
-Use `decisionConnections` in the runtime file to select a protocol and model.
-Omitting that map disables decision calls.
-The common contract supports predicates, choices, and ordered rubric scores.
-General structured generation, images, agent tools, and asynchronous jobs are not supported.
-
-```yaml
-decisionConnections:
-  assessor:
-    protocol: system-one
-    baseUrl: https://decision.example.org
-    model: institution-reviewed-model
-    authorization:
-      bearer:
-        tokenRef: secret:env/DECISION_TOKEN
-        principal: institutional-decision-account
-```
-
-`system-one` sends to `v1/systemone`; `openai-decisions` sends to `v1/decisions`.
-The configured base path is preserved.
-Use the service root as `baseUrl`, rather than repeating the protocol path.
-For an unauthenticated local service, explicitly use `authorization.local: {}` and a numeric loopback URL.
-The `principal` names the stable account represented by your bearer credential.
-Keep that account unchanged when rotating the secret; Coordinator cannot discover the account behind an opaque API key.
-
-`attemptTimeoutMilliseconds` accepts 1 to 8000, default 8000.
-`maximumRequestBytes` and `maximumResponseBytes` each accept 1 to 65,536, default 65,536.
-The time budget covers destination resolution, credentials, and HTTP.
-The client performs one request without redirects, ambient proxy use, or automatic provider fallback.
-
-Your input mapping supplies `state` and a `questions` object.
-State is a string, object, or array; object and array state becomes canonical JSON text for OpenAI.
-Question names and choice values are local identifiers.
-You can ask 1 to 32 named questions per call.
-Each question supplies text `instructions` and a `type`:
-
-- `predicate` asks for a probability from zero to one.
-- `choice` supplies `criteria` as a map from 2 to 32 allowed choices to their descriptions.
-- `score` supplies `criteria` as an ordered list of 2 to 10 rubric descriptions, indexed from zero.
-
-The result contains `protocol`, `requestedModel`, and named `answers`.
-`returnedModel` appears only when the provider supplies it; `usage` retains provider metadata.
-A predicate answer has `type: predicate` and `probability`.
-A choice answer has `type: choice`, `choice`, `probabilities`, and `nativeConfidence`.
-A score answer has `type: score`, `score`, `legend`, `probabilities`, and `nativeConfidence`.
-An OpenAI per-question refusal is `type: refusal`, with no numeric answer or copied provider explanation.
-System One HTTP refusals stop the call and do not become a typed review answer.
-Rubric scores can be fractional and are not probabilities.
-Native confidence preserves the provider's statistic; it is not normalized across models or a guarantee of correctness.
-
-Review which fields you send to the model, and test your thresholds against labeled cases for that provider and model.
-A model alias may change upstream even though Coordinator pins the configured name.
-Use a stable release identifier when your provider offers one.
-A pure `choose` step applies your policy to the stored answers; the next product operation obtains its own authority.
-A terminal `needs-review` outcome returns control to the caller and creates no approval task.
-
-Before dispatch, Coordinator saves the exact prepared request without credentials.
-The validated result and next checkpoint are committed together, so restarting or reading a completed step does not evaluate again.
-After possible dispatch, a lost or malformed reply leaves the call uncertain.
-Inspection reports `hold-after-dispatch`; automatic retry, `retry-same`, and receipt reconciliation cannot repeat that evaluation.
-Only a proven non-dispatch failure is retryable.
-Cancel the run and make a separately authorized new start if you accept another potentially billable evaluation with a possibly different answer.
-Cancellation does not retract provider processing.
-Status keeps `uncertain: true` and reports `cancelRequested: true`.
-After a restore, complete execution recovery may abandon that cancelled evaluation once its active lease has ended and its protected request has been checked.
-Releasing the restore hold then permits unrelated work while retaining the unknown outcome and preventing replay of the cancelled run.
-Unknown product mutations do not qualify for this recovery path.
-
-Contract tests use local HTTP fixtures for both profiles and the documented System One compatible local-provider shape.
-Offline scenarios test policy, refusal, and uncertainty; they do not establish live model compatibility or decision accuracy.
-
-{/* Evidence: crates/registry-coordinator/src/decision.rs;
-    crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
-    crates/registry-coordinator/src/operations.rs, CATALOG;
-    crates/registry-coordinator/src/store.rs;
-    crates/registry-coordinator/tests/decision_runtime.rs;
-    crates/registry-coordinator/tests/decision_protocol.rs;
-    crates/registry-coordinator/tests/process_restart.rs;
-    products/coordinator/examples/decision-follow-up/functions.rhai. */}
-
-## Review requests and waits
-
-`submit-review-request` and `cancel-review-request` hand work to Registry Casework human review as one of its review producers.
-Declare `casework` as the project's logical connection type, then bind it under `runtime.connections`:
-
-```yaml
-connections:
-  review:
-    product: casework
-    baseUrl: https://casework.example.org
-    profile: coordinator-producer
-    producer: coordinator
-    authorization:
-      tokenEndpoint: https://issuer.example.org/oauth/token
-      clientId: coordinator-review-producer
-      signingKeyRef: secret:file/review-jwk
-      resource: urn:example:casework
-      scopes: [casework:review]
-    completion:
-      recipientBinding: coordinator-v1
-      bearerTokenRef: secret:file/review-completion-token
-    resultCheckSeconds: 900
-```
-
-| Runtime member | Contract |
-| --- | --- |
-| `profile` | Required Casework access profile the producer's client is admitted to |
-| `producer` | Required review producer `id` from the Casework project's `reviewProducers` |
-| `authorization` | Required ordinary service identity whose issuer and subject the producer declares; `taskAuthority` is refused |
-| `completion` | Optional `recipientBinding`, 1 to 256 visible ASCII characters and unique across Casework connections, and `bearerTokenRef`, the secret Casework presents as a bearer token |
-| `resultCheckSeconds` | 60 to 86,400, default 900; the spacing of result reads while a review is open |
-
-`completion` and `resultCheckSeconds` are accepted only on a Casework connection, and changing them does not change a run's binding.
-
-The `submit-review-request` input names the review `kind`, the `subject` record with its source, type, id, version and digest, the `context` a reviewer sees, and a `requesterReference`.
-Its output is Casework's acceptance: `requestId`, `subject`, `policy` and `submissionDigest`.
-The `cancel-review-request` input passes that acceptance as `request` with a `reason`; its output is `outcome`, `cancelled` or `already-terminal`, with the review's terminal `result`.
-Route on `/outcome`: only `cancelled` means the cancellation ended the review, and `already-terminal` carries the decision a reviewer recorded first.
-Both are mutations without a read-only receipt: `retry-same` resends the saved request with its original key, and `reconcile` reports `reconciliation-unavailable`.
-
-A `wait-for` step waits for the result of a submitted request:
+`wait-until` persists a supplied or computed instant. An elapsed instant continues immediately;
+a wait that reaches the run deadline expires the run.
+`wait-for` names a completion of an earlier accepted call on every incoming route:
 
 ```yaml
 await-review:
   type: wait-for
-  event: {type: review-result, request: submit-review}
+  completion:
+    step: submit-review
+    name: result
   timeoutSeconds: 1209600
-  next: decide
-  onTimeout: withdraw-timeout
-  onCancel: withdraw-operator
+  next: report
+  onTimeout: withdraw
+  onCancel: withdraw
 ```
 
-`timeoutSeconds` accepts 1 to 31,536,000 and must be shorter than `deadlineSeconds`.
-The step reads the result with the producer identity when it starts, every `resultCheckSeconds` while the review is open, and once more at the timeout.
-A read that Casework answers as busy, or that cannot reach Casework, leaves the wait open: the next read follows Casework's `Retry-After`, no sooner than 30 seconds and no later than `resultCheckSeconds`, and without one comes five minutes later, or after `resultCheckSeconds` when that is shorter, so an outage shorter than the timeout does not fail the run.
-A settled result continues at `next` as the step's output; a `choose` reads its `/status`: `approved`, `rejected`, `changes-requested`, `answered`, `cancelled` or `superseded`.
-A result for another request, subject, policy or submission digest fails the run with `invalid-response`.
-An unknown request fails it with `review-request-unknown` and an expired result with `review-result-expired`.
-The timeout continues at `onTimeout`, or fails the run with `wait-timed-out`; a result found by the read at the timeout wins.
-An optional `onCancel` edge takes a durable authored path when an authorized caller cancels a
-parked review wait. If a read is leased, its completion or lease expiry routes that intent before
-advancing its result. The target can call `cancel-review-request` with the original acceptance.
-`authoredCancelRequested` distinguishes this intent from ordinary `cancelRequested` stop semantics;
-repeating cancellation leaves the cleanup runnable. A review already decided yields
-`already-terminal`, so branch on the withdrawal call's outcome. The original run deadline and
-current producer authority still bound cleanup. A wait without `onCancel` uses ordinary cancellation.
-A deadline that comes first ends the run `expired` with `deadline-reached`.
+Casework submission exposes `result`; BReg Proposal submission exposes `application`.
+`timeoutSeconds` is required, from one second to one year, and shorter than `deadlineSeconds`.
+A settled completion takes `next`; timeout takes `onTimeout`, or reports `wait-timed-out`.
+`onCancel` takes a durable authored cleanup route. A leased read records intent and routes when
+the read settles or its lease expires. Repeated cancellation preserves cleanup.
+Neither timeout nor cancellation reverses an accepted downstream effect.
 
-Casework supersedes a request still under review when the same producer submits another for the same subject record, of any version, and the same kind.
-The waiting run then reads `superseded`, so choose on it wherever two runs can submit for one record.
+Every observation has a persistent minimum spacing of at least 30 seconds.
+Top-level `minimumObservationIntervalSeconds` defaults to 30 and accepts 30 to 86,400.
+Casework and BReg pending reads default to 900 seconds. Casework `resultCheckSeconds` accepts
+60 to 86,400; external polling declares `intervalSeconds`. These intervals and deployment
+minimums constrain the effective read floor. Restart, wake-up, timeout, and recovery retain
+that floor and the original deadline. Retry hints can delay observations within the host ceiling
+of 86,400 seconds; unusable hints hold the wait.
 
-With `completion` configured, Casework posts each completion event to `POST /v1/review-completions` on the service listener.
-The receiver refuses any sender without the configured bearer token and recipient binding, and answers every authentic event with 204 whether or not a run waits on its request.
-The event is a wake-up only: it brings the next read forward to no sooner than 30 seconds after the previous one, and the read decides the result.
-No event starts a run.
+Unavailable observations remain pending within the original budget. Invalid, refused, blocked,
+or mismatched evidence holds the wait for recovery and cannot become a business-failure outcome.
+Inspection reports the completion revision, next observation, persistent floor, count, and limit.
+Protected correlation values remain absent. A Coordinator timeout does not establish that a BReg
+Proposal failed or stop source-owned work.
 
-The maintained [reviewed notice project](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/reviewed-notice) submits a review, waits up to fourteen days, sends a notice on approval and withdraws the request on timeout.
-Its scenarios state each wait's result or timeout with `waits`; they do not prove Casework review policy or completion delivery.
+{/* Evidence: crates/registry-coordinator/src/definition.rs, CompletionReference, Step;
+    crates/registry-coordinator/src/adapters.rs;
+    crates/registry-coordinator/src/worker.rs, wait_result;
+    crates/registry-coordinator/src/store.rs, WaitStatus;
+    crates/registry-coordinator/tests/external_wait_postgres.rs;
+    crates/registry-coordinator/tests/review_wait_postgres.rs. */}
+
+## Standalone Casework review
+
+A `casework-review-producer` connection names its endpoint, `profile`, `producer`, and ordinary
+service `authorization`. It accepts no task authority. Submission carries an expected
+`PolicyBinding`, subject, reviewer context, and requester reference. Acceptance and completion
+must agree with that exact policy, subject, and submission digest. Casework owns review authority
+and outcomes. Standalone review needs no BReg connection and creates no registry effect.
+
+The optional `completion` block authenticates minimized Casework wake-ups by `recipientBinding`
+and `bearerTokenRef`. The sender presents the same token and binding to
+`POST /v1/review-completions`. An authentic event advances an eligible result read; it starts no
+run and supplies no decision authority. Omit the block to use polling alone.
+
+A cancellation returns `cancelled` or `already-terminal`. Only the former establishes withdrawal;
+the latter carries the decision that won the race. Both review mutations use same-command
+recovery without a read-only original-key receipt.
 
 {/* Evidence: crates/registry-coordinator/src/review.rs;
-    crates/registry-coordinator/src/completion.rs, receive_review_completion, authenticate;
-    crates/registry-coordinator/src/runtime.rs, ConnectionConfig, ReviewCompletionConfig;
-    crates/registry-coordinator/src/worker.rs, wait_result;
-    crates/registry-coordinator/src/store.rs, wake;
-    crates/registry-coordinator/src/scenarios.rs, AuthoredWait;
-    crates/registry-coordinator/tests/casework_adapter.rs;
-    crates/registry-coordinator/tests/wait_for_authoring.rs;
-    crates/registry-coordinator/tests/review_wait_postgres.rs;
-    products/coordinator/examples/reviewed-notice/workflow.yaml;
-    products/coordinator/generated/operations/review-result.event.schema.json. */}
+    crates/registry-coordinator/src/completion.rs;
+    crates/registry-coordinator/src/runtime.rs, CaseworkConnectionConfig;
+    products/coordinator/examples/standalone-review/workflow.yaml;
+    crates/registry-coordinator/tests/standalone_review_postgres.rs. */}
 
-## Caller authentication
+## External HTTP and evaluation
 
-`deployment.authentication` names the token issuer, the admitted client IDs and each client's policy.
-The service reads a token's scopes from its `registry_scopes` claim.
-For an issuer that puts them in the standard `scope` claim, set `scopeClaim: scope`:
+An `external-http` connection supplies `baseUrl`, exact `paths`, optional `queryParameters`,
+optional ordinary service `authorization`, and required `responseSchema` for `{status, body}`.
+HTTPS is required except for numeric loopback HTTP. A call supplies a permitted relative path
+and optional string query values, never a URL, method, headers, or body. Redirects are refused.
+Attempt timeout defaults to 2000 milliseconds and response size to 65,536 bytes; both can narrow.
+Omitted authorization means a public read, with no forwarded caller token.
 
-```yaml
-deployment:
-  authentication:
-    scopeClaim: scope
-```
+An `external.get/v1` alias can specialize `responseSchema` and declare a named `bounded-poll`
+completion with `interpret` and `intervalSeconds`. The typed pure interpreter receives `command`
+and `response`, returning `pending`, `complete` with a typed `result`, or `refused` with a declared
+code. The host repeats the saved original read and enforces transport and observation budgets.
+This external completion path is independent of review and registry application.
 
-{/* Evidence: crates/registry-coordinator/src/access.rs, AccessConfig, scope_claim;
-    products/coordinator/DEPLOYMENT.md;
-    crates/registry-coordinator/tests/deployment_postgres.rs. */}
+An `evaluation` connection selects `system-one` or `openai-decisions`, `baseUrl`, `model`, and
+bearer authorization with a stable account `principal`, or explicit local authorization on
+numeric loopback. Attempt timeout defaults to 8000 milliseconds; request and response limits
+to 65,536 bytes. Typed questions cover predicates, choices, and rubric scores. Provider confidence
+is neither normalized across models nor proof of correctness. Review data disclosure and cost
+before activation. A saved request that may have dispatched remains held without automatic or
+operator replay; a completed result is reused. A later effect needs its own product authority.
 
-## Application integration
+{/* Evidence: crates/registry-coordinator/src/external_http.rs;
+    crates/registry-coordinator/src/decision.rs;
+    crates/registry-coordinator/src/runtime.rs, ConnectionConfig;
+    products/coordinator/examples/external-job/workflow.yaml;
+    crates/registry-coordinator/tests/decision_protocol.rs. */}
 
-A deployment serves each listed flow from its own active package; a start names its flow, and existing runs retain their original definitions.
-Plan and apply change one flow's package without touching another flow's package or runs.
-A flow leaves the deployment only through `--remove-flow`, which is refused while that flow has runs that are not terminal.
-`GET /v1/runs` returns at most 100 of the caller's most recently admitted runs, newest first, from the flows its policy lists; an operator policy lists every owner's runs in those flows.
-`limit` takes 1 to 100 and defaults to 20. Optional `state` filters one effective state;
-`attention=true` selects effective states `attention` and `failed`, and `attention=false` excludes
-both. Filters compose. `nextCursor`, when present, continues the admission-time order through
-`cursor` with unchanged filters. Each page rechecks current owner and flow permissions.
-The maintained Coordinator client reaches these routes as `registry_stack_client::coordinator` in Rust and the `coordinator` namespace of the unified Node.js and Python clients; published client packages carry it from the release that admits the Coordinator.
-Applications compose through the authenticated HTTP API and the owning Casework, BReg and optional Messaging APIs.
+## Runtime, callers, and state
 
-{/* Evidence: crates/registry-coordinator/src/http.rs, HttpState, List;
-    crates/registry-coordinator/src/store/recovery.rs, list_owned;
-    crates/registry-coordinator/src/deployment.rs, Flows, flow_changes;
-    crates/registry-coordinator/src/service.rs;
-    crates/registry-coordinator/tests/deployment_postgres.rs;
-    crates/registry-coordinator/tests/postgres_state.rs;
-    crates/registry-coordinator-client/src/client.rs;
-    crates/CLIENTS.md. */}
+`runtime.yaml` uses API version `id.registrystack.org/formats/coordinator/runtime/v1alpha1` and
+kind `CoordinatorRuntimeConfig`. One `connections` map contains one to sixteen entries, each with
+`type`: `breg`, `casework-review-producer`, `messaging`, `scheduling`, `external-http`, or
+`evaluation`. The variant selects the complete connection and authority contract.
+`secretProviders`, `database`, and `namespace` configure protected custody. Secret references
+remain outside the immutable authored package. The service requires an absolute runtime path.
+
+`deployment.packages` pins up to sixteen Workflow packages by `root` and `expectedDigest`.
+Caller `authentication.policies` is a map keyed by exact verified client identity. Run actions
+are scoped by `workflows`. Deployment-wide actions need `operator: true` and a policy listing only
+those actions omits `workflows`. Ownership follows verified issuer and subject, never input fields.
+
+A fresh start names `workflow`, expected `workflowRevision`, and `input`. Discover the permitted
+active contract or generate a revision-pinned TypeScript/Python wrapper. Recover an unknown start
+with its exact original identity, key, revision, and input even after activation changes.
+Generated wrappers offer typed `start`, `get`, and `cancel` over maintained public generic clients.
+
+Protected state schema version 3 replaces earlier pilot layouts without migration. Preserve and
+settle old work under its matching binary before provisioning fresh state. Use the
+[deployment procedure](../../operate/coordinator/) for custody, activation, rotation, and restore.
+
+{/* Evidence: crates/registry-coordinator/src/access.rs;
+    crates/registry-coordinator/src/deployment.rs;
+    crates/registry-coordinator/src/http.rs;
+    crates/registry-coordinator/src/sdk.rs;
+    crates/registry-coordinator/src/store.rs;
+    crates/registry-coordinator/src/service.rs. */}
 
 ## Check commands
 
-The commands in this table come from the maintained format registry.
-
 <ConfigurationFormatChecks product="coordinator" />
 
-Check a project directory, including its optional runtime and scenario files:
-
 ```sh
-coordinatorctl check --project ./my-follow-up --explain
-coordinatorctl test --project ./my-follow-up
-```
-
-The project check examines YAML files at the project root. It skips `.coordinator` state and
-reports an incomplete-check warning for other child directories. Optional companion files can
-be absent. Check a runtime file on its own with `--runtime-config`; a relative path is read from
-the current directory:
-
-```sh
+coordinatorctl check --project ./follow-up --explain
+coordinatorctl test --project ./follow-up
 coordinatorctl check --runtime-config ./runtime.yaml --deny-warnings
 ```
 
-The `coordinator` service itself requires an absolute runtime configuration path without `.` or
-`..` components.
-
-Without `--environment`, environment expressions defer value checks and produce warnings where
-validation is incomplete. Add `--environment` to check substituted values explicitly.
-`--deny-warnings` makes warnings fail the check. Add `--format json` for a structured report
-containing a diagnostics array. Refusal diagnostics identify the affected file or configuration
-path and suggest a repair. Source positions are included when the error can be tied to source text.
-
-When a check refuses a file, repair the indicated key or reference and run the same check again.
-Use the format registry's header and schema. Keep logical connection names consistent between the
-project and runtime files. An accepted offline check does not activate a package or establish
-deployment readiness.
+Project checks load `workflow.yaml`, referenced assets, and optional runtime/scenario companions.
+They aggregate independent diagnostics without resolving secrets or making requests. Correct the
+reported path and rerun, because a structural refusal can mask dependent checks.
+`--environment` explicitly substitutes environment expressions; `--deny-warnings` refuses deferred
+checks. A successful offline check neither activates a package nor proves downstream acceptance.
 
 {/* Evidence: crates/registry-coordinator/src/cli.rs;
     crates/registry-coordinator/src/project_check.rs;
-    crates/registry-coordinator/src/definition.rs;
-    crates/registry-coordinator/tests/project_checking.rs;
-    crates/registry-coordinator/tests/cli_authoring.rs;
-    crates/registry-coordinator/src/service.rs, run;
-    crates/registry-platform-config/src/loader.rs, validate_absolute_lexical_path. */}
+    crates/registry-coordinator/tests/cli_authoring.rs. */}
 
-## Owning contracts
+## Next
 
-[Author a Coordinator flow](../../configure/coordinator/) walks one flow from an empty directory to
-a package, and [Deploy Registry Coordinator](../../operate/coordinator/) serves, recovers, and
-restores it. The maintained [Coordinator project guide](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/README.md)
-describes authoring and packaging. The [deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md)
-describes installation, authenticated access, activation, operation, and recovery.
-The [product contract](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/PRODUCT-CONTRACT.md)
-defines the supported product boundary.
+- [Author a Coordinator workflow](../../configure/coordinator/).
+- [Deploy Registry Coordinator](../../operate/coordinator/).
+- [Registry Coordinator API](../apis/registry-coordinator/).

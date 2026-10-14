@@ -1,0 +1,133 @@
+{
+  "$defs": {
+    "DecisionAnswer": {
+      "oneOf": [
+        {
+          "properties": {
+            "probability": {
+              "type": "number"
+            },
+            "type": {
+              "const": "predicate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "probability"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "choice": {
+              "type": "string"
+            },
+            "nativeConfidence": {
+              "type": "number"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "type": {
+              "const": "choice",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "choice",
+            "probabilities",
+            "nativeConfidence"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "legend": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "nativeConfidence": {
+              "type": "number"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "score": {
+              "type": "number"
+            },
+            "type": {
+              "const": "score",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "score",
+            "legend",
+            "probabilities",
+            "nativeConfidence"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "refusal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DecisionProtocol": {
+      "enum": [
+        "system-one",
+        "openai-decisions"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The evaluate-decision call output. Answers keep the authored question\nidentifiers; usage keeps the provider's own metadata spelling.",
+  "properties": {
+    "answers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/DecisionAnswer"
+      },
+      "type": "object"
+    },
+    "protocol": {
+      "$ref": "#/$defs/DecisionProtocol"
+    },
+    "requestedModel": {
+      "type": "string"
+    },
+    "returnedModel": {
+      "type": "string"
+    },
+    "usage": true
+  },
+  "required": [
+    "protocol",
+    "requestedModel",
+    "returnedModel",
+    "answers",
+    "usage"
+  ],
+  "title": "evaluation.evaluate/v1 output",
+  "type": "object"
+}

@@ -1,5 +1,5 @@
 ---
-title: Author a Coordinator flow
+title: Author a Coordinator workflow
 description: Start a Registry Coordinator project, write its steps and mappings, check and test it offline, and package it with the digest an operator pins.
 status: draft
 owner: registry-docs
@@ -12,10 +12,10 @@ standards_referenced:
   - json-schema
 ---
 
-You know which product calls your flow makes and in what order, and now you want to write it as a
-Registry Coordinator project. This page takes one flow from an empty directory to a package: write
-the steps, check and test them offline, and hand the package, digest, and connection requirements to the operator who
-serves it. Endpoints, credentials, caller policies, and keys never enter the package;
+You know which product calls your workflow makes and in what order, and now you want to write it as a
+Registry Coordinator project. Write
+the steps, check and test them offline, and hand the package, digest, and connection requirements
+to the operator who serves it. Endpoints, credentials, caller policies, and keys never enter the package;
 [Deploy Registry Coordinator](../../operate/coordinator/) covers them.
 
 {/* Evidence: products/coordinator/README.md, Package and deploy;
@@ -62,15 +62,13 @@ coordinatorctl init --directory ./follow-up
 The project ID is the directory name unless you pass `--id`. The starter holds four files and a
 `.gitignore` that keeps the local `.coordinator/` directory out of version control:
 
-- `workflow.yaml`, a `CoordinatorProject`, names the workflow and its version under `project`, its
-  input schema, its logical `connections` and the product each one reaches, the run's
-  `deadlineSeconds`, its `start` step, its `steps`, and its declared `outcomes`.
-- `functions.rhai` holds the pure functions the mappings call.
-- `runtime.yaml`, a `CoordinatorRuntimeConfig`, binds the logical connections for local checks.
-  The operator's deployment copy adds the deployment identity, keys, and caller policies.
-- `scenarios.yaml`, a `CoordinatorScenarios`, holds the offline test cases.
+- `workflow.yaml` names the project and its one `workflow`, plus optional reusable `contracts`,
+  `types`, `functions`, and `operations` assets.
+- `functions.rhai` contains pure Function entrypoints. Projects that need no Functions can omit it.
+- `runtime.yaml` binds logical connections. The deployment copy adds identities, keys, and policies.
+- `scenarios.yaml` holds offline cases with fake replies and expected results.
 
-One project is one flow, and its workflow ID is the flow name callers start.
+One project is one workflow, and its workflow ID is the workflow name callers start.
 
 {/* Evidence: crates/registry-coordinator/src/cli.rs, Command;
     products/coordinator/README.md, Create and check a project;
@@ -78,15 +76,23 @@ One project is one flow, and its workflow ID is the flow name callers start.
 
 ## Write the steps
 
-Each step declares its `type`: `call`, `choose`, `wait-until`, `wait-for`, or `finish`. A call
-names a logical connection, one of the ten supported operations, an `input` mapping, and the next
-step:
+Each step declares `type`: `call`, `choose`, `wait-until`, `wait-for`, or `finish`.
+Declare an Operation alias first, then name that alias from a call. Endpoints and credentials
+stay in the deployment's tagged `connections` map:
+
+```yaml
+operations:
+  read-application:
+    uses: breg.read-record/v1
+    connection: applications
+```
+
+The call uses that alias and a typed mapping:
 
 ```yaml
 read-application:
   type: call
-  connection: applications
-  operation: read-record
+  operation: read-application
   input:
     type: fields
     fields:
@@ -102,8 +108,10 @@ read-application:
 A reference names one value. `type: input` reads the run's input, `type: step` with a `step` reads
 an earlier call's output, and `type: literal` with a `value` supplies a JSON value. An input or
 step reference may add an RFC 6901 `path`, such as `/applicationId`, to select one member. A call
-`input` or a finish `output` is either `type: fields`, an object built member by member from up to
-64 references, or `type: function`, a pure function given up to 16 references as `arguments`.
+`input` or a finish `output` is a reference, `type: fields` with up to 64 members, or `type: function` with an `inputs`
+object of up to sixteen named references. Declare each Function's runtime, source, entrypoint,
+named input schemas, and output schema. Its Rhai entrypoint takes one object of named inputs.
+The host validates input and output and enforces pure execution limits.
 
 Functions read no clock. `add_seconds(instant, seconds)` and `seconds_between(first, second)`
 compute over the RFC 3339 instants a function is given, such as an input value or a field of an
@@ -113,13 +121,13 @@ earlier call's output.
     maintained project; crates/registry-coordinator/src/authoring.rs, AuthoredStep;
     crates/registry-coordinator/src/functions.rs. */}
 
-The [configuration reference](../../reference/coordinator-configuration/) lists the ten operations
+The [configuration reference](../../reference/coordinator-configuration/) describes versioned operations
 with their effects and recovery, and the rules for external reads, typed decisions, and review
 waits. The maintained
 [example projects](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples)
 cover a delayed follow-up, a deferred appointment, a Base Registry Engine (BReg) read under
-Casework task authority, a governed BReg action, a typed decision, a reviewed notice, an external directory read, and a
-bounded poll. Starting from the closest one is usually faster than starting from the starter.
+Casework task authority, a governed BReg action, a typed decision, a reviewed notice, exact Proposal application follow-up, standalone review, an external
+directory read, and a bounded external job completion. Starting from the closest one is usually faster than starting from the starter.
 
 ## Check and explain
 
@@ -134,7 +142,7 @@ field path, what was expected, and the fix. Some errors hide the checks that dep
 the same check again after each repair. Add `--runtime-config ./follow-up/runtime.yaml` to check
 the logical bindings too.
 
-An accepted check prints the definition digest on its `Definition:` line. With `--explain`, or
+An accepted check prints the computed Workflow revision on its `Definition:` line. With `--explain`, or
 through `coordinatorctl explain --project ./follow-up`, it also lists the steps in graph order from
 the start, one line each, with each call's product, effect, and recovery.
 
@@ -153,29 +161,29 @@ coordinatorctl test --project ./follow-up
 mapping, and function semantics as the service, and reports each case by name. A case whose steps,
 end state, or outcome differs from its expectation names both sides. `test` also holds every
 computed call input to its operation's input contract and every fake success reply to its
-operation's output. A passing case proves the flow's logic, not that a product accepts the call:
+operation's output. A passing case proves the workflow's logic, not that a product accepts the call:
 scenarios never acquire credentials or send requests.
 
 {/* Evidence: crates/registry-coordinator/src/scenarios.rs;
     products/coordinator/README.md, Create and check a project and Add a maintained operation. */}
 
-## Package the flow
+## Package the workflow
 
 ```sh
 coordinatorctl package --project ./follow-up --output ./follow-up-package
 ```
 
 When the project has a `scenarios.yaml`, `package` runs it first and writes nothing unless every
-case passes. It writes the flow's immutable snapshot, `definition.json`, and `SHA256SUMS` into a new
+case passes. It writes the workflow's immutable snapshot, `definition.json`, and `SHA256SUMS` into a new
 directory, and refuses an output that already exists, so build a fresh directory for each change.
 It prints the package digest.
 
-A package has two digests:
+Pin the package digest for exact bytes and retain the computed Workflow revision for starts:
 
-- The package digest is the SHA-256 of `SHA256SUMS`. It covers the whole package, changes whenever
-  the definition changes, and is the one the operator pins.
-- The definition digest is the SHA-256 of `definition.json`. Each run reports it as
-  `definitionDigest`, which tells you the definition a run follows after an upgrade.
+- The package digest is the SHA-256 of `SHA256SUMS`, covering the exact snapshot bytes.
+- `workflowRevision` hashes execution semantics: input, graph, outcomes, used Operation and
+  Function revisions, and host execution contracts. Titles and descriptions do not change it.
+  Each run reports the revision it was admitted under, even after activation changes.
 
 Once a workflow version has admitted runs, give a changed definition a new `project.version`.
 `plan` and `apply` refuse a changed definition under a version already used, with
@@ -185,6 +193,24 @@ Once a workflow version has admitted runs, give a changed definition a new `proj
     crates/registry-coordinator/src/cli.rs, Command;
     products/coordinator/DEPLOYMENT.md, Package digest and definition digest. */}
 
+## Export a typed caller
+
+```sh
+coordinatorctl types --project ./follow-up --language typescript --output ./follow-up.ts
+coordinatorctl types --project ./follow-up --language python --output ./follow_up.py
+```
+
+The generated wrappers provide typed `start`, `get`, and `cancel` through the maintained public
+generic clients. They pin the computed `workflowRevision` and check returned identity and declared
+outcome names. Keep a start's original identity, key, revision, and input through unknown admission.
+A fresh start must match the deployed active revision, which `coordinatorctl workflow` discovers.
+Regenerate the wrapper after an execution contract change; runtime schema checks remain with
+Coordinator.
+
+{/* Evidence: crates/registry-coordinator/src/sdk.rs;
+    crates/registry-coordinator/src/cli.rs, Types, Workflow;
+    crates/registry-coordinator/tests/sdk_generation.rs. */}
+
 ## Hand over the package
 
 Give the operator the package directory and its package digest, plus a sanitized `runtime.yaml`
@@ -193,16 +219,16 @@ client scopes and resource, completion destination, and Messaging template and p
 operator supplies endpoint addresses, registered identities, private JWKs and other secret files,
 and checks those contracts in the receiving products. Share secret references, never secret values.
 
-The [reviewed-notice tutorial](../../tutorials/review-an-application-and-send-a-notice/) provides a
-complete development workspace for this handoff across BReg, Casework, Coordinator and Messaging.
+The maintained examples show these handoffs with synthetic offline scenarios. A passing scenario
+does not establish the owning products' live review or application policy.
 
 The operator installs the
 directory read-only and pins it as one entry of `deployment.packages`, with its `root` and the
-digest as `expectedDigest`. One deployment serves up to sixteen flows, one package each, and each
-flow is applied, upgraded, and rolled back on its own. Runs already admitted keep the definition
+digest as `expectedDigest`. One deployment serves up to sixteen workflows, one package each, and each
+workflow is applied, upgraded, and rolled back on its own. Runs already admitted keep the definition
 they started with, and new starts use the active one.
 
-{/* Evidence: crates/registry-coordinator/src/deployment.rs, DeploymentConfig, Flows;
+{/* Evidence: crates/registry-coordinator/src/deployment.rs, DeploymentConfig, Workflows;
     products/coordinator/README.md, Package and deploy. */}
 
 Each of the three files has an offline check command, listed under
@@ -218,4 +244,4 @@ reference.
 - [Registry Coordinator API](../../reference/apis/registry-coordinator/) for the contract a caller
   uses to start and follow a run.
 - [Registry Coordinator overview](../../start/coordinator/) for what stays with each product a
-  flow calls.
+  workflow calls.

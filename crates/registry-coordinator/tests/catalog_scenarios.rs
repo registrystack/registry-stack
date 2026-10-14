@@ -109,7 +109,7 @@ fn governed_action_example_covers_refusal_unknown_and_exact_command_recovery() {
     );
     assert_eq!(
         declared.output,
-        Some(json!({"refusalCode": "already-requested"}))
+        Some(json!({"refusalCode": "invalid-reason"}))
     );
     assert!(!declared.call_attempts.contains_key("notify"));
     let still_unknown = reports
@@ -120,12 +120,16 @@ fn governed_action_example_covers_refusal_unknown_and_exact_command_recovery() {
     assert_eq!(still_unknown.call_attempts["request-information"], 2);
     assert!(!still_unknown.call_attempts.contains_key("notify"));
 
-    let output = json!({"data":{"domainData":{"missingField":"proof of address"}}});
+    let mut output = match &document.cases[0].replies["read-application"][0] {
+        Reply::Success { success } => success.clone(),
+        _ => unreachable!(),
+    };
+    output["data"]["domainData"]["missingField"] = json!("proof of address");
     let arguments = std::collections::BTreeMap::from([("read-application".into(), output)]);
     let request = definition
         .evaluate("request-information", &document.cases[0].input, &arguments)
         .unwrap();
-    assert_eq!(request["action"], "request-information");
+    assert!(request.get("action").is_none());
     assert_eq!(
         request["input"]["reason"],
         "Please provide proof of address"
@@ -138,22 +142,35 @@ fn governed_action_example_covers_refusal_unknown_and_exact_command_recovery() {
 fn declared_refusal_without_an_authored_edge_preserves_refused_behavior() {
     let source = example("governed-action-follow-up");
     let root = tempfile::tempdir().unwrap();
-    let workflow = std::fs::read_to_string(source.join("workflow.yaml")).unwrap();
-    let workflow = workflow.replace("    onDeclaredRefusal: action-refused\n", "");
-    let workflow = workflow.replace(
-        "  action-refused:\n    type: finish\n    outcome: information-request-refused\n    output:\n      type: fields\n      fields:\n        refusalCode: {type: step, step: request-information, path: /refusalCode}\n",
-        "",
-    );
-    let workflow = workflow.replace(
-        "  information-request-refused:\n    type: object\n    additionalProperties: false\n    required: [refusalCode]\n    properties:\n      refusalCode: {type: string, minLength: 1, maxLength: 128}\n",
-        "",
-    );
-    assert!(!workflow.contains("onDeclaredRefusal"));
-    assert!(!workflow.contains("information-request-refused"));
-    std::fs::write(root.path().join("workflow.yaml"), workflow).unwrap();
+    let mut workflow: serde_json::Value =
+        serde_norway::from_str(&std::fs::read_to_string(source.join("workflow.yaml")).unwrap())
+            .unwrap();
+    workflow["workflow"]["steps"]["request-information"]
+        .as_object_mut()
+        .unwrap()
+        .remove("onDeclaredRefusal");
+    workflow["workflow"]["steps"]
+        .as_object_mut()
+        .unwrap()
+        .remove("action-refused");
+    workflow["workflow"]["outcomes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("information-request-refused");
+    std::fs::write(
+        root.path().join("workflow.yaml"),
+        serde_json::to_vec(&workflow).unwrap(),
+    )
+    .unwrap();
     std::fs::copy(
         source.join("functions.rhai"),
         root.path().join("functions.rhai"),
+    )
+    .unwrap();
+    std::fs::create_dir(root.path().join("generated")).unwrap();
+    std::fs::copy(
+        source.join("generated/applications.contract.json"),
+        root.path().join("generated/applications.contract.json"),
     )
     .unwrap();
     let definition = Definition::load(root.path()).unwrap();
@@ -179,53 +196,44 @@ fn declared_refusal_without_an_authored_edge_preserves_refused_behavior() {
 }
 
 #[test]
-fn bounded_poll_example_rereads_a_fixed_number_of_times_and_returns_control() {
+fn external_job_example_observes_one_saved_read_through_a_bounded_completion() {
     use registry_coordinator::definition::Step;
-    let (definition, document) = fixture("bounded-poll");
-    // A finite, acyclic graph polls by unrolling: one timed wait before each read.
-    let steps = definition.workflow.steps.values();
-    let reads = steps
-        .clone()
-        .filter(|step| matches!(step, Step::Call { call, .. } if call.operation == Operation::ReadRecord))
-        .count();
-    let waits = steps
-        .filter(|step| matches!(step, Step::WaitUntil { .. }))
-        .count();
-    assert_eq!((waits, reads), (3, 3));
-
-    let reports = scenarios::check(&definition, &document).unwrap();
-    let report = |name: &str| {
-        reports
-            .iter()
-            .find(|report| report.name == name)
-            .unwrap_or_else(|| panic!("no case {name}"))
-    };
-    let first = report("decided-at-first-check");
-    assert_eq!(first.path, ["wait-1", "read-1", "check-1", "decided-1"]);
-    assert_eq!(first.output, Some(json!({"decision": "approved"})));
-    let third = report("decided-at-third-check");
-    assert_eq!(third.outcome.as_deref(), Some("decided"));
-    assert_eq!(third.output, Some(json!({"decision": "rejected"})));
-    assert_eq!(third.call_attempts["read-3"], 1);
-    // After the last read the run finishes and the caller decides what is next.
-    let pending = report("still-pending-after-three-checks");
-    assert_eq!(pending.state, "completed");
-    assert_eq!(pending.outcome.as_deref(), Some("still-pending"));
+    let (definition, document) = fixture("external-job");
+    assert_eq!(definition.workflow.steps.values().filter(|step| matches!(step, Step::Call { call, .. } if call.operation == Operation::ExternalGet)).count(), 1);
     assert_eq!(
-        pending.path.last().map(String::as_str),
-        Some("still-pending")
+        definition
+            .workflow
+            .steps
+            .values()
+            .filter(|step| matches!(step, Step::WaitFor { .. }))
+            .count(),
+        1
     );
-    assert_eq!(pending.elapsed_seconds, 3 * 86_400);
-    for read in ["read-1", "read-2", "read-3"] {
-        assert_eq!(pending.call_attempts[read], 1, "{read}");
-    }
-    let refused = report("refused-read-ends-the-poll");
-    assert_eq!(refused.state, "refused");
-    assert!(!refused.call_attempts.contains_key("read-3"));
-    // A wait that would end after the run deadline expires the run instead.
-    let late = report("late-first-check-reaches-the-deadline");
-    assert_eq!(late.state, "deadline-exceeded");
-    assert_eq!(late.elapsed_seconds, 7 * 86_400);
+    let reports = scenarios::check(&definition, &document).unwrap();
+    let complete = reports
+        .iter()
+        .find(|r| r.name == "complete-after-pending")
+        .unwrap();
+    assert_eq!(
+        complete.output,
+        Some(json!({"state":"complete","result":{"jobId":"job-001"}}))
+    );
+    assert_eq!(complete.call_attempts["read"], 1);
+    assert_eq!(complete.elapsed_seconds, 30);
+    let refused = reports
+        .iter()
+        .find(|r| r.name == "declared-job-failure")
+        .unwrap();
+    assert_eq!(
+        refused.output,
+        Some(json!({"state":"refused","code":"external-job-failed"}))
+    );
+    let timeout = reports
+        .iter()
+        .find(|r| r.name == "timeout-stops-only-this-wait")
+        .unwrap();
+    assert_eq!(timeout.outcome.as_deref(), Some("job-wait-expired"));
+    assert_eq!(timeout.elapsed_seconds, 600);
     assert!(reports.iter().all(|report| report.frozen_commands == 0));
 }
 
@@ -337,7 +345,11 @@ fn directory_examples_follow_the_configured_response_contract_offline() {
         checked.diagnostics
     );
     let loaded = checked.loaded.unwrap();
-    let external = &loaded.config.external_http_connections["directory"];
+    let registry_coordinator::adapters::ConnectionConfig::ExternalHttp(external) =
+        &loaded.config.connections["directory"]
+    else {
+        panic!("expected external HTTP connection")
+    };
     assert!(external.authorization.is_none());
     assert_eq!(external.attempt_timeout_milliseconds.get(), 2000);
     assert_eq!(external.maximum_response_bytes.get(), 65536);

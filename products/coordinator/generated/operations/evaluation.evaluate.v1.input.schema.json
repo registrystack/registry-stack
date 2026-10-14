@@ -1,0 +1,115 @@
+{
+  "$defs": {
+    "Question": {
+      "description": "Authored questions are distinct from each provider's external DTO spelling.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "instructions": {
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "predicate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "instructions"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "criteria": {
+              "additionalProperties": false,
+              "maxProperties": 32,
+              "minProperties": 2,
+              "patternProperties": {
+                "^[a-z][a-z0-9_-]{0,63}$": {
+                  "pattern": "\\S",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "instructions": {
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "choice",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "instructions",
+            "criteria"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "criteria": {
+              "items": {
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "maxItems": 10,
+              "minItems": 2,
+              "type": "array"
+            },
+            "instructions": {
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "type": {
+              "const": "score",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "instructions",
+            "criteria"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "questions": {
+      "additionalProperties": false,
+      "maxProperties": 32,
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-z][a-z0-9_-]{0,63}$": {
+          "$ref": "#/$defs/Question"
+        }
+      },
+      "type": "object"
+    },
+    "state": {
+      "description": "The evaluated state: any JSON object, string or array.",
+      "type": [
+        "object",
+        "string",
+        "array"
+      ]
+    }
+  },
+  "required": [
+    "state",
+    "questions"
+  ],
+  "title": "evaluation.evaluate/v1 input",
+  "type": "object"
+}

@@ -140,6 +140,10 @@ impl Store {
         })
         .await
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Admission binds caller identity, command, runtime and expected revision independently"
+    )]
     pub async fn admit_runtime_owned(
         &self,
         definition: &Definition,
@@ -148,6 +152,7 @@ impl Store {
         key: &str,
         binding: &str,
         runtime: &crate::runtime::RuntimeConfig,
+        expected_revision: &str,
     ) -> Result<Uuid> {
         self.audited("admit", actor, None, None, async {
             self.admit_bound(
@@ -157,6 +162,7 @@ impl Store {
                 key,
                 binding,
                 Some(runtime),
+                expected_revision,
             )
             .await
         })
@@ -182,7 +188,7 @@ impl Store {
     /// Read one owned run only when its flow remains in the caller's current
     /// action policy. The filter is part of the status query so a denied flow
     /// cannot materialize protected status before the refusal is returned.
-    pub(crate) async fn status_owned_for_flows(
+    pub(crate) async fn status_owned_for_workflows(
         &self,
         run: Uuid,
         actor: &Actor,
@@ -344,7 +350,7 @@ impl Store {
             self.authorize_run(&tx,run,actor).await?;
             // Match Dispatch's job-then-run lock order. The product stop flag
             // fences every subsequent I/O check and next-step enqueue.
-            let row=tx.query_one(&format!("SELECT j.step,j.state,j.uncertain,r.state,r.restore_review_required,r.snapshot,r.authored_cancel_requested,EXISTS(SELECT 1 FROM {0}.review_waits w WHERE w.run_id=j.run_id AND w.step=j.step) FROM {0}.jobs j JOIN {0}.runs r ON r.run_id=j.run_id AND r.step=j.step WHERE j.run_id=$1 FOR UPDATE OF j,r",self.namespace),&[&run]).await.map_err(unavailable)?;
+            let row=tx.query_one(&format!("SELECT j.step,j.state,j.uncertain,r.state,r.restore_review_required,r.snapshot,r.authored_cancel_requested,EXISTS(SELECT 1 FROM {0}.completion_waits w WHERE w.run_id=j.run_id AND w.step=j.step) FROM {0}.jobs j JOIN {0}.runs r ON r.run_id=j.run_id AND r.step=j.step WHERE j.run_id=$1 FOR UPDATE OF j,r",self.namespace),&[&run]).await.map_err(unavailable)?;
             let step:String=row.get(0);let state:String=row.get(1);
             if row.get::<_,bool>(6) {
                 tx.commit().await.map_err(unavailable)?;
@@ -425,7 +431,7 @@ impl Store {
                 let input_row=tx.query_one(&format!("SELECT input FROM {}.runs WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 let input:Value=self.open_value(run,"input","",&input_row.get::<_,Value>(0))?;
                 let payload=Payload{snapshot,input,outputs,command:Some(command)};
-                let detail=Detail{next:Some(next.clone()),output:Some(value),outcome:None,failure_code:None,failure_path:None,uncertain:false,receipt_expired:false,completed_without_effect:false,recheck_seconds:None};
+                let detail=Detail{next:Some(next.clone()),output:Some(value),outcome:None,failure_code:None,failure_path:None,uncertain:false,recovery_hold:false,observation_pause_seconds:None,receipt_expired:false,completed_without_effect:false,recheck_seconds:None};
                 let written=self.apply_success(&tx,run,&step,payload,&detail,current.get(4)).await.map_err(unavailable)?;
                 let mapping_failed=written=="failed";
                 tx.execute(&format!("UPDATE {}.jobs SET state='delivered',attempt=GREATEST(attempt,1),uncertain=false,next_attempt_at=NULL,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=transaction_timestamp(),dead_lettered_at=NULL,expired_at=NULL,failure_code=NULL,failure_path=NULL WHERE run_id=$1 AND step=$2",self.namespace),&[&run,&step]).await.map_err(unavailable)?;
@@ -439,18 +445,6 @@ impl Store {
             // Missing, expired or unavailable receipts never prove no effect.
             self.inspect(run,binding).await
         }).await
-    }
-    /// Workflow versions remain bound to one artifact after payload erasure.
-    /// Admission and activation both hold admission_lock while checking history.
-    pub(crate) async fn check_definition_history(
-        &self,
-        client: &impl tokio_postgres::GenericClient,
-        definition: &Definition,
-    ) -> Result<()> {
-        if client.query_opt(&format!("SELECT 1 FROM {}.runs WHERE workflow_id=$1 AND workflow_version=$2 AND definition_digest<>$3 LIMIT 1", self.namespace), &[&definition.workflow.id, &definition.workflow.version, &definition.digest]).await.map_err(unavailable)?.is_some() {
-            return Err(refused("workflow-version-conflict", "this workflow version already names another immutable definition; give the changed definition a new version"));
-        }
-        Ok(())
     }
     // Failed dead letters remain recoverable. Only a delivered current step
     // identifies the settled workflow failure that has no command left to retry.
@@ -921,7 +915,7 @@ impl Store {
                 if eligible.is_none(){continue;}
                 tx.execute(&format!("UPDATE {}.runs SET snapshot=NULL,input=NULL,outputs=NULL,terminal_output=NULL,payload_erased_at=transaction_timestamp() WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 tx.execute(&format!("UPDATE {}.jobs SET command=NULL WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
-                tx.execute(&format!("DELETE FROM {}.review_waits WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
+                tx.execute(&format!("DELETE FROM {}.completion_waits WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 erased+=1;
             }
             tx.commit().await.map_err(unavailable)?;Ok(erased)

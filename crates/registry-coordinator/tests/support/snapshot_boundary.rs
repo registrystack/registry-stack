@@ -15,17 +15,19 @@ pub fn project_at_snapshot_size(path: &Path, size: usize) {
     let mut workflow = json!({
         "apiVersion": "id.registrystack.org/formats/coordinator/project/v1alpha1",
         "kind": "CoordinatorProject", "project": {"id": "snapshot-boundary", "version": "1"},
-        "input": schema, "connections": {}, "functionsFile": "functions.rhai",
-        "deadlineSeconds": 3600, "start": "select",
-        "steps": {
-            "select": {"type": "choose", "choose": {"type": "function", "function": "branch", "arguments": [{"type": "input"}]},
-                "cases": {"one": "first", "two": "second", "three": "third"}},
-            "first": {"type": "finish", "outcome": "one"}, "second": {"type": "finish", "outcome": "two"},
-            "third": {"type": "finish", "outcome": "three"}
-        },
-        "outcomes": {"one": schema, "two": schema, "three": schema}
+        "functions":{"branch":{"runtime":"rhai","source":"functions.rhai","entrypoint":"branch","inputs":{"input":{"type":"null"}},"output":{"enum":["one","two","three"]}}},
+        "workflow":{
+            "input": schema, "deadlineSeconds": 3600, "start": "select",
+            "steps": {
+                "select": {"type": "choose", "choose": {"type": "function", "function": "branch", "inputs": {"input":{"type":"input"}}},
+                    "cases": {"one": "first", "two": "second", "three": "third"}},
+                "first": {"type": "finish", "outcome": "one"}, "second": {"type": "finish", "outcome": "two"},
+                "third": {"type": "finish", "outcome": "three"}
+            },
+            "outcomes": {"one": schema, "two": schema, "three": schema}
+        }
     });
-    workflow["input"]["description"] = json!("");
+    workflow["workflow"]["input"]["description"] = json!("");
     // Valid Rhai with a referenced function and an escaping-heavy comment.
     // Authored YAML/source and each schema remain inside their own limits.
     let source = format!("fn branch(input) {{ \"one\" }}\n//{}", "\t".repeat(65_000));
@@ -35,10 +37,13 @@ pub fn project_at_snapshot_size(path: &Path, size: usize) {
     let baseline = Definition::load(path).unwrap().snapshot().unwrap().len();
     let padding = size.checked_sub(baseline).unwrap();
     assert!(padding <= 16_384);
-    workflow["input"]["description"] = json!("x".repeat(padding));
-    for schema in std::iter::once(&workflow["input"])
-        .chain(workflow["outcomes"].as_object().unwrap().values())
-    {
+    workflow["workflow"]["input"]["description"] = json!("x".repeat(padding));
+    for schema in std::iter::once(&workflow["workflow"]["input"]).chain(
+        workflow["workflow"]["outcomes"]
+            .as_object()
+            .unwrap()
+            .values(),
+    ) {
         assert!(
             registry_platform_canonical_json::canonicalize_json(schema)
                 .unwrap()

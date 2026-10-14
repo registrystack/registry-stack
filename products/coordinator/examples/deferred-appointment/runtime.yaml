@@ -12,7 +12,7 @@ database:
 namespace: coordinator_deferred
 connections:
   applications:
-    product: breg
+    type: breg
     baseUrl: https://breg.example.org
     profile: follow-up-reader
     authorization:
@@ -22,7 +22,7 @@ connections:
       resource: urn:example:applications
       scopes: [applications:read]
   catalogue:
-    product: scheduling
+    type: scheduling
     baseUrl: https://scheduling.example.org
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
@@ -31,7 +31,7 @@ connections:
       resource: urn:example:scheduling
       scopes: [scheduling:read]
   bookings:
-    product: scheduling
+    type: scheduling
     baseUrl: https://scheduling.example.org
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
@@ -52,7 +52,7 @@ connections:
       resource: urn:example:scheduling
       scopes: [scheduling:read]
   notices:
-    product: messaging
+    type: messaging
     baseUrl: https://messaging.example.org
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
@@ -74,15 +74,14 @@ deployment:
     audience: urn:example:coordinator
     jwksSource:
       type: discovery
-    allowedClients: [institution-producer, institution-operator]
     policies:
-      - clientId: institution-producer
+      institution-producer:
         requiredScopes: [coordinator:start]
-        flows: [deferred-appointment]
+        workflows: [deferred-appointment]
         actions: [start, status]
-      - clientId: institution-operator
+      institution-operator:
         requiredScopes: [coordinator:operate]
-        flows: [deferred-appointment]
+        workflows: [deferred-appointment]
         actions: [status, inspect, retry-same, cancel, reconcile, doctor, restore-hold, release-restore-hold, release-admission-hold, complete-execution-recovery, retain]
         operator: true
   auditFile: /var/lib/registry-coordinator/audit.jsonl

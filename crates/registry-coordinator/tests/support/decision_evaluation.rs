@@ -7,27 +7,36 @@ const DECISION_WORKFLOW: &str = r#"
 apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project: {id: synthetic-decision, version: '1'}
-input: {type: object}
-connections: {assessor: decision}
-functionsFile: functions.rhai
-deadlineSeconds: 3600
-start: evaluate
-steps:
+functions:
+  decision-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: decision_request
+    inputs: {input: {type: object}}
+    output: {operationInput: evaluate}
+operations:
   evaluate:
-    type: call
+    uses: evaluation.evaluate/v1
     connection: assessor
-    operation: evaluate-decision
-    input: {type: function, function: decision_request, arguments: [{type: input}]}
-    next: done
-  done:
-    type: finish
-    outcome: assessed
-    output: {type: function, function: decision_result, arguments: [{type: step, step: evaluate}]}
-outcomes: {assessed: {type: object}}
+workflow:
+  input: {type: object}
+  deadlineSeconds: 3600
+  start: evaluate
+  steps:
+    evaluate:
+      type: call
+      operation: evaluate
+      input: {type: function, function: decision-request, inputs: {input: {type: input}}}
+      next: done
+    done:
+      type: finish
+      outcome: assessed
+      output: {type: step, step: evaluate}
+  outcomes: {assessed: {operationOutput: evaluate}}
 "#;
 const DECISION_FUNCTIONS: &str = r#"
-fn decision_request(input) {
-    #{ state: input, questions: #{ route: #{ type: "choice", instructions: "Assess supplied facts", criteria: #{ proceed: "Sufficient", review: "Needs review" } } } }
+fn decision_request(args) {
+    #{ state: args.input, questions: #{ route: #{ type: "choice", instructions: "Assess supplied facts", criteria: #{ proceed: "Sufficient", review: "Needs review" } } } }
 }
 fn decision_result(result) { result }
 "#;
@@ -100,9 +109,10 @@ impl AdapterSet for DecisionFake {
     }
 }
 fn decision_success() -> CallOutcome {
-    CallOutcome::Success(
-        json!({"answers":{"route":{"type":"choice","choice":"proceed"}},"returnedModel":"original-model"}),
-    )
+    CallOutcome::Success(json!({
+        "protocol":"system-one", "requestedModel":"original-model", "returnedModel":"original-model", "usage":null,
+        "answers":{"route":{"type":"choice","choice":"proceed","probabilities":{"proceed":1.0,"review":0.0},"nativeConfidence":1.0}}
+    }))
 }
 
 #[tokio::test]
@@ -239,10 +249,14 @@ async fn completed_decision_is_reused_after_restart_and_downstream_mapping_failu
     for broken_wait in [false, true] {
         let mut h = decision_harness().await;
         if broken_wait {
-            std::fs::write(h.project.path().join("workflow.yaml"), DECISION_WORKFLOW.replace("next: done", "next: later").replace("  done:\n", "  later:\n    type: wait-until\n    waitUntil: {type: function, function: broken_wait, arguments: [{type: input}]}\n    next: done\n  done:\n")).unwrap();
+            let mut document = authored_workflow_value(DECISION_WORKFLOW);
+            document["functions"]["broken-wait"] = json!({"runtime":"rhai","source":"functions.rhai","entrypoint":"broken_wait","inputs":{"input":{"type":"object"}},"output":{}});
+            document["workflow"]["steps"]["evaluate"]["next"] = json!("later");
+            document["workflow"]["steps"]["later"] = json!({"type":"wait-until","waitUntil":{"type":"function","function":"broken-wait","inputs":{"input":{"type":"input"}}},"next":"done"});
+            std::fs::write(h.project.path().join("workflow.yaml"), document.to_string()).unwrap();
             std::fs::write(
                 h.project.path().join("functions.rhai"),
-                format!("{DECISION_FUNCTIONS}\nfn broken_wait(input) {{ 42 }}"),
+                format!("{DECISION_FUNCTIONS}\nfn broken_wait(args) {{ 42 }}"),
             )
             .unwrap();
             h.definition = Definition::load(h.project.path()).unwrap();

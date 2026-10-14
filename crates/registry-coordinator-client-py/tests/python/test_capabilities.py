@@ -13,7 +13,7 @@ from registry_coordinator_client import (  # noqa: E402
 )
 from scripted import INSPECTION, STATUS  # noqa: E402
 
-_METHODS = {"start", "status", "inspect", "reconcile", "list", "retry_same", "cancel"}
+_METHODS = {"start", "workflow", "status", "inspect", "reconcile", "list", "retry_same", "cancel"}
 _STUB = (
     pathlib.Path(__file__).resolve().parents[2]
     / "python"

@@ -5326,7 +5326,7 @@ dependencies = [
 
 [[package]]
 name = "registry-coordinator"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5382,7 +5382,7 @@ dependencies = [
 
 [[package]]
 name = "registry-coordinator-client"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "axum",
  "chrono",
@@ -5400,7 +5400,7 @@ dependencies = [
 
 [[package]]
 name = "registry-coordinator-client-node"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -5414,7 +5414,7 @@ dependencies = [
 
 [[package]]
 name = "registry-coordinator-client-py"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",

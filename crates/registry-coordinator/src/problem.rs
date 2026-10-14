@@ -22,11 +22,11 @@
 //! are `authentication.refused` and `operation.not-authorized`.
 //!
 //! `run.not-visible` answers every run the caller may not see, whether or not
-//! the run exists, and whether its flow lies outside the caller's policy or it
+//! the run exists, and whether its workflow lies outside the caller's policy or it
 //! belongs to another caller, so the run routes are never an existence
-//! oracle. `flow.not-served` is answered only after the caller's policy has
-//! already admitted a start of the named flow, so it tells a caller nothing
-//! about flows outside its own policy.
+//! oracle. `workflow.not-served` is answered only after the caller's policy has
+//! already admitted a start of the named workflow, so it tells a caller nothing
+//! about workflows outside its own policy.
 //!
 //! The `request.*` family carries the request-edge rejections (a route that
 //! does not exist, a method the route refuses, a body too large or not JSON)
@@ -51,8 +51,8 @@ pub const DEPLOYMENT_ACTIVATION_CHANGED_PROBLEM: &str = "deployment.activation-c
 pub const DEPLOYMENT_REFUSED_PROBLEM: &str = "deployment.refused";
 pub const EVALUATION_UNCERTAIN_PROBLEM: &str = "evaluation.uncertain";
 pub const EXECUTION_HELD_PROBLEM: &str = "execution.held";
-pub const FLOW_NOT_SERVED_PROBLEM: &str = "flow.not-served";
-pub const FLOW_VERSION_CONFLICT_PROBLEM: &str = "flow.version-conflict";
+pub const WORKFLOW_NOT_SERVED_PROBLEM: &str = "workflow.not-served";
+pub const WORKFLOW_REVISION_MISMATCH_PROBLEM: &str = "workflow.revision-mismatch";
 pub const IDEMPOTENCY_KEY_INVALID_PROBLEM: &str = "idempotency.key-invalid";
 pub const IDEMPOTENCY_KEY_REUSED_PROBLEM: &str = "idempotency.key-reused";
 pub const INPUT_INVALID_PROBLEM: &str = "input.invalid";
@@ -95,8 +95,6 @@ pub enum ProblemCode {
     DeploymentRefused,
     EvaluationUncertain,
     ExecutionHeld,
-    FlowNotServed,
-    FlowVersionConflict,
     IdempotencyKeyInvalid,
     IdempotencyKeyReused,
     InputInvalid,
@@ -124,6 +122,8 @@ pub enum ProblemCode {
     RunPayloadErased,
     RuntimeFailure,
     ServiceUnavailable,
+    WorkflowNotServed,
+    WorkflowRevisionMismatch,
 }
 
 impl ProblemCode {
@@ -140,8 +140,6 @@ impl ProblemCode {
         Self::DeploymentRefused,
         Self::EvaluationUncertain,
         Self::ExecutionHeld,
-        Self::FlowNotServed,
-        Self::FlowVersionConflict,
         Self::IdempotencyKeyInvalid,
         Self::IdempotencyKeyReused,
         Self::InputInvalid,
@@ -169,6 +167,8 @@ impl ProblemCode {
         Self::RunPayloadErased,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
+        Self::WorkflowNotServed,
+        Self::WorkflowRevisionMismatch,
     ];
 
     #[must_use]
@@ -185,8 +185,8 @@ impl ProblemCode {
             Self::DeploymentRefused => DEPLOYMENT_REFUSED_PROBLEM,
             Self::EvaluationUncertain => EVALUATION_UNCERTAIN_PROBLEM,
             Self::ExecutionHeld => EXECUTION_HELD_PROBLEM,
-            Self::FlowNotServed => FLOW_NOT_SERVED_PROBLEM,
-            Self::FlowVersionConflict => FLOW_VERSION_CONFLICT_PROBLEM,
+            Self::WorkflowNotServed => WORKFLOW_NOT_SERVED_PROBLEM,
+            Self::WorkflowRevisionMismatch => WORKFLOW_REVISION_MISMATCH_PROBLEM,
             Self::IdempotencyKeyInvalid => IDEMPOTENCY_KEY_INVALID_PROBLEM,
             Self::IdempotencyKeyReused => IDEMPOTENCY_KEY_REUSED_PROBLEM,
             Self::InputInvalid => INPUT_INVALID_PROBLEM,
@@ -240,7 +240,7 @@ impl ProblemCode {
             | Self::RequestRetentionInvalid => 400,
             Self::AuthenticationRefused => 401,
             Self::OperationNotAuthorized => 403,
-            Self::FlowNotServed | Self::RequestNotFound | Self::RunNotVisible => 404,
+            Self::WorkflowNotServed | Self::RequestNotFound | Self::RunNotVisible => 404,
             Self::RequestMethodNotAllowed => 405,
             Self::AdmissionHeld
             | Self::AdmissionRecoveryOnly
@@ -251,7 +251,7 @@ impl ProblemCode {
             | Self::DeploymentRefused
             | Self::EvaluationUncertain
             | Self::ExecutionHeld
-            | Self::FlowVersionConflict
+            | Self::WorkflowRevisionMismatch
             | Self::IdempotencyKeyReused
             | Self::ReceiptExpired
             | Self::ReconcileRaced
@@ -273,7 +273,7 @@ impl ProblemCode {
     }
 
     /// The fixed, value-free problem title. Titles and details carry no
-    /// identifiers, flow inputs, tokens or run data.
+    /// identifiers, workflow inputs, tokens or run data.
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
@@ -288,8 +288,8 @@ impl ProblemCode {
             Self::DeploymentRefused => "Deployment not serving",
             Self::EvaluationUncertain => "Evaluation outcome uncertain",
             Self::ExecutionHeld => "Execution held",
-            Self::FlowNotServed => "Flow not served",
-            Self::FlowVersionConflict => "Workflow version conflict",
+            Self::WorkflowNotServed => "Workflow not served",
+            Self::WorkflowRevisionMismatch => "Workflow revision mismatch",
             Self::IdempotencyKeyInvalid => "Idempotency key invalid",
             Self::IdempotencyKeyReused => "Idempotency key reused",
             Self::InputInvalid => "Start input invalid",
@@ -343,7 +343,7 @@ impl ProblemCode {
                 "Connection settings that runs in progress use differ from this service's runtime configuration."
             }
             Self::DefinitionRefused => {
-                "The flow's workflow definition, one of its mappings or one of its functions refused the request."
+                "The workflow's workflow definition, one of its mappings or one of its functions refused the request."
             }
             Self::DeploymentActivationChanged => {
                 "An apply changed the active packages after this service started. Restart it with the runtime file that apply used."
@@ -357,9 +357,9 @@ impl ProblemCode {
             Self::ExecutionHeld => {
                 "Execution is under restore hold until an operator releases it."
             }
-            Self::FlowNotServed => "This deployment does not serve the named flow.",
-            Self::FlowVersionConflict => {
-                "A changed workflow definition reuses a version that existing runs already pin."
+            Self::WorkflowNotServed => "This deployment does not serve the named workflow.",
+            Self::WorkflowRevisionMismatch => {
+                "The expected workflow revision differs from the active revision or the original admission."
             }
             Self::IdempotencyKeyInvalid => {
                 "Supply an Idempotency-Key header of 1 to 256 bytes."
@@ -368,7 +368,7 @@ impl ProblemCode {
                 "This idempotency key already started a run with different input."
             }
             Self::InputInvalid => {
-                "The start input does not satisfy the flow's declared input schema and value bounds."
+                "The start input does not satisfy the workflow's declared input schema and value bounds."
             }
             Self::OperationNotAuthorized => {
                 "The caller's policy does not allow this operation."
@@ -455,11 +455,11 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         "reason-invalid" => ProblemCode::RequestReasonInvalid,
         "retention-invalid" => ProblemCode::RequestRetentionInvalid,
         "run-absent" => ProblemCode::RunNotVisible,
-        "flow-absent" => ProblemCode::FlowNotServed,
+        "workflow-absent" => ProblemCode::WorkflowNotServed,
         "input-invalid" | "definition.input" => ProblemCode::InputInvalid,
         "start-key-invalid" => ProblemCode::IdempotencyKeyInvalid,
         "start-conflict" => ProblemCode::IdempotencyKeyReused,
-        "workflow-version-conflict" => ProblemCode::FlowVersionConflict,
+        "workflow-revision-mismatch" => ProblemCode::WorkflowRevisionMismatch,
         "recovery-only" => ProblemCode::AdmissionRecoveryOnly,
         "restore-admissions-held" => ProblemCode::AdmissionHeld,
         "restore-hold" => ProblemCode::ExecutionHeld,
@@ -482,7 +482,7 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         | "state-key-custody"
         | "coordinator.deployment.configuration"
         | "coordinator.runtime-config.refused" => ProblemCode::DeploymentRefused,
-        "status-unavailable" | "run-state-invalid" | "list-flow-invalid" => {
+        "status-unavailable" | "run-state-invalid" | "list-workflow-invalid" => {
             ProblemCode::RuntimeFailure
         }
         code if code.starts_with("definition.")
@@ -510,13 +510,14 @@ mod tests {
         "coordinator.command.usage",
         "coordinator.decision.configuration",
         "coordinator.external-http.configuration",
+        "coordinator.operation.contract-invalid",
         "database-identity-invalid",
         "database-invalid",
         "database-tls-required",
         "database-version",
         "deployment-invalid",
-        "deployment.flow-live-runs",
-        "deployment.flow-unlisted",
+        "deployment.workflow-live-runs",
+        "deployment.workflow-unlisted",
         "lease-stale",
         "listener-unavailable",
         "namespace-invalid",
@@ -527,6 +528,7 @@ mod tests {
         "runtime-config-required",
         "runtime-config-unresolved",
         "scenario.missing",
+        "scenario.reply",
         "schema-version",
         "service-invalid",
         "service-required",
@@ -536,6 +538,7 @@ mod tests {
         "token-file-required",
         "token-invalid",
         "worker-unavailable",
+        "workflow.types-refused",
     ];
 
     /// Every literal error code this crate's source raises, with the files
@@ -745,7 +748,7 @@ mod tests {
     }
 
     /// A run the caller may not see answers 404, not 403, so the run routes
-    /// never confirm that another caller's run, or a run in a flow outside
+    /// never confirm that another caller's run, or a run in a workflow outside
     /// the caller's policy, exists.
     #[test]
     fn an_invisible_run_answers_not_found() {

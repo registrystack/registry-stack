@@ -52,11 +52,12 @@ pub struct DecisionConfig {
     pub model: ExternalId,
     pub authorization: DecisionAuthorization,
     #[serde(default = "default_timeout")]
-    pub attempt_timeout_milliseconds: BoundedU64<1, 8000>,
+    pub attempt_timeout_milliseconds:
+        BoundedU64<1, { crate::operations::EVALUATION_TIMEOUT_MILLISECONDS }>,
     #[serde(default = "default_bytes")]
-    pub maximum_request_bytes: BoundedU64<1, 65536>,
+    pub maximum_request_bytes: BoundedU64<1, { crate::operations::MAXIMUM_HTTP_RESPONSE_BYTES }>,
     #[serde(default = "default_bytes")]
-    pub maximum_response_bytes: BoundedU64<1, 65536>,
+    pub maximum_response_bytes: BoundedU64<1, { crate::operations::MAXIMUM_HTTP_RESPONSE_BYTES }>,
 }
 
 fn endpoint<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Url, D::Error> {
@@ -69,12 +70,12 @@ fn endpoint<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Url, D::Erro
     written.as_str().parse().map_err(serde::de::Error::custom)
 }
 
-fn default_timeout() -> BoundedU64<1, 8000> {
-    BoundedU64::new(8000).expect("bounded default")
+fn default_timeout() -> BoundedU64<1, { crate::operations::EVALUATION_TIMEOUT_MILLISECONDS }> {
+    BoundedU64::new(crate::operations::EVALUATION_TIMEOUT_MILLISECONDS).expect("bounded default")
 }
 
-fn default_bytes() -> BoundedU64<1, 65536> {
-    BoundedU64::new(65536).expect("bounded default")
+fn default_bytes() -> BoundedU64<1, { crate::operations::MAXIMUM_HTTP_RESPONSE_BYTES }> {
+    BoundedU64::new(crate::operations::MAXIMUM_HTTP_RESPONSE_BYTES).expect("bounded default")
 }
 
 impl DecisionConfig {

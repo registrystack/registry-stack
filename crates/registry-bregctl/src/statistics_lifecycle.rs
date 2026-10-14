@@ -192,13 +192,15 @@ mod tests {
     #[test]
     fn publish_response_is_bound_to_the_requested_release() {
         let valid = header();
-        assert!(decode_publish_header(
-            &encoded(&valid),
-            "population",
-            "2025-01",
-            BRegReleaseStatus::Final,
-        )
-        .is_ok());
+        assert!(
+            decode_publish_header(
+                &encoded(&valid),
+                "population",
+                "2025-01",
+                BRegReleaseStatus::Final,
+            )
+            .is_ok()
+        );
         let maximum_exact_version = i64::MAX as u64 - 1023;
         let mut maximum_version = valid.clone();
         maximum_version["version"] = serde_json::json!(maximum_exact_version);
@@ -206,13 +208,15 @@ mod tests {
             decode_header(&encoded(&maximum_version)).unwrap().version,
             maximum_exact_version
         );
-        assert!(decode_publish_header(
-            &encoded(&maximum_version),
-            "population",
-            "2025-01",
-            BRegReleaseStatus::Final,
-        )
-        .is_ok());
+        assert!(
+            decode_publish_header(
+                &encoded(&maximum_version),
+                "population",
+                "2025-01",
+                BRegReleaseStatus::Final,
+            )
+            .is_ok()
+        );
 
         let withdrawal = serde_json::json!({
             "withdrawnAt": "2026-10-03T00:01:00Z",
@@ -263,14 +267,16 @@ mod tests {
             "withdrawnAt": "2026-10-03T00:01:00Z",
             "reason": "computation-error",
         });
-        assert!(decode_withdraw_header(
-            &encoded(&valid),
-            "population",
-            "2025-01",
-            7,
-            BRegWithdrawalReason::ComputationError,
-        )
-        .is_ok());
+        assert!(
+            decode_withdraw_header(
+                &encoded(&valid),
+                "population",
+                "2025-01",
+                7,
+                BRegWithdrawalReason::ComputationError,
+            )
+            .is_ok()
+        );
 
         let invalid_cases = [
             ("dataset", serde_json::json!("other-population")),

@@ -12,14 +12,14 @@ use std::path::Path;
 
 use registry_breg::audit::RegistryAudit;
 use registry_breg::migration_reconcile::{
-    reconcile_failed_migration, ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport,
-    ReconcileRequest, ReconcileTimeouts,
+    ReconcileAudit, ReconcileError, ReconcileOutcome, ReconcileReport, ReconcileRequest,
+    ReconcileTimeouts, reconcile_failed_migration,
 };
-use registry_breg::package::{load_package, PackageError};
-use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
+use registry_breg::package::{PackageError, load_package};
+use registry_breg::runtime_config::{RuntimeConfigError, load_runtime_config};
 
 use crate::active_registry::{
-    observed_identity_for_digest, recorded_identity_for_digest, ActiveRegistryError,
+    ActiveRegistryError, observed_identity_for_digest, recorded_identity_for_digest,
 };
 use serde::Serialize;
 

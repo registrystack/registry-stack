@@ -91,8 +91,16 @@ fn removed_jwks_tag_names_the_shared_type_replacement_without_values() {
 }
 
 #[test]
-fn admitted_clients_must_be_explicit_and_restricted() {
+fn policy_keys_are_the_only_closed_client_admission_configuration() {
     let original = yaml_value(SCHEDULING_RUNTIME).unwrap();
+    let config = load(&original.to_string()).unwrap();
+    let access = &config.deployment.as_ref().unwrap().authentication;
+    assert!(access.policies.contains_key("institution-producer"));
+    assert!(access.policies.contains_key("institution-operator"));
+    let roundtrip = config.document().unwrap();
+    assert!(roundtrip["deployment"]["authentication"]
+        .get("allowedClients")
+        .is_none());
     #[cfg(feature = "schema")]
     let schema: Value =
         serde_json::from_str(&registry_coordinator::runtime::runtime_schema().unwrap()).unwrap();
@@ -101,111 +109,62 @@ fn admitted_clients_must_be_explicit_and_restricted() {
         .with_draft(jsonschema::Draft::Draft202012)
         .compile(&schema)
         .unwrap();
-    for (clients, code, pointer) in [
-        (None, "config.missing-key", "/deployment/authentication"),
-        (
-            Some(json!([])),
-            "config.invalid-value",
-            "/deployment/authentication/allowedClients",
-        ),
-        (
-            Some(json!("unrestricted")),
-            "coordinator.access.configuration",
-            "/deployment/authentication/allowedClients",
-        ),
-    ] {
+    for value in [json!({}), json!([]), json!("unrestricted"), Value::Null] {
         let mut document = original.clone();
-        let authentication = document["deployment"]["authentication"]
-            .as_object_mut()
-            .unwrap();
-        match clients {
-            Some(value) => {
-                authentication.insert("allowedClients".into(), value);
-            }
-            None => {
-                authentication.remove("allowedClients");
-            }
-        }
-        let error = refused(&document.to_string());
-        assert_eq!(error.code, code);
-        assert_eq!(error.field.as_deref(), Some(pointer));
+        document["deployment"]["authentication"]["policies"] = value;
+        assert!(load(&document.to_string()).is_err());
         #[cfg(feature = "schema")]
         assert!(!validator.is_valid(&document));
     }
-    load(&original.to_string()).unwrap();
+    let mut legacy = original.clone();
+    legacy["deployment"]["authentication"]["allowedClients"] = json!(["institution-producer"]);
+    let error = refused(&legacy.to_string());
+    assert_eq!(
+        error.field.as_deref(),
+        Some("/deployment/authentication/allowedClients")
+    );
     #[cfg(feature = "schema")]
-    assert!(validator.is_valid(&original));
+    assert!(!validator.is_valid(&legacy));
+    let mut duplicated = original;
+    duplicated["deployment"]["authentication"]["policies"]["institution-producer"]["clientId"] =
+        json!(CANARY);
+    let error = refused(&duplicated.to_string());
+    assert_eq!(
+        error.field.as_deref(),
+        Some("/deployment/authentication/policies/institution-producer/clientId")
+    );
+    assert!(!error.to_string().contains(CANARY));
 }
 
 #[test]
-fn admitted_clients_require_exactly_one_policy() {
+fn exact_client_keys_keep_external_identity_grammar_and_source_addressing() {
     let mut document = yaml_value(SCHEDULING_RUNTIME).unwrap();
-    load(&document.to_string()).unwrap();
-    let authentication = &mut document["deployment"]["authentication"];
-    let client_index = authentication["allowedClients"].as_array().unwrap().len();
-    authentication["allowedClients"]
-        .as_array_mut()
+    let policies = document["deployment"]["authentication"]["policies"]
+        .as_object_mut()
+        .unwrap();
+    let policy = policies.remove("institution-producer").unwrap();
+    policies.insert("urn:client:institution.v1/producer~primary".into(), policy);
+    let config = load(&document.to_string()).unwrap();
+    assert!(config
+        .deployment
+        .as_ref()
         .unwrap()
-        .push(json!(CANARY));
+        .authentication
+        .policies
+        .contains_key("urn:client:institution.v1/producer~primary"));
+    document["deployment"]["authentication"]["policies"]
+        ["urn:client:institution.v1/producer~primary"]["workflows"] = json!(["invalid.workflow"]);
     let error = refused(&document.to_string());
-    assert_eq!(error.code, "coordinator.access.configuration");
-    assert_eq!(
-        error.field.as_deref(),
-        Some(format!("/deployment/authentication/allowedClients/{client_index}").as_str())
-    );
-    assert!(error
-        .suggested_action
-        .as_deref()
-        .unwrap()
-        .contains("one explicit policy"));
-    assert!(!error.to_string().contains(CANARY));
+    let pointer = "/deployment/authentication/policies/urn:client:institution.v1~1producer~0primary/workflows";
+    assert_eq!(error.field.as_deref(), Some(pointer));
     let diagnostic = error
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.path == error.field.as_deref().unwrap())
+        .find(|d| d.path == pointer)
         .unwrap();
     assert!(diagnostic.source.as_ref().unwrap().line.is_some());
-
-    let authentication = &mut document["deployment"]["authentication"];
-    let mut policy = authentication["policies"][0].clone();
-    policy["clientId"] = json!(CANARY);
-    let policy_index = authentication["policies"].as_array().unwrap().len();
-    authentication["policies"]
-        .as_array_mut()
-        .unwrap()
-        .push(policy.clone());
-    load(&document.to_string()).unwrap();
-
-    let mut duplicate = document.clone();
-    duplicate["deployment"]["authentication"]["policies"]
-        .as_array_mut()
-        .unwrap()
-        .push(policy);
-    let error = refused(&duplicate.to_string());
-    assert_eq!(error.code, "coordinator.access.configuration");
-    assert_eq!(
-        error.field.as_deref(),
-        Some(
-            format!(
-                "/deployment/authentication/policies/{}/clientId",
-                policy_index + 1
-            )
-            .as_str()
-        )
-    );
-    assert!(!error.to_string().contains(CANARY));
-
-    document["deployment"]["authentication"]["allowedClients"]
-        .as_array_mut()
-        .unwrap()
-        .pop();
-    let error = refused(&document.to_string());
-    assert_eq!(error.code, "coordinator.access.configuration");
-    assert_eq!(
-        error.field.as_deref(),
-        Some(format!("/deployment/authentication/policies/{policy_index}/clientId").as_str())
-    );
-    assert!(!error.to_string().contains(CANARY));
+    let duplicate = SCHEDULING_RUNTIME.replace("      institution-producer:", "      institution-producer:\n        requiredScopes: [coordinator:start]\n        workflows: [deferred-appointment]\n        actions: [start, status]\n      institution-producer:");
+    assert_eq!(refused(&duplicate).code, "yaml.duplicate-key");
 }
 
 #[test]
@@ -435,7 +394,7 @@ fn runtime_fields_and_binding_errors_name_the_fix_without_values() {
     project::init(&root.path().join("flow"), None).unwrap();
     let definition = Definition::load(&root.path().join("flow")).unwrap();
     let error = config.validate_workflow(&definition.workflow).unwrap_err();
-    assert_eq!(error.field.as_deref(), Some("connections.applications"));
+    assert_eq!(error.field.as_deref(), Some("/connections/applications"));
 }
 
 #[test]
@@ -599,11 +558,14 @@ fn ignored_observation_authority_is_refused_for_other_connection_modes() {
             error.field.as_deref(),
             Some(format!("/connections/{name}/observationAuthorization").as_str())
         );
-        assert!(error
-            .suggested_action
-            .as_deref()
-            .unwrap()
-            .contains("remove observationAuthorization"));
+        assert!(
+            error.code == "config.unknown-key"
+                || error
+                    .suggested_action
+                    .as_deref()
+                    .unwrap()
+                    .contains("remove observationAuthorization")
+        );
         assert!(!error.to_string().contains(CANARY));
     }
     load(SCHEDULING_RUNTIME).unwrap();
@@ -626,13 +588,15 @@ fn binding_identity_never_resolves_secrets_and_pins_audience_and_task_authority(
         .connections
         .get_mut("applications")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .signing_key_ref =
         registry_platform_config::SecretReference::parse("secret:file/another-unavailable-key")
             .unwrap();
     assert_eq!(digest, config.binding_digest().unwrap());
     let audience = config.connections["applications"]
-        .authorization
+        .authorization()
+        .unwrap()
         .token_endpoint
         .as_str()
         .to_owned();
@@ -640,21 +604,24 @@ fn binding_identity_never_resolves_secrets_and_pins_audience_and_task_authority(
         .connections
         .get_mut("applications")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .client_assertion_audience = Some(audience);
     assert_eq!(digest, config.binding_digest().unwrap());
     config
         .connections
         .get_mut("applications")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .client_assertion_audience = Some("http://127.0.0.1:8090".into());
     assert_ne!(digest, config.binding_digest().unwrap());
     config
         .connections
         .get_mut("applications")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .task_authority = Some(registry_coordinator::runtime::TaskAuthorityConfig {
         base_url: "http://127.0.0.1:8200".parse().unwrap(),
         issuer: "urn:example:casework".into(),
@@ -668,7 +635,8 @@ fn binding_identity_never_resolves_secrets_and_pins_audience_and_task_authority(
         .connections
         .get_mut("applications")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .task_authority
         .as_mut()
         .unwrap()
@@ -678,9 +646,11 @@ fn binding_identity_never_resolves_secrets_and_pins_audience_and_task_authority(
         .connections
         .get_mut("notices")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .task_authority = config.connections["applications"]
-        .authorization
+        .authorization()
+        .unwrap()
         .task_authority
         .clone();
     assert!(config.binding_digest().is_err());
@@ -710,8 +680,9 @@ fn initialized_project_is_four_offline_checkable_files_and_a_gitignore_and_never
     let definition = Definition::load(&path).unwrap();
     config.validate_workflow(&definition.workflow).unwrap();
     let explanation = definition.explain().unwrap();
-    assert_eq!(explanation["networkAccess"], false);
-    assert_eq!(explanation["secretResolution"], false);
+    assert_eq!(explanation["workflowRevision"], definition.digest);
+    assert!(explanation["operations"].is_object());
+    assert!(explanation["functions"].is_object());
     assert_eq!(explanation["steps"].as_array().unwrap().len(), 6);
     assert_eq!(explanation["limits"]["operations"], 100000);
     fs::write(path.join("functions.rhai"), CANARY).unwrap();
@@ -805,13 +776,15 @@ fn appointment_workflow_refuses_ordinary_authority_before_admission_or_activatio
         .connections
         .get_mut("bookings")
         .unwrap()
-        .authorization
-        .task_authority = None;
-    config
-        .connections
-        .get_mut("bookings")
+        .authorization_mut()
         .unwrap()
-        .observation_authorization = None;
+        .task_authority = None;
+    let registry_coordinator::runtime::ConnectionConfig::Scheduling(binding) =
+        config.connections.get_mut("bookings").unwrap()
+    else {
+        panic!("scheduling connection")
+    };
+    binding.observation_authorization = None;
     config.validate().unwrap();
     let error = config.validate_workflow(&definition.workflow).unwrap_err();
     assert_eq!(error.code, "workflow-binding");
@@ -828,17 +801,18 @@ fn appointment_workflow_refuses_ordinary_authority_before_admission_or_activatio
         registry_coordinator::authoring::KIND,
     )
     .unwrap();
-    read_only["start"] = json!("metadata");
-    read_only["connections"]
+    read_only["workflow"]["start"] = json!("metadata");
+    read_only.as_object_mut().unwrap().remove("functions");
+    read_only["operations"]
         .as_object_mut()
         .unwrap()
-        .retain(|name, _| name == "catalogue");
-    read_only["steps"]
+        .retain(|name, _| name == "catalogue-read-scheduling");
+    read_only["workflow"]["steps"]
         .as_object_mut()
         .unwrap()
         .retain(|name, _| matches!(name.as_str(), "metadata" | "skipped"));
-    read_only["steps"]["metadata"]["next"] = json!("skipped");
-    read_only["outcomes"]
+    read_only["workflow"]["steps"]["metadata"]["next"] = json!("skipped");
+    read_only["workflow"]["outcomes"]
         .as_object_mut()
         .unwrap()
         .retain(|name, _| name == "no-current-eligibility");
@@ -866,7 +840,8 @@ fn caller_policy_flow_ids_use_the_workflow_name_grammar() {
     ] {
         let mut document = original.clone();
         let invalid_type = invalid.chars().any(char::is_control);
-        document["deployment"]["authentication"]["policies"][0]["flows"] = json!([invalid]);
+        document["deployment"]["authentication"]["policies"]["institution-producer"]["workflows"] =
+            json!([invalid]);
         let error = refused(&serde_norway::to_string(&document).unwrap());
         if invalid_type {
             assert!(matches!(
@@ -881,7 +856,7 @@ fn caller_policy_flow_ids_use_the_workflow_name_grammar() {
     // Policy entries may name other or retained workflows, not just the active
     // package. Offline syntax checks do not load a package or contact its issuer.
     let mut document = original;
-    document["deployment"]["authentication"]["policies"][0]["flows"] =
+    document["deployment"]["authentication"]["policies"]["institution-producer"]["workflows"] =
         json!(["a".repeat(64), "Retained_flow-1"]);
     load(&serde_norway::to_string(&document).unwrap()).unwrap();
 }
@@ -913,13 +888,12 @@ fn flows_scope_run_actions_and_deployment_operators_list_none() {
         .unwrap();
     let with_operator = |policy: Value| {
         let mut document = original.clone();
-        document["deployment"]["authentication"]["policies"][1] = policy;
+        document["deployment"]["authentication"]["policies"]["institution-operator"] = policy;
         document
     };
 
     let deployment_operator = with_operator(json!({
-        "clientId": "institution-operator",
-        "requiredScopes": ["coordinator:operate"],
+                "requiredScopes": ["coordinator:operate"],
         "actions": DEPLOYMENT_ACTIONS,
         "operator": true,
     }));
@@ -930,33 +904,34 @@ fn flows_scope_run_actions_and_deployment_operators_list_none() {
     // A flow list on a policy without run actions would read as a limit it is
     // not, so it is refused rather than ignored.
     let mut listed = deployment_operator.clone();
-    listed["deployment"]["authentication"]["policies"][1]["flows"] = json!(["delayed-follow-up"]);
+    listed["deployment"]["authentication"]["policies"]["institution-operator"]["workflows"] =
+        json!(["delayed-follow-up"]);
     let error = refused(&serde_norway::to_string(&listed).unwrap());
     assert_eq!(error.code, "coordinator.access.configuration");
     assert_eq!(
         error.field.as_deref(),
-        Some("/deployment/authentication/policies/1/flows")
+        Some("/deployment/authentication/policies/institution-operator/workflows")
     );
     let advice = error.suggested_action.as_deref().unwrap();
-    assert!(advice.contains("remove flows"), "{advice}");
+    assert!(advice.contains("remove workflows"), "{advice}");
 
     // Every run action needs the flows it may reach, for producers and
     // operators alike.
     for (index, actions, operator) in [
-        (0, json!(["start", "status"]), false),
-        (1, json!(["inspect"]), true),
-        (1, json!(["doctor", "reconcile"]), true),
+        ("institution-producer", json!(["start", "status"]), false),
+        ("institution-operator", json!(["inspect"]), true),
+        ("institution-operator", json!(["doctor", "reconcile"]), true),
     ] {
         let mut document = original.clone();
         let policy = &mut document["deployment"]["authentication"]["policies"][index];
-        policy.as_object_mut().unwrap().remove("flows");
+        policy.as_object_mut().unwrap().remove("workflows");
         policy["actions"] = actions.clone();
         policy["operator"] = json!(operator);
         let error = refused(&serde_norway::to_string(&document).unwrap());
         assert_eq!(error.code, "coordinator.access.configuration", "{actions}");
         assert_eq!(
             error.field.as_deref(),
-            Some(format!("/deployment/authentication/policies/{index}/flows").as_str()),
+            Some(format!("/deployment/authentication/policies/{index}/workflows").as_str()),
             "{actions}"
         );
         let advice = error.suggested_action.as_deref().unwrap();
@@ -965,12 +940,13 @@ fn flows_scope_run_actions_and_deployment_operators_list_none() {
 
     // Deployment-wide actions stay an operator's, with or without flows.
     let mut not_operator = deployment_operator.clone();
-    not_operator["deployment"]["authentication"]["policies"][1]["operator"] = json!(false);
+    not_operator["deployment"]["authentication"]["policies"]["institution-operator"]["operator"] =
+        json!(false);
     let error = refused(&serde_norway::to_string(&not_operator).unwrap());
     assert_eq!(error.code, "coordinator.access.configuration");
     assert_eq!(
         error.field.as_deref(),
-        Some("/deployment/authentication/policies/1/actions")
+        Some("/deployment/authentication/policies/institution-operator/actions")
     );
     assert!(error
         .suggested_action
@@ -1243,14 +1219,14 @@ fn shared_runtime_reports_all_unknown_members_and_refuses_null_and_duplicate_set
     );
     let mut document = yaml_value(SCHEDULING_RUNTIME).unwrap();
     let policies = &mut document["deployment"]["authentication"]["policies"];
-    policies[0]["actions"] = json!(["start", "start"]);
+    policies["institution-producer"]["actions"] = json!(["start", "start"]);
     let error = refused(&document.to_string());
     assert_eq!(error.code, "config.duplicate-item");
     assert!(error
         .field
         .as_deref()
         .unwrap()
-        .starts_with("/deployment/authentication/policies/0/actions"));
+        .starts_with("/deployment/authentication/policies/institution-producer/actions"));
 }
 
 const SINGLE_FLOW: &str =
@@ -1276,7 +1252,7 @@ fn deployment_packages_list_one_pinned_package_per_flow() {
         (
             json!([]),
             "/deployment/packages",
-            "one pinned package per flow",
+            "one pinned package per workflow",
             true,
         ),
         (
@@ -1393,17 +1369,17 @@ fn two_flow_example_serves_two_example_projects() {
     for flow in &flows {
         assert!(
             policies
-                .as_array()
+                .as_object()
                 .unwrap()
-                .iter()
-                .any(|policy| policy["flows"] == json!([flow])),
+                .values()
+                .any(|policy| policy["workflows"] == json!([flow])),
             "{flow} has a producer limited to that flow"
         );
     }
     assert!(
-        policies.as_array().unwrap().iter().any(|policy| {
+        policies.as_object().unwrap().values().any(|policy| {
             policy["operator"] == json!(true)
-                && policy.get("flows").is_none()
+                && policy.get("workflows").is_none()
                 && policy["actions"] == json!(DEPLOYMENT_ACTIONS)
         }),
         "a deployment operator takes every deployment-wide action without a flow list"
@@ -1413,7 +1389,7 @@ fn two_flow_example_serves_two_example_projects() {
 fn with_review_connection() -> Value {
     let mut document: Value = yaml_value(RUNTIME).unwrap();
     document["connections"]["review"] = json!({
-        "product": "casework",
+        "type": "casework-review-producer",
         "baseUrl": "http://127.0.0.1:8102",
         "profile": "coordinator-producer",
         "producer": "coordinator",
@@ -1463,43 +1439,50 @@ fn reviewed_notice_runtime_receives_completions_for_its_review_connection_on_the
     )
     .unwrap();
     config.validate_workflow(&definition.workflow).unwrap();
-    let review = &config.connections["review"];
+    let review = config.connections["review"].product_binding().unwrap();
     assert!(matches!(
         review.product,
         registry_coordinator::runtime::Product::Casework
     ));
-    assert_eq!(review.profile.as_deref(), Some("coordinator-producer"));
-    assert_eq!(review.producer.as_deref(), Some("coordinator"));
-    assert_eq!(review.result_check_seconds(), 900);
+    assert_eq!(
+        review.profile.map(String::as_str),
+        Some("coordinator-producer")
+    );
+    assert_eq!(review.producer.map(String::as_str), Some("coordinator"));
+    assert_eq!(config.connections["review"].result_check_seconds(), 900);
     let completion = review.completion.as_ref().unwrap();
     assert_eq!(completion.recipient_binding, "coordinator-v1");
     assert_eq!(
         completion.bearer_token_ref.as_str(),
         "secret:file/review-completion-token"
     );
-    assert!(config.connections["notices"].completion.is_none());
+    assert!(config.connections["notices"]
+        .product_binding()
+        .unwrap()
+        .completion
+        .is_none());
     let document = yaml_value(REVIEW_RUNTIME).unwrap();
     assert!(document["deployment"]["listener"]["bind"].is_string());
     let policies = document["deployment"]["authentication"]["policies"]
-        .as_array()
+        .as_object()
         .unwrap();
     assert!(policies
-        .iter()
-        .all(|policy| policy["flows"] == json!(["reviewed-notice"])));
-    assert!(policies.iter().any(|policy| policy["operator"] == true));
+        .values()
+        .all(|policy| policy["workflows"] == json!(["reviewed-notice"])));
+    assert!(policies.values().any(|policy| policy["operator"] == true));
 }
 
 #[test]
 fn casework_connections_name_a_producer_profile_and_bounded_result_checks_offline() {
     let original = with_review_connection();
     let config = load(&original.to_string()).unwrap();
-    let review = &config.connections["review"];
+    let review = config.connections["review"].product_binding().unwrap();
     assert!(matches!(
         review.product,
         registry_coordinator::runtime::Product::Casework
     ));
-    assert_eq!(review.producer.as_deref(), Some("coordinator"));
-    assert_eq!(review.result_check_seconds(), 900);
+    assert_eq!(review.producer.map(String::as_str), Some("coordinator"));
+    assert_eq!(config.connections["review"].result_check_seconds(), 900);
     let mut defaulted = original.clone();
     defaulted["connections"]["review"]
         .as_object_mut()
@@ -1523,7 +1506,12 @@ fn casework_connections_name_a_producer_profile_and_bounded_result_checks_offlin
             .unwrap()
             .remove(member);
         let error = refused(&document.to_string());
-        finding_at(&error, &format!("/connections/review/{member}"));
+        finding_at(&error, "/connections/review");
+        assert!(error
+            .suggested_action
+            .as_deref()
+            .unwrap_or("")
+            .contains(member));
     }
     for (member, value) in [
         ("producer", json!(format!("Not {CANARY}"))),
@@ -1592,8 +1580,7 @@ fn casework_connections_name_a_producer_profile_and_bounded_result_checks_offlin
         let error = refused(&document.to_string());
         assert!(
             finding_at(&error, &format!("/connections/{connection}/{member}"))
-                .contains(&format!("remove {member}")),
-            "{connection}.{member}"
+                .starts_with("config.unknown-key")
         );
     }
 
@@ -1669,7 +1656,12 @@ fn generated_runtime_schema_describes_casework_connections() {
         .unwrap();
     let original = with_review_connection();
     assert!(validator.is_valid(&original));
-    let connection = &schema["$defs"]["ConnectionConfig"]["properties"];
+    let connection = &schema["$defs"]["ConnectionConfig"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == "casework-review-producer")
+        .unwrap()["properties"];
     assert_eq!(connection["resultCheckSeconds"]["default"], json!(900));
     assert_eq!(connection["resultCheckSeconds"]["minimum"], json!(60));
     assert_eq!(connection["resultCheckSeconds"]["maximum"], json!(86_400));
@@ -1697,4 +1689,157 @@ fn generated_runtime_schema_describes_casework_connections() {
     let mut spaced = original;
     spaced["connections"]["review"]["completion"]["recipientBinding"] = json!("two words");
     assert!(!validator.is_valid(&spaced));
+}
+
+#[test]
+fn tagged_connections_share_one_namespace_and_preserve_variant_checks() {
+    let mut document = yaml_value(SCHEDULING_RUNTIME).unwrap();
+    let external = yaml_value(include_str!(
+        "../../../products/coordinator/examples/external-directory/runtime.yaml"
+    ))
+    .unwrap();
+    let evaluation = yaml_value(include_str!(
+        "../../../products/coordinator/examples/decision-follow-up/runtime.yaml"
+    ))
+    .unwrap();
+    document["connections"]["directory"] = external["connections"]["directory"].clone();
+    document["connections"]["assessor"] = evaluation["connections"]["assessor"].clone();
+    document["connections"]["review"] = with_review_connection()["connections"]["review"].clone();
+    let config = load(&document.to_string()).unwrap();
+    assert!(config.connections["directory"].external_http().is_some());
+    assert!(config.connections["assessor"].decision().is_some());
+    assert!(config.connections["review"].product_binding().is_some());
+    let restored = load(&config.document().unwrap().to_string()).unwrap();
+    assert_eq!(
+        config.binding_digest().unwrap(),
+        restored.binding_digest().unwrap()
+    );
+    #[cfg(feature = "schema")]
+    {
+        let schema: Value =
+            serde_json::from_str(&registry_coordinator::runtime::runtime_schema().unwrap())
+                .unwrap();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        assert!(validator.is_valid(&document));
+    }
+    for (connection, member, value) in [
+        ("directory", "maximumResponseBytes", json!(65537)),
+        ("assessor", "attemptTimeoutMilliseconds", json!(8001)),
+        ("notices", "producer", json!("coordinator")),
+        ("directory", "type", json!("messaging")),
+    ] {
+        let mut invalid = document.clone();
+        invalid["connections"][connection][member] = value;
+        let error = refused(&invalid.to_string());
+        assert!(error
+            .diagnostics
+            .iter()
+            .any(|d| d.path.starts_with(&format!("/connections/{connection}"))));
+        assert!(error.diagnostics.iter().all(|d| d
+            .source
+            .as_ref()
+            .is_some_and(|source| source.line.is_some() && source.column.is_some())));
+    }
+    for legacy in ["externalHttpConnections", "decisionConnections"] {
+        let mut invalid = document.clone();
+        invalid[legacy] = json!({});
+        let error = refused(&invalid.to_string());
+        assert_eq!(error.field.as_deref(), Some(format!("/{legacy}").as_str()));
+    }
+    let mut too_many = document;
+    let binding = too_many["connections"]["directory"].clone();
+    let connections = too_many["connections"].as_object_mut().unwrap();
+    for index in 0..17 {
+        connections.insert(format!("directory-{index}"), binding.clone());
+    }
+    assert_eq!(
+        refused(&too_many.to_string()).field.as_deref(),
+        Some("/connections")
+    );
+}
+
+#[test]
+fn external_and_evaluation_identity_permits_rotation_but_pins_authority_and_destination() {
+    for (runtime, name, credential, authority) in [
+        (
+            include_str!("../../../products/coordinator/examples/decision-follow-up/runtime.yaml"),
+            "assessor",
+            vec!["authorization", "bearer", "tokenRef"],
+            vec!["authorization", "bearer", "principal"],
+        ),
+        (
+            include_str!("../../../products/coordinator/examples/external-directory/runtime.yaml"),
+            "directory",
+            vec!["authorization", "signingKeyRef"],
+            vec!["authorization", "clientId"],
+        ),
+    ] {
+        let mut document = yaml_value(runtime).unwrap();
+        if name == "directory" {
+            document["secretProviders"]["file"] =
+                json!({"root":"/run/registry-coordinator/secrets"});
+            document["connections"][name]["authorization"] = yaml_value(RUNTIME).unwrap()
+                ["connections"]["applications"]["authorization"]
+                .clone();
+        }
+        let original = load(&document.to_string())
+            .unwrap()
+            .binding_digest()
+            .unwrap();
+        let mut rotate = document.clone();
+        let mut slot = &mut rotate["connections"][name];
+        for part in &credential {
+            slot = &mut slot[*part];
+        }
+        *slot = json!("secret:file/rotated-credential");
+        assert_eq!(
+            original,
+            load(&rotate.to_string()).unwrap().binding_digest().unwrap()
+        );
+        let mut change = document.clone();
+        let mut slot = &mut change["connections"][name];
+        for part in &authority {
+            slot = &mut slot[*part];
+        }
+        *slot = json!("different-principal");
+        assert_ne!(
+            original,
+            load(&change.to_string()).unwrap().binding_digest().unwrap()
+        );
+        let mut redirect = document;
+        redirect["connections"][name]["baseUrl"] = json!("https://different-service.example");
+        assert_ne!(
+            original,
+            load(&redirect.to_string())
+                .unwrap()
+                .binding_digest()
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+fn stricter_observation_spacing_is_bounded_and_part_of_the_binding() {
+    let original = yaml_value(SCHEDULING_RUNTIME).unwrap();
+    let default = load(&original.to_string()).unwrap();
+    assert_eq!(default.minimum_observation_interval_seconds.get(), 30);
+    let digest = default.binding_digest().unwrap();
+    let mut strict = original.clone();
+    strict["minimumObservationIntervalSeconds"] = json!(900);
+    let strict = load(&strict.to_string()).unwrap();
+    assert_eq!(strict.minimum_observation_interval_seconds.get(), 900);
+    assert_ne!(digest, strict.binding_digest().unwrap());
+    for seconds in [29, 86_401] {
+        let mut invalid = original.clone();
+        invalid["minimumObservationIntervalSeconds"] = json!(seconds);
+        let error = refused(&invalid.to_string());
+        assert_eq!(
+            error.field.as_deref(),
+            Some("/minimumObservationIntervalSeconds")
+        );
+        assert_eq!(error.code, "config.out-of-range");
+    }
 }

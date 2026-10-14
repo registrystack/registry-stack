@@ -11,7 +11,7 @@ use std::{
 
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
 use registry_platform_testing::TestAuthorizationServer;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn binary(variable: &str) -> PathBuf {
     let path = PathBuf::from(std::env::var_os(variable).unwrap_or_else(|| {
@@ -131,7 +131,7 @@ impl Breg {
         std::fs::create_dir_all(project.join("scripts")).unwrap();
         crate::support::private_file(
             &project.join("scripts/update-item.rhai"),
-            br#"fn handle(ctx) {
+            br#"fn plan(ctx) {
     if ctx.inputs.label == "Refuse" {
         return #{refusal: #{code: "label-not-eligible", field: "label"}};
     }
@@ -139,36 +139,68 @@ impl Breg {
 }
 "#,
         );
-        document(
-            &project.join("registry.yaml"),
-            json!({
-                "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
-                "project":{"id":"coordinator-action-proof", "canonicalBaseIri":"https://synthetic.example.invalid/action-proof", "version":"1", "defaultLanguage":"en"},
-                "package":{"sourceRevision":"coordinator-native-action-proof"},
-                "entities":[{"id":"item", "primaryDataset":"synthetic-items", "route":"items", "mutationMode":"mutable", "classification":"internal",
-                    "fields":[{"id":"owner", "type":"string", "required":true, "maximumLength":80, "classification":"internal"},
-                        {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}]}],
-                "actions":[{"id":"update-item", "inputs":[
-                    {"id":"target", "apiName":"targetId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
-                    {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}],
-                    "handler":{"type":"rhai", "script":"scripts/update-item.rhai", "abi":"registry.action-handler/v1",
-                        "refusals":[{"code":"label-not-eligible", "label":"The label is not eligible."}],
-                        "writes":[{"id":"item", "target":{"fromField":"target"}, "operation":"patch", "fields":["label"]}]}}],
-                "accessProfiles":[
-                    {"id":"writer", "default":true, "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
-                        "permissions":{"entities":[{"entity":"item", "operations":["create","get","list"], "readableFields":["owner","label"], "writableFields":["owner","label"],
-                            "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}],
-                            "actions":[{"action":"update-item", "operations":["invoke"], "targets":[{"entity":"item", "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}], "results":["item"]}]}},
-                    {"id":"reader", "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
-                        "permissions":{"entities":[{"entity":"item", "operations":["get"], "readableFields":["owner","label"], "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}]}}
-                ]
-            }),
+        let mut registry = json!({
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+            "project":{"id":"coordinator-action-proof", "canonicalBaseIri":"https://synthetic.example.invalid/action-proof", "version":"1", "defaultLanguage":"en"},
+            "package":{"sourceRevision":"coordinator-native-action-proof"},
+            "recordTypes":[{"id":"item", "primaryDataset":"synthetic-items", "route":"items", "mutationMode":"mutable", "classification":"internal",
+                "fields":[{"id":"owner", "type":"string", "required":true, "maximumLength":80, "classification":"internal"},
+                    {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}]}],
+            "datasets":[{"id":"synthetic-items"}],
+            "functions":[{"id":"update-item-plan","runtime":"rhai","source":"scripts/update-item.rhai","entrypoint":"plan","abi":"registry.action-plan/v1"}],
+            "actions":[{"id":"update-item", "execution":{"mode":"immediate"}, "inputs":[
+                {"id":"target", "apiName":"targetId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
+                {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}],
+                "plan":{"type":"function", "function":"update-item-plan", "inputs":["target","label"],
+                    "refusals":[{"code":"label-not-eligible", "label":"The label is not eligible."}],
+                    "writes":[{"id":"item", "target":{"fromInput":"target"}, "operation":"patch", "fields":["label"]}]}}],
+            "accessProfiles":[
+                {"id":"writer", "default":true, "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
+                    "permissions":{"records":[{"recordType":"item", "operations":["create","get","list"], "readableFields":["owner","label"], "writableFields":["owner","label"],
+                        "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}],
+                        "actions":[{"action":"update-item", "operations":["invoke"], "targets":[{"recordType":"item", "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}], "results":["item"]}]}},
+                {"id":"reader", "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
+                    "permissions":{"records":[{"recordType":"item", "operations":["get"], "readableFields":["owner","label"], "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}]}}
+            ]
+        });
+        for (id, automatic) in [("propose-item", true), ("manual-item", false)] {
+            let mut policy =
+                json!({"review":{"type":"none"},"retention":{"mode":"operator-erase"}});
+            if !automatic {
+                policy["application"] = json!({"mode":"manual"});
+            }
+            registry["actions"].as_array_mut().unwrap().push(json!({
+                "id":id,"execution":{"mode":"proposal","proposal":policy},
+                "inputs":[{"id":"target","apiName":"targetId","type":"reference","target":"item","required":true,"classification":"internal"},
+                    {"id":"label","type":"string","required":true,"minimumLength":1,"maximumLength":80,"classification":"internal"}],
+                "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
+                "plan":{"type":"fixed","effects":[{"id":"item","target":{"fromInput":"target"},"operation":"patch","set":{"label":{"fromInput":"label"}}}]}
+            }));
+            registry["accessProfiles"][0]["permissions"]["actions"].as_array_mut().unwrap().push(json!({
+                "action":id,"operations":["start"],"targets":[{"recordType":"item","rowBoundaries":[{"field":"owner","claim":"sub","operator":"equals"}]}]
+            }));
+        }
+        registry["accessProfiles"][0]["permissions"]["proposals"] = json!([
+            {"action":"propose-item","operations":["get","submit","cancel"],"ownership":"caller","targets":[{"recordType":"item","rowBoundaries":[{"field":"owner","claim":"sub","operator":"equals"}]}]},
+            {"action":"manual-item","operations":["get","submit","cancel","apply"],"ownership":"caller","targets":[{"recordType":"item","rowBoundaries":[{"field":"owner","claim":"sub","operator":"equals"}]}]}
+        ]);
+        document(&project.join("registry.yaml"), registry);
+        operator(
+            &ctl,
+            &[
+                "generate".as_ref(),
+                "actions".as_ref(),
+                project.as_os_str(),
+                "--output".as_ref(),
+                service.root.join("action-contracts").as_os_str(),
+            ],
+            &service.root.join("action-contracts.log"),
         );
         document(
             &project.join("tests/journeys.yaml"),
             json!({
                 "apiVersion":"id.registrystack.org/formats/breg/journeys/v1", "kind":"BRegJourneys",
-                "journeys":[{"id":"fixture-empty", "steps":[{"id":"list", "entity":"item", "accessProfile":"writer",
+                "journeys":[{"id":"fixture-empty", "steps":[{"id":"list", "recordType":"item", "accessProfile":"writer",
                     "claims":{"principal":"coordinator-reader", "scopes":["applications:read"], "actorKind":"service", "requesterClient":"application-reader", "directClaims":{"sub":"coordinator-reader"}},
                     "request":{"type":"list"}, "expect":{"outcome":"success", "status":200, "count":0}}]}]
             }),
@@ -317,6 +349,14 @@ impl Breg {
     }
 
     pub fn client(&self, issuer: &TestAuthorizationServer) -> BaseRegistryClient {
+        self.client_at(issuer, &self.base_url)
+    }
+
+    pub fn client_at(
+        &self,
+        issuer: &TestAuthorizationServer,
+        base_url: &str,
+    ) -> BaseRegistryClient {
         let token = issuer.issue_access_token(
             "application-reader",
             "coordinator-reader",
@@ -325,7 +365,7 @@ impl Breg {
             chrono::Utc::now().timestamp() + 300,
         );
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(self.base_url.parse().unwrap())
+            BaseRegistryClientConfig::new(base_url.parse().unwrap())
                 .with_token_provider(std::sync::Arc::new(StaticToken::new(token).unwrap()))
                 .with_max_mutation_retries(0),
         )
@@ -390,6 +430,13 @@ pub struct LostResponse {
 }
 
 impl LostResponse {
+    pub fn submit_proposal(origin: &str, proposal_id: &str) -> Self {
+        Self::start_for(
+            origin,
+            &format!("/v1/proposals/{proposal_id}/submit?accessProfile=writer"),
+            false,
+        )
+    }
     pub fn start(origin: &str) -> Self {
         Self::start_for(
             origin,

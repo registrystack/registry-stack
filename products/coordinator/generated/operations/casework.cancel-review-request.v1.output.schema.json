@@ -1,0 +1,156 @@
+{
+  "$defs": {
+    "ContentDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "PolicyBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/ContentDigest"
+        },
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "ReviewResult": {
+      "additionalProperties": false,
+      "properties": {
+        "availableUntil": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "completedAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy": {
+          "$ref": "#/$defs/PolicyBinding"
+        },
+        "requestId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "result": true,
+        "resultId": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ReviewResultStatus"
+        },
+        "subject": {
+          "$ref": "#/$defs/SubjectBinding"
+        },
+        "submissionDigest": {
+          "$ref": "#/$defs/ContentDigest"
+        }
+      },
+      "required": [
+        "resultId",
+        "requestId",
+        "subject",
+        "policy",
+        "submissionDigest",
+        "status",
+        "completedAt",
+        "availableUntil"
+      ],
+      "type": "object"
+    },
+    "ReviewResultStatus": {
+      "enum": [
+        "approved",
+        "rejected",
+        "changes-requested",
+        "answered",
+        "cancelled",
+        "superseded"
+      ],
+      "type": "string"
+    },
+    "SubjectBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/ContentDigest"
+        },
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "type",
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "const": "cancelled",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/ReviewResult"
+        }
+      },
+      "required": [
+        "outcome",
+        "result"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "const": "already-terminal",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/ReviewResult"
+        }
+      },
+      "required": [
+        "outcome",
+        "result"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "casework.cancel-review-request/v1 output"
+}

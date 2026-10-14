@@ -1,59 +1,94 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+# This is a run cutoff. It never extends the shorter Casework approval.
+    # Copy only the UUID and original Unix expiry returned by Casework approval.
+    # The adapter acquires a fresh assertion and bearer at the time of each read.
 apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project:
   id: approved-record-check
-  version: "1"
-input:
-  type: object
-  additionalProperties: false
-  required: [collection, recordId, notBefore, grant]
-  properties:
-    collection: {type: string, minLength: 1, maxLength: 64}
-    recordId: {type: string, format: uuid}
-    notBefore: {type: string, format: date-time}
-    grant:
-      type: object
-      additionalProperties: false
-      required: [id, expiresAt]
-      properties:
-        id: {type: string, format: uuid}
-        expiresAt: {type: integer, minimum: 1}
-connections:
-  source: breg
-functionsFile: functions.rhai
-# This is a run cutoff. It never extends the shorter Casework approval.
-deadlineSeconds: 86400
-start: due
-steps:
-  due:
-    type: wait-until
-    waitUntil: {type: input, path: /notBefore}
-    next: read
-  read:
-    type: call
-    connection: source
-    operation: read-record
-    # Copy only the UUID and original Unix expiry returned by Casework approval.
-    # The adapter acquires a fresh assertion and bearer at the time of each read.
-    input:
-      type: fields
-      fields:
-        collection: {type: input, path: /collection}
-        recordId: {type: input, path: /recordId}
-        grant: {type: input, path: /grant}
-    next: checked
-  checked:
-    type: finish
-    outcome: record-checked
-    output:
-      type: fields
-      fields:
-        recordId: {type: step, step: read, path: /data/recordIdentifier}
-outcomes:
-  record-checked:
+  version: '1'
+types:
+  workflow-input:
     type: object
     additionalProperties: false
-    required: [recordId]
+    required:
+    - collection
+    - recordId
+    - notBefore
+    - grant
     properties:
-      recordId: {type: string, format: uuid}
+      collection:
+        type: string
+        minLength: 1
+        maxLength: 64
+      recordId:
+        type: string
+        format: uuid
+      notBefore:
+        type: string
+        format: date-time
+      grant:
+        type: object
+        additionalProperties: false
+        required:
+        - id
+        - expiresAt
+        properties:
+          id:
+            type: string
+            format: uuid
+          expiresAt:
+            type: integer
+            minimum: 1
+operations:
+  source-read-record:
+    uses: breg.read-record/v1
+    connection: source
+workflow:
+  input:
+    typeRef: workflow-input
+  deadlineSeconds: 86400
+  start: due
+  steps:
+    due:
+      type: wait-until
+      waitUntil:
+        type: input
+        path: /notBefore
+      next: read
+    read:
+      type: call
+      operation: source-read-record
+      input:
+        type: fields
+        fields:
+          collection:
+            type: input
+            path: /collection
+          recordId:
+            type: input
+            path: /recordId
+          grant:
+            type: input
+            path: /grant
+      next: checked
+    checked:
+      type: finish
+      outcome: record-checked
+      output:
+        type: fields
+        fields:
+          recordId:
+            type: step
+            step: read
+            path: /data/recordIdentifier
+  outcomes:
+    record-checked:
+      type: object
+      additionalProperties: false
+      required:
+      - recordId
+      properties:
+        recordId:
+          type: string
+          format: uuid

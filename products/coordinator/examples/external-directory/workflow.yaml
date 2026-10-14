@@ -1,52 +1,106 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+# Ten attempts and nine waits of at most the 300-second backoff cap fit, so a
+# directory that stays busy reaches the workflow on the final attempt.
 apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project:
   id: external-directory
-  version: "1"
-input:
-  type: object
-  additionalProperties: false
-  required: [district]
-  properties:
-    district: {type: string, minLength: 1, maxLength: 128}
-connections:
-  directory: external-http
-functionsFile: functions.rhai
-# Ten attempts and nine waits of at most the 300-second backoff cap fit, so a
-# directory that stays busy reaches the workflow on the final attempt.
-deadlineSeconds: 3600
-start: lookup
-steps:
-  lookup:
-    type: call
-    connection: directory
-    operation: external-get
-    input: {type: function, function: lookup_request, arguments: [{type: input}]}
-    next: result
-  result:
-    type: choose
-    choose: {type: function, function: office_route, arguments: [{type: step, step: lookup}]}
-    cases: {found: found, missing: missing, unavailable: unavailable}
-  found:
-    type: finish
-    outcome: office-found
-    output:
-      type: fields
-      fields:
-        officeId: {type: step, step: lookup, path: /body/items/0/id}
-  missing:
-    type: finish
-    outcome: no-directory-entry
-  unavailable:
-    type: finish
-    outcome: directory-unavailable
-outcomes:
-  office-found:
+  version: '1'
+types:
+  workflow-input:
     type: object
     additionalProperties: false
-    required: [officeId]
+    required:
+    - district
     properties:
-      officeId: {type: string, minLength: 1, maxLength: 128}
-  no-directory-entry: {type: "null"}
-  directory-unavailable: {type: "null"}
+      district:
+        type: string
+        minLength: 1
+        maxLength: 128
+functions:
+  lookup-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: lookup_request
+    inputs:
+      input:
+        typeRef: workflow-input
+    output:
+      operationInput: directory-external-get
+  office-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: office_route
+    inputs:
+      reply:
+        operationOutput: directory-external-get
+    output:
+      type: string
+      enum:
+      - found
+      - missing
+      - unavailable
+operations:
+  directory-external-get:
+    uses: external.get/v1
+    connection: directory
+workflow:
+  input:
+    typeRef: workflow-input
+  deadlineSeconds: 3600
+  start: lookup
+  steps:
+    lookup:
+      type: call
+      operation: directory-external-get
+      input:
+        type: function
+        function: lookup-request
+        inputs:
+          input:
+            type: input
+      next: result
+    result:
+      type: choose
+      choose:
+        type: function
+        function: office-route
+        inputs:
+          reply:
+            type: step
+            step: lookup
+      cases:
+        found: found
+        missing: missing
+        unavailable: unavailable
+    found:
+      type: finish
+      outcome: office-found
+      output:
+        type: fields
+        fields:
+          officeId:
+            type: step
+            step: lookup
+            path: /body/items/0/id
+    missing:
+      type: finish
+      outcome: no-directory-entry
+    unavailable:
+      type: finish
+      outcome: directory-unavailable
+  outcomes:
+    office-found:
+      type: object
+      additionalProperties: false
+      required:
+      - officeId
+      properties:
+        officeId:
+          type: string
+          minLength: 1
+          maxLength: 128
+    no-directory-entry:
+      type: 'null'
+    directory-unavailable:
+      type: 'null'

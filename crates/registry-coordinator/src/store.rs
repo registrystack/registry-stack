@@ -46,7 +46,7 @@ enum InspectionBinding<'a> {
 /// The protected state schema version. It is written once, when apply creates
 /// the namespace, to `control.schema_version` and to the activation migration
 /// ledger, and every state transaction fences on it.
-pub(crate) const SCHEMA_VERSION: i32 = 2;
+pub(crate) const SCHEMA_VERSION: i32 = 3;
 
 /// Identifies a namespace whose tables this runtime created and owns.
 const NAMESPACE_MARKER: &str = "registry-coordinator protected-state";
@@ -130,9 +130,8 @@ pub struct StoreSecurity {
 #[serde(rename_all = "camelCase")]
 pub struct RunStatus {
     pub run_id: Uuid,
-    pub workflow_id: String,
-    pub workflow_version: String,
-    pub definition_digest: String,
+    pub workflow: String,
+    pub workflow_revision: String,
     pub binding_digest: String,
     pub step: String,
     pub state: String,
@@ -256,7 +255,47 @@ pub struct RecoveryStatus {
 pub struct RunInspection {
     pub run: RunStatus,
     pub steps: Vec<StepStatus>,
+    pub effects: Vec<EffectStatus>,
+    pub waits: Vec<WaitStatus>,
     pub recovery: RecoveryStatus,
+}
+
+/// Known acceptance or dispatch ambiguity, without product inputs or receipts.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectStatus {
+    pub step: String,
+    pub operation: crate::operations::OperationIdentity,
+    pub operation_revision: String,
+    pub state: EffectState,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffectState {
+    Accepted,
+    Unknown,
+}
+
+/// Durable observation budget. Correlation values remain in protected custody.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitStatus {
+    pub step: String,
+    pub accepted_step: String,
+    pub completion: String,
+    pub completion_revision: String,
+    pub timeout_at: DateTime<Utc>,
+    pub next_observation_at: Option<DateTime<Utc>>,
+    pub not_before: DateTime<Utc>,
+    pub minimum_interval_seconds: u32,
+    pub observations: u32,
+    pub observation_limit: u32,
+}
+
+fn observation_limit(started: DateTime<Utc>, timeout: DateTime<Utc>, interval: u32) -> u32 {
+    let duration = (timeout - started).num_seconds().max(0) as u64;
+    (1 + duration.div_ceil(u64::from(interval.max(WAIT_READ_SPACING_SECONDS)))) as u32
 }
 
 #[derive(Clone)]
@@ -332,6 +371,13 @@ impl FrozenCommand {
     }
 }
 
+pub(crate) enum ObservationPermit {
+    Observe { timed_out: bool },
+    Pause { seconds: u32 },
+    TimedOut,
+    Exhausted,
+}
+
 #[derive(Clone)]
 #[doc(hidden)]
 pub struct Detail {
@@ -341,6 +387,10 @@ pub struct Detail {
     pub failure_code: Option<&'static str>,
     pub failure_path: Option<String>,
     pub uncertain: bool,
+    /// An observation needs operator attention without implying an unknown command.
+    pub recovery_hold: bool,
+    /// Product or transport pause that even an authenticated signal must honor.
+    pub observation_pause_seconds: Option<u32>,
     pub receipt_expired: bool,
     /// A delivered mutating call whose typed result proves no product effect
     /// occurred. This matters only when cancellation raced with completion.
@@ -358,6 +408,8 @@ impl Detail {
             failure_code: Some(code),
             failure_path: None,
             uncertain,
+            recovery_hold: false,
+            observation_pause_seconds: None,
             receipt_expired: false,
             completed_without_effect: false,
             recheck_seconds: None,
@@ -494,7 +546,7 @@ impl Store {
     }
 
     /// Fence every state transaction on the flow set this process serves.
-    pub fn with_flows_digest(mut self, digest: String) -> Self {
+    pub fn with_workflows_digest(mut self, digest: String) -> Self {
         self.flows_digest = Some(digest);
         self
     }
@@ -737,12 +789,16 @@ impl Store {
         // name a job but carry no foreign key: deployment cleanup deletes
         // jobs and runs in its own order.
         tx.batch_execute(&format!(
-            "CREATE TABLE {0}.review_waits (
+            "CREATE TABLE {0}.completion_waits (
                 run_id uuid NOT NULL, step text NOT NULL, wait_key text NOT NULL,
                 timeout_at timestamptz NOT NULL, read_at timestamptz,
                 woken_at timestamptz, recheck_at timestamptz,
+                started_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                not_before timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                observations integer NOT NULL DEFAULT 0 CHECK(observations>=0),
+                interval_seconds integer NOT NULL DEFAULT 30 CHECK(interval_seconds BETWEEN 30 AND 86400),
                 PRIMARY KEY (run_id, step));
-            CREATE INDEX review_waits_key_idx ON {0}.review_waits (wait_key)",
+            CREATE INDEX completion_waits_key_idx ON {0}.completion_waits (wait_key)",
             self.namespace
         ))
         .await
@@ -843,21 +899,48 @@ impl Store {
         )
     }
 
-    /// The correlation key of the wait for the review request that the named
-    /// call step accepted, from that step's protected output.
-    fn review_wait_key(
+    /// Hash the protected accepted binding. Only Casework exposes a public
+    /// signal protocol, whose authenticated locator uses the same keyed hash.
+    fn completion_wait_key(
         &self,
         definition: &Definition,
-        request: &str,
+        completion: &crate::definition::CompletionReference,
         outputs: &BTreeMap<String, Value>,
     ) -> Option<String> {
-        let Some(Step::Call { call, .. }) = definition.workflow.steps.get(request) else {
+        let Some(Step::Call { call, .. }) = definition.workflow.steps.get(&completion.step) else {
             return None;
         };
-        let accepted: registry_review_protocol::ReviewRequestAccepted =
-            serde_json::from_value(outputs.get(request)?.clone()).ok()?;
-        (!accepted.request_id.is_nil())
-            .then(|| self.wait_key(&call.connection, accepted.request_id))
+        let accepted = outputs.get(&completion.step)?;
+        let contract = definition.completion(completion).ok()?;
+        if matches!(
+            contract.kind,
+            crate::definition::CompletionKind::CaseworkResult {}
+        ) {
+            let accepted: registry_review_protocol::ReviewRequestAccepted =
+                serde_json::from_value(accepted.clone()).ok()?;
+            return (!accepted.request_id.is_nil())
+                .then(|| self.wait_key(&call.connection, accepted.request_id));
+        }
+        if matches!(
+            contract.kind,
+            crate::definition::CompletionKind::BregApplication {}
+        ) {
+            let bytes = serde_json::to_vec(accepted).ok()?;
+            let accepted = registry_breg_client::BRegProposal::from_slice(&bytes).ok()?;
+            if accepted.submission_version() == 0 || accepted.effect_digest().is_none() {
+                return None;
+            }
+        }
+        let bytes = registry_platform_canonical_json::canonicalize_json(accepted).ok()?;
+        Some(self.security.keys.commitment(
+            "completion-wait",
+            &[
+                self.security.database_id.as_bytes(),
+                call.connection.as_bytes(),
+                contract.revision.as_bytes(),
+                &bytes,
+            ],
+        ))
     }
 
     pub async fn admit(
@@ -868,10 +951,22 @@ impl Store {
         key: &str,
         binding_digest: &str,
     ) -> Result<Uuid> {
-        self.admit_bound(definition, input, producer, key, binding_digest, None)
-            .await
+        self.admit_bound(
+            definition,
+            input,
+            producer,
+            key,
+            binding_digest,
+            None,
+            &definition.digest,
+        )
+        .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Admission binds caller identity, command, runtime and expected revision independently"
+    )]
     async fn admit_bound(
         &self,
         definition: &Definition,
@@ -880,6 +975,7 @@ impl Store {
         key: &str,
         binding_digest: &str,
         runtime: Option<&crate::runtime::RuntimeConfig>,
+        expected_revision: &str,
     ) -> Result<Uuid> {
         if producer.is_empty()
             || key.is_empty()
@@ -947,14 +1043,10 @@ impl Store {
         if held {
             return Err(refused("restore-admissions-held","recover complete admission history before enabling starts; inspect known runs while ingress is held"));
         }
-        if let Some(runtime) = runtime {
-            self.check_live_bindings(&tx, runtime).await?;
-        }
-        self.check_definition_history(&tx, definition).await?;
         if let Some(row) = tx
             .query_opt(
                 &format!(
-                    "SELECT run_id,input_digest FROM {}.runs WHERE start_identity=$1",
+                    "SELECT run_id,input_digest,definition_digest FROM {}.runs WHERE start_identity=$1",
                     self.namespace
                 ),
                 &[&identity],
@@ -962,15 +1054,21 @@ impl Store {
             .await
             .map_err(unavailable)?
         {
-            if row.get::<_, String>(1) != input_digest {
+            if row.get::<_, String>(1) != input_digest || row.get::<_, String>(2) != expected_revision {
                 return Err(refused(
                     "start-conflict",
                     "this producer, workflow and idempotency key already names different admitted work",
                 ));
             }
-            // A retry of admission belongs to its first run, irrespective of a
-            // newer supplied version or that version's input schema.
+            // Recovery is bound to the originally admitted revision and exact
+            // input, including when only the protected tombstone remains.
             return Ok(row.get(0));
+        }
+        if expected_revision != definition.digest {
+            return Err(refused("workflow-revision-mismatch", "the expected Workflow revision is not active; discover the active contract before starting new work"));
+        }
+        if let Some(runtime) = runtime {
+            self.check_live_bindings(&tx, runtime).await?;
         }
         definition.validate_input(&input)?;
         self.require_unheld(&tx).await?;
@@ -1041,7 +1139,7 @@ impl Store {
     }
 
     fn status_state() -> &'static str {
-        "CASE WHEN r.restore_review_required THEN 'attention' WHEN r.cancel_requested THEN r.state WHEN r.state='finished' THEN 'finished' WHEN j.state IN ('pending','leased') THEN 'running' WHEN j.state='unknown' THEN 'attention' WHEN j.state='expired' THEN 'expired' WHEN j.state='dead-lettered' THEN 'failed' ELSE r.state END"
+        "CASE WHEN r.restore_review_required THEN 'attention' WHEN r.cancel_requested THEN r.state WHEN r.state IN ('finished','attention') THEN r.state WHEN j.state IN ('pending','leased') THEN 'running' WHEN j.state='unknown' THEN 'attention' WHEN j.state='expired' THEN 'expired' WHEN j.state='dead-lettered' THEN 'failed' ELSE r.state END"
     }
 
     fn status_select(&self) -> String {
@@ -1093,7 +1191,7 @@ impl Store {
                 .any(|flow| flow.is_empty() || flow.len() > 128)
         {
             return Err(refused(
-                "list-flow-invalid",
+                "list-workflow-invalid",
                 "choose at most 64 bounded nonempty workflow identities",
             ));
         }
@@ -1238,7 +1336,7 @@ impl Store {
                 failure_path: row.get(10),
             })
             .collect::<Vec<_>>();
-        let row = tx.query_one(&format!("SELECT r.snapshot,j.state,j.receipt_expired,j.pure OR r.deadline_at>transaction_timestamp(),r.cancel_requested,r.payload_erased_at, (SELECT restore_hold FROM {0}.control WHERE id), ({1}) AND NOT r.restore_review_required, EXISTS(SELECT 1 FROM {0}.review_waits w WHERE w.run_id=r.run_id AND w.step=r.step) FROM {0}.runs r JOIN {0}.jobs j ON j.run_id=r.run_id AND j.step=r.step WHERE r.run_id=$1", self.namespace,self.terminal_retention_predicate()), &[&run]).await.map_err(unavailable)?;
+        let row = tx.query_one(&format!("SELECT r.snapshot,j.state,j.receipt_expired,j.pure OR r.deadline_at>transaction_timestamp(),r.cancel_requested,r.payload_erased_at, (SELECT restore_hold FROM {0}.control WHERE id), ({1}) AND NOT r.restore_review_required, EXISTS(SELECT 1 FROM {0}.completion_waits w WHERE w.run_id=r.run_id AND w.step=r.step),r.outputs FROM {0}.runs r JOIN {0}.jobs j ON j.run_id=r.run_id AND j.step=r.step WHERE r.run_id=$1", self.namespace,self.terminal_retention_predicate()), &[&run]).await.map_err(unavailable)?;
         // Only genuinely settled terminal history may use its recorded binding.
         // Decide inside this same repeatable-read inspection, never from a stale
         // HTTP status label. Recovery targets must still resolve current bindings.
@@ -1275,6 +1373,79 @@ impl Store {
                 _ => None,
             }
         });
+        let outputs = row
+            .get::<_, Option<Value>>(9)
+            .map(|sealed| self.open_value::<BTreeMap<String, Value>>(run, "outputs", "", &sealed))
+            .transpose()?;
+        let mut effects = Vec::new();
+        let mut waits = Vec::new();
+        if let Some(definition) = &definition {
+            for step in &steps {
+                let Some(Step::Call { call, .. }) = definition.workflow.steps.get(&step.step)
+                else {
+                    continue;
+                };
+                if !call.operation.has_dispatch_risk() {
+                    continue;
+                }
+                let state = if step.uncertain {
+                    Some(EffectState::Unknown)
+                } else if step.state == "delivered"
+                    && outputs
+                        .as_ref()
+                        .and_then(|values| values.get(&step.step))
+                        .is_some_and(|value| {
+                            definition
+                                .operation_contract(call)
+                                .is_ok_and(|contract| contract.check_output(value).is_ok())
+                        })
+                {
+                    Some(EffectState::Accepted)
+                } else {
+                    None
+                };
+                if let Some(state) = state {
+                    effects.push(EffectStatus {
+                        step: step.step.clone(),
+                        operation: call.operation.identity(),
+                        operation_revision: definition.workflow.operation(call).revision.clone(),
+                        state,
+                    });
+                }
+            }
+            let rows = tx.query(&format!("SELECT w.step,w.timeout_at,CASE WHEN j.state IN ('pending','leased') THEN j.next_attempt_at ELSE NULL END,w.not_before,w.interval_seconds,w.observations,w.started_at FROM {0}.completion_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE w.run_id=$1 ORDER BY w.step LIMIT 65",self.namespace),&[&run]).await.map_err(unavailable)?;
+            if rows.len() > 64 {
+                return Err(refused(
+                    "run-state-invalid",
+                    "durable waits exceed the workflow bound",
+                ));
+            }
+            for row in rows {
+                let step: String = row.get(0);
+                let Some(Step::WaitFor { wait_for, .. }) = definition.workflow.steps.get(&step)
+                else {
+                    return Err(refused(
+                        "run-state-invalid",
+                        "a durable wait has no pinned completion",
+                    ));
+                };
+                let completion = definition.completion(wait_for)?;
+                let timeout_at = row.get(1);
+                let interval = row.get::<_, i32>(4) as u32;
+                waits.push(WaitStatus {
+                    step,
+                    accepted_step: wait_for.step.clone(),
+                    completion: wait_for.name.clone(),
+                    completion_revision: completion.revision.clone(),
+                    timeout_at,
+                    next_observation_at: row.get(2),
+                    not_before: row.get(3),
+                    minimum_interval_seconds: interval,
+                    observations: row.get::<_, i32>(5) as u32,
+                    observation_limit: observation_limit(row.get(6), timeout_at, interval),
+                });
+            }
+        }
         let reason = if row.get::<_, Option<DateTime<Utc>>>(5).is_some() {
             Some(RetryBlockReason::PayloadErased)
         } else if status.binding_digest != current_binding_digest {
@@ -1319,6 +1490,8 @@ impl Store {
         Ok(RunInspection {
             run: status,
             steps,
+            effects,
+            waits,
             recovery: RecoveryStatus {
                 retry_allowed: reason.is_none(),
                 reason,
@@ -1532,7 +1705,7 @@ impl Store {
                     timeout_seconds,
                     ..
                 })) => {
-                    match self.review_wait_key(&definition, wait_for.request(), &outputs) {
+                    match self.completion_wait_key(&definition, wait_for, &outputs) {
                         Some(key) => wait = Some((key, *timeout_seconds)),
                         None => failure = Some("protected-state-invalid"),
                     }
@@ -1586,7 +1759,7 @@ impl Store {
                         i32::try_from(*timeout_seconds).map_err(|_| DispatchError::Unavailable)?;
                     tx.execute(
                         &format!(
-                            "INSERT INTO {}.review_waits(run_id,step,wait_key,timeout_at) VALUES($1,$2,$3,transaction_timestamp()+$4::integer*interval '1 second')",
+                            "INSERT INTO {0}.completion_waits(run_id,step,wait_key,timeout_at) SELECT $1,$2,$3,LEAST(r.deadline_at,transaction_timestamp()+$4::integer*interval '1 second') FROM {0}.runs r WHERE r.run_id=$1",
                             self.namespace
                         ),
                         &[&id, next, key, &timeout_seconds],
@@ -1686,7 +1859,7 @@ impl Store {
     ) -> std::result::Result<(), DispatchError> {
         tx.execute(
             &format!(
-                "DELETE FROM {0}.review_waits w USING {0}.runs r WHERE w.run_id=$1 AND r.run_id=w.run_id AND ((w.step=$2 AND $3) OR r.state IN ('finished','cancelled','cancelled-after-effect','expired') OR (r.state<>'running' AND r.deadline_at<=clock_timestamp()))",
+                "DELETE FROM {0}.completion_waits w USING {0}.runs r WHERE w.run_id=$1 AND r.run_id=w.run_id AND ((w.step=$2 AND $3) OR r.state IN ('finished','cancelled','cancelled-after-effect','expired') OR (r.state<>'running' AND r.deadline_at<=clock_timestamp()))",
                 self.namespace
             ),
             &[&run, &step, &step_ended],
@@ -1735,28 +1908,73 @@ impl Store {
         Ok(true)
     }
 
-    /// Whether the timeout of the leased waiting step has passed, or `None`
-    /// when this attempt no longer holds its lease or its wait has no row.
-    pub(crate) async fn wait_timed_out(&self, job: &LeasedJob<Job>) -> Result<Option<bool>> {
+    pub(crate) async fn accepted_command(
+        &self,
+        job: &LeasedJob<Job>,
+        accepted_step: &str,
+    ) -> Result<Option<FrozenCommand>> {
         let client = self.client().await.map_err(unavailable)?;
         let fence = job.fence();
-        let row = client
-            .query_opt(
-                &format!(
-                    "SELECT w.timeout_at<=clock_timestamp() FROM {0}.review_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE j.run_id=$1 AND j.step=$2 AND j.generation=$3 AND j.attempt=$4 AND j.lease_token=$5 AND j.state='leased' AND j.lease_expires_at>clock_timestamp()",
-                    self.namespace
-                ),
-                &[
-                    &fence.id,
-                    &fence.part,
-                    &fence.generation,
-                    &fence.attempt,
-                    &fence.lease_token,
-                ],
-            )
-            .await
-            .map_err(unavailable)?;
-        Ok(row.map(|row| row.get(0)))
+        let row=client.query_opt(&format!(
+            "SELECT accepted.command FROM {0}.jobs accepted JOIN {0}.jobs waiting ON waiting.run_id=accepted.run_id WHERE accepted.run_id=$1 AND accepted.step=$6 AND accepted.state='delivered' AND NOT accepted.uncertain AND waiting.step=$2 AND waiting.generation=$3 AND waiting.attempt=$4 AND waiting.lease_token=$5 AND waiting.state='leased' AND waiting.lease_expires_at>clock_timestamp()",self.namespace),
+            &[&fence.id,&fence.part,&fence.generation,&fence.attempt,&fence.lease_token,&accepted_step]).await.map_err(unavailable)?;
+        row.and_then(|row| row.get::<_, Option<Value>>(0))
+            .map(|value| self.open_value(fence.id, "command", accepted_step, &value))
+            .transpose()
+    }
+
+    /// Reserve one observation before network I/O. The persisted spacing and
+    /// count survive worker death and lease recovery; a signal cannot bypass
+    /// either. The ceiling is derived from duration and the effective interval,
+    /// which is always longer than the bounded transport attempt.
+    pub(crate) async fn begin_observation(
+        &self,
+        job: &LeasedJob<Job>,
+        interval: u32,
+    ) -> Result<Option<ObservationPermit>> {
+        let interval = i32::try_from(interval.clamp(
+            WAIT_READ_SPACING_SECONDS,
+            crate::operations::MAXIMUM_OBSERVATION_INTERVAL_SECONDS,
+        ))
+        .map_err(unavailable)?;
+        let mut client = self.client().await.map_err(unavailable)?;
+        let tx = client.transaction().await.map_err(unavailable)?;
+        self.verify_transaction(&tx).await.map_err(unavailable)?;
+        let fence = job.fence();
+        let valid=tx.query_opt(&format!("SELECT run_id FROM {}.jobs WHERE run_id=$1 AND step=$2 AND generation=$3 AND attempt=$4 AND lease_token=$5 AND state='leased' AND lease_expires_at>clock_timestamp() FOR UPDATE",self.namespace),&[&fence.id,&fence.part,&fence.generation,&fence.attempt,&fence.lease_token]).await.map_err(unavailable)?;
+        if valid.is_none() {
+            return Ok(None);
+        }
+        let Some(row)=tx.query_opt(&format!("SELECT timeout_at,clock_timestamp(),not_before,observations,started_at,GREATEST(interval_seconds,$3) FROM {}.completion_waits WHERE run_id=$1 AND step=$2 FOR UPDATE",self.namespace),&[&fence.id,&fence.part,&interval]).await.map_err(unavailable)? else{return Ok(None)};
+        let timeout: DateTime<Utc> = row.get(0);
+        let now: DateTime<Utc> = row.get(1);
+        let not_before: DateTime<Utc> = row.get(2);
+        let observations: i32 = row.get(3);
+        let started: DateTime<Utc> = row.get(4);
+        let interval: i32 = row.get(5);
+        let ceiling = observation_limit(started, timeout, interval as u32);
+        if now < not_before {
+            return Ok(Some(if now >= timeout {
+                ObservationPermit::TimedOut
+            } else {
+                ObservationPermit::Pause {
+                    seconds: ((not_before.min(timeout) - now).num_milliseconds().max(1) as u64)
+                        .div_ceil(1000) as u32,
+                }
+            }));
+        }
+        if observations as u32 >= ceiling {
+            return Ok(Some(if now >= timeout {
+                ObservationPermit::TimedOut
+            } else {
+                ObservationPermit::Exhausted
+            }));
+        }
+        tx.execute(&format!("UPDATE {}.completion_waits SET read_at=$3,not_before=$3::timestamptz+$4::integer*interval '1 second',observations=observations+1,interval_seconds=$4 WHERE run_id=$1 AND step=$2",self.namespace),&[&fence.id,&fence.part,&now,&interval]).await.map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(Some(ObservationPermit::Observe {
+            timed_out: now >= timeout,
+        }))
     }
 
     /// Bring forward the next read of every wait for this request on this
@@ -1771,7 +1989,7 @@ impl Store {
         // Dispatch's lock order: a job row before anything that names it.
         tx.query(
             &format!(
-                "SELECT j.run_id FROM {0}.review_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE w.wait_key=$1 ORDER BY j.run_id,j.step FOR UPDATE OF j",
+                "SELECT j.run_id FROM {0}.completion_waits w JOIN {0}.jobs j ON j.run_id=w.run_id AND j.step=w.step WHERE w.wait_key=$1 ORDER BY j.run_id,j.step FOR UPDATE OF j",
                 self.namespace
             ),
             &[&key],
@@ -1780,7 +1998,7 @@ impl Store {
         .map_err(unavailable)?;
         tx.execute(
             &format!(
-                "UPDATE {}.review_waits SET woken_at=clock_timestamp() WHERE wait_key=$1",
+                "UPDATE {}.completion_waits SET woken_at=clock_timestamp() WHERE wait_key=$1",
                 self.namespace
             ),
             &[&key],
@@ -1789,8 +2007,8 @@ impl Store {
         .map_err(unavailable)?;
         tx.execute(
             &format!(
-                "UPDATE {0}.jobs j SET next_attempt_at=LEAST(j.next_attempt_at,GREATEST(transaction_timestamp(),COALESCE(w.read_at,'-infinity'::timestamptz)+interval '{1} seconds')) FROM {0}.review_waits w WHERE w.wait_key=$1 AND j.run_id=w.run_id AND j.step=w.step AND j.state='pending'",
-                self.namespace, WAIT_READ_SPACING_SECONDS
+                "UPDATE {0}.jobs j SET next_attempt_at=LEAST(j.next_attempt_at,LEAST(w.timeout_at,GREATEST(transaction_timestamp(),w.not_before))) FROM {0}.completion_waits w WHERE w.wait_key=$1 AND j.run_id=w.run_id AND j.step=w.step AND j.state='pending'",
+                self.namespace
             ),
             &[&key],
         )
@@ -1804,9 +2022,8 @@ impl Store {
     fn status_from_row(&self, row: &Row) -> Result<RunStatus> {
         Ok(RunStatus {
             run_id: row.get(13),
-            workflow_id: row.get(0),
-            workflow_version: row.get(1),
-            definition_digest: row.get(2),
+            workflow: row.get(0),
+            workflow_revision: row.get(2),
             binding_digest: row.get(3),
             step: row.get(4),
             state: row.get(5),
@@ -1852,7 +2069,8 @@ fn decode(row: &Row, first: usize) -> std::result::Result<Job, DispatchError> {
     })
 }
 /// The least time between two reads of one review wait, whatever wakes it.
-pub(crate) const WAIT_READ_SPACING_SECONDS: u32 = 30;
+pub(crate) const WAIT_READ_SPACING_SECONDS: u32 =
+    crate::operations::MINIMUM_OBSERVATION_INTERVAL_SECONDS;
 /// Failures of a waiting step that end its wait for good: reading again
 /// cannot change them, so no retry may resume the wait.
 const WAIT_ENDING_FAILURES: &[&str] = &[
@@ -1862,13 +2080,15 @@ const WAIT_ENDING_FAILURES: &[&str] = &[
 ];
 /// How long one attempt may run; its lease lasts this long plus Dispatch's
 /// finalization allowance.
-pub(crate) const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const ATTEMPT_TIMEOUT: Duration =
+    Duration::from_secs(crate::operations::ATTEMPT_TIMEOUT_SECONDS);
 /// Attempts a call step may make, the first included, before its run fails.
-const MAXIMUM_ATTEMPTS: i16 = 10;
+const MAXIMUM_ATTEMPTS: i16 = crate::operations::MAXIMUM_ATTEMPTS;
 /// Delay before the second attempt; each later delay doubles it.
 const RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
 /// Longest automatic retry delay, and the ceiling on a product's `Retry-After`.
-pub(crate) const RETRY_MAXIMUM_DELAY: Duration = Duration::from_secs(300);
+pub(crate) const RETRY_MAXIMUM_DELAY: Duration =
+    Duration::from_secs(crate::operations::RETRY_MAXIMUM_DELAY_SECONDS);
 
 /// A definite retryable answer waits 1, 2, 4, 8, 16, 32, 64, 128 and then 256
 /// seconds, each with equal jitter (between half and all of that delay), before
@@ -2055,7 +2275,7 @@ impl DispatchStore for Store {
                 let changed = tx
                     .execute(
                         &format!(
-                            "UPDATE {}.review_waits SET recheck_at=NULL WHERE run_id=$1 AND step=$2",
+                            "UPDATE {}.completion_waits SET recheck_at=NULL WHERE run_id=$1 AND step=$2",
                             self.namespace
                         ),
                         &[&audit.key.id(), &audit.key.part()],
@@ -2103,12 +2323,16 @@ impl DispatchStore for Store {
         let id = job.key.id();
         let step = job.key.part();
         tx.execute(&format!("UPDATE {}.jobs SET uncertain=$3,receipt_expired=receipt_expired OR $4,failure_code=COALESCE($5,failure_code),failure_path=CASE WHEN $5::text IS NULL THEN failure_path ELSE $6 END WHERE run_id=$1 AND step=$2", self.namespace), &[&id, &step, &detail.uncertain, &detail.receipt_expired, &detail.failure_code, &detail.failure_path]).await?;
-        let state = match disposition {
-            Disposition::Delivered if detail.outcome.is_some() => "finished",
-            Disposition::Delivered | Disposition::RetryPending => "running",
-            Disposition::Unknown => "attention",
-            Disposition::Expired => "expired",
-            _ => "failed",
+        let state = if detail.recovery_hold {
+            "attention"
+        } else {
+            match disposition {
+                Disposition::Delivered if detail.outcome.is_some() => "finished",
+                Disposition::Delivered | Disposition::RetryPending => "running",
+                Disposition::Unknown => "attention",
+                Disposition::Expired => "expired",
+                _ => "failed",
+            }
         };
         let cancellation = tx
             .query_one(
@@ -2145,20 +2369,19 @@ impl DispatchStore for Store {
             }
             _ => None,
         };
-        let changed = tx
-            .execute(
-                &format!(
-                    "UPDATE {0}.review_waits w SET read_at=transaction_timestamp(),
-                        recheck_at=CASE WHEN $3::integer IS NULL THEN NULL ELSE LEAST(w.timeout_at, GREATEST(
-                            transaction_timestamp()+interval '{1} seconds',
-                            transaction_timestamp()+CASE WHEN w.woken_at>=j.attempt_started_at
-                                THEN interval '{1} seconds' ELSE $3::integer*interval '1 second' END)) END
-                     FROM {0}.jobs j WHERE w.run_id=$1 AND w.step=$2 AND j.run_id=w.run_id AND j.step=w.step",
-                    self.namespace, WAIT_READ_SPACING_SECONDS
-                ),
-                &[&id, &step, &recheck],
-            )
-            .await?;
+        let pause = detail
+            .observation_pause_seconds
+            .map(i32::try_from)
+            .transpose()
+            .map_err(|_| DispatchError::Unavailable)?;
+        let changed = tx.execute(&format!(
+            "UPDATE {0}.completion_waits w SET
+                not_before=CASE WHEN $4::integer IS NULL THEN w.not_before ELSE GREATEST(w.not_before,transaction_timestamp()+$4::integer*interval '1 second') END,
+                recheck_at=CASE WHEN $3::integer IS NULL THEN NULL ELSE LEAST(w.timeout_at,GREATEST(w.not_before,
+                    transaction_timestamp()+COALESCE($4::integer,0)*interval '1 second',
+                    CASE WHEN w.woken_at>=j.attempt_started_at THEN transaction_timestamp() ELSE transaction_timestamp()+$3::integer*interval '1 second' END)) END
+             FROM {0}.jobs j WHERE w.run_id=$1 AND w.step=$2 AND j.run_id=w.run_id AND j.step=w.step",self.namespace),
+            &[&id,&step,&recheck,&pause]).await?;
         if recheck.is_some() && !cancelled && changed != 1 {
             return Err(DispatchError::Unavailable);
         }
@@ -2184,11 +2407,11 @@ impl DispatchStore for Store {
             .await?;
             state
         };
-        let step_ended = (disposition == Disposition::Delivered
-            && detail.recheck_seconds.is_none())
-            || detail
-                .failure_code
-                .is_some_and(|code| WAIT_ENDING_FAILURES.contains(&code));
+        let step_ended = !detail.recovery_hold
+            && ((disposition == Disposition::Delivered && detail.recheck_seconds.is_none())
+                || detail
+                    .failure_code
+                    .is_some_and(|code| WAIT_ENDING_FAILURES.contains(&code)));
         self.end_waits(tx, id, step, step_ended).await?;
         self.settle_later(id, step, RunOutcome::from_state(written));
         Ok(())
@@ -2213,7 +2436,7 @@ impl DispatchStore for Store {
                     "UPDATE {0}.jobs j SET generation=j.generation+1,state='pending',attempt=0,next_attempt_at=w.recheck_at,
                         attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=NULL,dead_lettered_at=NULL,
                         expired_at=NULL,failure_code=NULL,failure_path=NULL,updated_at=transaction_timestamp()
-                     FROM {0}.review_waits w
+                     FROM {0}.completion_waits w
                      WHERE j.run_id=$1 AND j.step=$2 AND w.run_id=j.run_id AND w.step=j.step
                        AND j.state='delivered' AND w.recheck_at IS NOT NULL",
                     self.namespace
@@ -2224,7 +2447,7 @@ impl DispatchStore for Store {
         if rearmed > 0 {
             tx.execute(
                 &format!(
-                    "UPDATE {}.review_waits SET recheck_at=NULL WHERE run_id=$1 AND step=$2",
+                    "UPDATE {}.completion_waits SET recheck_at=NULL WHERE run_id=$1 AND step=$2",
                     self.namespace
                 ),
                 &[&run, &step],

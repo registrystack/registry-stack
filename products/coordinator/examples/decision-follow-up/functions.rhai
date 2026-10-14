@@ -1,6 +1,8 @@
 // Synthetic recommendation only. BReg still owns the governed action and
 // current authorization. No identifier or credential is sent to the model.
-fn assessment_request(input) {
+fn assessment_request(args) {
+    let input = args["input"];
+
     #{
         state: #{ summary: input.summary },
         questions: #{
@@ -17,7 +19,9 @@ fn assessment_request(input) {
     }
 }
 
-fn assessment_route(reply) {
+fn assessment_route(args) {
+    let reply = args["reply"];
+
     let answer = reply.answers.action;
     if answer["type"] == "refusal" { return "review"; }
     // Illustrative policy only. Calibrate with labeled cases for this provider
@@ -28,8 +32,10 @@ fn assessment_route(reply) {
     "review"
 }
 
-fn action_request(input) {
-    #{ action: "request-information", input: #{
+fn action_request(args) {
+    let input = args["input"];
+
+    #{ input: #{
         applicationId: input.applicationId,
         reason: "Please provide the missing information identified in your application."
     } }

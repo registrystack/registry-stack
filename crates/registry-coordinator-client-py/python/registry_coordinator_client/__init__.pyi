@@ -12,14 +12,21 @@ Instant: TypeAlias = str
 OperationId: TypeAlias = str
 
 class StartRunRequest(TypedDict):
-    flow: str
+    workflow: str
+    workflowRevision: str
     input: JsonValue
+
+class WorkflowContract(TypedDict):
+    workflow: str
+    workflowRevision: str
+    input: JsonValue
+    outcomes: dict[str, JsonValue]
 
 class RunStatus(TypedDict):
     runId: RunId
-    workflowId: str
-    workflowVersion: str
-    definitionDigest: str
+    workflow: str
+    workflowRevision: str
+
     bindingDigest: str
     step: str
     state: str
@@ -90,9 +97,30 @@ class RecoveryStatus(_RecoveryStatusOptional):
     retryAllowed: bool
     reason: RetryBlockReason | None
 
+EffectState: TypeAlias = Literal["accepted", "unknown"]
+class EffectStatus(TypedDict):
+    step: str
+    operation: OperationIdentity
+    operationRevision: str
+    state: EffectState
+
+class WaitStatus(TypedDict):
+    step: str
+    acceptedStep: str
+    completion: str
+    completionRevision: str
+    timeoutAt: Instant
+    nextObservationAt: Instant | None
+    notBefore: Instant
+    minimumIntervalSeconds: int
+    observations: int
+    observationLimit: int
+
 class RunInspection(TypedDict):
     run: RunStatus
     steps: list[StepStatus]
+    effects: list[EffectStatus]
+    waits: list[WaitStatus]
     recovery: RecoveryStatus
 
 RunListState: TypeAlias = Literal[
@@ -144,7 +172,7 @@ class CoordinatorClientError(Exception):
     # Whether the call may have taken effect although this error was raised:
     # a timeout or broken exchange after sending, an unusable answer, or a
     # 5xx. When True after `start`, recover by sending it again with the same
-    # identity, key and input; a new key could admit a second run. When True
+    # identity, key, workflow, revision and input; a new key could admit a second run. When True
     # after `retry_same` or `cancel`, which take no key and are never resent,
     # read the run before asking again. False for a configuration or request
     # defect, a connection never established, and every 4xx refusal.
@@ -152,12 +180,16 @@ class CoordinatorClientError(Exception):
 
 class CoordinatorClient:
     def __init__(self, base_url: str, request_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, max_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None, max_mutation_retries: int | None = None) -> None: ...
-    # Admit `{flow, input}` under the caller's key; resent under the same key
+    # Admit `{workflow, workflowRevision, input}` under the caller's key; resent under the same key
     # up to `max_mutation_retries` times when the outcome is unknown. The key
-    # is scoped to the caller and the flow, so the same key under two flows
-    # starts two runs, and an allowed flow the deployment does not serve is
-    # refused with 404 `flow.not-served`, a known outcome never resent.
+    # is scoped to the caller and the workflow, so the same key under two workflows
+    # starts two runs, and an allowed workflow the deployment does not serve is
+    # refused with 404 `workflow.not-served`, a known outcome never resent.
+    # Fresh starts must match the active revision. Unknown-admission recovery keeps
+    # the original revision even after activation changes.
     def start(self, token: str, idempotency_key: str, request: StartRunRequest) -> Complete[RunStatus]: ...
+    # Discover the active typed contract under current start authority; starts no run.
+    def workflow(self, token: str, workflow: str) -> Complete[WorkflowContract]: ...
     def status(self, token: str, run_id: RunId) -> Complete[RunStatus]: ...
     def inspect(self, token: str, run_id: RunId) -> Complete[RunInspection]: ...
     # Observe the original operation's receipt; never resubmits the operation.

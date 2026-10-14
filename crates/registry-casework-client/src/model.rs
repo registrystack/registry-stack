@@ -42,6 +42,20 @@ impl fmt::Debug for CaseworkAuth<'_> {
     }
 }
 
+/// Metadata for a single authenticated result read; no automatic retry occurs.
+pub struct ReviewResultObservation {
+    pub outcome: Result<ReviewResultResponse, crate::CaseworkClientError>,
+    pub retry_after: registry_platform_httputil::client::RetryAfter,
+}
+impl fmt::Debug for ReviewResultObservation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReviewResultObservation")
+            .field("received", &self.outcome.is_ok())
+            .field("retry_after", &self.retry_after)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CaseworkComplete<T> {

@@ -11,7 +11,7 @@ database:
 namespace: coordinator_decision_follow_up
 connections:
   applications:
-    product: breg
+    type: breg
     baseUrl: https://registry.example.test
     profile: coordinator-actions
     authorization:
@@ -20,8 +20,8 @@ connections:
       signingKeyRef: secret:file/client-key
       resource: urn:example:registry
       scopes: [registry:actions]
-decisionConnections:
   assessor:
+    type: evaluation
     protocol: system-one
     baseUrl: https://api.typesafe.ai
     # Explicit alias: an existing run pins this text, not the provider's weights.

@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use zeroize::Zeroizing;
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegRecoveryHint {
@@ -17,6 +18,7 @@ pub enum BRegRecoveryHint {
     Terminal,
     ReceiptOnly,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegAvailabilityReason {
@@ -27,6 +29,7 @@ pub enum BRegAvailabilityReason {
     InvalidInput,
     AlreadyApplied,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegAvailability {
@@ -37,6 +40,7 @@ pub struct BRegAvailability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery: Option<BRegRecoveryHint>,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegProposalState {
@@ -46,7 +50,64 @@ pub enum BRegProposalState {
     Cancelled,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalApplicationState {
+    Pending,
+    Applying,
+    Blocked,
+    Applied,
+    Cancelled,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalApplicationMode {
+    Automatic,
+    Manual,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalApplicationReason {
+    ContractChanged,
+    ReviewUnavailable,
+    DependencyOutage,
+    LeaseExpired,
+    ApplicationRefused,
+    AttemptsExhausted,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalAutomaticRetry {
+    pub scheduled: bool,
+    pub attempts: u16,
+    pub maximum_attempts: u16,
+}
+
+/// Receiver-owned progress for this exact frozen submission, under current
+/// disclosure. A blocked submission is not a terminal non-application result.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalApplicationStatus {
+    pub state: BRegProposalApplicationState,
+    pub mode: BRegProposalApplicationMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<BRegProposalApplicationReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<BRegRecoveryHint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_retry: Option<BRegProposalAutomaticRetry>,
+}
+
 /// Inert server-issued link. Only a client-bound Proposal promotes its use.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalLink {
@@ -86,6 +147,7 @@ impl fmt::Debug for BRegProposalLink {
 }
 
 /// Inert slot metadata disclosed on an authorized Proposal representation.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalAttachment {
@@ -98,6 +160,7 @@ pub struct BRegProposalAttachment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     value: Option<BRegProposalAttachmentValue>,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalAttachmentValue {
@@ -111,6 +174,7 @@ pub struct BRegProposalAttachmentValue {
     uploaded_by: Option<String>,
     verification_status: String,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalApplication {
@@ -119,6 +183,7 @@ pub struct BRegProposalApplication {
     pub effect_digest: String,
     pub result_links: Vec<BRegProposalResultReference>,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalResultReference {
@@ -126,6 +191,7 @@ pub struct BRegProposalResultReference {
     pub record_id: String,
     pub revision: u64,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewDocument {
@@ -145,6 +211,7 @@ pub struct BRegProposalReviewDocument {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<BRegProposalReviewResult>,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewSubject {
@@ -154,6 +221,7 @@ pub struct BRegProposalReviewSubject {
     pub version: String,
     pub digest: String,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewContext {
@@ -163,6 +231,7 @@ pub struct BRegProposalReviewContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<BTreeMap<String, Value>>,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewPolicy {
@@ -170,6 +239,7 @@ pub struct BRegProposalReviewPolicy {
     pub version: String,
     pub digest: String,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewResult {
@@ -200,6 +270,7 @@ impl BRegProposalAttachment {
 }
 
 /// A Proposal is independently versioned and never decoded as a Record subtype.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposal {
@@ -222,6 +293,8 @@ pub struct BRegProposal {
     attachments: BTreeMap<String, BRegProposalAttachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application: Option<BRegProposalApplication>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    application_status: Option<BRegProposalApplicationStatus>,
     #[serde(skip)]
     source: Option<String>,
 }
@@ -253,6 +326,43 @@ impl BRegProposal {
                 .as_deref()
                 .is_some_and(|reason| reason != "package-changed")
         {
+            return Err(refusal());
+        }
+        if self.application_status.as_ref().is_some_and(|status| {
+            self.effect_digest.is_none()
+                || self.submission_version == 0
+                || self.state == BRegProposalState::Draft
+                || status.reason.is_some() != status.recovery.is_some()
+                || (status.state == BRegProposalApplicationState::Blocked)
+                    != status.reason.is_some()
+                || status.automatic_retry.as_ref().is_some_and(|retry| {
+                    retry.maximum_attempts == 0
+                        || retry.maximum_attempts > 32
+                        || retry.attempts > retry.maximum_attempts
+                        || retry.scheduled
+                            && !matches!(
+                                status.state,
+                                BRegProposalApplicationState::Pending
+                                    | BRegProposalApplicationState::Applying
+                            )
+                })
+                || match status.state {
+                    BRegProposalApplicationState::Applied => {
+                        self.state != BRegProposalState::Applied
+                            || self.application.is_none()
+                            || status.automatic_retry.is_some()
+                    }
+                    BRegProposalApplicationState::Cancelled => {
+                        self.state != BRegProposalState::Cancelled
+                            || status.automatic_retry.is_some()
+                    }
+                    _ => {
+                        self.state != BRegProposalState::Submitted
+                            || (status.mode == BRegProposalApplicationMode::Automatic)
+                                != status.automatic_retry.is_some()
+                    }
+                }
+        }) {
             return Err(refusal());
         }
         if self
@@ -408,6 +518,9 @@ impl BRegProposal {
     }
     pub fn application(&self) -> Option<&BRegProposalApplication> {
         self.application.as_ref()
+    }
+    pub fn application_status(&self) -> Option<&BRegProposalApplicationStatus> {
+        self.application_status.as_ref()
     }
     pub const fn revision(&self) -> u64 {
         self.revision
@@ -625,28 +738,49 @@ impl BaseRegistryClient {
         binding: &BRegProposalGetBinding,
         id: &str,
     ) -> Result<BRegComplete<BRegProposal>, BaseRegistryClientError> {
-        if binding.source != self.source_binding()
-            || !Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
-        {
-            return Err(refusal());
+        self.get_proposal_observation(binding, id).await.outcome
+    }
+
+    /// Observe one authorized Proposal, preserving the receiver's scheduling
+    /// hint even when its response cannot supply a usable representation.
+    /// No retry or mutation is performed by this method.
+    pub async fn get_proposal_observation(
+        &self,
+        binding: &BRegProposalGetBinding,
+        id: &str,
+    ) -> BRegObservation<BRegProposal> {
+        let mut retry_after = BRegRetryAfter::Absent;
+        let outcome = async {
+            if binding.source != self.source_binding()
+                || !Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
+            {
+                return Err(refusal());
+            }
+            let link = BRegProposalLink {
+                method: "GET".to_owned(),
+                path: binding.path.replace("{proposal_id}", id),
+                access_profile: binding.profile.clone(),
+                operation: "get".to_owned(),
+                if_match: None,
+                availability: None,
+            };
+            let observation = self.proposal_observation_exchange(&link).await;
+            retry_after = observation.retry_after;
+            let response = observation.outcome?;
+            let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
+            if proposal.id != id {
+                return Err(refusal());
+            }
+            Ok(BRegComplete {
+                value: proposal.bind_profile(self.source_binding(), &binding.profile)?,
+                metadata: response.metadata,
+            })
         }
-        let link = BRegProposalLink {
-            method: "GET".to_owned(),
-            path: binding.path.replace("{proposal_id}", id),
-            access_profile: binding.profile.clone(),
-            operation: "get".to_owned(),
-            if_match: None,
-            availability: None,
-        };
-        let response = self.proposal_exchange(&link, None, None).await?;
-        let proposal = BRegProposal::from_slice(response.value.as_bytes())?;
-        if proposal.id != id {
-            return Err(refusal());
+        .await;
+        BRegObservation {
+            outcome,
+            retry_after,
         }
-        Ok(BRegComplete {
-            value: proposal.bind_profile(self.source_binding(), &binding.profile)?,
-            metadata: response.metadata,
-        })
     }
     pub async fn read_proposal_review_status(
         &self,
@@ -1095,11 +1229,7 @@ fn validate_body(operation: &str, body: &Value) -> Result<(), BaseRegistryClient
         }
         _ => false,
     };
-    if valid {
-        Ok(())
-    } else {
-        Err(refusal())
-    }
+    if valid { Ok(()) } else { Err(refusal()) }
 }
 fn validate_link(link: &BRegProposalLink) -> Result<(), BaseRegistryClientError> {
     if !matches!(link.method.as_str(), "GET" | "POST")
@@ -1166,9 +1296,11 @@ mod tests {
         let bytes = serde_json::to_vec(&document()).unwrap();
         let inert = BRegProposal::from_slice(&bytes).unwrap();
         let key = BRegIdempotencyKey::parse("original-key").unwrap();
-        assert!(client
-            .prepare_proposal(&inert, "apply", json!({}), &key)
-            .is_err());
+        assert!(
+            client
+                .prepare_proposal(&inert, "apply", json!({}), &key)
+                .is_err()
+        );
         let bound = proposal(&client, document());
         let attempt = client
             .prepare_proposal(
@@ -1180,9 +1312,11 @@ mod tests {
             .unwrap();
         assert!(!format!("{attempt:?}").contains("original-key"));
         let other = super::tests::client("https://other.example/");
-        assert!(other
-            .prepare_proposal(&bound, "apply", json!({}), &key)
-            .is_err());
+        assert!(
+            other
+                .prepare_proposal(&bound, "apply", json!({}), &key)
+                .is_err()
+        );
         let restored = BRegPreparedProposal::from_slice(attempt.as_bytes()).unwrap();
         assert!(!restored.executable);
         assert!(
@@ -1211,27 +1345,33 @@ mod tests {
         terminal["links"]["apply"]["ifMatch"] = json!("\"current-condition\"");
         terminal["links"]["apply"]["availability"] = json!({"available":false,"observedRevision":3,"reason":"already-applied","recovery":"receipt-only"});
         let terminal = proposal(&client, terminal);
-        assert!(client
-            .prepare_proposal(
-                &terminal,
-                "apply",
-                json!({}),
-                &BRegIdempotencyKey::parse("new-key").unwrap()
-            )
-            .is_err());
+        assert!(
+            client
+                .prepare_proposal(
+                    &terminal,
+                    "apply",
+                    json!({}),
+                    &BRegIdempotencyKey::parse("new-key").unwrap()
+                )
+                .is_err()
+        );
         let recovered = client.recover_proposal(&terminal, &attempt).unwrap();
         assert_eq!(recovered.as_bytes(), attempt.as_bytes());
         let mut changed = document();
         changed["actionRevision"] =
             json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        assert!(client
-            .recover_proposal(&proposal(&client, changed), &attempt)
-            .is_err());
+        assert!(
+            client
+                .recover_proposal(&proposal(&client, changed), &attempt)
+                .is_err()
+        );
         let mut revoked = document();
         revoked["links"].as_object_mut().unwrap().remove("apply");
-        assert!(client
-            .recover_proposal(&proposal(&client, revoked), &attempt)
-            .is_err());
+        assert!(
+            client
+                .recover_proposal(&proposal(&client, revoked), &attempt)
+                .is_err()
+        );
     }
     #[test]
     fn revised_and_rebased_receipts_require_the_exact_next_draft_version() {
@@ -1307,10 +1447,12 @@ mod tests {
             "reviewer",
         )
         .unwrap();
-        assert!(client("https://other.example/")
-            .get_proposal(&binding, ID)
-            .await
-            .is_err());
+        assert!(
+            client("https://other.example/")
+                .get_proposal(&binding, ID)
+                .await
+                .is_err()
+        );
         for id in [
             "../secret",
             "00000000-0000-4000-8000-00000000000A",
@@ -1344,20 +1486,24 @@ mod tests {
     }
     #[test]
     fn a_get_grant_does_not_promote_collection_authority() {
-        assert!(BRegProposalCollection::from_metadata(
-            &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),
-            "https://registry.example/",
-            REVISION,
-            "get-author"
-        )
-        .is_err());
-        assert!(BRegProposalCollection::from_metadata(
-            &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),
-            "https://registry.example/",
-            REVISION,
-            "list-author"
-        )
-        .is_ok());
+        assert!(
+            BRegProposalCollection::from_metadata(
+                &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),
+                "https://registry.example/",
+                REVISION,
+                "get-author"
+            )
+            .is_err()
+        );
+        assert!(
+            BRegProposalCollection::from_metadata(
+                &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),
+                "https://registry.example/",
+                REVISION,
+                "list-author"
+            )
+            .is_ok()
+        );
     }
     #[test]
     fn promoted_links_bind_method_operation_resource_and_selected_profile() {
@@ -1378,13 +1524,17 @@ mod tests {
             );
         }
         let parsed = BRegProposal::from_slice(&serde_json::to_vec(&document()).unwrap()).unwrap();
-        assert!(parsed
-            .clone()
-            .bind_profile("https://registry.example/base/".to_owned(), "other-profile")
-            .is_err());
-        assert!(parsed
-            .bind_profile("https://registry.example/base/".to_owned(), "author")
-            .is_ok());
+        assert!(
+            parsed
+                .clone()
+                .bind_profile("https://registry.example/base/".to_owned(), "other-profile")
+                .is_err()
+        );
+        assert!(
+            parsed
+                .bind_profile("https://registry.example/base/".to_owned(), "author")
+                .is_ok()
+        );
     }
     #[test]
     fn lifecycle_bodies_are_closed_before_transport() {
@@ -1403,11 +1553,13 @@ mod tests {
         ] {
             assert!(validate_body(operation, &body).is_err());
         }
-        assert!(validate_body(
-            "apply",
-            &json!({"submissionVersion":1,"effectDigest":REVISION})
-        )
-        .is_ok());
+        assert!(
+            validate_body(
+                "apply",
+                &json!({"submissionVersion":1,"effectDigest":REVISION})
+            )
+            .is_ok()
+        );
         assert!(validate_body("rebase", &json!({"input":{"address":"Example"}})).is_ok());
     }
 }

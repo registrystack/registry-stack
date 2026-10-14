@@ -1,15 +1,23 @@
 // The grant is an approval reference with its original deadline, never a token.
 // Casework checks current source authority; Scheduling owns every capacity commitment.
-fn appointment_route(record) {
+fn appointment_route(args) {
+    let record = args["record"];
+
     if record.data.domainData.appointmentAllowed { "book" } else { "skip" }
 }
-fn capacity_route(availability) {
+fn capacity_route(args) {
+    let availability = args["availability"];
+
     for slot in availability.items {
         if slot.kind == "slot" && slot.free > 0 { return "available"; }
     }
     "unavailable"
 }
-fn booking_request(input, metadata, availability) {
+fn booking_request(args) {
+    let input = args["input"];
+    let metadata = args["metadata"];
+    let availability = args["availability"];
+
     let selected = "";
     for slot in availability.items {
         if slot.kind == "slot" && slot.free > 0 { selected = slot.start; break; }
@@ -22,7 +30,11 @@ fn booking_request(input, metadata, availability) {
         externalReferences: [#{ product: "breg", recordType: "applications", identifier: input.applicationId }]
     } } }
 }
-fn notice_request(input, record, appointment) {
+fn notice_request(args) {
+    let input = args["input"];
+    let record = args["record"];
+    let appointment = args["appointment"];
+
     #{ senderProfile: "transactional", to: #{ email: record.data.domainData.email },
        template: #{ id: "appointment-confirmed", version: "1" }, locale: "en",
        data: #{ applicationReference: input.applicationId, appointmentReference: appointment.appointmentId,

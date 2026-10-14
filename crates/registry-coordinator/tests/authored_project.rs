@@ -6,52 +6,146 @@ use std::{fs, path::Path};
 
 fn project() -> Value {
     json!({
-        "apiVersion": authoring::API_VERSION, "kind": authoring::KIND,
-        "project": {"id":"tiny", "version":"1"},
-        "input": {"type":"object", "properties":{"optional":{"const":null}}},
-        "connections": {}, "functionsFile":"functions.rhai", "deadlineSeconds":60,
-        "start":"done", "steps":{"done":{"type":"finish", "outcome":"accepted", "output":{"type":"function", "function":"identity", "arguments":[{"type":"input"}]}}},
-        "outcomes":{"accepted":{}}
+        "apiVersion": "id.registrystack.org/formats/coordinator/project/v1alpha1",
+        "kind": "CoordinatorProject",
+        "project": {
+            "id": "tiny",
+            "version": "1"
+        },
+        "workflow": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "optional": {
+                        "const": null
+                    }
+                }
+            },
+            "deadlineSeconds": 60,
+            "start": "done",
+            "steps": {
+                "done": {
+                    "type": "finish",
+                    "outcome": "accepted",
+                    "output": {
+                        "type": "function",
+                        "function": "identity",
+                        "inputs": {
+                            "arg0": {
+                                "type": "input"
+                            }
+                        }
+                    }
+                }
+            },
+            "outcomes": {
+                "accepted": {}
+            }
+        }
     })
 }
 
 fn declared_refusal_project() -> Value {
     json!({
-        "apiVersion": authoring::API_VERSION, "kind": authoring::KIND,
-        "project": {"id":"declared-refusal", "version":"1"},
-        "input": {}, "connections": {"registry":"breg"},
-        "functionsFile":"functions.rhai", "deadlineSeconds":60,
-        "start":"act",
-        "steps": {
-            "act": {"type":"call", "connection":"registry", "operation":"invoke-breg-action",
-                "input":{"type":"function", "function":"command", "arguments":[{"type":"input"}]},
-                "next":"accepted", "onDeclaredRefusal":"refused"},
-            "accepted": {"type":"finish", "outcome":"accepted"},
-            "refused": {"type":"finish", "outcome":"refused", "output":{
-                "type":"fields", "fields":{"refusalCode":{"type":"step", "step":"act", "path":"/refusalCode"}}
-            }}
+        "apiVersion": "id.registrystack.org/formats/coordinator/project/v1alpha1",
+        "kind": "CoordinatorProject",
+        "project": {
+            "id": "declared-refusal",
+            "version": "1"
         },
-        "outcomes": {
-            "accepted":{"type":"null"},
-            "refused":{"type":"object", "required":["refusalCode"],
-                "properties":{"refusalCode":{"type":"string"}}, "additionalProperties":false}
+        "contracts":{"registry":{"type":"breg","source":"action-contracts.json"}},
+        "operations": {
+            "invoke-breg-action": {
+                "uses": "breg.invoke-action/v1",
+                "connection": "registry",
+                "action":{"contract":"registry","id":"test-action"}
+            }
+        },
+        "workflow": {
+            "input": {},
+            "deadlineSeconds": 60,
+            "start": "act",
+            "steps": {
+                "act": {
+                    "type": "call",
+                    "operation": "invoke-breg-action",
+                    "input": {
+                        "type": "function",
+                        "function": "command",
+                        "inputs": {
+                            "arg0": {
+                                "type": "input"
+                            }
+                        }
+                    },
+                    "next": "accepted",
+                    "onDeclaredRefusal": "refused"
+                },
+                "accepted": {
+                    "type": "finish",
+                    "outcome": "accepted"
+                },
+                "refused": {
+                    "type": "finish",
+                    "outcome": "refused",
+                    "output": {
+                        "type": "fields",
+                        "fields": {
+                            "refusalCode": {
+                                "type": "step",
+                                "step": "act",
+                                "path": "/refusalCode"
+                            }
+                        }
+                    }
+                }
+            },
+            "outcomes": {
+                "accepted": {
+                    "type": "null"
+                },
+                "refused": {
+                    "type": "object",
+                    "required": [
+                        "refusalCode"
+                    ],
+                    "properties": {
+                        "refusalCode": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            }
         }
     })
 }
 
 fn write_project(root: &Path, project: &Value, source: &str) {
+    let project = declare_test_functions(project);
     fs::write(
         root.join("workflow.yaml"),
-        serde_json::to_string(project).unwrap(),
+        serde_json::to_string(&project).unwrap(),
     )
     .unwrap();
     fs::write(root.join("functions.rhai"), source).unwrap();
+    if project.get("contracts").is_some() {
+        fs::write(root.join("action-contracts.json"), serde_json::to_string(&json!({"actions":[{
+            "id":"test-action", "revision":format!("sha256:{}", "a".repeat(64)), "mode":"immediate",
+            "input":{"type":"object"}, "output":{"type":"object","additionalProperties":false,"properties":{"receipt":{"type":"object"}}},
+            "declaredRefusal":{"type":"object","additionalProperties":false,"required":["refusalCode"],"properties":{"refusalCode":{"type":"string","minLength":1,"maxLength":128}}}
+        }]})).unwrap()).unwrap();
+    }
 }
 
 #[test]
 fn authored_project_converts_to_the_versioned_snapshot_abi() {
     let root = tempfile::tempdir().unwrap();
-    write_project(root.path(), &project(), "fn identity(input) { input }");
+    write_project(
+        root.path(),
+        &project(),
+        "fn identity(__named) { let input = __named.arg0;  input }",
+    );
     let definition = Definition::load(root.path()).unwrap();
     let snapshot = definition.snapshot().unwrap();
     let frozen: Value = serde_json::from_str(&snapshot).unwrap();
@@ -60,11 +154,11 @@ fn authored_project_converts_to_the_versioned_snapshot_abi() {
         frozen["workflow"]["apiVersion"],
         "id.registrystack.org/formats/coordinator/definition-snapshot/v1alpha1"
     );
-    assert_eq!(frozen["workflow"]["steps"]["done"]["finish"], "accepted");
-    assert!(frozen["workflow"]["steps"]["done"].get("type").is_none());
+    assert_eq!(frozen["workflow"]["steps"]["done"]["outcome"], "accepted");
+    assert_eq!(frozen["workflow"]["steps"]["done"]["type"], "finish");
     assert_eq!(
-        frozen["workflow"]["steps"]["done"]["output"]["arguments"],
-        json!([{"type": "input"}])
+        frozen["workflow"]["steps"]["done"]["output"]["inputs"],
+        json!({"arg0":{"type": "input"}})
     );
     assert_eq!(frozen["adapterAbi"], "coordinator/product-operations/v1");
     let restored = Definition::from_snapshot(&snapshot).unwrap();
@@ -82,7 +176,11 @@ fn authored_project_converts_to_the_versioned_snapshot_abi() {
 fn declared_refusal_edge_is_frozen_in_the_snapshot_and_restores_exactly() {
     let root = tempfile::tempdir().unwrap();
     let project = declared_refusal_project();
-    write_project(root.path(), &project, "fn command(input) { input }");
+    write_project(
+        root.path(),
+        &project,
+        "fn command(__named) { let input = __named.arg0;  input }",
+    );
     let definition = Definition::load(root.path()).unwrap();
     let snapshot = definition.snapshot().unwrap();
     let frozen: Value = serde_json::from_str(&snapshot).unwrap();
@@ -137,19 +235,19 @@ fn declared_refusal_edge_is_frozen_in_the_snapshot_and_restores_exactly() {
 #[test]
 fn declared_refusal_is_available_only_on_its_edge_and_not_after_a_mixed_join() {
     let root = tempfile::tempdir().unwrap();
-    let source = "fn command(input) { input } fn identity(value) { value }";
+    let source = "fn command(__named) { let input = __named.arg0;  input } fn identity(__named) { let value = __named.arg0;  value }";
     let project = declared_refusal_project();
     write_project(root.path(), &project, source);
     Definition::load(root.path()).expect("the refusal edge reads its declared output");
 
     let mut success_reads_refusal = project.clone();
-    success_reads_refusal["steps"]["accepted"]["output"] = json!({
+    success_reads_refusal["workflow"]["steps"]["accepted"]["output"] = json!({
         "type":"fields", "fields":{"refusalCode":{
             "type":"step", "step":"act", "path":"/refusalCode"
         }}
     });
-    success_reads_refusal["outcomes"]["accepted"] =
-        success_reads_refusal["outcomes"]["refused"].clone();
+    success_reads_refusal["workflow"]["outcomes"]["accepted"] =
+        success_reads_refusal["workflow"]["outcomes"]["refused"].clone();
     write_project(root.path(), &success_reads_refusal, source);
     assert_eq!(
         Definition::load(root.path()).err().unwrap().code,
@@ -157,8 +255,8 @@ fn declared_refusal_is_available_only_on_its_edge_and_not_after_a_mixed_join() {
     );
 
     let mut refusal_reads_success = project.clone();
-    refusal_reads_success["steps"]["refused"]["output"]["fields"]["refusalCode"]["path"] =
-        json!("/applicationId");
+    refusal_reads_success["workflow"]["steps"]["refused"]["output"]["fields"]["refusalCode"]
+        ["path"] = json!("/applicationId");
     write_project(root.path(), &refusal_reads_success, source);
     assert_eq!(
         Definition::load(root.path()).err().unwrap().code,
@@ -166,16 +264,22 @@ fn declared_refusal_is_available_only_on_its_edge_and_not_after_a_mixed_join() {
     );
 
     let mut joined = project;
-    joined["steps"]["act"]["next"] = json!("joined");
-    joined["steps"]["act"]["onDeclaredRefusal"] = json!("joined");
-    joined["steps"].as_object_mut().unwrap().remove("accepted");
-    joined["steps"].as_object_mut().unwrap().remove("refused");
-    joined["steps"]["joined"] = json!({
+    joined["workflow"]["steps"]["act"]["next"] = json!("joined");
+    joined["workflow"]["steps"]["act"]["onDeclaredRefusal"] = json!("joined");
+    joined["workflow"]["steps"]
+        .as_object_mut()
+        .unwrap()
+        .remove("accepted");
+    joined["workflow"]["steps"]
+        .as_object_mut()
+        .unwrap()
+        .remove("refused");
+    joined["workflow"]["steps"]["joined"] = json!({
         "type":"finish", "outcome":"joined", "output":{
-            "type":"function", "function":"identity", "arguments":[{"type":"step", "step":"act"}]
+            "type":"function", "function":"identity", "inputs": {"arg0": {"type":"step", "step":"act"}}
         }
     });
-    joined["outcomes"] = json!({"joined":{}});
+    joined["workflow"]["outcomes"] = json!({"joined":{}});
     write_project(root.path(), &joined, source);
     assert_eq!(
         Definition::load(root.path()).err().unwrap().code,
@@ -187,29 +291,42 @@ fn declared_refusal_is_available_only_on_its_edge_and_not_after_a_mixed_join() {
 fn operations_without_a_declared_refusal_contract_reject_the_edge() {
     let root = tempfile::tempdir().unwrap();
     let mut project = declared_refusal_project();
-    project["steps"]["act"]["operation"] = json!("read-record");
-    write_project(root.path(), &project, "fn command(input) { input }");
+    project["operations"]["invoke-breg-action"] =
+        json!({"uses":"breg.read-record/v1","connection":"registry"});
+    write_project(
+        root.path(),
+        &project,
+        "fn command(__named) { let input = __named.arg0;  input }",
+    );
     let error = Definition::load(root.path()).err().unwrap();
     assert_eq!(error.code, "coordinator.definition.operation");
-    assert_eq!(error.field.as_deref(), Some("/steps/act/onDeclaredRefusal"));
+    assert_eq!(
+        error.field.as_deref(),
+        Some("/workflow/steps/act/onDeclaredRefusal")
+    );
 }
 
 #[test]
 fn a_snapshot_cannot_carry_the_refusal_edge_on_an_operation_without_it() {
     let root = tempfile::tempdir().unwrap();
     let mut project = declared_refusal_project();
-    project["steps"]["act"]["operation"] = json!("read-record");
-    let steps = project["steps"].as_object_mut().unwrap();
+    project["operations"]["invoke-breg-action"] =
+        json!({"uses":"breg.read-record/v1","connection":"registry"});
+    let steps = project["workflow"]["steps"].as_object_mut().unwrap();
     steps["act"]
         .as_object_mut()
         .unwrap()
         .remove("onDeclaredRefusal");
     steps.remove("refused");
-    project["outcomes"]
+    project["workflow"]["outcomes"]
         .as_object_mut()
         .unwrap()
         .remove("refused");
-    write_project(root.path(), &project, "fn command(input) { input }");
+    write_project(
+        root.path(),
+        &project,
+        "fn command(__named) { let input = __named.arg0;  input }",
+    );
     let snapshot = Definition::load(root.path()).unwrap().snapshot().unwrap();
     let mut frozen: Value = serde_json::from_str(&snapshot).unwrap();
     frozen["workflow"]["steps"]["act"]["onDeclaredRefusal"] = json!("accepted");
@@ -228,7 +345,7 @@ fn function_compile_diagnostics_keep_the_function_file_and_position() {
     write_project(
         root.path(),
         &project(),
-        "fn identity(input) {\n    let broken = ;\n}\n",
+        "fn identity(__named) { let input = __named.arg0; \n    let broken = ;\n}\n",
     );
     let error = Definition::load(root.path())
         .err()
@@ -245,7 +362,7 @@ fn function_compile_diagnostics_keep_the_function_file_and_position() {
 #[test]
 fn authored_project_structural_errors_keep_the_authored_member_position() {
     let mut project = project();
-    project["steps"]["done"]["unexpected"] = json!("private-marker-value");
+    project["workflow"]["steps"]["done"]["unexpected"] = json!("private-marker-value");
     let error = authoring::parse_project(Path::new("workflow.yaml"), project.to_string())
         .expect_err("unknown member must refuse");
     let finding = error
@@ -253,7 +370,7 @@ fn authored_project_structural_errors_keep_the_authored_member_position() {
         .iter()
         .find(|finding| finding.code == "config.unknown-key")
         .unwrap();
-    assert_eq!(finding.path, "/steps/done/unexpected");
+    assert_eq!(finding.path, "/workflow/steps/done/unexpected");
     assert!(finding.source.as_ref().unwrap().line.is_some());
     assert!(!error.to_string().contains("private-marker-value"));
 }
@@ -262,7 +379,11 @@ fn authored_project_structural_errors_keep_the_authored_member_position() {
 #[test]
 fn linked_function_source_refusal_points_to_the_authored_reference() {
     let root = tempfile::tempdir().unwrap();
-    write_project(root.path(), &project(), "fn identity(input) { input }");
+    write_project(
+        root.path(),
+        &project(),
+        "fn identity(__named) { let input = __named.arg0;  input }",
+    );
     fs::remove_file(root.path().join("functions.rhai")).unwrap();
     let outside = tempfile::NamedTempFile::new().unwrap();
     std::os::unix::fs::symlink(outside.path(), root.path().join("functions.rhai")).unwrap();
@@ -270,7 +391,7 @@ fn linked_function_source_refusal_points_to_the_authored_reference() {
         .err()
         .expect("a linked source must refuse");
     let finding = error.diagnostics.first().expect("a positioned finding");
-    assert_eq!(finding.path, "/functionsFile");
+    assert_eq!(finding.path, "/functions/identity/source");
     assert!(finding
         .source
         .as_ref()
@@ -284,13 +405,17 @@ fn linked_function_source_refusal_points_to_the_authored_reference() {
 #[test]
 fn missing_function_source_keeps_the_operational_exit_and_authored_position() {
     let root = tempfile::tempdir().unwrap();
-    write_project(root.path(), &project(), "fn identity(input) { input }");
+    write_project(
+        root.path(),
+        &project(),
+        "fn identity(__named) { let input = __named.arg0;  input }",
+    );
     fs::remove_file(root.path().join("functions.rhai")).unwrap();
     let error = Definition::load(root.path())
         .err()
         .expect("missing source must refuse");
     assert_eq!(error.exit_code, 3);
-    assert_eq!(error.diagnostics[0].path, "/functionsFile");
+    assert_eq!(error.diagnostics[0].path, "/functions/identity/source");
     assert!(error.diagnostics[0]
         .source
         .as_ref()
@@ -304,18 +429,22 @@ fn execution_member_diagnostics_preserve_authored_step_names() {
     let root = tempfile::tempdir().unwrap();
     for name in ["finish", "finish-next", "call"] {
         let mut project = project();
-        project["start"] = json!(name);
-        project["steps"] = json!({name: {
-            "type":"wait-until", "waitUntil":{"type":"function", "function":"identity", "arguments":[{"type":"input"}]},
+        project["workflow"]["start"] = json!(name);
+        project["workflow"]["steps"] = json!({name: {
+            "type":"wait-until", "waitUntil":{"type":"function", "function":"identity", "inputs": {"arg0": {"type":"input"}}},
             "next":"missing"
         }});
-        write_project(root.path(), &project, "fn identity(input) { input }");
+        write_project(
+            root.path(),
+            &project,
+            "fn identity(__named) { let input = __named.arg0;  input }",
+        );
         let Err(error) = Definition::load(root.path()) else {
             panic!("missing target must be refused");
         };
         assert_eq!(
             error.field.as_deref(),
-            Some(format!("/steps/{name}/next").as_str())
+            Some(format!("/workflow/steps/{name}/next").as_str())
         );
         let source = error.diagnostics[0].source.as_ref().unwrap();
         assert!(source.line.is_some() && source.column.is_some());
@@ -325,7 +454,11 @@ fn execution_member_diagnostics_preserve_authored_step_names() {
 #[test]
 fn project_file_encoding_is_reported_by_the_shared_reader() {
     let root = tempfile::tempdir().unwrap();
-    write_project(root.path(), &project(), "fn identity(input) { input }");
+    write_project(
+        root.path(),
+        &project(),
+        "fn identity(__named) { let input = __named.arg0;  input }",
+    );
     fs::write(root.path().join("workflow.yaml"), b"\xff\xfe").unwrap();
     let error = Definition::load(root.path()).err().expect("invalid UTF-8");
     assert_eq!(error.code, "yaml.not-utf8");
@@ -340,7 +473,11 @@ fn project_file_encoding_is_reported_by_the_shared_reader() {
 #[test]
 fn oversized_project_file_is_reported_by_the_shared_reader() {
     let root = tempfile::tempdir().unwrap();
-    write_project(root.path(), &project(), "fn identity(input) { input }");
+    write_project(
+        root.path(),
+        &project(),
+        "fn identity(__named) { let input = __named.arg0;  input }",
+    );
     let padded = format!("{}\n#{}\n", project(), "x".repeat(1_048_576));
     fs::write(root.path().join("workflow.yaml"), padded).unwrap();
     let error = Definition::load(root.path()).err().expect("oversized file");
@@ -370,7 +507,11 @@ fn project_version_schema_and_execution_grammar_agree() {
         let mut project = project();
         project["project"]["version"] = json!(version);
         assert_eq!(validator.is_valid(&project), accepted, "schema: {version}");
-        write_project(root.path(), &project, "fn identity(input) { input }");
+        write_project(
+            root.path(),
+            &project,
+            "fn identity(__named) { let input = __named.arg0;  input }",
+        );
         assert_eq!(
             Definition::load(root.path()).is_ok(),
             accepted,
@@ -383,226 +524,127 @@ fn project_version_schema_and_execution_grammar_agree() {
 #[test]
 fn project_schema_matches_local_keys_bounds_and_foreign_schema_members() {
     let schema: Value = serde_json::from_str(&authoring::project_schema().unwrap()).unwrap();
-    assert_eq!(
-        schema["properties"]["input"]["x-registry-foreign"],
-        "json-schema-2020-12"
-    );
-    assert_eq!(
-        schema["properties"]["outcomes"]["additionalProperties"]["x-registry-foreign"],
-        "json-schema-2020-12"
-    );
-    for (field, minimum, maximum) in [
-        ("connections", 0, 16),
-        ("steps", 1, 64),
-        ("outcomes", 1, 64),
+    assert!(schema["properties"].get("input").is_none());
+    assert!(schema["properties"].get("functionsFile").is_none());
+    for (pointer, minimum, maximum) in [
+        ("/properties/operations", 0, 64),
+        ("/properties/functions", 0, 128),
+        ("/properties/types", 0, 128),
+        ("/$defs/AuthoredWorkflow/properties/steps", 1, 64),
+        ("/$defs/AuthoredWorkflow/properties/outcomes", 1, 64),
     ] {
-        assert_eq!(
-            schema["properties"][field]["propertyNames"]["$ref"],
-            "#/$defs/LocalId"
-        );
-        assert_eq!(schema["properties"][field]["minProperties"], minimum);
-        assert_eq!(schema["properties"][field]["maxProperties"], maximum);
-        assert!(schema["properties"][field]
-            .get("patternProperties")
-            .is_none());
-        assert!(schema["properties"][field]["additionalProperties"].is_object());
+        let mapping = schema.pointer(pointer).unwrap();
+        assert_eq!(mapping["propertyNames"]["$ref"], "#/$defs/LocalId");
+        assert_eq!(mapping["minProperties"], minimum);
+        assert_eq!(mapping["maxProperties"], maximum);
+        assert!(mapping.get("patternProperties").is_none());
+        assert!(mapping["additionalProperties"].is_object());
     }
-    // Every mapping form is named by its `type` member.
-    for (union, forms) in [
-        ("AuthoredInput", vec!["function", "fields"]),
-        (
-            "AuthoredSelector",
-            vec!["function", "input", "step", "literal"],
-        ),
-    ] {
-        let variants = schema["$defs"][union]["oneOf"].as_array().unwrap();
-        let tags: Vec<&str> = variants
-            .iter()
-            .map(|variant| variant["properties"]["type"]["const"].as_str().unwrap())
-            .collect();
-        assert_eq!(tags, forms, "{union}");
-        for variant in variants {
-            assert!(variant["required"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("type")));
-            if variant["properties"]["type"]["const"] == "function" {
-                assert_eq!(variant["properties"]["arguments"]["maxItems"], 16);
-            }
-        }
-    }
-    // A fields key is a member name the operation input or outcome issues,
-    // so it is an external identifier, held to the field-name grammar.
-    let fields = &schema["$defs"]["Fields"];
-    assert_eq!(
-        fields["propertyNames"],
-        json!({"allOf": [{"$ref": "#/$defs/ExternalId"}, {"$ref": "#/$defs/FieldName"}]})
-    );
-    assert_eq!(
-        schema["$defs"]["ExternalId"],
-        serde_json::to_value(
-            <registry_platform_yaml::ExternalId as schemars::JsonSchema>::json_schema(
-                &mut schemars::SchemaGenerator::default()
-            )
-        )
-        .unwrap()
-    );
-    assert_eq!(
-        schema["$defs"]["FieldName"]["pattern"],
-        "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
-    );
+    let variants = schema["$defs"]["AuthoredMapping"]["oneOf"]
+        .as_array()
+        .unwrap();
+    let tags = variants
+        .iter()
+        .map(|variant| variant["properties"]["type"]["const"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(tags, ["function", "fields", "input", "step", "literal"]);
+    let function = variants
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == "function")
+        .unwrap();
+    assert_eq!(function["properties"]["inputs"]["maxProperties"], 16);
+    assert_eq!(schema["$defs"]["Fields"]["maxProperties"], 64);
+    assert_eq!(schema["$defs"]["JsonPointer"]["maxLength"], 256);
     let mut references = Vec::new();
     local_references(&schema, &mut references);
     for reference in references {
         assert!(
-            schema
-                .pointer(&reference[1..])
-                .is_some_and(|target| !target.is_null()),
+            schema.pointer(&reference[1..]).is_some(),
             "{reference} names no definition"
         );
     }
-    assert_eq!(fields["maxProperties"], 64);
-    assert!(fields.get("patternProperties").is_none());
-    assert_eq!(fields["additionalProperties"]["$ref"], "#/$defs/Reference");
-    assert_eq!(schema["$defs"]["JsonPointer"]["maxLength"], 256);
-    assert_eq!(
-        schema["properties"]["functionsFile"]["const"],
-        "functions.rhai"
-    );
 }
 
 /// The tiny project with one call that feeds `input` to `operation`.
 #[cfg(feature = "schema")]
 fn call_project(operation: &str, input: Value) -> Value {
     let mut project = project();
-    project["connections"] = json!({"source": "breg"});
-    project["start"] = json!("call");
-    project["steps"]["call"] = json!({"type": "call", "connection": "source",
-        "operation": operation, "input": input, "next": "done"});
+    let catalog = match operation {
+        "read-record" => "breg.read-record/v1",
+        "read-scheduling" => "scheduling.read-service/v1",
+        "external-get" => "external.get/v1",
+        "submit-message" => "messaging.submit-message/v1",
+        _ => operation,
+    };
+    project["operations"] = json!({"source-call":{"uses":catalog,"connection":"source"}});
+    project["workflow"]["start"] = json!("call");
+    project["workflow"]["input"] = json!({"type":"object"});
+    project["workflow"]["steps"]["call"] =
+        json!({"type":"call","operation":"source-call","input":input,"next":"done"});
     project
 }
 
 #[cfg(feature = "schema")]
 #[test]
 fn project_schema_holds_each_fields_mapping_to_its_operation_input_members() {
+    // The schema exposes catalog choices. Alias-dependent schema fit is checked
+    // by the same canonical compiler, rather than a duplicated schema catalogue.
     let schema: Value = serde_json::from_str(&authoring::project_schema().unwrap()).unwrap();
-    let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
-    let input = |path: &str| json!({"type": "input", "path": path});
-    let literal = json!({"type": "literal", "value": "applications"});
-    let function =
-        json!({"type": "function", "function": "identity", "arguments": [{"type": "input"}]});
+    let choices = schema["$defs"]["Operation"]["enum"].as_array().unwrap();
+    for descriptor in registry_coordinator::operations::descriptors() {
+        assert!(choices.contains(&json!(descriptor.id)));
+    }
+    let literal = json!({"type":"literal","value":"applications"});
+    let input = |path: &str| json!({"type":"input","path":path});
+    let root = tempfile::tempdir().unwrap();
     for (operation, mapping, accepted) in [
         (
             "read-record",
-            json!({"type": "fields", "fields": {"collection": literal, "recordId": input("/id")}}),
+            json!({"type":"fields","fields":{"collection":literal,"recordId":input("/id")}}),
             true,
         ),
         (
             "read-record",
-            json!({"type": "fields", "fields": {"collection": literal, "recordId": input("/id"),
-                "grant": input("/grant")}}),
-            true,
-        ),
-        (
-            "read-record",
-            json!({"type": "fields", "fields": {"collection": literal, "recordId": input("/id"),
-                "resource": input("/id")}}),
+            json!({"type":"fields","fields":{"collection":literal,"recordId":input("/id"),"resource":input("/id")}}),
             false,
         ),
         (
             "read-record",
-            json!({"type": "fields", "fields": {"collection": literal}}),
+            json!({"type":"fields","fields":{"collection":literal}}),
             false,
         ),
-        ("read-record", function.clone(), true),
         (
             "read-scheduling",
-            json!({"type": "fields", "fields": {}}),
+            json!({"type":"fields","fields":{}}),
             true,
         ),
         (
             "read-scheduling",
-            json!({"type": "fields", "fields": {"collection": literal}}),
+            json!({"type":"fields","fields":{"collection":literal}}),
             false,
         ),
         (
             "external-get",
-            json!({"type": "fields", "fields": {"path": literal, "query": input("/query")}}),
+            json!({"type":"fields","fields":{"path":{"type":"literal","value":"/status"},"query":input("/query")}}),
             true,
         ),
         (
             "external-get",
-            json!({"type": "fields", "fields": {"query": input("/query")}}),
-            false,
-        ),
-        (
-            "submit-message",
-            json!({"type": "fields", "fields": {"senderProfile": literal, "to": input("/to")}}),
-            true,
-        ),
-        (
-            "submit-message",
-            json!({"type": "fields", "fields": {"senderProfile": literal, "recipient": input("/to")}}),
-            false,
-        ),
-        ("submit-message", function.clone(), true),
-        (
-            "read-record",
-            json!({"fields": {"collection": literal, "recordId": input("/id")}}),
-            false,
-        ),
-        (
-            "read-record",
-            json!({"function": "identity", "arguments": [{"type": "input"}]}),
+            json!({"type":"fields","fields":{"query":input("/query")}}),
             false,
         ),
     ] {
-        let project = call_project(operation, mapping.clone());
+        write_project(
+            root.path(),
+            &call_project(operation, mapping.clone()),
+            "fn identity(inputs) { inputs.arg0 }",
+        );
         assert_eq!(
-            validator.is_valid(&project),
+            Definition::load(root.path()).is_ok(),
             accepted,
             "{operation} {mapping}"
         );
     }
-    // A finish output is not an operation input, so its members stay open.
-    let mut finish = project();
-    finish["steps"]["done"]["output"] =
-        json!({"type": "fields", "fields": {"resource": input("/id")}});
-    assert!(validator.is_valid(&finish));
-
-    let call = schema["$defs"]["AuthoredStep"]["oneOf"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|variant| variant["properties"]["type"]["const"] == "call")
-        .unwrap();
-    let constrained: Vec<&str> = call["allOf"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|rule| {
-            rule["if"]["properties"]["operation"]["const"]
-                .as_str()
-                .unwrap()
-        })
-        .collect();
-    let catalog: Vec<&str> = registry_coordinator::operations::descriptors()
-        .iter()
-        .map(|descriptor| descriptor.id)
-        .collect();
-    assert_eq!(constrained, catalog);
-
-    let function =
-        json!({"type": "function", "function": "identity", "arguments": [{"type": "input"}]});
-    let mut supported = call_project("invoke-breg-action", function.clone());
-    supported["steps"]["call"]["onDeclaredRefusal"] = json!("done");
-    assert!(validator.is_valid(&supported));
-    let mut unsupported = call_project("read-record", function);
-    unsupported["steps"]["call"]["onDeclaredRefusal"] = json!("done");
-    assert!(!validator.is_valid(&unsupported));
-    assert!(call["properties"]["onDeclaredRefusal"]
-        .get("default")
-        .is_none());
 }
 
 #[cfg(feature = "schema")]
@@ -706,4 +748,35 @@ fn authoring_schemas_describe_every_member_and_form() {
             "{name} schema lacks descriptions at {found:#?}"
         );
     }
+}
+
+fn declare_test_functions(project: &Value) -> Value {
+    fn mapping(value: &Value, functions: &mut serde_json::Map<String, Value>) {
+        if let Some(object) = value.as_object() {
+            if object.get("type") == Some(&json!("function")) {
+                if let (Some(name), Some(inputs)) = (
+                    object.get("function").and_then(Value::as_str),
+                    object.get("inputs").and_then(Value::as_object),
+                ) {
+                    let signature = inputs
+                        .keys()
+                        .map(|name| (name.clone(), json!({})))
+                        .collect::<serde_json::Map<_, _>>();
+                    functions.insert(name.into(),json!({"runtime":"rhai","source":"functions.rhai","entrypoint":name,"inputs":signature,"output":{}}));
+                }
+            }
+            for value in object.values() {
+                mapping(value, functions);
+            }
+        } else if let Some(items) = value.as_array() {
+            for value in items {
+                mapping(value, functions);
+            }
+        }
+    }
+    let mut project = project.clone();
+    let mut functions = serde_json::Map::new();
+    mapping(&project["workflow"]["steps"], &mut functions);
+    project["functions"] = Value::Object(functions);
+    project
 }

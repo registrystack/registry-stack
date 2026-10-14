@@ -253,16 +253,16 @@ def serve(args):
         sender = journey.export(owner, "case-system", keys)
         fixture.private(keys / "review-completion-token", completion_token)
         runtime, coordinator_url, coordinator = journey.coordinator_service("reviewed-notice", keys, {
-            "applications": {"product": "breg", "baseUrl": journey.urls["breg"],
+            "applications": {"type": "breg", "baseUrl": journey.urls["breg"],
                 "profile": "follow-up-reader",
                 "authorization": journey.authorization(reader, resource, ["records:get"])},
-            "review": {"product": "casework", "baseUrl": casework_url,
+            "review": {"type": "casework-review-producer", "baseUrl": casework_url,
                 "profile": "coordinator-producer", "producer": "coordinator",
                 "authorization": journey.authorization(reviewer, resource, ["casework:review"]),
                 "completion": {"recipientBinding": "coordinator-v1",
                     "bearerTokenRef": "secret:file/review-completion-token"},
                 "resultCheckSeconds": 900},
-            "notices": {"product": "messaging", "baseUrl": messaging_url,
+            "notices": {"type": "messaging", "baseUrl": messaging_url,
                 "authorization": journey.authorization(sender, sender["resource"], ["messaging:send"])},
         }, coordinator_port, "coordinator-reviewed-notice-tutorial")
 
@@ -286,6 +286,7 @@ def serve(args):
             "status": "ready", "supervisorPid": os.getpid(), "coordinatorRestarts": 0,
             "cleanupStatus": "pending",
             "applicationId": application_id, "runId": run_id,
+            "workflow": run["workflow"], "workflowRevision": run["workflowRevision"],
             "bregApi": journey.urls["breg"], "caseworkApi": casework_url,
             "coordinatorApi": coordinator_url, "mailpit": journey.mailpit_url,
             "caseworkProfile": "staff", "staffHeaderFile": str(staff_header),

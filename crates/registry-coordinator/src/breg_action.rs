@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Durable handoff for one configured BReg immediate action.
+//! Durable handoff for one exact configured BReg Action.
 //!
 //! The BReg client owns metadata promotion, target conditions, exact recovery
 //! and receipt validation. Preparation reads current authority but sends no
 //! mutation. Saved bytes are inert and must be protected with the command.
 
 use registry_breg_client::{
-    BRegActionInvocationRequest, BRegActionTargetConditionsRequest, BRegIdempotencyKey,
-    BRegImmediateActionBinding, BRegPreparedAction, BRegProblemCode, BaseRegistryClient,
-    BaseRegistryClientError,
+    BRegActionBinding, BRegActionInvocationRequest, BRegActionMode,
+    BRegActionTargetConditionsRequest, BRegIdempotencyKey, BRegPreparedAction, BRegProblemCode,
+    BaseRegistryClient, BaseRegistryClientError,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -18,12 +18,25 @@ use crate::{
     protocol::{CallOutcome, CallRequest, DeclaredRefusal, Operation},
 };
 
+/// Package-pinned specialization exported by the owning BReg compiler.
+/// Current caller metadata must promote the same Action before every attempt.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ActionContract {
+    pub action_id: String,
+    pub action_revision: String,
+    #[cfg_attr(feature = "schema", schemars(with = "String", extend("enum" = ["immediate", "proposal"])))]
+    pub mode: BRegActionMode,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct ActionInput {
-    action: String,
     input: Map<String, Value>,
+    #[serde(default)]
+    preconditions: Option<Value>,
 }
 
 fn input(request: &CallRequest) -> Result<(ActionInput, BRegIdempotencyKey), CallOutcome> {
@@ -52,7 +65,7 @@ fn declared_refusal(
         .and_then(DeclaredRefusal::new)
 }
 
-fn failure(error: BaseRegistryClientError, mutation: bool) -> CallOutcome {
+pub(crate) fn failure(error: BaseRegistryClientError, mutation: bool) -> CallOutcome {
     if mutation && error.problem_code() == Some(BRegProblemCode::IdempotencyExpired) {
         return CallOutcome::ReceiptExpired;
     }
@@ -94,16 +107,20 @@ fn failure(error: BaseRegistryClientError, mutation: bool) -> CallOutcome {
 async fn binding(
     client: &BaseRegistryClient,
     profile: &str,
-    action: &str,
-) -> Result<BRegImmediateActionBinding, CallOutcome> {
+    expected: &ActionContract,
+) -> Result<BRegActionBinding, CallOutcome> {
     let metadata = client
         .registry_contract(Some(profile))
         .await
         .map_err(|error| failure(error, false))?;
-    metadata
+    let action = metadata
         .value
-        .select_immediate_action(action, profile)
-        .map_err(|_| refused("action-unavailable"))
+        .select_action(&expected.action_id, profile)
+        .map_err(|_| refused("action-unavailable"))?;
+    if action.definition_revision() != expected.action_revision || action.mode() != expected.mode {
+        return Err(refused("action-contract-changed"));
+    }
+    Ok(action)
 }
 
 /// Prepare exact client-owned evidence before durable dispatch. The configured
@@ -114,7 +131,11 @@ pub async fn prepare(
     request: &CallRequest,
 ) -> Result<Vec<u8>, CallOutcome> {
     let (input, key) = input(request)?;
-    let action = binding(client, profile, &input.action).await?;
+    let expected = request
+        .operation_contract
+        .as_ref()
+        .ok_or_else(|| refused("action-contract-missing"))?;
+    let action = binding(client, profile, expected).await?;
     BRegActionInvocationRequest::validate_inputs(&action, &input.input)
         .map_err(|_| refused("invalid-command"))?;
     let conditions = if action.required_condition_keys().is_empty() {
@@ -142,6 +163,16 @@ pub async fn prepare(
                 .value,
         )
     };
+    if input.preconditions.as_ref().is_some_and(|expected| {
+        conditions
+            .as_ref()
+            .and_then(|conditions| serde_json::to_value(conditions).ok())
+            .and_then(|value| value.get("preconditions").cloned())
+            .as_ref()
+            != Some(expected)
+    }) {
+        return Err(refused("target-conditions-mismatch"));
+    }
     let invocation = BRegActionInvocationRequest::new(&action, input.input, conditions.as_ref())
         .map_err(|_| refused("invalid-command"))?;
     client
@@ -167,7 +198,10 @@ pub async fn execute(
         Ok(prepared) => prepared,
         Err(_) => return refused("invalid-command"),
     };
-    let action = match binding(client, profile, &input.action).await {
+    let Some(expected) = request.operation_contract.as_ref() else {
+        return refused("action-contract-missing");
+    };
+    let action = match binding(client, profile, expected).await {
         Ok(action) => action,
         Err(outcome) => return outcome,
     };
@@ -175,6 +209,28 @@ pub async fn execute(
         Ok(invocation) => invocation,
         Err(_) => return refused("prepared-command-mismatch"),
     };
+    if action.mode() == BRegActionMode::Proposal {
+        return match client.start_proposal(&action, &invocation, &key).await {
+            Ok(answer)
+                if answer.value.state() != registry_breg_client::BRegProposalState::Draft
+                    || answer.value.application().is_some() =>
+            {
+                CallOutcome::Uncertain {
+                    code: "invalid-response".into(),
+                }
+            }
+            Ok(answer) => match serde_json::to_value(answer.value) {
+                Ok(proposal) => CallOutcome::Success(serde_json::json!({"proposal":proposal})),
+                Err(_) => CallOutcome::Uncertain {
+                    code: "invalid-response".into(),
+                },
+            },
+            Err(BaseRegistryClientError::InvalidRequest { .. }) => CallOutcome::Uncertain {
+                code: "invalid-response".into(),
+            },
+            Err(error) => failure(error, true),
+        };
+    }
     match client.invoke_action(&action, &invocation, &key).await {
         Ok(answer) => match serde_json::to_value(answer.value) {
             Ok(value) => CallOutcome::Success(value),

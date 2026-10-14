@@ -5,24 +5,28 @@ public Rust facade exposes it as `registry_stack_client::coordinator`; the
 public Node.js and Python packages expose it as their `coordinator`
 namespace. Browser apps call their own authorized server routes.
 
-The operations are `start`, `list`, `status`, `inspect`, `reconcile`,
+The operations are `workflow`, `start`, `list`, `status`, `inspect`, `reconcile`,
 `retry_same`, and `cancel`. The operator routes (doctor, holds, execution
 recovery and retention) are not part of this client; `coordinatorctl` owns them.
-Admission requires a caller-chosen idempotency key and `{flow, input}`. HTTP
+`workflow` discovers the permitted active input and outcome contracts under current start
+authority, including the computed `workflowRevision`, without starting a run. Admission requires
+a caller-chosen idempotency key and `{workflow, workflowRevision, input}`. HTTP
 200 confirms admission and returns the run's current status. The runtime
-answers the same run again for the same caller, flow, key and input, and
-refuses the same key with a different input. A key is scoped to the caller and
-the flow, so the same key under two flows starts two runs, and an allowed flow
-the deployment does not serve is refused with 404 `flow.not-served`, a known
+answers the same run again for the same caller, workflow, key, expected revision, and input, and
+refuses conflicting revision or input under that key. A fresh start must match the active revision;
+a mismatch is `409 workflow.revision-mismatch`. Recovery of an unknown admission retains the
+original revision even when activation changes. A key is scoped to the caller and
+the workflow, so the same key under two workflows starts two runs, and an allowed workflow
+the deployment does not serve is refused with 404 `workflow.not-served`, a known
 outcome the client never resends. When an admission's outcome is
 unknown, after a timeout or broken exchange or on a 5xx answer, the client
 resends the identical request under the same key, at most
 `with_max_mutation_retries` times (2 by default, at most 2, 0 disables it).
 It never resends after a 4xx status line. An error that still leaves the
 outcome unknown may have admitted a run: the caller retains the exact key,
-flow, input and service identity in durable state before dispatch and
+workflow, revision, input, and service identity in durable state before dispatch and
 recovers under that same identity. Changing the key or the verified
-issuer/subject can create another run. `list`, `status`, `inspect`,
+issuer/subject can create another run. `workflow`, `list`, `status`, `inspect`,
 `reconcile`, `retry_same` and `cancel` send exactly once. `retry_same` and
 `cancel` take no idempotency key, so the client never resends them: after an
 error that leaves the outcome unknown, read the run before asking again.
@@ -32,6 +36,21 @@ cursor returned as `next_cursor`, an exact state, and an attention filter.
 Pass a cursor unchanged with the same caller and filters. Attention means the
 effective states `attention` and `failed`; the state filter exposes all eight
 closed runtime states individually.
+
+The computed Workflow revision identifies execution semantics, including the typed input,
+graph, declared outcomes, used Operation and Function revisions, and host execution contracts.
+Presentation titles and descriptions do not change it. Exact package bytes have a separate
+package checksum. Status retains the admitted `workflow` and `workflowRevision` after upgrades.
+Inspection adds accepted or unknown `effects` and named completion `waits`, including pinned
+revisions, deadlines, next observations, persistent floors, and count/limit. Original inputs,
+raw product responses, prepared requests, and protected correlation values remain absent.
+The reviewed Workflow declares any terminal output projection.
+
+`coordinatorctl types --project DIRECTORY --language typescript --output FILE` and the equivalent
+`--language python` export typed Workflow wrappers over the maintained public generic clients.
+Their `start`, `get`, and `cancel` methods pin the compiled revision and check returned workflow
+identity and declared outcome names. They add no transport or authorization semantics; runtime
+schema checks remain with Coordinator. Regenerate the wrapper when the execution contract changes.
 
 Status is protected by current Coordinator policy and ownership. A run started
 by a backend is owned by that backend, even when its input mentions a citizen's

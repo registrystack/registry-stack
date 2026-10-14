@@ -26,13 +26,15 @@ use uuid::Uuid;
 
 use crate::{
     protocol::{
-        AdapterSet, CallOutcome, CallRequest, Operation, ReconciliationOutcome, ReviewRead,
+        AdapterSet, CallOutcome, CallRequest, CompletionObservation, Operation,
+        ReconciliationOutcome,
     },
     CoordinatorError, Result,
 };
 
-const FILE_BOUND: u64 = 65_536;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const FILE_BOUND: u64 = crate::operations::MAXIMUM_HTTP_RESPONSE_BYTES;
+const REQUEST_TIMEOUT: Duration =
+    Duration::from_millis(crate::operations::HTTP_REQUEST_TIMEOUT_MILLISECONDS);
 
 pub use crate::runtime::{
     AuthorizationConfig, ConnectionConfig, Product, RuntimeConfig, TaskAuthorityConfig,
@@ -111,7 +113,9 @@ fn tokens(
         .with_scopes(scopes.iter().cloned())
         .with_fetch_url_policy(configured_endpoint_policy(&auth.token_endpoint))
         .with_request_timeout(REQUEST_TIMEOUT)
-        .with_connect_timeout(Duration::from_secs(1));
+        .with_connect_timeout(Duration::from_millis(
+            crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
+        ));
     if let Some(audience) = &auth.client_assertion_audience {
         config = config.with_audience(audience);
     }
@@ -125,9 +129,11 @@ fn breg_client(
     BaseRegistryClient::new(
         BaseRegistryClientConfig::new(url)
             .with_token_provider(tokens)
-            .with_max_mutation_retries(0)
+            .with_max_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
             .with_request_timeout(REQUEST_TIMEOUT)
-            .with_connect_timeout(Duration::from_secs(1))
+            .with_connect_timeout(Duration::from_millis(
+                crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
+            ))
             .with_max_response_bytes(FILE_BOUND),
     )
 }
@@ -139,13 +145,43 @@ impl HttpAdapters {
 
     pub fn new(config: &RuntimeConfig) -> Result<Self> {
         config.validate()?;
-        let secrets = config
-            .secret_providers
-            .resolver()
-            .map_err(|_| config_error())?;
+        let secrets = Arc::new(
+            config
+                .secret_providers
+                .resolver()
+                .map_err(|_| config_error())?,
+        );
         let mut connections = BTreeMap::new();
-        for (name, binding) in config.connections.clone() {
-            let auth = binding.authorization;
+        for (name, configured) in &config.connections {
+            if let Some(binding) = configured.external_http() {
+                let provider: Option<Arc<dyn TokenProvider>> = match &binding.authorization {
+                    Some(auth) => {
+                        let key_bytes = secrets
+                            .resolve_reference(&auth.signing_key_ref)
+                            .map_err(|_| config_error())?;
+                        let key_text = std::str::from_utf8(key_bytes.expose_secret())
+                            .map_err(|_| config_error())?;
+                        let key = PrivateJwk::parse(key_text).map_err(|_| config_error())?;
+                        Some(Arc::new(
+                            tokens(auth, key, &auth.resource, &auth.scopes)
+                                .map_err(|_| config_error())?,
+                        ))
+                    }
+                    None => None,
+                };
+                let connection =
+                    crate::external_http::ExternalHttpConnection::new(binding, provider)?;
+                connections.insert(name.clone(), Connection::External(Box::new(connection)));
+                continue;
+            }
+            if let Some(binding) = configured.decision() {
+                let connection =
+                    crate::decision::DecisionConnection::new(binding, Arc::clone(&secrets))?;
+                connections.insert(name.clone(), Connection::Decision(Box::new(connection)));
+                continue;
+            }
+            let binding = configured.product_binding().ok_or_else(config_error)?;
+            let auth = binding.authorization.clone();
             let key_bytes = secrets
                 .resolve_reference(&auth.signing_key_ref)
                 .map_err(|_| config_error())?;
@@ -173,13 +209,13 @@ impl HttpAdapters {
             };
             let connection = match binding.product {
                 Product::Breg => {
-                    let profile = binding.profile.ok_or_else(config_error)?;
+                    let profile = binding.profile.cloned().ok_or_else(config_error)?;
                     let options = BRegRecordOptions::default()
                         .access_profile(&profile)
                         .map_err(|_| config_error())?;
                     if auth.task_authority.is_some() {
                         Connection::BregTask(Box::new(TaskConnection {
-                            base_url: binding.base_url,
+                            base_url: binding.base_url.clone(),
                             options,
                             authorization: auth,
                             key,
@@ -191,7 +227,7 @@ impl HttpAdapters {
                         );
                         Connection::Breg {
                             client: Box::new(
-                                breg_client(binding.base_url, tokens)
+                                breg_client(binding.base_url.clone(), tokens)
                                     .map_err(|_| config_error())?,
                             ),
                             options,
@@ -209,10 +245,12 @@ impl HttpAdapters {
                         None
                     };
                     let client = SchedulingClient::new(
-                        SchedulingClientConfig::new(binding.base_url)
-                            .with_max_mutation_retries(0)
+                        SchedulingClientConfig::new(binding.base_url.clone())
+                            .with_max_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_request_timeout(REQUEST_TIMEOUT)
-                            .with_connect_timeout(Duration::from_secs(1))
+                            .with_connect_timeout(Duration::from_millis(
+                                crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
+                            ))
                             .with_max_response_bytes(FILE_BOUND),
                     )
                     .map_err(|_| config_error())?;
@@ -230,10 +268,12 @@ impl HttpAdapters {
                             .map_err(|_| config_error())?,
                     );
                     let client = MessagingClient::new(
-                        MessagingClientConfig::new(binding.base_url)
-                            .with_max_mutation_retries(0)
+                        MessagingClientConfig::new(binding.base_url.clone())
+                            .with_max_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_request_timeout(REQUEST_TIMEOUT)
-                            .with_connect_timeout(Duration::from_secs(1))
+                            .with_connect_timeout(Duration::from_millis(
+                                crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
+                            ))
                             .with_max_response_bytes(FILE_BOUND),
                     )
                     .map_err(|_| config_error())?;
@@ -264,49 +304,26 @@ impl HttpAdapters {
                     let tokens = tokens(&auth, key, &auth.resource, &auth.scopes)
                         .map_err(|_| config_error())?;
                     let client = CaseworkClient::new(
-                        CaseworkClientConfig::new(binding.base_url)
-                            .with_max_mutation_retries(0)
+                        CaseworkClientConfig::new(binding.base_url.clone())
+                            .with_max_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_request_timeout(REQUEST_TIMEOUT)
-                            .with_connect_timeout(Duration::from_secs(1))
+                            .with_connect_timeout(Duration::from_millis(
+                                crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
+                            ))
                             .with_max_response_bytes(FILE_BOUND),
                     )
                     .map_err(|_| config_error())?;
                     Connection::Casework(Box::new(crate::review::CaseworkConnection::new(
                         client,
                         tokens,
-                        binding.profile.ok_or_else(config_error)?,
-                        binding.producer.ok_or_else(config_error)?,
+                        binding.profile.cloned().ok_or_else(config_error)?,
+                        binding.producer.cloned().ok_or_else(config_error)?,
                         completion,
                         result_check_seconds,
                     )))
                 }
             };
-            connections.insert(name, connection);
-        }
-        for (name, binding) in &config.external_http_connections {
-            let provider: Option<Arc<dyn TokenProvider>> = match &binding.authorization {
-                Some(auth) => {
-                    let key_bytes = secrets
-                        .resolve_reference(&auth.signing_key_ref)
-                        .map_err(|_| config_error())?;
-                    let key_text = std::str::from_utf8(key_bytes.expose_secret())
-                        .map_err(|_| config_error())?;
-                    let key = PrivateJwk::parse(key_text).map_err(|_| config_error())?;
-                    Some(Arc::new(
-                        tokens(auth, key, &auth.resource, &auth.scopes)
-                            .map_err(|_| config_error())?,
-                    ))
-                }
-                None => None,
-            };
-            let connection = crate::external_http::ExternalHttpConnection::new(binding, provider)?;
-            connections.insert(name.clone(), Connection::External(Box::new(connection)));
-        }
-        let decision_secrets = Arc::new(secrets);
-        for (name, binding) in &config.decision_connections {
-            let connection =
-                crate::decision::DecisionConnection::new(binding, Arc::clone(&decision_secrets))?;
-            connections.insert(name.clone(), Connection::Decision(Box::new(connection)));
+            connections.insert(name.clone(), connection);
         }
         let digest = config.binding_digest()?;
         Ok(Self {
@@ -404,9 +421,11 @@ fn task_provider(
     .map_err(|error| token_failure(&error))?;
     let casework = CaseworkClient::new(
         CaseworkClientConfig::new(authority.base_url.clone())
-            .with_max_mutation_retries(0)
+            .with_max_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
             .with_request_timeout(REQUEST_TIMEOUT)
-            .with_connect_timeout(Duration::from_secs(1))
+            .with_connect_timeout(Duration::from_millis(
+                crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
+            ))
             .with_max_response_bytes(FILE_BOUND),
     )
     .map_err(|_| refused("credential-configuration"))?;
@@ -435,6 +454,17 @@ impl TaskConnection {
         let provider = task_provider(&self.authorization, &self.key, grant)?;
         breg_client(self.base_url.clone(), Arc::new(provider))
             .map_err(|_| refused("credential-configuration"))
+    }
+}
+
+fn proposal_transition(operation: Operation) -> Option<crate::breg_proposal::Transition> {
+    use crate::breg_proposal::Transition;
+    match operation {
+        Operation::SubmitBregProposal => Some(Transition::Submit),
+        Operation::ApplyBregProposal => Some(Transition::Apply),
+        Operation::CancelBregProposal => Some(Transition::Cancel),
+        Operation::RetryBregProposal => Some(Transition::Retry),
+        _ => None,
     }
 }
 
@@ -505,6 +535,16 @@ impl AdapterSet for HttpAdapters {
                 _ => Err(refused("operation-unbound")),
             };
         }
+        if let Some(transition) = proposal_transition(request.operation) {
+            return match self.connections.get(&request.connection) {
+                Some(Connection::Breg {
+                    client, profile, ..
+                }) => crate::breg_proposal::prepare(client, profile, request, transition)
+                    .await
+                    .map(Some),
+                _ => Err(refused("operation-unbound")),
+            };
+        }
         Ok(None)
     }
 
@@ -527,6 +567,19 @@ impl AdapterSet for HttpAdapters {
                     }),
                     Some(bytes),
                 ) => crate::breg_action::execute(client, profile, request, bytes).await,
+                _ => refused("operation-unbound"),
+            };
+        }
+        if let Some(transition) = proposal_transition(request.operation) {
+            return match (self.connections.get(&request.connection), prepared) {
+                (
+                    Some(Connection::Breg {
+                        client, profile, ..
+                    }),
+                    Some(bytes),
+                ) => {
+                    crate::breg_proposal::execute(client, profile, request, bytes, transition).await
+                }
                 _ => refused("operation-unbound"),
             };
         }
@@ -665,21 +718,73 @@ impl AdapterSet for HttpAdapters {
         }
     }
 
-    async fn read_review_result(
+    async fn observe_completion(
         &self,
-        connection: &str,
+        request: &CallRequest,
         accepted: &serde_json::Value,
-    ) -> ReviewRead {
-        match self.connections.get(connection) {
-            Some(Connection::Casework(connection)) => connection.read_result(accepted).await,
-            _ => ReviewRead::Failed(refused("operation-unbound")),
+        completion: &crate::definition::CompletionDefinition,
+    ) -> CompletionObservation {
+        use crate::{breg_proposal::ApplicationObservation, definition::CompletionKind};
+        match (&completion.kind, self.connections.get(&request.connection)) {
+            (CompletionKind::CaseworkResult {}, Some(Connection::Casework(connection)))
+                if request.operation == Operation::SubmitReviewRequest =>
+            {
+                connection.read_result(accepted).await
+            }
+            (
+                CompletionKind::BregApplication {},
+                Some(Connection::Breg {
+                    client, profile, ..
+                }),
+            ) if request.operation == Operation::SubmitBregProposal => {
+                match crate::breg_proposal::observe_application(client, profile, accepted).await {
+                    ApplicationObservation::Pending { retry_after } => {
+                        CompletionObservation::Pending { retry_after }
+                    }
+                    ApplicationObservation::Complete(value) => {
+                        CompletionObservation::Settled(value)
+                    }
+                    ApplicationObservation::Retryable { code, retry_after } => {
+                        CompletionObservation::Retryable { code, retry_after }
+                    }
+                    ApplicationObservation::Hold { code } => CompletionObservation::Hold { code },
+                }
+            }
+            _ => CompletionObservation::Hold {
+                code: "operation-unbound".into(),
+            },
         }
     }
 
-    fn result_check_seconds(&self, connection: &str) -> u32 {
-        match self.connections.get(connection) {
-            Some(Connection::Casework(connection)) => connection.result_check_seconds(),
-            _ => crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
+    fn observation_interval(
+        &self,
+        connection: &str,
+        completion: &crate::definition::CompletionDefinition,
+    ) -> u32 {
+        let seconds = match &completion.kind {
+            crate::definition::CompletionKind::BoundedPoll {
+                interval_seconds, ..
+            } => *interval_seconds,
+            _ => match self.connections.get(connection) {
+                Some(Connection::Casework(connection)) => connection.result_check_seconds(),
+                _ => crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
+            },
+        };
+        seconds.max(self.config.minimum_observation_interval_seconds.get())
+    }
+
+    fn minimum_observation_interval(
+        &self,
+        connection: &str,
+        completion: &crate::definition::CompletionDefinition,
+    ) -> u32 {
+        if matches!(
+            completion.kind,
+            crate::definition::CompletionKind::CaseworkResult {}
+        ) {
+            self.config.minimum_observation_interval_seconds.get()
+        } else {
+            self.observation_interval(connection, completion)
         }
     }
 

@@ -84,6 +84,16 @@ impl ProposalAuthority {
                     .iter()
                     .find(|p| p.profile_id == profile && p.operations.contains(&operation))
                     .ok_or_else(invalid_context)?;
+                if proposal.application.is_automatic()
+                    && matches!(
+                        operation,
+                        ProposalOperation::Apply | ProposalOperation::Retry
+                    )
+                    && (permission.actor_kind != Some(crate::contract::ActorKindSource::Human)
+                        || permission.task_grant.is_some())
+                {
+                    return Err(invalid_context());
+                }
                 ownership = permission.ownership;
                 permission
                     .targets

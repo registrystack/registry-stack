@@ -4,39 +4,25 @@
 
 First release of Registry Coordinator.
 
-- The `coordinator` runtime executes finite, acyclic YAML workflows with
-  declarative mappings and bounded pure Rhai functions, across durable waits,
-  service outages and worker restarts. PostgreSQL stores encrypted progress
-  and prepared commands, the operation inventory is fixed, and receiving
-  products retain authorization and ownership of every external effect. One
-  deployment serves up to sixteen flows, one pinned package per flow.
-- `coordinatorctl` authors and checks projects (`init`, `check`, `explain`,
-  `test`, `package`), operates a deployment from its runtime file (`plan`,
-  `apply`, `deployment-status`), and checks a running service (`doctor`).
-- Every refusal of the HTTP API is an RFC 9457 `application/problem+json`
-  document whose `type` sits under
-  `https://id.registrystack.org/problems/registry-coordinator/`. The
-  generated OpenAPI document lists the codes each operation can answer.
-- The Coordinator client covers `start`, `list`, `status`, `inspect`,
-  `reconcile`, `retry_same` and `cancel` as
-  `registry_stack_client::coordinator` in Rust and the `coordinator`
-  namespace of the unified Node.js and Python clients.
-- `submit-review-request` and `cancel-review-request` hand work to Casework
-  human review as a review producer, and a `wait-for` step on a
-  `review-result` event waits for the reviewer's result.
-- `invoke-breg-action` calls may route a package-declared, no-effect BReg
-  action refusal through `onDeclaredRefusal`. The branch receives only its
-  validated `refusalCode`; operational failures and prior uncertain attempts
-  retain their existing failure and recovery behavior.
-- Coordinator joins the unified clients from v0.42.0. Runtime binary and image
-  publication remain held until package permissions and Coordinator-specific
-  advisory evidence are ready; source builds are available meanwhile.
-- The reviewed-notice example and runnable tutorial coordinate a BReg record,
-  Casework review and one Messaging notice, with fresh revision and permission
-  checks before delivery and a recipient read from BReg.
-- Review waits can author `onCancel` cleanup. Cancellation records durable intent
-  and lets that path withdraw the original review across worker restarts; repeated
-  cancellation preserves the cleanup. Protected state schema version 2 refuses
-  earlier pilot namespaces rather than silently adopting an incompatible layout.
-- Run discovery supports bounded cursor pagination, effective-state filters and
-  an attention filter through HTTP, CLI and the Rust, Node.js and Python clients.
+- Coordinator executes finite, acyclic Workflows across durable waits, outages, and restarts.
+  Projects separate generated contracts, reusable types, named pure Functions, local exact
+  Operation aliases, and one Workflow graph. Functions take one typed object of named inputs.
+- Runtime bindings use one tagged `connections` map. Caller policies are keyed by exact verified
+  client identity and scope run actions through `workflows`.
+- Starts require an expected computed `workflowRevision`. Workflow discovery and generated
+  TypeScript/Python wrappers provide revision-pinned typed `start`, `get`, and `cancel` through
+  maintained public generic clients. Unknown admission preserves its original revision and key.
+- Named completions share `completion: {step, name}` across Casework results, exact BReg Proposal
+  application, and bounded external job observation. Persistent read floors, retry ceilings, and
+  observation budgets survive restarts and wake-ups. Blocked or uncertain evidence remains held.
+- BReg Action aliases import owner-generated exact contracts. Proposal draft creation, submission,
+  review, application, and a later notice remain separate authorized stages. Only exact application
+  evidence can release an application wait. Declared no-effect refusals can route explicitly.
+- Inspection reports accepted or unknown effects and bounded wait state without protected inputs,
+  raw product responses, prepared requests, or correlation values. Encrypted PostgreSQL custody,
+  durable audit, retention tombstones, and explicit fenced restore recovery protect work.
+- Protected state schema version 3 directly replaces earlier pilot layouts. Incompatible state is
+  refused; there is no in-place conversion or legacy authoring syntax.
+- Maintained examples cover independent Proposal follow-up, standalone Casework review, and
+  external job completion. Offline scenarios do not establish a complete native reviewed BReg
+  Proposal journey; owning Casework/BReg checkpoint integration remains required.

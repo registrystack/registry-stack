@@ -2,9 +2,11 @@
 // application version under review and submits the only context a reviewer is
 // shown, so Casework needs no source adapter for it. The notice cites the
 // review result by id and repeats none of its content.
-fn review_request(input) {
+fn review_request(args) {
+    let input = args["input"];
+
     #{
-        kind: "application-review",
+        policy: #{id: "application-review", version: "1", digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
         subject: #{
             source: "applications",
             type: "application",
@@ -23,7 +25,10 @@ fn review_request(input) {
     }
 }
 
-fn notice_request(input, result) {
+fn notice_request(args) {
+    let input = args["input"];
+    let result = args["result"];
+
     #{
         senderProfile: "transactional",
         to: #{ email: input.email },

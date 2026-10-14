@@ -21,8 +21,8 @@ fn document() -> Value {
         "database":{"runtimeUrlRef":"secret:env/UNRESOLVED_DECISION_TEST_DATABASE",
             "migrationUrlRef":"secret:env/UNRESOLVED_DECISION_TEST_DATABASE"},
         "namespace":"coordinator_decision_test",
-        "decisionConnections":{"assessor":{
-            "protocol":"system-one","baseUrl":"https://decision.example.test/tenant",
+        "connections":{"assessor":{
+            "type":"evaluation", "protocol":"system-one","baseUrl":"https://decision.example.test/tenant",
             "model":"fixture-model","authorization":{"bearer":{
                 "tokenRef":"secret:env/UNRESOLVED_DECISION_TEST_TOKEN","principal":"fixture-account"
             }}
@@ -47,19 +47,19 @@ fn example() -> PathBuf {
 #[test]
 fn offline_decision_binding_checks_do_not_resolve_credentials() {
     let config = load(&document()).unwrap();
-    assert!(config.connections.is_empty());
-    assert!(config.external_http_connections.is_empty());
+    assert_eq!(config.connections.len(), 1);
+    assert!(config.connections["assessor"].decision().is_some());
     let effective = config.document().unwrap();
     assert_eq!(
-        effective["decisionConnections"]["assessor"]["attemptTimeoutMilliseconds"],
+        effective["connections"]["assessor"]["attemptTimeoutMilliseconds"],
         8000
     );
     assert_eq!(
-        effective["decisionConnections"]["assessor"]["maximumRequestBytes"],
+        effective["connections"]["assessor"]["maximumRequestBytes"],
         65536
     );
     assert_eq!(
-        effective["decisionConnections"]["assessor"]["maximumResponseBytes"],
+        effective["connections"]["assessor"]["maximumResponseBytes"],
         65536
     );
     config.binding_digest().unwrap();
@@ -77,7 +77,7 @@ fn decision_binding_is_pinned_but_credential_rotation_is_not_a_new_command() {
     let original = document();
     let digest = load(&original).unwrap().binding_digest().unwrap();
     let mut rotated = original.clone();
-    rotated["decisionConnections"]["assessor"]["authorization"]["bearer"]["tokenRef"] =
+    rotated["connections"]["assessor"]["authorization"]["bearer"]["tokenRef"] =
         json!("secret:env/ROTATED_DECISION_TEST_TOKEN");
     assert_eq!(load(&rotated).unwrap().binding_digest().unwrap(), digest);
     for (member, value) in [
@@ -89,7 +89,7 @@ fn decision_binding_is_pinned_but_credential_rotation_is_not_a_new_command() {
         ("maximumResponseBytes", json!(32768)),
     ] {
         let mut changed = original.clone();
-        changed["decisionConnections"]["assessor"][member] = value;
+        changed["connections"]["assessor"][member] = value;
         assert_ne!(
             load(&changed).unwrap().binding_digest().unwrap(),
             digest,
@@ -97,7 +97,7 @@ fn decision_binding_is_pinned_but_credential_rotation_is_not_a_new_command() {
         );
     }
     let mut changed = original.clone();
-    changed["decisionConnections"]["assessor"]["authorization"]["bearer"]["principal"] =
+    changed["connections"]["assessor"]["authorization"]["bearer"]["principal"] =
         json!("other-account");
     assert_ne!(load(&changed).unwrap().binding_digest().unwrap(), digest);
 }
@@ -105,28 +105,28 @@ fn decision_binding_is_pinned_but_credential_rotation_is_not_a_new_command() {
 #[test]
 fn decision_credentials_and_connection_names_fail_closed() {
     let mut missing_provider = document();
-    missing_provider["decisionConnections"]["assessor"]["authorization"]["bearer"]["tokenRef"] =
+    missing_provider["connections"]["assessor"]["authorization"]["bearer"]["tokenRef"] =
         json!("secret:file/private-canary");
     let error = load(&missing_provider).err().unwrap();
     assert_eq!(
         error.field.as_deref(),
-        Some("/decisionConnections/assessor/authorization/bearer/tokenRef")
+        Some("/connections/assessor/authorization/bearer/tokenRef")
     );
     assert!(!error.to_string().contains("private-canary"));
-    let mut collision = document();
-    collision["externalHttpConnections"] = json!({"assessor":{
-        "baseUrl":"https://directory.example.test", "paths":["records"],"responseSchema":{"type":"object"}
-    }});
-    let error = load(&collision).err().unwrap();
-    assert_eq!(
-        error.field.as_deref(),
-        Some("/decisionConnections/assessor")
-    );
+    let duplicate =
+        document()
+            .to_string()
+            .replacen("\"assessor\":", "\"assessor\":{},\"assessor\":", 1);
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("runtime.yaml");
+    std::fs::write(&path, duplicate).unwrap();
+    let error = RuntimeConfig::load(&path).err().unwrap();
+    assert_eq!(error.code, "yaml.duplicate-key");
     let mut remote_public = document();
-    remote_public["decisionConnections"]["assessor"]["authorization"] = json!({"local":{}});
+    remote_public["connections"]["assessor"]["authorization"] = json!({"local":{}});
     assert!(load(&remote_public).is_err());
     let mut absent = document();
-    absent["decisionConnections"]["assessor"]
+    absent["connections"]["assessor"]
         .as_object_mut()
         .unwrap()
         .remove("authorization");
@@ -141,17 +141,15 @@ fn named_decision_binding_is_required_and_other_connections_do_not_change_identi
     config.validate_workflow(&definition.workflow).unwrap();
     let digest = config.binding_digest_for(&definition.workflow).unwrap();
     let mut extra = config.clone();
-    let binding = extra.decision_connections["assessor"].clone();
-    extra
-        .decision_connections
-        .insert("unrelated".into(), binding);
+    let binding = extra.connections["assessor"].clone();
+    extra.connections.insert("unrelated".into(), binding);
     assert_eq!(
         extra.binding_digest_for(&definition.workflow).unwrap(),
         digest
     );
-    extra.decision_connections.remove("assessor");
+    extra.connections.remove("assessor");
     let error = extra.validate_workflow(&definition.workflow).unwrap_err();
-    assert_eq!(error.field.as_deref(), Some("decisionConnections.assessor"));
+    assert_eq!(error.field.as_deref(), Some("/connections/assessor"));
 }
 
 #[cfg(feature = "schema")]
@@ -179,7 +177,7 @@ fn decision_config_schema_matches_reader_for_authorization_and_bounds() {
         ),
     ] {
         let mut d = document();
-        d["decisionConnections"]["assessor"][member] = value;
+        d["connections"]["assessor"][member] = value;
         assert!(!validator.is_valid(&d), "schema accepted {member}");
         assert!(load(&d).is_err(), "reader accepted {member}");
     }
@@ -189,11 +187,12 @@ fn decision_config_schema_matches_reader_for_authorization_and_bounds() {
 async fn deployed_decision_adapter_requires_frozen_preparation_and_preserves_prefix() {
     let server = MockServer::start().await;
     let mut d = document();
-    d["decisionConnections"]["assessor"]["baseUrl"] = json!(format!("{}/tenant", server.uri()));
-    d["decisionConnections"]["assessor"]["authorization"] = json!({"local":{}});
+    d["connections"]["assessor"]["baseUrl"] = json!(format!("{}/tenant", server.uri()));
+    d["connections"]["assessor"]["authorization"] = json!({"local":{}});
     let adapters = HttpAdapters::new(&load(&d).unwrap()).unwrap();
     let input = json!({"state":{"summary":"synthetic"},"questions":{"ready":{"type":"predicate","instructions":"Ready?"}}});
     let request = CallRequest {
+        operation_contract: None,
         connection: "assessor".into(),
         operation: Operation::EvaluateDecision,
         input: input.clone(),
@@ -264,10 +263,10 @@ fn decision_runtime_preserves_unknown_key_positions_and_defers_environment_value
     for branch in ["bearer", "local"] {
         let mut d = document();
         if branch == "local" {
-            d["decisionConnections"]["assessor"]["baseUrl"] = json!("http://127.0.0.1:11434");
-            d["decisionConnections"]["assessor"]["authorization"] = json!({"local":{}});
+            d["connections"]["assessor"]["baseUrl"] = json!("http://127.0.0.1:11434");
+            d["connections"]["assessor"]["authorization"] = json!({"local":{}});
         }
-        d["decisionConnections"]["assessor"]["authorization"][branch]["unexpected"] =
+        d["connections"]["assessor"]["authorization"][branch]["unexpected"] =
             json!("private-canary");
         let root = tempfile::tempdir().unwrap();
         let path = root.path().canonicalize().unwrap().join("runtime.yaml");
@@ -280,15 +279,15 @@ fn decision_runtime_preserves_unknown_key_positions_and_defers_environment_value
             .unwrap();
         assert_eq!(
             finding.path,
-            format!("/decisionConnections/assessor/authorization/{branch}/unexpected")
+            format!("/connections/assessor/authorization/{branch}/unexpected")
         );
         let reported = serde_json::to_value(finding).unwrap();
         assert!(reported["source"]["line"].as_u64().unwrap() > 1);
         assert!(!reported.to_string().contains("private-canary"));
     }
     let mut d = document();
-    d["decisionConnections"]["assessor"]["baseUrl"] = json!("${UNRESOLVED_DECISION_ENDPOINT}");
-    d["decisionConnections"]["assessor"]["authorization"] = json!({"local":{}});
+    d["connections"]["assessor"]["baseUrl"] = json!("${UNRESOLVED_DECISION_ENDPOINT}");
+    d["connections"]["assessor"]["authorization"] = json!({"local":{}});
     let root = tempfile::tempdir().unwrap();
     let path = root.path().canonicalize().unwrap().join("runtime.yaml");
     std::fs::write(&path, serde_json::to_vec(&d).unwrap()).unwrap();
@@ -297,5 +296,5 @@ fn decision_runtime_preserves_unknown_key_positions_and_defers_environment_value
         .diagnostics
         .iter()
         .all(|finding| finding.severity != registry_platform_yaml::Severity::Error));
-    assert!(checked.defers("/decisionConnections/assessor/baseUrl"));
+    assert!(checked.defers("/connections/assessor/baseUrl"));
 }

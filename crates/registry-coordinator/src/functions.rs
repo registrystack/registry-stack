@@ -1,19 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Pure functions under one pinned, bounded interpreter profile.
 
+use crate::definition::{compile_schema, FunctionDefinition};
 use chrono::{DateTime, Datelike, SecondsFormat, TimeDelta, Utc};
 use registry_platform_script::rhai::{self as platform, RhaiBaseEngine, RhaiLimits, RhaiProfile};
 use rhai::packages::{
     ArithmeticPackage, BasicArrayPackage, BasicIteratorPackage, BasicMapPackage,
     BasicStringPackage, LogicPackage, Package,
 };
-use rhai::{Dynamic, Engine, EvalAltResult, Position, AST, INT};
+use rhai::{Engine, EvalAltResult, Position, AST, INT};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use crate::{CoordinatorError, Result};
 
-/// Changing this identity requires a new definition digest.
-pub const INTERPRETER_ABI: &str = "coordinator/pure-rhai-1.26.1/v1;raw-arithmetic-logic-string-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32";
+/// Changing this identity requires a new Workflow revision.
+pub const PURE_PROFILE: &str = "coordinator/bounded-pure/v1";
+
+pub const INTERPRETER_ABI: &str = "coordinator/pure-rhai-1.26.1/v1;named-input-object;raw-arithmetic-logic-string-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32";
+
+pub(crate) const MAXIMUM_VALUE_BYTES: usize = 131_072;
+pub(crate) const MAXIMUM_VALUE_DEPTH: usize = 32;
+pub(crate) const MAXIMUM_VALUE_NODES: usize = 4_096;
+pub(crate) const MAXIMUM_VALUE_ARRAY_ITEMS: usize = 256;
+pub(crate) const MAXIMUM_VALUE_OBJECT_MEMBERS: usize = 256;
+pub(crate) const MAXIMUM_VALUE_STRING_BYTES: usize = 16_384;
 
 const PROFILE: RhaiProfile = RhaiProfile {
     limits: RhaiLimits {
@@ -33,150 +44,200 @@ const PROFILE: RhaiProfile = RhaiProfile {
 
 #[derive(Clone)]
 pub(crate) struct Functions {
-    ast: Option<AST>,
+    entries: BTreeMap<String, CompiledFunction>,
+}
+
+#[derive(Clone)]
+struct CompiledFunction {
+    definition: FunctionDefinition,
+    ast: AST,
+    input: std::sync::Arc<jsonschema::JSONSchema>,
+    output: std::sync::Arc<jsonschema::JSONSchema>,
+}
+
+fn profile(function: &FunctionDefinition) -> RhaiProfile {
+    RhaiProfile {
+        limits: RhaiLimits {
+            operations: function.limits.operations,
+            call_levels: function.limits.call_levels,
+            expression_depth: function.limits.expression_depth,
+            modules: 0,
+            string_bytes: function.limits.string_bytes,
+            array_items: function.limits.array_items,
+            map_entries: function.limits.map_entries,
+        },
+        maximum_source_bytes: function.limits.source_bytes,
+        ..PROFILE
+    }
 }
 
 impl Functions {
-    /// Compile the source for the functions the mappings call, each given
-    /// with its step and the authored member that holds it, or report every
-    /// refusal.
     pub(crate) fn compile(
-        source: &str,
-        mappings: &[(&str, &str, &crate::definition::Mapping)],
+        sources: &BTreeMap<String, String>,
+        definitions: &BTreeMap<String, FunctionDefinition>,
     ) -> std::result::Result<Self, Vec<CoordinatorError>> {
-        if source.len() > PROFILE.maximum_source_bytes {
-            return Err(vec![
-                failure("function.source_limit").at("functions.rhai", "/")
-            ]);
-        }
-        let mut ast = None;
-        let mut findings: Vec<CoordinatorError> = Vec::new();
-        // Reference and fields mappings call no function.
-        for (step, role, function, arity) in
-            mappings
-                .iter()
-                .filter_map(|(step, role, mapping)| match mapping {
-                    crate::definition::Mapping::Function {
-                        function,
-                        arguments,
-                    } => Some((step, role, function, arguments.len())),
-                    _ => None,
-                })
-        {
-            let field = format!("steps.{step}.{role}.function");
-            let refusal = if arity > 16 {
-                CoordinatorError::new(
-                    "function.arity",
-                    format!(
-                        "step {step} passes {} to function {function}; a function takes at most 16",
-                        counted(arity, "argument")
-                    ),
-                )
-                .at("workflow.yaml", &field)
-                .suggest("Pass at most 16 arguments, or gather values in a fields mapping first.")
-            } else {
-                match platform::compile_entrypoint(&PROFILE, source, function, &[arity]) {
-                    Ok(checked) => {
-                        ast.get_or_insert(checked);
-                        continue;
-                    }
-                    Err(platform::RhaiCompileError::SourceBound) => {
-                        failure("function.source_limit").at("functions.rhai", "/")
-                    }
-                    Err(platform::RhaiCompileError::Parse(position)) => {
-                        CoordinatorError::new("function.definition", syntax_refusal(source))
-                            .at(
-                                "functions.rhai",
-                                format!(
-                                    "line {} column {}",
-                                    position.line().unwrap_or(0),
-                                    position.position().unwrap_or(0)
-                                ),
-                            )
-                            .suggest(
-                                "Correct the named function or syntax position, then rerun check.",
-                            )
-                    }
-                    Err(platform::RhaiCompileError::Entrypoint) => {
-                        entrypoint_refusal(source, step, &field, function, arity)
-                    }
+        let mut entries = BTreeMap::new();
+        let mut findings = Vec::new();
+        for (name, function) in definitions {
+            let result = (|| {
+                let source = sources
+                    .get(&function.source)
+                    .ok_or_else(|| failure("function.definition"))?;
+                let limits = &function.limits;
+                let ceiling = crate::definition::FunctionLimits::default();
+                if function.runtime != "rhai"
+                    || !function.capabilities.is_empty()
+                    || function.profile != PURE_PROFILE
+                    || function.abi != INTERPRETER_ABI
+                    || limits.operations == 0
+                    || limits.operations > ceiling.operations
+                    || limits.call_levels == 0
+                    || limits.call_levels > ceiling.call_levels
+                    || limits.expression_depth == 0
+                    || limits.expression_depth > ceiling.expression_depth
+                    || limits.string_bytes == 0
+                    || limits.string_bytes > ceiling.string_bytes
+                    || limits.array_items == 0
+                    || limits.array_items > ceiling.array_items
+                    || limits.map_entries == 0
+                    || limits.map_entries > ceiling.map_entries
+                    || limits.source_bytes == 0
+                    || limits.source_bytes > ceiling.source_bytes
+                    || function.inputs.len() > 16
+                {
+                    return Err(failure("function.limits")
+                        .at("workflow.yaml", format!("/functions/{name}/limits")));
                 }
-            };
-            if !findings.iter().any(|finding| {
-                finding.code == refusal.code
-                    && finding.message == refusal.message
-                    && finding.field == refusal.field
-            }) {
-                findings.push(refusal);
+                let ast = platform::compile_entrypoint(&profile(function), source, &function.entrypoint, &[1])
+                    .map_err(|error| match error {
+                        platform::RhaiCompileError::SourceBound => failure("function.source_limit").at(&function.source, "/"),
+                        platform::RhaiCompileError::Parse(position) => CoordinatorError::new("function.definition", syntax_refusal(source))
+                            .at(&function.source, format!("line {} column {}", position.line().unwrap_or(0), position.position().unwrap_or(0)))
+                            .suggest("Correct the named Function source syntax and rerun check."),
+                        platform::RhaiCompileError::Entrypoint => CoordinatorError::new("function.definition", "the Function entrypoint must name one public Rhai function taking one named-input object")
+                            .at("workflow.yaml", format!("/functions/{name}/entrypoint"))
+                            .suggest("Declare one public function with exactly one parameter for its named input object."),
+                    })?;
+                let mut names = std::collections::BTreeSet::new();
+                if ast
+                    .iter_functions()
+                    .any(|function| !names.insert(function.name.to_owned()))
+                    || names.len() > 128
+                {
+                    return Err(failure("function.definition").at(&function.source, "/"));
+                }
+                let properties = function
+                    .inputs
+                    .iter()
+                    .map(|(name, schema)| {
+                        crate::authoring::embed_schema(
+                            schema,
+                            &format!("/properties/{}", name.replace('~', "~0").replace('/', "~1")),
+                        )
+                        .map(|schema| (name.clone(), schema))
+                    })
+                    .collect::<Result<BTreeMap<_, _>>>()?;
+                let input_schema = serde_json::json!({"type":"object","additionalProperties":false,
+                    "properties":properties,"required":function.inputs.keys().collect::<Vec<_>>()});
+                let input = std::sync::Arc::new(compile_schema(&input_schema)?);
+                let output = std::sync::Arc::new(compile_schema(&function.output)?);
+                let revision = revision(function, source)?;
+                if function.revision != revision {
+                    return Err(failure("function.revision")
+                        .at("workflow.yaml", format!("/functions/{name}")));
+                }
+                Ok(CompiledFunction {
+                    definition: function.clone(),
+                    ast,
+                    input,
+                    output,
+                })
+            })();
+            match result {
+                Ok(compiled) => {
+                    entries.insert(name.clone(), compiled);
+                }
+                Err(error) => findings.push(error),
             }
         }
-        if !findings.is_empty() {
-            return Err(findings);
+        if findings.is_empty() {
+            Ok(Self { entries })
+        } else {
+            Err(findings)
         }
-        // A workflow with no mappings still compiles its source; invalid source
-        // cannot become valid merely because no current step invokes it.
-        if ast.is_none() {
-            let engine = platform::build_engine(&PROFILE, None, register_pure_packages);
-            ast = Some(
-                engine
-                    .compile(source)
-                    .map_err(|_| vec![failure("function.definition")])?,
-            );
-        }
-        let mut names = std::collections::BTreeSet::new();
-        for function in ast
-            .as_ref()
-            .into_iter()
-            .flat_map(|ast| ast.iter_functions())
-        {
-            if !names.insert(function.name.to_owned()) || names.len() > 128 {
-                return Err(vec![failure("function.definition")]);
-            }
-        }
-        Ok(Self { ast })
     }
 
-    /// Call one function. When `synthetic`, a failure also names its kind and
-    /// where in functions.rhai it arose, never a value; only offline
-    /// scenarios ask for it.
-    pub(crate) fn evaluate(
-        &self,
-        name: &str,
-        values: Vec<&Value>,
-        synthetic: bool,
-    ) -> Result<Value> {
-        let arguments = values
-            .into_iter()
-            .map(|value| {
-                check_value(value)?;
-                rhai::serde::to_dynamic(value).map_err(|_| failure("function.input"))
-            })
-            .collect::<Result<Vec<Dynamic>>>()?;
-        let engine = platform::build_engine(&PROFILE, None, register_pure_packages);
-        let ast = self
-            .ast
-            .as_ref()
+    pub(crate) fn evaluate(&self, name: &str, inputs: &Value, synthetic: bool) -> Result<Value> {
+        let function = self
+            .entries
+            .get(name)
             .ok_or_else(|| failure("function.definition"))?;
-        let value =
-            platform::call_with_fresh_scope(&engine, ast, name, arguments).map_err(|error| {
+        check_value(inputs)?;
+        if !function.input.is_valid(inputs) {
+            return Err(contract_failure(
+                name,
+                "function.input",
+                &function.input,
+                inputs,
+                synthetic,
+            ));
+        }
+        let arguments =
+            vec![rhai::serde::to_dynamic(inputs).map_err(|_| failure("function.input"))?];
+        let engine =
+            platform::build_engine(&profile(&function.definition), None, register_pure_packages);
+        let value = platform::call_with_fresh_scope(&engine, &function.ast, &function.definition.entrypoint, arguments)
+            .map_err(|error| {
                 let refusal = failure(match platform::classify_failure(&error) {
                     platform::RhaiFailureCategory::ResourceExhausted => "function.resource_limit",
                     platform::RhaiFailureCategory::Other => "function.execution",
                 });
-                if synthetic {
-                    CoordinatorError {
-                        message: format!("function {name} failed: {}", located(name, &error)),
-                        ..refusal
-                    }
-                    .suggest(format!("Correct function {name} in functions.rhai at the line named, or the scenario values it reads."))
-                } else {
-                    refusal
-                }
+                if synthetic { CoordinatorError { message: format!("function {name} failed: {}", located(&function.definition.entrypoint, &error)), ..refusal }
+                    .suggest(format!("Correct Function {name} in {} at the named position, or correct its synthetic inputs.", function.definition.source)) }
+                else { refusal }
             })?;
         let value = rhai::serde::from_dynamic(&value).map_err(|_| failure("function.output"))?;
         check_value(&value)?;
+        if !function.output.is_valid(&value) {
+            return Err(contract_failure(
+                name,
+                "function.output",
+                &function.output,
+                &value,
+                synthetic,
+            ));
+        }
         Ok(value)
     }
+}
+
+fn contract_failure(
+    name: &str,
+    code: &'static str,
+    schema: &jsonschema::JSONSchema,
+    value: &Value,
+    synthetic: bool,
+) -> CoordinatorError {
+    let refusal = failure(code);
+    if !synthetic {
+        return refusal;
+    }
+    let role = if code == "function.input" {
+        "named inputs"
+    } else {
+        "output"
+    };
+    let rule = crate::definition::schema_refusal(schema, value).unwrap_or_default();
+    CoordinatorError {message:format!("function {name} returned a value of class {}; its declared {role} schema refuses it{rule}",crate::definition::class(value)),..refusal}
+        .suggest(format!("Correct Function {name} or its synthetic input mappings to satisfy the named signature rule."))
+}
+
+pub(crate) fn revision(function: &FunctionDefinition, source: &str) -> Result<String> {
+    let semantic = serde_json::json!({"runtime":function.runtime,"profile":function.profile,"capabilities":function.capabilities,"abi":function.abi,"entrypoint":function.entrypoint,
+        "inputs":function.inputs.iter().map(|(name,schema)| (name,crate::definition::semantic_schema(schema))).collect::<BTreeMap<_,_>>(),"output":crate::definition::semantic_schema(&function.output),"limits":function.limits,"valueLimits":value_limits(),"sourceDigest":registry_platform_config::sha256_uri(source.as_bytes())});
+    let bytes = registry_platform_canonical_json::canonicalize_json(&semantic)
+        .map_err(|_| failure("function.definition"))?;
+    Ok(registry_platform_config::sha256_uri(&bytes))
 }
 
 /// The kind of a function failure, the innermost function it arose in and
@@ -226,94 +287,6 @@ fn located(name: &str, error: &EvalAltResult) -> String {
     }
 }
 
-/// Why `function` is not one public entry point taking `arity` arguments:
-/// placed at the calling step, or in functions.rhai when a name is declared
-/// twice there.
-fn entrypoint_refusal(
-    source: &str,
-    step: &str,
-    field: &str,
-    function: &str,
-    arity: usize,
-) -> CoordinatorError {
-    let declared = platform::build_engine(&PROFILE, None, |_| {})
-        .compile(source)
-        .map(|ast| {
-            ast.iter_functions()
-                .map(|declared| {
-                    (
-                        declared.name.to_owned(),
-                        declared.params.len(),
-                        declared.access == rhai::FnAccess::Public,
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let mut seen = std::collections::BTreeSet::new();
-    if let Some((twice, ..)) = declared
-        .iter()
-        .find(|(name, ..)| !seen.insert(name.as_str()))
-    {
-        return CoordinatorError::new(
-            "function.definition",
-            format!("functions.rhai declares function {twice} more than once; function names cannot be overloaded"),
-        )
-        .at("functions.rhai", format!("function {twice}"))
-        .suggest(format!("Keep one definition of function {twice} in functions.rhai, and give the others their own names."));
-    }
-    let refusal = |message: String, action: String| {
-        CoordinatorError::new("function.definition", message)
-            .at("workflow.yaml", field)
-            .suggest(action)
-    };
-    match declared.iter().find(|(name, ..)| name == function) {
-        None => {
-            let mut public = declared
-                .iter()
-                .filter(|(.., public)| *public)
-                .map(|(name, ..)| name.as_str())
-                .collect::<Vec<_>>();
-            public.sort_unstable();
-            refusal(
-                format!(
-                    "step {step} calls function {function}, which functions.rhai does not declare; it declares {}",
-                    crate::definition::listed(public)
-                ),
-                format!(
-                    "Name one of the declared functions, or add fn {function} with {} to functions.rhai.",
-                    counted(arity, "parameter")
-                ),
-            )
-        }
-        Some((_, _, false)) => refusal(
-            format!("step {step} calls function {function}, which functions.rhai declares private"),
-            format!("Remove private from function {function} in functions.rhai."),
-        ),
-        Some((_, parameters, true)) => refusal(
-            format!(
-                "step {step} passes {} to function {function}, which takes {}",
-                counted(arity, "argument"),
-                counted(*parameters, "parameter")
-            ),
-            format!(
-                "Pass {} from step {step}, or change function {function} to take {}.",
-                counted(*parameters, "argument"),
-                counted(arity, "parameter")
-            ),
-        ),
-    }
-}
-
-/// A count with its noun, such as 1 argument or 2 parameters.
-fn counted(count: usize, noun: &str) -> String {
-    if count == 1 {
-        format!("1 {noun}")
-    } else {
-        format!("{count} {noun}s")
-    }
-}
-
 /// The parser's own reason for refusing authored source, which names source
 /// text and never a run value.
 fn syntax_refusal(source: &str) -> String {
@@ -330,20 +303,21 @@ fn syntax_refusal(source: &str) -> String {
 pub(crate) fn check_value(value: &Value) -> Result<()> {
     fn walk(value: &Value, depth: usize, nodes: &mut usize) -> bool {
         *nodes += 1;
-        if depth > 32 || *nodes > 4096 {
+        if depth > MAXIMUM_VALUE_DEPTH || *nodes > MAXIMUM_VALUE_NODES {
             return false;
         }
         match value {
             Value::Array(items) => {
-                items.len() <= 256 && items.iter().all(|v| walk(v, depth + 1, nodes))
+                items.len() <= MAXIMUM_VALUE_ARRAY_ITEMS
+                    && items.iter().all(|v| walk(v, depth + 1, nodes))
             }
             Value::Object(items) => {
-                items.len() <= 256
-                    && items
-                        .iter()
-                        .all(|(k, v)| k.len() <= 16384 && walk(v, depth + 1, nodes))
+                items.len() <= MAXIMUM_VALUE_OBJECT_MEMBERS
+                    && items.iter().all(|(k, v)| {
+                        k.len() <= MAXIMUM_VALUE_STRING_BYTES && walk(v, depth + 1, nodes)
+                    })
             }
-            Value::String(text) => text.len() <= 16384,
+            Value::String(text) => text.len() <= MAXIMUM_VALUE_STRING_BYTES,
             _ => true,
         }
     }
@@ -352,7 +326,7 @@ pub(crate) fn check_value(value: &Value) -> Result<()> {
     }
     let bytes = registry_platform_canonical_json::canonicalize_json(value)
         .map_err(|_| failure("function.json"))?;
-    if bytes.len() > 131_072 {
+    if bytes.len() > MAXIMUM_VALUE_BYTES {
         return Err(failure("function.value_limit"));
     }
     Ok(())
@@ -410,10 +384,23 @@ fn instant_refused() -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime("an instant is outside RFC 3339".into(), Position::NONE).into()
 }
 
+/// Structured JSON custody limits, shared by every host Operation boundary.
+/// These are distinct from a pure Function's narrowed interpreter limits.
+pub(crate) fn value_limits() -> Value {
+    serde_json::json!({
+        "maximumBytes": MAXIMUM_VALUE_BYTES,
+        "maximumDepth": MAXIMUM_VALUE_DEPTH,
+        "maximumNodes": MAXIMUM_VALUE_NODES,
+        "maximumArrayItems": MAXIMUM_VALUE_ARRAY_ITEMS,
+        "maximumObjectMembers": MAXIMUM_VALUE_OBJECT_MEMBERS,
+        "maximumStringBytes": MAXIMUM_VALUE_STRING_BYTES,
+    })
+}
+
 pub(crate) fn limits() -> Value {
     serde_json::json!({"operations":PROFILE.limits.operations,"callLevels":PROFILE.limits.call_levels,
         "expressionDepth":PROFILE.limits.expression_depth,"stringBytes":PROFILE.limits.string_bytes,
         "arrayItems":PROFILE.limits.array_items,"mapEntries":PROFILE.limits.map_entries,
-        "sourceBytes":PROFILE.maximum_source_bytes,"jsonBytes":131072,"jsonDepth":32,"jsonNodes":4096,
-        "maximumArguments":16,"maximumFunctions":128,"modules":0})
+        "sourceBytes":PROFILE.maximum_source_bytes,"jsonBytes":MAXIMUM_VALUE_BYTES,"jsonDepth":MAXIMUM_VALUE_DEPTH,"jsonNodes":MAXIMUM_VALUE_NODES,
+        "maximumInputs":16,"maximumFunctions":128,"modules":0})
 }

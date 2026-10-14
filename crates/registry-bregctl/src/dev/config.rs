@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Authored local teaching identities and generated private service bindings.
 
-use super::{private, State, DATABASE_ID, MAX_BYTES, MIGRATION_ROLE, RUNTIME_ROLE};
-use anyhow::{bail, Context, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use super::{DATABASE_ID, MAX_BYTES, MIGRATION_ROLE, RUNTIME_ROLE, State, private};
+use anyhow::{Context, Result, bail};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use p256::ecdsa::SigningKey;
 use registry_breg::literal_text::{
     LiteralText, WRITE_THE_VALUE, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
@@ -15,7 +15,7 @@ use registry_platform_yaml::{
 };
 use registry_platform_yaml::{ExternalId, LocalId, Url};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -729,7 +729,9 @@ fn resolve_secret(
         anyhow::anyhow!("{member} could not be resolved: {error}; {fix}")
     })?;
     if secret.len() > maximum {
-        bail!("{member} is larger than its {maximum}-byte limit; store the expected secret under this reference");
+        bail!(
+            "{member} is larger than its {maximum}-byte limit; store the expected secret under this reference"
+        );
     }
     Ok(Zeroizing::new(secret.expose_secret().to_vec()))
 }
@@ -829,7 +831,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 );
             }
             if client.test_bindings.is_empty() && !profile_defaults.insert(profile) {
-                bail!("a shared local access profile needs at most one default client; use exact testBindings for claim variants");
+                bail!(
+                    "a shared local access profile needs at most one default client; use exact testBindings for claim variants"
+                );
             }
         }
         if client.test_bindings.len() > 100 {
@@ -941,7 +945,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                         != Some(&json!("service"))
             })
         {
-            bail!("local task-grant status services need unique source issuers, exact loopback endpoints, and declared service clients scoped only to casework:grants:status without BReg access");
+            bail!(
+                "local task-grant status services need unique source issuers, exact loopback endpoints, and declared service clients scoped only to casework:grants:status without BReg access"
+            );
         }
     }
     for (id, authority) in &clients.review_authorities {
@@ -970,7 +976,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 .iter()
                 .any(|client| client.id == authority.client)
         {
-            bail!("local review authorities need bounded IDs, exact loopback endpoints, producer bindings, recovery windows, and declared clients");
+            bail!(
+                "local review authorities need bounded IDs, exact loopback endpoints, producer bindings, recovery windows, and declared clients"
+            );
         }
         match (
             &authority.completion_token_ref,
@@ -1023,7 +1031,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
             || origin.query().is_some()
             || origin.fragment().is_some()
         {
-            bail!("local Evidence providers need bounded IDs, trust bindings, and exact loopback origins");
+            bail!(
+                "local Evidence providers need bounded IDs, trust bindings, and exact loopback origins"
+            );
         }
         if provider.token_ref.is_some() == provider.private_key_jwt.is_some() {
             bail!("local Evidence providers require exactly one tokenRef or privateKeyJwt");
@@ -1065,7 +1075,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                         || !registry_platform_httputil::valid_scope_token(scope)
                 })
             {
-                bail!("local Evidence privateKeyJwt requires exact loopback token endpoint, client, audience, resource and scopes");
+                bail!(
+                    "local Evidence privateKeyJwt requires exact loopback token endpoint, client, audience, resource and scopes"
+                );
             }
         }
     }
@@ -1098,7 +1110,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
             )
                 .is_err()
         {
-            bail!("local event destinations need bounded IDs, exact loopback origins, and absolute paths");
+            bail!(
+                "local event destinations need bounded IDs, exact loopback origins, and absolute paths"
+            );
         }
     }
     let mut resource_ids = BTreeSet::new();
@@ -1124,12 +1138,16 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 .find(|entry| &entry.id == client)
                 .is_some_and(|entry| grant_scopes(&clients, Some(resource), &entry.scopes))
         {
-            bail!("issuer client resource bindings need a declared client, audience, and resource scopes");
+            bail!(
+                "issuer client resource bindings need a declared client, audience, and resource scopes"
+            );
         }
     }
     for client in &clients.clients {
         if !client.grants.is_empty() && !valid_grants(&clients, &client.grants) {
-            bail!("machine client grants require distinct declared audiences and exact bounded resource scopes");
+            bail!(
+                "machine client grants require distinct declared audiences and exact bounded resource scopes"
+            );
         }
     }
     let mut exchange_clients = BTreeSet::new();
@@ -1148,7 +1166,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 .iter()
                 .any(|client| &client.id == id && client.scopes.len() == 1)
         {
-            bail!("exchange clients need one exact bootstrap scope and a registering exchange connection");
+            bail!(
+                "exchange clients need one exact bootstrap scope and a registering exchange connection"
+            );
         }
     }
     let mut connection_ids = BTreeSet::new();
@@ -1160,7 +1180,9 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 .iter()
                 .any(|client| !clients.issuer.exchange_clients.contains(client))
         {
-            bail!("local exchange connections require distinct bounded IDs and declared exchange clients");
+            bail!(
+                "local exchange connections require distinct bounded IDs and declared exchange clients"
+            );
         }
         // The generated purpose connection makes every multi-purpose client a
         // first-party client, and the issuer projects one first-party
@@ -1285,7 +1307,9 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             .iter()
             .any(|client| !client.grants.is_empty())
         {
-            bail!("a borrowed issuer cannot declare owner-only machine client grants; declare them on the issuer owner");
+            bail!(
+                "a borrowed issuer cannot declare owner-only machine client grants; declare them on the issuer owner"
+            );
         }
     }
     for directory in [
@@ -1339,7 +1363,10 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
                     .client_resources
                     .contains_key(&client.id)
             {
-                bail!("shared issuer registration differs from the local client or BREG audience for {}", client.id);
+                bail!(
+                    "shared issuer registration differs from the local client or BREG audience for {}",
+                    client.id
+                );
             }
             private::directory(&directory)?;
             let source = owner.root().join("credentials").join(&client.id);
@@ -1572,7 +1599,9 @@ fn validate_borrowed_issuer_composition(issuer: &IssuerComposition) -> Result<()
         || !issuer.client_resources.is_empty()
         || !issuer.exchange_clients.is_empty()
     {
-        bail!("a borrowed issuer cannot declare owner-only resources, exchange connections, applications, users, or client mappings; declare them on the issuer owner");
+        bail!(
+            "a borrowed issuer cannot declare owner-only resources, exchange connections, applications, users, or client mappings; declare them on the issuer owner"
+        );
     }
     Ok(())
 }
@@ -1651,7 +1680,7 @@ pub(super) fn issuer_description(
             ExchangeIssuer, ExchangeMapping, InteractiveApplication, Role, SessionIdentity,
             SyntheticUser, TokenExchangeClient,
         },
-        local::{typed_local_description, TypedLocalClient},
+        local::{TypedLocalClient, typed_local_description},
     };
     let local_clients = clients
         .clients

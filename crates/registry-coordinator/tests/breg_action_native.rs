@@ -11,13 +11,467 @@ use registry_breg_client::{
 use registry_coordinator::{
     adapters::HttpAdapters,
     breg_action,
+    breg_proposal::{self, ApplicationObservation, Transition},
     protocol::{AdapterSet, CallOutcome, CallRequest, Operation, ReconciliationOutcome},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
 type DispatchedCommands = Vec<(CallRequest, Option<Vec<u8>>)>;
+
+#[tokio::test]
+#[ignore = "native BReg/Messaging prerequisites; run products/coordinator/scripts/test-breg-action.py"]
+async fn native_automatic_proposal_application_gates_a_separately_authorized_notice() {
+    use registry_coordinator::{
+        definition::Definition,
+        store::{Actor, Store},
+        worker::Worker,
+    };
+    let issuer = support::issuer().await;
+    let service = Breg::start(&issuer).await;
+    let messaging = support::messaging::Messaging::start(&issuer).await;
+    let client = service.client(&issuer);
+    let metadata = client.registry_contract(Some("writer")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.item.create", "writer")
+        .unwrap()
+    else {
+        panic!("Create grant")
+    };
+    let record = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(
+                json!({"owner":"coordinator-reader","label":"Before"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap(),
+            &BRegIdempotencyKey::parse("native-workflow-proposal-seed").unwrap(),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap()
+        .value
+        .data
+        .record_identifier;
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let mut runtime = support::config(root.path(), &issuer, &service.base_url, &messaging.base_url);
+    breg_connection(&mut runtime).profile = "writer".into();
+    runtime.minimum_observation_interval_seconds =
+        registry_platform_yaml::BoundedU32::new(30).unwrap();
+    let mut project: Value = serde_norway::from_str(include_str!(
+        "../../../products/coordinator/examples/proposal-follow-up/workflow.yaml"
+    ))
+    .unwrap();
+    project["project"]["id"] = json!("native-proposal-notice");
+    project["contracts"]["facilities"]["source"] = json!("breg.contract.json");
+    project["operations"]["start-correction"]["action"]["id"] = json!("propose-item");
+    project["operations"]["start-correction"]["connection"] = json!("applications");
+    project["operations"]["submit-correction"]["connection"] = json!("applications");
+    project["workflow"]["deadlineSeconds"] = json!(1100);
+    project["workflow"]["steps"]["await-application"]["timeoutSeconds"] = json!(960);
+    project["workflow"]["steps"]["start-draft"]
+        .as_object_mut()
+        .unwrap()
+        .remove("onDeclaredRefusal");
+    project["workflow"]["steps"]
+        .as_object_mut()
+        .unwrap()
+        .remove("report-correction-refused");
+    project["workflow"]["outcomes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("correction-refused");
+    std::fs::copy(
+        service
+            .root
+            .join("action-contracts/generated/action-contracts.json"),
+        root.path().join("breg.contract.json"),
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("workflow.yaml"),
+        serde_norway::to_string(&project).unwrap(),
+    )
+    .unwrap();
+    let definition = Definition::load(root.path()).unwrap();
+    let adapters = Arc::new(HttpAdapters::new(&runtime).unwrap());
+    let store = Arc::new(
+        Store::connect(
+            &std::env::var("COORDINATOR_TEST_DATABASE_URL").unwrap(),
+            &runtime.namespace,
+        )
+        .await
+        .unwrap(),
+    );
+    store.migrate().await.unwrap();
+    let owner = Actor {
+        issuer: "https://institution.example.invalid".into(),
+        subject: "producer".into(),
+        client_id: "producer-client".into(),
+        operator: false,
+    };
+    let input = json!({"correction":{"input":{"targetId":record,"label":"Workflow applied"}},"notice":{
+        "senderProfile":"transactional","to":{"email":"person@example.invalid"},"template":{"id":"application-follow-up","version":"1"},"locale":"en",
+        "data":{"applicationReference":record}}});
+    let run = store
+        .admit_owned(
+            &definition,
+            input,
+            &owner,
+            "native-proposal-follow-up",
+            &adapters.binding_digest_for(&definition.workflow),
+        )
+        .await
+        .unwrap();
+    let binding_digest = adapters.binding_digest_for(&definition.workflow);
+    let mut worker = Worker::new(store.clone(), adapters);
+    let mut resumed_pending_wait = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(80);
+    loop {
+        worker.tick().await.unwrap();
+        let status = store.status_owned(run, &owner).await.unwrap();
+        if !resumed_pending_wait && status.step == "await-application" {
+            let inspection = store.inspect(run, &binding_digest).await.unwrap();
+            if let Some(wait) = inspection.waits.iter().find(|wait| wait.observations > 0) {
+                assert_eq!(wait.minimum_interval_seconds, 900);
+                assert_eq!(wait.observations, 1);
+                assert!(wait.next_observation_at.unwrap() > chrono::Utc::now());
+                worker = Worker::new(
+                    Arc::new(
+                        Store::connect(
+                            &std::env::var("COORDINATOR_TEST_DATABASE_URL").unwrap(),
+                            &runtime.namespace,
+                        )
+                        .await
+                        .unwrap(),
+                    ),
+                    Arc::new(HttpAdapters::new(&runtime).unwrap()),
+                );
+                worker.tick().await.unwrap();
+                let restored = store.inspect(run, &binding_digest).await.unwrap();
+                let restored = restored
+                    .waits
+                    .iter()
+                    .find(|item| item.step == wait.step)
+                    .unwrap();
+                assert_eq!(restored.not_before, wait.not_before);
+                assert_eq!(restored.next_observation_at, wait.next_observation_at);
+                assert_eq!(restored.observations, wait.observations);
+                assert_eq!(
+                    messaging.count().await,
+                    0,
+                    "restart cannot dispatch an early notice"
+                );
+                let applied_deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(20);
+                let options = BRegRecordOptions::default()
+                    .access_profile("writer")
+                    .unwrap();
+                loop {
+                    let current = client.get_record("items", &record, &options).await.unwrap();
+                    if current.value.data.domain_data["label"] == "Workflow applied" {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < applied_deadline,
+                        "native BReg automatic application remains independently scheduled"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                // Simulate elapsed fixture time while preserving the original
+                // 900-second interval, timeout, deadline and read budget.
+                advance_fixture_completion_time(&runtime, run).await;
+                resumed_pending_wait = true;
+            }
+        }
+        if status.state == "finished" {
+            assert_eq!(
+                status.outcome.as_deref(),
+                Some("message-accepted"),
+                "native Proposal follow-up status: {status:?}"
+            );
+            assert!(status.output.as_ref().unwrap()["id"].as_str().is_some());
+            assert!(
+                resumed_pending_wait,
+                "native application wait resumes its recorded due schedule"
+            );
+            break;
+        }
+        assert!(
+            !status.uncertain,
+            "native automatic Proposal wait must have known progress"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "native exact application follow-up deadline"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let options = BRegRecordOptions::default()
+        .access_profile("writer")
+        .unwrap();
+    assert_eq!(
+        client
+            .get_record("items", &record, &options)
+            .await
+            .unwrap()
+            .value
+            .data
+            .domain_data["label"],
+        "Workflow applied"
+    );
+    assert_eq!(messaging.count().await, 1);
+    drop(worker);
+    drop(store);
+    drop(messaging);
+    service.finish();
+}
+
+async fn advance_fixture_completion_time(
+    runtime: &registry_coordinator::runtime::RuntimeConfig,
+    run: uuid::Uuid,
+) {
+    let (mut client, connection) = tokio_postgres::connect(
+        &std::env::var("COORDINATOR_TEST_DATABASE_URL").unwrap(),
+        tokio_postgres::NoTls,
+    )
+    .await
+    .unwrap();
+    let connection = tokio::spawn(connection);
+    let tx = client.transaction().await.unwrap();
+    // Store::connect already validated this task-owned namespace as one SQL identifier.
+    let schema = &runtime.namespace;
+    tx.execute(&format!("UPDATE {schema}.runs SET admitted_at=admitted_at-interval '900 seconds',deadline_at=deadline_at-interval '900 seconds' WHERE run_id=$1"), &[&run]).await.unwrap();
+    tx.execute(&format!("UPDATE {schema}.completion_waits SET started_at=started_at-interval '900 seconds',timeout_at=timeout_at-interval '900 seconds',not_before=not_before-interval '900 seconds',read_at=read_at-interval '900 seconds' WHERE run_id=$1"), &[&run]).await.unwrap();
+    tx.execute(&format!("UPDATE {schema}.jobs SET next_attempt_at=next_attempt_at-interval '900 seconds' WHERE run_id=$1 AND state='pending'"), &[&run]).await.unwrap();
+    tx.commit().await.unwrap();
+    connection.abort();
+}
+
+fn breg_connection(
+    runtime: &mut registry_coordinator::runtime::RuntimeConfig,
+) -> &mut registry_coordinator::runtime::BregConnectionConfig {
+    let registry_coordinator::runtime::ConnectionConfig::Breg(connection) =
+        runtime.connections.get_mut("applications").unwrap()
+    else {
+        panic!("BReg connection")
+    };
+    connection
+}
+
+fn action_contract(metadata: &registry_breg_client::BRegMetadata) -> breg_action::ActionContract {
+    let action = metadata.select_action("update-item", "writer").unwrap();
+    breg_action::ActionContract {
+        action_id: action.action_identifier().into(),
+        action_revision: action.definition_revision().into(),
+        mode: action.mode(),
+    }
+}
+
+#[tokio::test]
+#[ignore = "native BReg prerequisites; run products/coordinator/scripts/test-breg-action.py"]
+async fn native_draft_submit_recovery_observes_exact_automatic_and_manual_application() {
+    let issuer = support::issuer().await;
+    let service = Breg::start(&issuer).await;
+    let client = service.client(&issuer);
+    let metadata = client.registry_contract(Some("writer")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.item.create", "writer")
+        .unwrap()
+    else {
+        panic!("Create grant")
+    };
+    let record = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(
+                json!({"owner":"coordinator-reader","label":"Before"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap(),
+            &BRegIdempotencyKey::parse("native-proposal-seed").unwrap(),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap()
+        .value
+        .data
+        .record_identifier;
+    let options = BRegRecordOptions::default()
+        .access_profile("writer")
+        .unwrap();
+    for (action_id, label, manual) in [
+        ("propose-item", "Automatic", false),
+        ("manual-item", "Manual", true),
+    ] {
+        let before = client
+            .get_record("items", &record, &options)
+            .await
+            .unwrap()
+            .value
+            .data
+            .revision_identifier;
+        let action = metadata.value.select_action(action_id, "writer").unwrap();
+        let start = CallRequest {
+            connection: "applications".into(),
+            operation: Operation::InvokeBregAction,
+            input: json!({"input":{"targetId":record,"label":label}}),
+            idempotency_key: Some(format!("{action_id}-start")),
+            operation_contract: Some(breg_action::ActionContract {
+                action_id: action_id.into(),
+                action_revision: action.definition_revision().into(),
+                mode: action.mode(),
+            }),
+        };
+        let prepared = breg_action::prepare(&client, "writer", &start)
+            .await
+            .unwrap_or_else(|_| panic!("draft prepare"));
+        let draft = match breg_action::execute(&client, "writer", &start, &prepared).await {
+            CallOutcome::Success(value) => value["proposal"].clone(),
+            _ => panic!("draft start"),
+        };
+        assert_eq!(draft["state"], "draft");
+        assert!(draft.get("application").is_none());
+        assert_eq!(
+            client
+                .get_record("items", &record, &options)
+                .await
+                .unwrap()
+                .value
+                .data
+                .revision_identifier,
+            before
+        );
+        let mut proxy =
+            LostResponse::submit_proposal(&service.base_url, draft["id"].as_str().unwrap());
+        let submit_client = service.client_at(&issuer, &proxy.base_url);
+        let submit = CallRequest {
+            connection: "applications".into(),
+            operation: Operation::SubmitBregProposal,
+            input: draft,
+            idempotency_key: Some(format!("{action_id}-submit")),
+            operation_contract: None,
+        };
+        let prepared =
+            breg_proposal::prepare(&submit_client, "writer", &submit, Transition::Submit)
+                .await
+                .unwrap_or_else(|_| panic!("submit prepare"));
+        assert!(matches!(
+            breg_proposal::execute(
+                &submit_client,
+                "writer",
+                &submit,
+                &prepared,
+                Transition::Submit
+            )
+            .await,
+            CallOutcome::Uncertain { .. }
+        ));
+        drop(submit_client);
+        let submit_client = service.client_at(&issuer, &proxy.base_url);
+        let accepted = match breg_proposal::execute(
+            &submit_client,
+            "writer",
+            &submit,
+            &prepared,
+            Transition::Submit,
+        )
+        .await
+        {
+            CallOutcome::Success(value) => value,
+            _ => panic!("exact original submit replay"),
+        };
+        assert_eq!(accepted["id"], submit.input["id"]);
+        assert_eq!(accepted["actionRevision"], submit.input["actionRevision"]);
+        assert_eq!(
+            accepted["submissionVersion"],
+            submit.input["submissionVersion"]
+        );
+        assert!(accepted["effectDigest"].as_str().is_some());
+        if manual {
+            assert!(matches!(
+                breg_proposal::observe_application(&client, "writer", &accepted).await,
+                ApplicationObservation::Pending { .. }
+            ));
+            let apply = CallRequest {
+                connection: "applications".into(),
+                operation: Operation::ApplyBregProposal,
+                input: accepted.clone(),
+                idempotency_key: Some("manual-item-apply".into()),
+                operation_contract: None,
+            };
+            let prepared = breg_proposal::prepare(&client, "writer", &apply, Transition::Apply)
+                .await
+                .unwrap_or_else(|_| panic!("ordinary manual grant"));
+            assert!(matches!(
+                breg_proposal::execute(&client, "writer", &apply, &prepared, Transition::Apply)
+                    .await,
+                CallOutcome::Success(_)
+            ));
+        } else {
+            let apply = CallRequest {
+                connection: "applications".into(),
+                operation: Operation::ApplyBregProposal,
+                input: accepted.clone(),
+                idempotency_key: Some("service-must-not-recover-automatic".into()),
+                operation_contract: None,
+            };
+            assert!(
+                breg_proposal::prepare(&client, "writer", &apply, Transition::Apply)
+                    .await
+                    .is_err()
+            );
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match breg_proposal::observe_application(&client, "writer", &accepted).await {
+                ApplicationObservation::Complete(value) => {
+                    assert_eq!(value["outcome"], "applied");
+                    assert_eq!(value["proposal"]["effectDigest"], accepted["effectDigest"]);
+                    assert_eq!(
+                        value["proposal"]["application"]["submissionVersion"],
+                        accepted["submissionVersion"]
+                    );
+                    assert_eq!(
+                        value["proposal"]["application"]["effectDigest"],
+                        accepted["effectDigest"]
+                    );
+                    break;
+                }
+                ApplicationObservation::Pending { .. }
+                | ApplicationObservation::Retryable { .. } => {}
+                ApplicationObservation::Hold { code } => {
+                    panic!("unexpected native application hold: {code}")
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "native automatic application deadline"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let current = client
+            .get_record("items", &record, &options)
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(current.data.domain_data["label"], label);
+        let commands = proxy.observations()["commands"].as_array().unwrap().clone();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0]["bodyHash"], commands[1]["bodyHash"]);
+        assert_eq!(commands[0]["key"], commands[1]["key"]);
+        drop(proxy);
+    }
+    service.finish();
+}
 
 /// Passive observations around real adapters. No response is fabricated and
 /// preparation, submission and receipt requests all reach maintained clients.
@@ -107,8 +561,9 @@ async fn real_breg_action_recovers_exactly_once_and_rechecks_current_authority()
     let refused_request = CallRequest {
         connection: "applications".into(),
         operation: Operation::InvokeBregAction,
-        input: json!({"action":"update-item", "input":{"targetId":record, "label":"Refuse"}}),
+        input: json!({"input":{"targetId":record, "label":"Refuse"}}),
         idempotency_key: Some("coordinator-native-refusal".into()),
+        operation_contract: Some(action_contract(&metadata.value)),
     };
     let refused_prepared = breg_action::prepare(&client, "writer", &refused_request)
         .await
@@ -136,13 +591,14 @@ async fn real_breg_action_recovers_exactly_once_and_rechecks_current_authority()
     let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let mut runtime = support::config(root.path(), &issuer, &proxy.base_url, "http://127.0.0.1:1");
     runtime.connections.remove("notices");
-    runtime.connections.get_mut("applications").unwrap().profile = Some("writer".into());
+    breg_connection(&mut runtime).profile = "writer".into();
     let adapters = HttpAdapters::new(&runtime).unwrap();
     let request = CallRequest {
         connection: "applications".into(),
         operation: Operation::InvokeBregAction,
-        input: json!({"action":"update-item", "input":{"targetId":record, "label":"After"}}),
+        input: json!({"input":{"targetId":record, "label":"After"}}),
         idempotency_key: Some("coordinator-native-action".into()),
+        operation_contract: Some(action_contract(&metadata.value)),
     };
     let prepared = adapters
         .prepare(&request)
@@ -257,11 +713,7 @@ async fn real_breg_action_recovers_exactly_once_and_rechecks_current_authority()
     // A real read-only profile has current metadata but no action permission.
     // Protected preparation is evidence, not authority for another profile.
     let mut reader_runtime = runtime.clone();
-    reader_runtime
-        .connections
-        .get_mut("applications")
-        .unwrap()
-        .profile = Some("reader".into());
+    breg_connection(&mut reader_runtime).profile = "reader".into();
     let reader = HttpAdapters::new(&reader_runtime).unwrap();
     refused(
         reader.call_prepared(&request, Some(&recovered)).await,
@@ -342,63 +794,90 @@ async fn worker_reconstruction_recovers_notice_after_one_real_breg_action() {
         &action_proxy.base_url,
         &notice_proxy.base_url,
     );
-    runtime.connections.get_mut("applications").unwrap().profile = Some("writer".into());
-    std::fs::write(
-        root.path().join("workflow.yaml"),
-        r#"
+    breg_connection(&mut runtime).profile = "writer".into();
+    std::fs::copy(
+        service
+            .root
+            .join("action-contracts/generated/action-contracts.json"),
+        root.path().join("breg.contract.json"),
+    )
+    .unwrap();
+    std::fs::write(root.path().join("workflow.yaml"),r#"
 apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project: {id: native-action-notice-proof, version: "1"}
-input:
-  type: object
-  additionalProperties: false
-  required: [recordId]
-  properties: {recordId: {type: string, format: uuid}}
-connections: {applications: breg, notices: messaging}
-functionsFile: functions.rhai
-deadlineSeconds: 300
-start: act
-steps:
-  act:
-    type: call
-    connection: applications
-    operation: invoke-breg-action
-    input: {type: function, function: action_request, arguments: [{type: input}]}
-    next: notify
-  notify:
-    type: call
-    connection: notices
-    operation: submit-message
-    input: {type: function, function: notice_request, arguments: [{type: step, step: act}]}
-    next: done
-  done:
-    type: finish
-    outcome: accepted
-    output: {type: function, function: result, arguments: [{type: step, step: act}, {type: step, step: notify}]}
-outcomes:
-  accepted:
+contracts:
+  source: {type: breg, source: breg.contract.json}
+types:
+  run-input:
+    type: object
+    additionalProperties: false
+    required: [recordId]
+    properties: {recordId: {type: string, format: uuid}}
+  accepted-output:
     type: object
     additionalProperties: false
     required: [actionApplicationId, messageId]
     properties:
       actionApplicationId: {type: string, format: uuid}
       messageId: {type: string, format: uuid}
-"#,
-    )
-    .unwrap();
+operations:
+  act: {uses: breg.invoke-action/v1, connection: applications, action: {contract: source, id: update-item}}
+  notify: {uses: messaging.submit-message/v1, connection: notices}
+functions:
+  action_request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: action_request
+    inputs: {input: {typeRef: run-input}}
+    output: {operationInput: act}
+  notice_request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: notice_request
+    inputs: {action: {operationOutput: act}}
+    output: {operationInput: notify}
+  result:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: result
+    inputs: {action: {operationOutput: act}, notice: {operationOutput: notify}}
+    output: {typeRef: accepted-output}
+workflow:
+  input: {typeRef: run-input}
+  deadlineSeconds: 300
+  start: act
+  steps:
+    act:
+      type: call
+      operation: act
+      input: {type: function, function: action_request, inputs: {input: {type: input}}}
+      next: notify
+    notify:
+      type: call
+      operation: notify
+      input: {type: function, function: notice_request, inputs: {action: {type: step, step: act}}}
+      next: done
+    done:
+      type: finish
+      outcome: accepted
+      output: {type: function, function: result, inputs: {action: {type: step, step: act}, notice: {type: step, step: notify}}}
+  outcomes:
+    accepted: {typeRef: accepted-output}
+"#).unwrap();
     std::fs::write(
         root.path().join("functions.rhai"),
         r#"
-fn action_request(input) {
-    #{action: "update-item", input: #{targetId: input.recordId, label: "After"}}
+fn action_request(args) {
+    #{input: #{targetId: args.input.recordId, label: "After"}}
 }
-fn notice_request(action) {
+fn notice_request(args) {
     #{senderProfile: "transactional", to: #{email: "person@example.invalid"},
       template: #{id: "application-follow-up", version: "1"}, locale: "en",
-      data: #{applicationReference: action.applicationId}}
+      data: #{applicationReference: args.action.applicationId}}
 }
-fn result(action, notice) {
-    #{actionApplicationId: action.applicationId, messageId: notice.id}
+fn result(args) {
+    #{actionApplicationId: args.action.applicationId, messageId: args.notice.id}
 }
 "#,
     )
@@ -447,10 +926,12 @@ fn result(action, notice) {
         && step.state == "delivered"
         && step.command_prepared
         && !step.uncertain));
-    assert!(attention
-        .steps
-        .iter()
-        .any(|step| step.step == "notify" && step.command_prepared && step.uncertain));
+    assert!(
+        attention
+            .steps
+            .iter()
+            .any(|step| step.step == "notify" && step.command_prepared && step.uncertain)
+    );
     assert_eq!(
         messaging.count().await,
         1,
@@ -472,10 +953,12 @@ fn result(action, notice) {
             calls[1].0.clone(),
         )
     };
-    assert!(action_request
-        .idempotency_key
-        .as_ref()
-        .is_some_and(|key| !key.is_empty() && key != "worker-native-start"));
+    assert!(
+        action_request
+            .idempotency_key
+            .as_ref()
+            .is_some_and(|key| !key.is_empty() && key != "worker-native-start")
+    );
     assert_ne!(
         action_request.idempotency_key,
         notice_request.idempotency_key
@@ -483,9 +966,11 @@ fn result(action, notice) {
     let saved: Value = serde_json::from_slice(&prepared).unwrap();
     let action_body = saved["body"].as_str().unwrap();
     let body: Value = serde_json::from_str(action_body).unwrap();
-    assert!(body["preconditions"]["targetId"]["ifMatch"]
-        .as_str()
-        .is_some());
+    assert!(
+        body["preconditions"]["targetId"]["ifMatch"]
+            .as_str()
+            .is_some()
+    );
     let actions_before_reconstruction = action_proxy.observations();
     assert_eq!(
         actions_before_reconstruction["commands"]
@@ -568,9 +1053,11 @@ fn result(action, notice) {
         finished.output.as_ref().unwrap()["actionApplicationId"],
         notice_request.input["data"]["applicationReference"]
     );
-    assert!(finished.output.as_ref().unwrap()["messageId"]
-        .as_str()
-        .is_some());
+    assert!(
+        finished.output.as_ref().unwrap()["messageId"]
+            .as_str()
+            .is_some()
+    );
     assert_eq!(
         reopened
             .admit_owned(&definition, input, &owner, "worker-native-start", &binding)

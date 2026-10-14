@@ -11,12 +11,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use registry_breg::logical_names::{default_api_name, default_sql_name, reserved_logical_name};
 use registry_breg::Diagnostic;
-use registry_linkml::publicschema::{self, Sensitivity, LANGUAGES};
+use registry_breg::logical_names::{default_api_name, default_sql_name, reserved_logical_name};
+use registry_linkml::publicschema::{self, LANGUAGES, Sensitivity};
 use registry_linkml::{ClassDef, EnumDef, Model, Range, SlotDef};
 use registry_manifest_core::MAX_CODELIST_CONCEPTS;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::selection::{EntitySelection, PropertySelection, Selection, VocabularyMode};
 use crate::diagnostic;
@@ -831,7 +831,7 @@ fn field_kind(
                     return Err(format!(
                         "more than one selected entity fits `{name}`; name one with `target`: {}",
                         names(several.iter().map(|entry| entry.id.as_str()))
-                    ))
+                    ));
                 }
             }
         }
@@ -1746,13 +1746,17 @@ mod tests {
             "Person".to_owned(),
             "GroupMembership".to_owned(),
         ];
-        assert!(connectors(model(), &with_membership)
-            .expect("computed")
-            .iter()
-            .all(|connector| connector.concept != "GroupMembership"));
-        assert!(connectors(model(), &["School".to_owned()])
-            .expect("computed")
-            .is_empty());
+        assert!(
+            connectors(model(), &with_membership)
+                .expect("computed")
+                .iter()
+                .all(|connector| connector.concept != "GroupMembership")
+        );
+        assert!(
+            connectors(model(), &["School".to_owned()])
+                .expect("computed")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2019,10 +2023,12 @@ mod tests {
         // With one concept selected, two references to it connect two of its
         // records, which is all there is to connect.
         let alone = ["Location".to_owned()];
-        assert!(connectors(model(), &alone)
-            .expect("computed")
-            .iter()
-            .any(|connector| connector.concept == "Birth"));
+        assert!(
+            connectors(model(), &alone)
+                .expect("computed")
+                .iter()
+                .any(|connector| connector.concept == "Birth")
+        );
     }
 
     #[test]

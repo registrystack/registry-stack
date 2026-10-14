@@ -13,7 +13,7 @@ database:
 namespace: coordinator_actions
 connections:
   applications:
-    product: breg
+    type: breg
     baseUrl: http://127.0.0.1:8100
     profile: workflow-actions
     authorization:
@@ -23,7 +23,7 @@ connections:
       resource: urn:example:applications
       scopes: [applications:read, applications:act]
   notices:
-    product: messaging
+    type: messaging
     baseUrl: http://127.0.0.1:8101
     authorization:
       tokenEndpoint: http://127.0.0.1:8090/token

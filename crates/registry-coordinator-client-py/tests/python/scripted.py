@@ -9,13 +9,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 RUN = "7e367d42-b001-4d44-b94c-9447bfa182aa"
 OTHER_RUN = "00000000-0000-4000-8000-000000000001"
 KEY = "nursing-notice-2026-10-10-0001"
-START_REQUEST = {"flow": "nursing-notice", "input": {"requestId": "one", "values": [None, True, 23]}}
+START_REQUEST = {"workflow": "nursing-notice", "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "input": {"requestId": "one", "values": [None, True, 23]}}
 
 STATUS = {
     "runId": RUN,
-    "workflowId": "nursing-notice",
-    "workflowVersion": "1",
-    "definitionDigest": "sha256:definition",
+    "workflow": "nursing-notice",
+    "workflowRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000",
+
     "bindingDigest": "sha256:binding",
     "step": "notify",
     "state": "pending",
@@ -33,6 +33,8 @@ STATUS = {
 }
 INSPECTION = {
     "run": STATUS,
+    "effects": [],
+    "waits": [],
     "steps": [
         {
             "step": "notify",

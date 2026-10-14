@@ -23,13 +23,21 @@ export interface CoordinatorClientConfig {
   maxMutationRetries?: SafeInteger | null
 }
 
-export interface StartRunRequest { flow: string; input: JsonValue }
+export interface StartRunRequest { workflow: string; workflowRevision: string; input: JsonValue }
+
+/** The active compiled contract under current start authority. */
+export interface WorkflowContract {
+  workflow: string
+  workflowRevision: string
+  input: JsonValue
+  outcomes: { readonly [name: string]: JsonValue }
+}
 
 export interface RunStatus {
   runId: RunId
-  workflowId: string
-  workflowVersion: string
-  definitionDigest: string
+  workflow: string
+  workflowRevision: string
+
   bindingDigest: string
   step: string
   state: string
@@ -99,9 +107,31 @@ export interface RecoveryStatus {
   operation?: OperationIdentity
 }
 
+export type EffectState = 'accepted' | 'unknown'
+export interface EffectStatus {
+  step: string
+  operation: OperationIdentity
+  operationRevision: string
+  state: EffectState
+}
+export interface WaitStatus {
+  step: string
+  acceptedStep: string
+  completion: string
+  completionRevision: string
+  timeoutAt: Instant
+  nextObservationAt: Instant | null
+  notBefore: Instant
+  minimumIntervalSeconds: SafeInteger
+  observations: SafeInteger
+  observationLimit: SafeInteger
+}
+
 export interface RunInspection {
   run: RunStatus
   steps: ReadonlyArray<StepStatus>
+  effects: ReadonlyArray<EffectStatus>
+  waits: ReadonlyArray<WaitStatus>
   recovery: RecoveryStatus
 }
 
@@ -129,7 +159,7 @@ export class CoordinatorClientError extends Error {
   /**
    * Whether the call may have taken effect although this error was raised:
    * a timeout or broken exchange after sending, an unusable answer, or a
-   * 5xx. When true for `start`, recover by sending the same flow and input
+   * 5xx. When true for `start`, recover by sending the same workflow, revision, and input
    * again under the same idempotency key; a new key could admit a second
    * run. When true for `retrySame` or `cancel`, which take no key and are
    * never resent, read the run before asking again. False for a
@@ -151,13 +181,17 @@ export class CoordinatorClientError extends Error {
 export class CoordinatorClient {
   constructor(config: CoordinatorClientConfig)
   /**
-   * Admit a run under the caller's key. An unknown outcome is resent with
+   * Admit `{workflow, workflowRevision, input}` under the caller's key. Fresh
+   * starts must match the active revision. Recover unknown admissions with the
+   * original revision even after activation changes. An unknown outcome is resent with
    * the same key and body at most `maxMutationRetries` times; a 4xx is never
-   * resent. The key is scoped to the caller and the flow, so the same key
-   * under two flows starts two runs, and an allowed flow the deployment does
-   * not serve is refused with 404 `flow.not-served`, a known outcome never resent.
+   * resent. The key is scoped to the caller and the workflow, so the same key
+   * under two workflows starts two runs, and an allowed workflow the deployment does
+   * not serve is refused with 404 `workflow.not-served`, a known outcome never resent.
    */
   start(token: string, idempotencyKey: string, request: StartRunRequest): Promise<CoordinatorOutcome<RunStatus>>
+  /** Discover the active typed contract under current start authority; starts no run. */
+  workflow(token: string, workflow: string): Promise<CoordinatorOutcome<WorkflowContract>>
   status(token: string, runId: RunId): Promise<CoordinatorOutcome<RunStatus>>
   inspect(token: string, runId: RunId): Promise<CoordinatorOutcome<RunInspection>>
   /** Read the original operation's receipt and update recovery state. Never resubmits the operation. */

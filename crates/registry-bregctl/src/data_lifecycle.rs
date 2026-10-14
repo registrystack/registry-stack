@@ -15,21 +15,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use registry_breg::data::{
-    execute_export_page, DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan,
-    DataExportResumeState, DataHttpMethod, DataHttpRequest, DataHttpResponse, DataImportCheckpoint,
-    DataImportOperation, DataImportPlan, MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
-    MAX_DATA_IMPORT_INPUT_BYTES,
+    DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan, DataExportResumeState,
+    DataHttpMethod, DataHttpRequest, DataHttpResponse, DataImportCheckpoint, DataImportOperation,
+    DataImportPlan, MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
+    MAX_DATA_IMPORT_INPUT_BYTES, execute_export_page,
 };
-use registry_breg::package::{inspect_package_integrity, PackageEnvelope, PackageError};
+use registry_breg::package::{PackageEnvelope, PackageError, inspect_package_integrity};
 use registry_breg_client::{
-    ingestion_prefix_digest, BRegBatchOperation, BRegIngestionBlockedReason, BRegIngestionChunk,
-    BRegIngestionChunkReceipt, BRegIngestionError, BRegIngestionRun, BRegIngestionRunRequest,
-    BRegIngestionRunStatus, BRegProblemCode, BaseRegistryClient, BaseRegistryClientConfig,
-    BaseRegistryClientError, BearerToken, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+    BREG_INGESTION_CHUNK_ALGORITHM_VERSION, BRegBatchOperation, BRegIngestionBlockedReason,
+    BRegIngestionChunk, BRegIngestionChunkReceipt, BRegIngestionError, BRegIngestionRun,
+    BRegIngestionRunRequest, BRegIngestionRunStatus, BRegProblemCode, BaseRegistryClient,
+    BaseRegistryClientConfig, BaseRegistryClientError, BearerToken, ingestion_prefix_digest,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::client::{
-    build_client, OutboundOptions, ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT, OutboundOptions, ServiceBaseUrl, build_client,
 };
 use registry_platform_httputil::{read_bounded, validate_response_headers};
 use registry_platform_yaml::{
@@ -694,10 +694,10 @@ fn submit_ingestion_chunks(
             BRegIngestionRunStatus::Blocked => {
                 return Err(DataLifecycleError::ImportRunBlocked(
                     started.run.blocked_reason(),
-                ))
+                ));
             }
             BRegIngestionRunStatus::Cancelled => {
-                return Err(DataLifecycleError::ImportRunCancelled)
+                return Err(DataLifecycleError::ImportRunCancelled);
             }
             BRegIngestionRunStatus::Complete => break,
         }
@@ -1622,16 +1622,16 @@ mod tests {
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::process::Command;
     use std::sync::{
-        atomic::{AtomicUsize, Ordering as AtomicOrdering},
         Arc,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
     };
     use std::thread;
     use std::time::{Duration as StdDuration, Instant};
 
-    use registry_breg::compiler::{compile_project, CompileProfile};
+    use registry_breg::compiler::{CompileProfile, compile_project};
     use registry_breg::contract::parse_project_json;
     use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -2662,9 +2662,11 @@ mod tests {
         else {
             unreachable!("the loop asserted a document refusal");
         };
-        assert!(report.diagnostics()[0]
-            .suggested_action
-            .contains("Finish this import with the bregctl that wrote the state file"));
+        assert!(
+            report.diagnostics()[0]
+                .suggested_action
+                .contains("Finish this import with the bregctl that wrote the state file")
+        );
 
         fs::remove_dir_all(directory).unwrap();
     }
@@ -2910,10 +2912,12 @@ mod tests {
             0o600
         );
         assert_eq!(fs::read(&canary).unwrap(), b"unchanged");
-        assert!(fs::symlink_metadata(&collided_temporary)
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        assert!(
+            fs::symlink_metadata(&collided_temporary)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
 
         std::os::unix::fs::symlink(&canary, &final_symlink).unwrap();
         assert!(matches!(
@@ -3277,9 +3281,11 @@ mod tests {
                 &resumed.output_state,
                 &resumed.resume_state,
                 |request| async move {
-                    assert!(request
-                        .path_and_query()
-                        .contains("$skiptoken=SERVER-CURSOR"));
+                    assert!(
+                        request
+                            .path_and_query()
+                            .contains("$skiptoken=SERVER-CURSOR")
+                    );
                     Ok::<_, ()>(export_response("BB", None))
                 },
             ))
@@ -3420,9 +3426,11 @@ mod tests {
                 &recovered.output_state,
                 &recovered.resume_state,
                 |request| async move {
-                    assert!(request
-                        .path_and_query()
-                        .contains("$skiptoken=SERVER-CURSOR"));
+                    assert!(
+                        request
+                            .path_and_query()
+                            .contains("$skiptoken=SERVER-CURSOR")
+                    );
                     Ok::<_, ()>(export_response("BB", None))
                 },
             ))

@@ -18,7 +18,7 @@ use serde_json::json;
 use crate::{
     BearerToken, CoordinatorClientConfig, CoordinatorClientError as Error,
     CoordinatorProtocolFailure as Failure, RetryScheduled, RunInspection, RunList, RunListQuery,
-    RunStatus, StartRunRequest, Uuid,
+    RunStatus, StartRunRequest, Uuid, WorkflowContract,
 };
 
 const MAXIMUM_REQUEST_BYTES: usize = 65_536;
@@ -71,10 +71,10 @@ impl CoordinatorClient {
         })
     }
 
-    /// Admit `{flow, input}` under the caller's exact key. HTTP 200 confirms
+    /// Admit `{workflow, workflowRevision, input}` under the caller's exact key. HTTP 200 confirms
     /// admission, not a completed workflow or delivery. The runtime answers
-    /// the same run again for the same caller, flow, key and input, and
-    /// refuses the same key with a different input.
+    /// the same run again for the same caller, workflow, key, revision and input, and
+    /// refuses conflicting revision or input. Fresh starts must match the active revision.
     ///
     /// The caller chooses the key; the client never invents one. When the
     /// outcome is unknown, after a timeout or broken exchange or on a 5xx
@@ -82,30 +82,34 @@ impl CoordinatorClient {
     /// at most `CoordinatorClientConfig::with_max_mutation_retries` times (2
     /// by default; 0 disables it). An error for which
     /// `CoordinatorClientError::is_outcome_unknown` is true may still have
-    /// admitted a run: recover with the same identity, key and input, never a
-    /// new key.
+    /// admitted a run: recover with the same identity, key, workflow, revision and
+    /// input even after activation changes, never a new key.
     pub async fn start(
         &self,
         token: &BearerToken,
         key: &str,
         request: &StartRunRequest,
     ) -> Result<CoordinatorComplete<RunStatus>, Error> {
-        if request.flow.is_empty()
-            || request.flow.len() > 64
+        if request.workflow.is_empty()
+            || request.workflow.len() > 64
             || !request
-                .flow
+                .workflow
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
         {
-            return Err(Error::invalid_request("the flow identifier is invalid"));
+            return Err(Error::invalid_request("the workflow identifier is invalid"));
         }
         if key.is_empty() || key.len() > 256 || !key.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
             return Err(Error::invalid_request("the admission key is invalid"));
         }
+        if !valid_revision(&request.workflow_revision) {
+            return Err(Error::invalid_request("the workflow revision is invalid"));
+        }
         let body = request_bytes(request)?;
         let prepared = self.prepare(token, Method::POST, "v1/runs", Some(key), Some(body))?;
         let prepared = &prepared;
-        let flow = request.flow.as_str();
+        let workflow = request.workflow.as_str();
+        let revision = request.workflow_revision.as_str();
         let value = retry_keyed_mutation(self.max_mutation_retries, || async move {
             let Some(attempt) = prepared.try_clone() else {
                 return KeyedMutationAttempt::Settled(Err(Error::invalid_request(
@@ -119,7 +123,7 @@ impl CoordinatorClient {
             let status = response.status();
             let retry_after = RetryAfter::from_headers(response.headers());
             let answer = self.answer::<RunStatus>(response).await.and_then(|value| {
-                if value.workflow_id == flow {
+                if value.workflow == workflow && value.workflow_revision == revision {
                     Ok(value)
                 } else {
                     Err(protocol(status.as_u16(), Failure::Body))
@@ -128,6 +132,35 @@ impl CoordinatorClient {
             keyed_attempt(answer, Some(status), retry_after)
         })
         .await?;
+        Ok(CoordinatorComplete { value })
+    }
+
+    /// Discover the active revision and resolved input/outcome contracts under
+    /// current start authority. This performs one bounded read and starts no run.
+    pub async fn workflow(
+        &self,
+        token: &BearerToken,
+        workflow: &str,
+    ) -> Result<CoordinatorComplete<WorkflowContract>, Error> {
+        if !valid_workflow(workflow) {
+            return Err(Error::invalid_request("the workflow identifier is invalid"));
+        }
+        let value: WorkflowContract = self
+            .exchange(
+                token,
+                Method::GET,
+                &format!("v1/workflows/{workflow}"),
+                None,
+                None,
+            )
+            .await?;
+        if value.workflow != workflow
+            || !valid_revision(&value.workflow_revision)
+            || value.outcomes.is_empty()
+            || value.outcomes.len() > 64
+        {
+            return Err(protocol(200, Failure::Body));
+        }
         Ok(CoordinatorComplete { value })
     }
 
@@ -480,4 +513,21 @@ fn keyed_attempt<T>(
         Error::is_outcome_unknown,
         Error::resend_may_settle,
     )
+}
+
+fn valid_workflow(workflow: &str) -> bool {
+    !workflow.is_empty()
+        && workflow.len() <= 64
+        && workflow
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+}
+
+fn valid_revision(revision: &str) -> bool {
+    revision.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+    })
 }

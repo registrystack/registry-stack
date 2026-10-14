@@ -25,24 +25,27 @@ fn fixture() -> Definition {
 }
 /// The example's wait and read computed by functions rather than references,
 /// so a test can replace a function body with the expression it exercises.
+fn authored_value(source: &str) -> Value {
+    registry_platform_yaml::Reader::new("workflow.yaml")
+        .scan(source.as_bytes())
+        .unwrap()
+        .unwrap()
+        .to_json_value()
+}
 fn computed_workflow() -> String {
-    let workflow = WORKFLOW
-        .replace(
-            "waitUntil: {type: input, path: /sendAfter}",
-            "waitUntil: {type: function, function: send_after, arguments: [{type: input}]}",
-        )
-        .replace(
-            "    input:\n      type: fields\n      fields:\n        collection: {type: literal, value: applications}\n        recordId: {type: input, path: /applicationId}\n",
-            "    input: {type: function, function: read_request, arguments: [{type: input}]}\n",
-        );
-    assert_eq!(workflow.matches("function: send_after").count(), 1);
-    assert_eq!(workflow.matches("function: read_request").count(), 1);
-    workflow
+    let mut workflow = authored_value(WORKFLOW);
+    workflow["functions"]["send-after"] = json!({"runtime":"rhai","source":"functions.rhai","entrypoint":"send_after",
+        "inputs":{"input":{"typeRef":"workflow-input"}},"output":{"type":"string","format":"date-time"}});
+    workflow["functions"]["read-request"] = json!({"runtime":"rhai","source":"functions.rhai","entrypoint":"read_request",
+        "inputs":{"input":{"typeRef":"workflow-input"}},"output":{"operationInput":"applications-read-record"}});
+    workflow["workflow"]["steps"]["due"]["waitUntil"] =
+        json!({"type":"function","function":"send-after","inputs":{"input":{"type":"input"}}});
+    workflow["workflow"]["steps"]["read-application"]["input"] =
+        json!({"type":"function","function":"read-request","inputs":{"input":{"type":"input"}}});
+    workflow.to_string()
 }
 fn computed_source() -> String {
-    format!(
-        "{SOURCE}\nfn send_after(input) {{\n    input.sendAfter\n}}\n\nfn read_request(input) {{\n    #{{ collection: \"applications\", recordId: input.applicationId }}\n}}\n"
-    )
+    format!("{SOURCE}\nfn send_after(input) {{ let input = input.input; input.sendAfter }}\nfn read_request(input) {{ let input = input.input; #{{ collection: \"applications\", recordId: input.applicationId }} }}")
 }
 fn input() -> Value {
     json!({"applicationId": "00000000-0000-4000-8000-000000000001", "sendAfter": "2026-10-10T09:00:00Z"})
@@ -85,9 +88,8 @@ fn synthetic_fixture_maps_current_permission_and_receipt() {
             .unwrap(),
         json!({"collection": "applications", "recordId": input["applicationId"]})
     );
-    let record =
-        json!({"data": {"domainData": {"noticeAllowed": true, "email": "person@example.invalid"}}});
-    let mut outputs = BTreeMap::from([("read-application".into(), record)]);
+    let current_record = record(json!({"noticeAllowed": true, "email": "person@example.invalid"}));
+    let mut outputs = BTreeMap::from([("read-application".into(), current_record)]);
     assert_eq!(
         definition.evaluate("permission", &input, &outputs).unwrap(),
         "send"
@@ -104,7 +106,7 @@ fn synthetic_fixture_maps_current_permission_and_receipt() {
         .unwrap();
     outputs.insert(
         "read-application".into(),
-        json!({"data": {"domainData": {"noticeAllowed": false}}}),
+        record(json!({"noticeAllowed": false})),
     );
     assert_eq!(
         definition.evaluate("permission", &input, &outputs).unwrap(),
@@ -118,25 +120,20 @@ fn synthetic_fixture_maps_current_permission_and_receipt() {
 #[test]
 fn shared_mapping_is_validated_only_for_the_executing_branch() {
     let workflow = json!({
-        "apiVersion": "id.registrystack.org/formats/coordinator/project/v1alpha1",
-        "kind": "CoordinatorProject", "project": {"id": "shared-mapping", "version": "1"},
-        "input": {
-            "type": "object", "required": ["choice", "value"],
-            "properties": {"choice": {"enum": ["number", "text"]}, "value": {}},
-            "additionalProperties": false
-        },
-        "connections": {}, "functionsFile": "functions.rhai", "deadlineSeconds": 3600, "start": "select",
-        "steps": {
-            "select": {"type": "choose", "choose": {"type": "function", "function": "branch", "arguments": [{"type": "input"}]},
-                "cases": {"number": "finish-number", "text": "finish-text"}},
-            "finish-number": {"type": "finish", "outcome": "number", "output": {"type": "function", "function": "value", "arguments": [{"type": "input"}]}},
-            "finish-text": {"type": "finish", "outcome": "text", "output": {"type": "function", "function": "value", "arguments": [{"type": "input"}]}}
-        },
-        "outcomes": {"number": {"type": "integer"}, "text": {"type": "string"}}
+        "apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject","project":{"id":"shared-mapping","version":"1"},
+        "functions":{
+            "branch":{"runtime":"rhai","source":"functions.rhai","entrypoint":"branch","inputs":{"input":{"type":"object"}},"output":{"type":"string","enum":["number","text"]}},
+            "value":{"runtime":"rhai","source":"functions.rhai","entrypoint":"value","inputs":{"input":{"type":"object"}},"output":{}}
+        },"workflow":{"input":{"type":"object","required":["choice","value"],"properties":{"choice":{"enum":["number","text"]},"value":{}},"additionalProperties":false},"deadlineSeconds":3600,"start":"select",
+            "steps":{
+                "select":{"type":"choose","choose":{"type":"function","function":"branch","inputs":{"input":{"type":"input"}}},"cases":{"number":"finish-number","text":"finish-text"}},
+                "finish-number":{"type":"finish","outcome":"number","output":{"type":"function","function":"value","inputs":{"input":{"type":"input"}}}},
+                "finish-text":{"type":"finish","outcome":"text","output":{"type":"function","function":"value","inputs":{"input":{"type":"input"}}}}
+            },"outcomes":{"number":{"type":"integer"},"text":{"type":"string"}}}
     });
     let definition = load(
         &serde_norway::to_string(&workflow).unwrap(),
-        "fn branch(input) { input.choice } fn value(input) { input.value }",
+        "fn branch(args) { args.input.choice } fn value(args) { args.input.value }",
     )
     .unwrap();
     for (choice, value, other) in [
@@ -243,17 +240,14 @@ fn digest_pins_plan_schema_and_exact_function_bytes() {
         .unwrap()
         .digest
     );
+    let mut changed_schema = authored_value(WORKFLOW);
+    changed_schema["workflow"]["outcomes"]["message-accepted"]["properties"]["messageId"]
+        .as_object_mut()
+        .unwrap()
+        .remove("format");
     assert_ne!(
         baseline,
-        load(
-            &WORKFLOW.replace(
-                "messageId: {type: string, format: uuid}",
-                "messageId: {type: string}"
-            ),
-            SOURCE
-        )
-        .unwrap()
-        .digest
+        load(&changed_schema.to_string(), SOURCE).unwrap().digest
     );
     assert_eq!(
         baseline,
@@ -265,50 +259,56 @@ fn digest_pins_plan_schema_and_exact_function_bytes() {
 
 #[test]
 fn bad_graphs_and_whole_value_references_refuse() {
-    for workflow in [
-        WORKFLOW.replace("next: read-application", "next: due"),
-        WORKFLOW.replace("next: read-application", "next: missing"),
-        WORKFLOW.replace("start: due", "start: missing"),
-        WORKFLOW.replace("cases: {send: notify, skip: skipped}", "cases: {}"),
-        WORKFLOW.replace(
-            "arguments: [{type: step, step: read-application}]",
-            "arguments: [{type: step, step: read-application.output.data}]",
+    let base = authored_value(WORKFLOW);
+    for (pointer, value) in [
+        ("/workflow/steps/due/next", json!("due")),
+        ("/workflow/steps/due/next", json!("missing")),
+        ("/workflow/start", json!("missing")),
+        ("/workflow/steps/permission/cases", json!({})),
+        (
+            "/workflow/steps/permission/choose/inputs/record/step",
+            json!("read-application.output.data"),
         ),
-        WORKFLOW.replace(
-            "arguments: [{type: step, step: read-application}]",
-            "arguments: [{type: step, step: notify}]",
+        (
+            "/workflow/steps/permission/choose/inputs/record/step",
+            json!("notify"),
         ),
-        WORKFLOW.replace("next: read-application", "next: permission"),
-        WORKFLOW.replace("operation: read-record", "operation: submit-message"),
-        WORKFLOW.replace("operation: read-record", "operation: arbitrary-http"),
-        WORKFLOW.replace("deadlineSeconds: 2592000", "deadlineSeconds: é"),
-        WORKFLOW.replace(
-            "functionsFile: functions.rhai",
-            "functionsFile: ../functions.rhai",
+        ("/workflow/steps/due/next", json!("permission")),
+        (
+            "/workflow/steps/read-application/operation",
+            json!("notices-submit-message"),
         ),
-        WORKFLOW.replace(
-            "kind: CoordinatorProject",
-            "kind: CoordinatorProject\nunknown: true",
+        (
+            "/workflow/steps/read-application/operation",
+            json!("arbitrary-http"),
         ),
-        WORKFLOW.replace(
-            "deadlineSeconds: 2592000",
-            "deadlineSeconds: 2592000\ndeadlineSeconds: 86400",
-        ),
-        WORKFLOW.replace("deadlineSeconds: 2592000", "deadlineSeconds: ${DEADLINE}"),
+        ("/workflow/deadlineSeconds", json!("é")),
+        ("/functions/notice-route/source", json!("../functions.rhai")),
+        ("/workflow/deadlineSeconds", json!("${DEADLINE}")),
     ] {
-        refused(load(&workflow, SOURCE));
+        let mut workflow = base.clone();
+        *workflow.pointer_mut(pointer).unwrap() = value;
+        refused(load(&workflow.to_string(), SOURCE));
     }
-    // The join has one route that bypasses notify, so notify.output is not
-    // available on every route even though notify exists earlier on one path.
-    let workflow = WORKFLOW
-        .replace("skip: skipped", "skip: accepted")
-        .replace(
-            "  skipped:\n    type: finish\n    outcome: no-current-permission\n",
-            "",
-        )
-        .replace("  no-current-permission:\n    type: \"null\"\n", "");
+    let mut unknown = base.clone();
+    unknown["unknown"] = json!(true);
+    refused(load(&unknown.to_string(), SOURCE));
+    refused(load(
+        &base.to_string().replacen("{", "{\"project\":{},", 1),
+        SOURCE,
+    ));
+    let mut joined = base;
+    joined["workflow"]["steps"]["permission"]["cases"]["skip"] = json!("accepted");
+    joined["workflow"]["steps"]
+        .as_object_mut()
+        .unwrap()
+        .remove("skipped");
+    joined["workflow"]["outcomes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("no-current-permission");
     assert_eq!(
-        refused(load(&workflow, SOURCE)).code,
+        refused(load(&joined.to_string(), SOURCE)).code,
         "coordinator.mapping.dominance"
     );
 }
@@ -338,11 +338,14 @@ fn branch_timestamp_schema_and_missing_values_refuse_without_values() {
         ),
     )
     .unwrap();
-    let outputs = BTreeMap::from([("read-application".into(), json!({}))]);
+    let outputs = BTreeMap::from([(
+        "read-application".into(),
+        record(json!({"noticeAllowed":true})),
+    )]);
     let error = definition
         .evaluate("permission", &input(), &outputs)
         .unwrap_err();
-    assert_eq!(error.code, "mapping.branch");
+    assert_eq!(error.code, "function.output");
     assert!(!error.to_string().contains(CANARY));
     let definition = fixture();
     assert_eq!(
@@ -372,7 +375,7 @@ fn branch_timestamp_schema_and_missing_values_refuse_without_values() {
             .initial_due(&input(), instant("2026-10-09T09:00:00Z"))
             .unwrap_err()
             .code,
-        "mapping.timestamp"
+        "function.output"
     );
 }
 
@@ -515,22 +518,24 @@ fn snapshots_refuse_missing_changed_extra_or_reordered_operation_contracts() {
 
 #[test]
 fn remote_schemas_and_non_null_finish_without_mapping_refuse() {
-    let workflow = WORKFLOW.replace(
-        "messageId: {type: string, format: uuid}",
-        "messageId: {$ref: 'https://example.invalid/schema'}",
-    );
+    let mut workflow = authored_value(WORKFLOW);
+    workflow["workflow"]["outcomes"]["message-accepted"]["properties"]["messageId"] =
+        json!({"$ref":"https://example.invalid/schema"});
     assert_eq!(
-        refused(load(&workflow, SOURCE)).code,
+        refused(load(&workflow.to_string(), SOURCE)).code,
         "coordinator.definition.schema"
     );
-    let workflow = WORKFLOW.replace("format: uuid", "format: unsupported-format");
+    let mut workflow = authored_value(WORKFLOW);
+    workflow["types"]["workflow-input"]["properties"]["applicationId"]["format"] =
+        json!("unsupported-format");
     assert_eq!(
-        refused(load(&workflow, SOURCE)).code,
+        refused(load(&workflow.to_string(), SOURCE)).code,
         "coordinator.definition.schema"
     );
-    let workflow = WORKFLOW.replace("type: \"null\"", "type: string");
+    let mut workflow = authored_value(WORKFLOW);
+    workflow["workflow"]["outcomes"]["no-current-permission"] = json!({"type":"string"});
     assert_eq!(
-        refused(load(&workflow, SOURCE)).code,
+        refused(load(&workflow.to_string(), SOURCE)).code,
         "coordinator.definition.outcome"
     );
 }
@@ -569,14 +574,15 @@ fn resource_limits_include_recursion_input_values_and_non_object_commands() {
             .evaluate("read-application", &input(), &BTreeMap::new())
             .unwrap_err()
             .code,
-        "mapping.call_shape"
+        "function.output"
     );
 }
 
 #[test]
 fn minimal_finished_workflow_needs_no_mapping_or_timer() {
-    let workflow = "apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1\nkind: CoordinatorProject\nproject:\n  id: minimal\n  version: '1'\ninput: true\nconnections: {}\nfunctionsFile: functions.rhai\ndeadlineSeconds: 3600\nstart: done\nsteps:\n  done: {type: finish, outcome: done}\noutcomes:\n  done: {type: 'null'}\n";
-    let definition = load(workflow, "").unwrap();
+    let workflow = json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject","project":{"id":"minimal","version":"1"},
+        "workflow":{"input":true,"deadlineSeconds":3600,"start":"done","steps":{"done":{"type":"finish","outcome":"done"}},"outcomes":{"done":{"type":"null"}}}}).to_string();
+    let definition = load(&workflow, "").unwrap();
     assert_eq!(
         definition
             .initial_due(&Value::Null, instant("2026-10-09T09:00:00Z"))
@@ -587,9 +593,12 @@ fn minimal_finished_workflow_needs_no_mapping_or_timer() {
     assert!(definition
         .evaluate("arbitrary", &Value::Null, &BTreeMap::new())
         .is_err());
+    // Unreferenced files are outside this project's named Function asset closure.
     assert_eq!(
-        refused(load(workflow, "fn unused(x) { x } fn unused(x, y) { y }")).code,
-        "coordinator.function.definition"
+        definition.digest,
+        load(&workflow, "fn unused(x) { x } fn unused(x,y) { y }")
+            .unwrap()
+            .digest
     );
 }
 
@@ -603,22 +612,19 @@ fn authored_workflow_refuses_environment_substitution() {
         SOURCE,
     ));
     assert_eq!(error.code, "config.substitution-not-allowed");
-    assert_eq!(error.field.as_deref(), Some("/deadlineSeconds"));
+    assert_eq!(error.field.as_deref(), Some("/workflow/deadlineSeconds"));
     assert!(error.suggested_action.is_some());
 }
 
 #[test]
 fn authoring_diagnostics_locate_graph_reference_and_functions_without_runtime_values() {
-    let error = refused(load(
-        &WORKFLOW.replace(
-            "arguments: [{type: step, step: read-application}]",
-            "arguments: [{type: step, step: notify}]",
-        ),
-        SOURCE,
-    ));
+    let mut unavailable = authored_value(WORKFLOW);
+    unavailable["workflow"]["steps"]["permission"]["choose"]["inputs"]["record"]["step"] =
+        json!("notify");
+    let error = refused(load(&unavailable.to_string(), SOURCE));
     assert_eq!(
         error.field.as_deref(),
-        Some("/steps/permission/choose/arguments/0")
+        Some("/workflow/steps/permission/choose/inputs/record")
     );
     assert!(error
         .suggested_action
@@ -634,7 +640,7 @@ fn authoring_diagnostics_locate_graph_reference_and_functions_without_runtime_va
     assert_eq!(error.code, "coordinator.function.definition");
     assert_eq!(
         error.field.as_deref(),
-        Some("/steps/due/waitUntil/function")
+        Some("/functions/send-after/entrypoint")
     );
     assert!(error.diagnostics[0]
         .source
@@ -643,9 +649,8 @@ fn authoring_diagnostics_locate_graph_reference_and_functions_without_runtime_va
         .file
         .ends_with("workflow.yaml"));
     assert!(
-        error.message.contains("send_after") && error.message.contains("takes 2 parameters"),
-        "{}",
-        error.message
+        error.message.contains("exactly one parameter")
+            || error.message.contains("one named-input object")
     );
     let definition = load(
         &workflow,
@@ -671,7 +676,7 @@ fn deferred_appointment_graph_preserves_grant_and_maps_product_contracts() {
     let mut outputs = BTreeMap::from([
         (
             "read-application".into(),
-            json!({"data":{"domainData":{"appointmentAllowed":true,"email":"person@example.invalid"}}}),
+            record(json!({"appointmentAllowed":true,"email":"person@example.invalid"})),
         ),
         (
             "metadata".into(),
@@ -701,10 +706,13 @@ fn deferred_appointment_graph_preserves_grant_and_maps_product_contracts() {
     );
     let _: registry_scheduling_client::CreateAppointmentRequest =
         serde_json::from_value(booking["appointment"].clone()).unwrap();
-    outputs.insert(
-        "book".into(),
-        json!({"appointmentId":"appointment-one","start":"2026-10-10T10:00:00Z"}),
-    );
+    let scenarios = registry_coordinator::scenarios::load(&root.join("scenarios.yaml")).unwrap();
+    let registry_coordinator::scenarios::Reply::Success { success: booked } =
+        &scenarios.cases[0].replies["book"][0]
+    else {
+        panic!("the fixture books an appointment");
+    };
+    outputs.insert("book".into(), booked.clone());
     let notice = definition.evaluate("notify", &input, &outputs).unwrap();
     let _: registry_messaging_client::SubmitMessageRequest =
         serde_json::from_value(notice).unwrap();
@@ -808,10 +816,10 @@ fn scenario_past_due_wait_does_not_rewind_an_advanced_clock() {
     .unwrap()
     .1
     .to_json_value();
-    workflow["deadlineSeconds"] = json!(3600);
-    workflow["steps"]["due"]["next"] = json!("earlier");
-    workflow["steps"]["earlier"] = json!({
-        "type": "wait-until", "waitUntil": {"type": "function", "function": "earlier_due", "arguments": [{"type": "input"}]},
+    workflow["workflow"]["deadlineSeconds"] = json!(3600);
+    workflow["workflow"]["steps"]["due"]["next"] = json!("earlier");
+    workflow["workflow"]["steps"]["earlier"] = json!({
+        "type": "wait-until", "waitUntil": {"type": "literal", "value":"2026-10-09T09:10:00Z"},
         "next": "read-application"
     });
     let definition = load(
@@ -980,7 +988,10 @@ fn bounded_noncanonical_input_cannot_expand_into_an_unrestorable_snapshot() {
     snapshot_boundary::project_at_snapshot_size(root.path(), snapshot_boundary::SNAPSHOT_BOUND);
     let snapshot = Definition::load(root.path()).unwrap().snapshot().unwrap();
     let mut value: Value = serde_json::from_str(&snapshot).unwrap();
-    value["source"] = json!(format!("{}x", value["source"].as_str().unwrap()));
+    value["workflow"]["input"]["description"] = json!(format!(
+        "{}x",
+        value["workflow"]["input"]["description"].as_str().unwrap()
+    ));
     let canonical = registry_platform_canonical_json::canonicalize_json(&value).unwrap();
     assert_eq!(canonical.len(), snapshot_boundary::SNAPSHOT_BOUND + 1);
     let compact = String::from_utf8(canonical)

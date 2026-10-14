@@ -6,6 +6,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::protocol::RecoverySemantics;
 
+// These are host policy, consumed by Dispatch and by the compiled contract.
+// A local Operation alias cannot increase them or claim stronger recovery.
+pub(crate) const ATTEMPT_TIMEOUT_SECONDS: u64 = 10;
+pub(crate) const MAXIMUM_ATTEMPTS: i16 = 10;
+pub(crate) const RETRY_MAXIMUM_DELAY_SECONDS: u64 = 300;
+pub(crate) const MAXIMUM_PREPARATION_BYTES: usize = 65_536;
+pub(crate) const MINIMUM_OBSERVATION_INTERVAL_SECONDS: u32 = 30;
+pub(crate) const MAXIMUM_OBSERVATION_INTERVAL_SECONDS: u32 = 86_400;
+pub(crate) const MAXIMUM_HTTP_RESPONSE_BYTES: u64 = 65_536;
+pub(crate) const HTTP_REQUEST_TIMEOUT_MILLISECONDS: u64 = 2_000;
+pub(crate) const HTTP_CONNECT_TIMEOUT_MILLISECONDS: u64 = 1_000;
+pub(crate) const HTTP_MUTATION_RETRIES: u8 = 0;
+pub(crate) const EVALUATION_TIMEOUT_MILLISECONDS: u64 = 8_000;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EffectKind {
@@ -58,6 +72,96 @@ pub struct OperationIdentity {
 }
 
 impl OperationDescriptor {
+    /// The host-owned execution contract, shared by compilation, generated
+    /// references and inspection. Product authorization is checked afresh;
+    /// this metadata cannot grant it or make an unknown command successful.
+    pub fn host_contract(&self) -> serde_json::Value {
+        use serde_json::json;
+        let mut observation = match self.id {
+            "casework.submit-review-request/v1" => json!({
+                "name":"result", "profile":"casework-result",
+                "acceptedBinding":["requestId","subject","policy","submissionDigest"],
+                "authority":"current-review-producer",
+                "terminalEvidence":"exact-authorized-review-result",
+                "authenticatedWake":true,
+                "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
+            }),
+            "breg.submit-proposal/v1" => json!({
+                "name":"application", "profile":"breg-application",
+                "acceptedBinding":["id","actionId","actionRevision","submissionVersion","effectDigest"],
+                "authority":"current-proposal-get-profile",
+                "terminalEvidence":"exact-application-evidence-or-cancelled-proposal",
+                "authenticatedWake":false,
+                "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
+            }),
+            "external.get/v1" => json!({
+                "profile":"bounded-poll", "specializationRequired":true,
+                "acceptedBinding":["saved-command"],
+                "authority":"bound-read-only-connection",
+                "terminalEvidence":"typed-response-and-pinned-pure-interpretation",
+                "authenticatedWake":false, "intervalSource":"authored-completion"
+            }),
+            _ => serde_json::Value::Null,
+        };
+        if let Some(fields) = observation.as_object_mut() {
+            fields.insert(
+                "minimumIntervalSeconds".into(),
+                json!(MINIMUM_OBSERVATION_INTERVAL_SECONDS),
+            );
+            fields.insert(
+                "maximumRetryAfterSeconds".into(),
+                json!(MAXIMUM_OBSERVATION_INTERVAL_SECONDS),
+            );
+            fields.insert(
+                "observationLimit".into(),
+                json!("1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)"),
+            );
+            fields.insert(
+                "deadline".into(),
+                json!("original-wait-timeout-within-original-run-deadline"),
+            );
+            fields.insert("signalCarriesResult".into(), json!(false));
+        }
+        let mut http = json!({
+            "maximumResponseBytes":MAXIMUM_HTTP_RESPONSE_BYTES,
+            "requestTimeoutMilliseconds":HTTP_REQUEST_TIMEOUT_MILLISECONDS,
+            "connectTimeoutMilliseconds":HTTP_CONNECT_TIMEOUT_MILLISECONDS,
+            "mutationRetries":HTTP_MUTATION_RETRIES
+        });
+        if matches!(self.product, "external-http" | "evaluation") {
+            let fields = http.as_object_mut().expect("HTTP contract is an object");
+            fields.remove("connectTimeoutMilliseconds");
+            fields.insert("connectionMayLowerLimits".into(), json!(true));
+            fields.insert("redirects".into(), json!("refused"));
+            if self.product == "evaluation" {
+                fields.insert(
+                    "requestTimeoutMilliseconds".into(),
+                    json!(EVALUATION_TIMEOUT_MILLISECONDS),
+                );
+                fields.insert(
+                    "maximumRequestBytes".into(),
+                    json!(MAXIMUM_HTTP_RESPONSE_BYTES),
+                );
+            }
+        }
+        json!({
+            "identity":self.identity(),
+            "connectionInterface":self.product,
+            "authority":"current-bound-connection-authority",
+            "limits":{
+                "value":crate::functions::value_limits(),
+                "maximumPreparationBytes":MAXIMUM_PREPARATION_BYTES,
+                "attemptTimeoutSeconds":ATTEMPT_TIMEOUT_SECONDS,
+                "maximumCallAttempts":MAXIMUM_ATTEMPTS,
+                "maximumCallRetryDelaySeconds":RETRY_MAXIMUM_DELAY_SECONDS,
+                "maximumConcurrentAttemptsPerRun":1,
+                "maximumRunDurationSeconds":crate::definition::MAXIMUM_WAIT_SECONDS,
+                "http":http
+            },
+            "completionObservation":observation
+        })
+    }
+
     pub fn identity(&self) -> OperationIdentity {
         OperationIdentity {
             id: self.id.to_owned(),
@@ -116,20 +220,25 @@ const fn mutation(
 }
 
 static CATALOG: &[OperationDescriptor] = &[
-    read("read-record", "breg"),
-    mutation("submit-message", "messaging", true, false),
-    read("read-scheduling", "scheduling"),
-    read("read-availability", "scheduling"),
-    mutation("create-appointment", "scheduling", true, false),
+    read("breg.read-record/v1", "breg"),
+    mutation("messaging.submit-message/v1", "messaging", true, false),
+    read("scheduling.read-service/v1", "scheduling"),
+    read("scheduling.read-availability/v1", "scheduling"),
+    mutation(
+        "scheduling.create-appointment/v1",
+        "scheduling",
+        true,
+        false,
+    ),
     OperationDescriptor {
         declared_refusal: true,
-        ..mutation("invoke-breg-action", "breg", false, true)
+        ..mutation("breg.invoke-action/v1", "breg", false, true)
     },
-    read("external-get", "external-http"),
+    read("external.get/v1", "external-http"),
     OperationDescriptor {
-        id: "evaluate-decision",
+        id: "evaluation.evaluate/v1",
         version: 1,
-        product: "decision",
+        product: "evaluation",
         effect: EffectKind::Evaluation,
         key_requirement: KeyRequirement::None,
         requires_preparation: true,
@@ -137,8 +246,22 @@ static CATALOG: &[OperationDescriptor] = &[
         read_receipt: false,
         declared_refusal: false,
     },
-    mutation("submit-review-request", "casework", false, false),
-    mutation("cancel-review-request", "casework", false, false),
+    mutation(
+        "casework.submit-review-request/v1",
+        "casework",
+        false,
+        false,
+    ),
+    mutation(
+        "casework.cancel-review-request/v1",
+        "casework",
+        false,
+        false,
+    ),
+    mutation("breg.submit-proposal/v1", "breg", false, true),
+    mutation("breg.apply-proposal/v1", "breg", false, true),
+    mutation("breg.retry-proposal/v1", "breg", false, true),
+    mutation("breg.cancel-proposal/v1", "breg", false, true),
 ];
 
 pub fn descriptors() -> &'static [OperationDescriptor] {
@@ -159,6 +282,38 @@ pub fn identities() -> Vec<OperationIdentity> {
 /// copied into protected state or operator reports.
 pub fn failure_code(code: &str) -> Option<&'static str> {
     match code {
+        "completion-invalid-response" => Some("completion-invalid-response"),
+        "completion-interpretation-failed" => Some("completion-interpretation-failed"),
+        "completion-unavailable" => Some("completion-unavailable"),
+        "observation-budget-exhausted" => Some("observation-budget-exhausted"),
+        "review-request-unknown" => Some("review-request-unknown"),
+        "review-result-expired" => Some("review-result-expired"),
+        "completion-unusable-retry-after" => Some("completion-unusable-retry-after"),
+        "external-unusable-retry-after" => Some("external-unusable-retry-after"),
+        "submission-stale" => Some("submission-stale"),
+        "submission-missing" => Some("submission-missing"),
+        "application-evidence-missing" => Some("application-evidence-missing"),
+        "application-binding-mismatch" => Some("application-binding-mismatch"),
+        "action-contract-changed" => Some("action-contract-changed"),
+        "action-contract-missing" => Some("action-contract-missing"),
+        "target-conditions-mismatch" => Some("target-conditions-mismatch"),
+        "proposal-unavailable" => Some("proposal-unavailable"),
+        "proposal-binding-mismatch" => Some("proposal-binding-mismatch"),
+        "proposal-revision-changed" => Some("proposal-revision-changed"),
+        "proposal-not-draft" => Some("proposal-not-draft"),
+        "proposal-not-visible" => Some("proposal-not-visible"),
+        "proposal-blocked" => Some("proposal-blocked"),
+        "proposal-contract-changed" => Some("proposal-contract-changed"),
+        "proposal-review-unavailable" => Some("proposal-review-unavailable"),
+        "proposal-dependency-outage" => Some("proposal-dependency-outage"),
+        "proposal-lease-expired" => Some("proposal-lease-expired"),
+        "proposal-application-refused" => Some("proposal-application-refused"),
+        "proposal-attempts-exhausted" => Some("proposal-attempts-exhausted"),
+        "observation-backoff-unusable" => Some("observation-backoff-unusable"),
+        "application-blocked" => Some("application-blocked"),
+        "proposal-unknown" => Some("proposal-unknown"),
+        "application-status-invalid" => Some("application-status-invalid"),
+        "retry-after-invalid" => Some("retry-after-invalid"),
         "action-unavailable" => Some("action-unavailable"),
         "prepared-command-mismatch" => Some("prepared-command-mismatch"),
         "external-invalid-command" => Some("external-invalid-command"),
@@ -184,16 +339,28 @@ mod tests {
     #[test]
     fn existing_portable_names_round_trip_through_catalog() {
         for (operation, name) in [
-            (Operation::ReadRecord, "read-record"),
-            (Operation::SubmitMessage, "submit-message"),
-            (Operation::ReadScheduling, "read-scheduling"),
-            (Operation::ReadAvailability, "read-availability"),
-            (Operation::CreateAppointment, "create-appointment"),
-            (Operation::InvokeBregAction, "invoke-breg-action"),
-            (Operation::ExternalGet, "external-get"),
-            (Operation::EvaluateDecision, "evaluate-decision"),
-            (Operation::SubmitReviewRequest, "submit-review-request"),
-            (Operation::CancelReviewRequest, "cancel-review-request"),
+            (Operation::ReadRecord, "breg.read-record/v1"),
+            (Operation::SubmitMessage, "messaging.submit-message/v1"),
+            (Operation::ReadScheduling, "scheduling.read-service/v1"),
+            (
+                Operation::ReadAvailability,
+                "scheduling.read-availability/v1",
+            ),
+            (
+                Operation::CreateAppointment,
+                "scheduling.create-appointment/v1",
+            ),
+            (Operation::InvokeBregAction, "breg.invoke-action/v1"),
+            (Operation::ExternalGet, "external.get/v1"),
+            (Operation::EvaluateDecision, "evaluation.evaluate/v1"),
+            (
+                Operation::SubmitReviewRequest,
+                "casework.submit-review-request/v1",
+            ),
+            (
+                Operation::CancelReviewRequest,
+                "casework.cancel-review-request/v1",
+            ),
         ] {
             let encoded = serde_json::to_value(operation).unwrap();
             assert_eq!(encoded, name);

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #![cfg(feature = "postgres-test")]
+#[path = "support/failed_fixture.rs"]
+mod failed_fixture;
 mod support;
 
 use registry_coordinator::{
@@ -26,7 +28,9 @@ async fn restoring_an_older_backup_cannot_repeat_a_real_accepted_message() {
     let psql_tool = std::env::var("COORDINATOR_PSQL").unwrap_or_else(|_| "psql".into());
     let issuer = issuer().await;
     let messaging = Messaging::start(&issuer).await;
-    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let root = failed_fixture::FixtureDirectory::new(
+        tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap(),
+    );
     let config = config(
         root.path(),
         &issuer,
@@ -41,20 +45,22 @@ kind: CoordinatorProject
 project:
   id: restore-proof
   version: v1
-input: {type: object}
-connections: {notices: messaging}
-functionsFile: functions.rhai
-deadlineSeconds: 3600
-start: send
-steps:
-  send:
-    type: call
+operations:
+  send-message:
+    uses: messaging.submit-message/v1
     connection: notices
-    operation: submit-message
-    input: {type: function, function: request, arguments: [{type: input}]}
-    next: done
-  done: {type: finish, outcome: accepted}
-outcomes: {accepted: {type: 'null'}}
+workflow:
+  input: {operationInput: send-message}
+  deadlineSeconds: 3600
+  start: send
+  steps:
+    send:
+      type: call
+      operation: send-message
+      input: {type: input}
+      next: done
+    done: {type: finish, outcome: accepted}
+  outcomes: {accepted: {type: 'null'}}
 "#,
     )
     .unwrap();
@@ -277,6 +283,7 @@ async fn maintained_client_replays_one_real_messaging_postgres_submission() {
     let request = CallRequest {
         connection: "notices".into(),
         operation: Operation::SubmitMessage,
+        operation_contract: None,
         input: submission(),
         idempotency_key: Some("real-messaging-same-command".into()),
     };

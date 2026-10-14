@@ -61,7 +61,7 @@ fn runtime_check_is_offline_until_environment_is_explicitly_requested() {
     // reader explicitly warns that the remainder could not be checked.
     let text = fs::read_to_string(&file)
         .unwrap()
-        .replace("product: breg", "product: ${COORDINATOR_CHECK_PRODUCT}");
+        .replace("type: breg", "type: ${COORDINATOR_CHECK_PRODUCT}");
     fs::write(&file, text).unwrap();
     let incomplete = cli(&arguments);
     assert!(incomplete.status.success());
@@ -69,7 +69,7 @@ fn runtime_check_is_offline_until_environment_is_explicitly_requested() {
     assert_eq!(report["diagnostics"][0]["severity"], "warning");
     assert_eq!(
         report["diagnostics"][0]["path"],
-        "/connections/applications/product"
+        "/connections/applications/type"
     );
     let denied = cli(&[arguments.as_slice(), &["--deny-warnings"]].concat());
     assert_eq!(denied.status.code(), Some(1));
@@ -104,8 +104,8 @@ fn checking_reports_distinct_refusal_usage_and_unavailable_exits() {
                 "namespace: coordinator_demo\nunknownRoot: PRIVATE-PRODUCT-CANARY",
             )
             .replace(
-                "product: breg",
-                "product: breg\n    unknownConnection: PRIVATE-PRODUCT-CANARY",
+                "type: breg",
+                "type: breg\n    unknownConnection: PRIVATE-PRODUCT-CANARY",
             );
     fs::write(&invalid, text).unwrap();
     let refusal = cli(&[
@@ -178,7 +178,7 @@ fn init_check_and_explain_work_without_database_or_signing_keys() {
     );
     let result: Value = serde_json::from_slice(&checked.stdout).unwrap();
     assert_eq!(result["status"], "valid");
-    assert!(result["definitionDigest"]
+    assert!(result["workflowRevision"]
         .as_str()
         .unwrap()
         .starts_with("sha256:"));
@@ -192,9 +192,11 @@ fn init_check_and_explain_work_without_database_or_signing_keys() {
     ]);
     assert!(explained.status.success());
     let result: Value = serde_json::from_slice(&explained.stdout).unwrap();
-    assert_eq!(result["networkAccess"], false);
-    assert_eq!(result["databaseAccess"], false);
-    assert_eq!(result["secretResolution"], false);
+    assert!(result["functions"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|function| function["capabilities"] == serde_json::json!([])));
     assert_eq!(result["limits"]["operations"], 100000);
     assert_eq!(result["steps"].as_array().unwrap().len(), 6);
     let text = cli(&["check", "--project", directory]);
@@ -449,7 +451,7 @@ fn human_output_is_the_default_and_explain_reads_the_graph_from_start() {
             .collect::<Vec<_>>();
         assert_eq!(steps, order, "{text}");
         assert!(text.contains("send -> notify"), "{text}");
-        assert!(text.contains("notices submit-message"), "{text}");
+        assert!(text.contains("notices notices-submit-message"), "{text}");
     }
     let explained = cli(&["--format", "json", "explain", "--project", directory]);
     let result: Value = serde_json::from_slice(&explained.stdout).unwrap();

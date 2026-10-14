@@ -30,7 +30,14 @@ async fn start_as(server: &MockServer, root: &Path, format: &[&str]) -> std::pro
     tokio::task::spawn_blocking(move || {
         Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
             .args(format)
-            .args(["start", "--flow", "follow-up", "--input"])
+            .args([
+                "start",
+                "--workflow",
+                "follow-up",
+                "--workflow-revision",
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "--input",
+            ])
             .arg(input)
             .arg("--key-file")
             .arg(key)
@@ -49,7 +56,7 @@ async fn receiver(server: &MockServer, response: ResponseTemplate) {
         .and(header("authorization", format!("Bearer {TOKEN}")))
         .and(header("idempotency-key", KEY))
         .and(body_json(json!({
-            "flow":"follow-up", "input":{"applicationId":"synthetic"}
+            "workflow":"follow-up","workflowRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000", "input":{"applicationId":"synthetic"}
         })))
         .respond_with(response)
         .expect(1)
@@ -175,9 +182,9 @@ async fn a_known_refusal_code_gets_its_own_advice_and_never_the_service_text() {
     for (status, code, reported, wanted) in [
         (
             409,
-            Some("flow.version-conflict"),
+            Some("workflow.revision-mismatch"),
             "service-refused",
-            "new project.version",
+            "original workflow revision",
         ),
         (
             403,
@@ -193,7 +200,7 @@ async fn a_known_refusal_code_gets_its_own_advice_and_never_the_service_text() {
         ),
         (
             404,
-            Some("flow.not-served"),
+            Some("workflow.not-served"),
             "service-refused",
             "deployment-status",
         ),
@@ -249,7 +256,7 @@ async fn a_known_refusal_code_gets_its_own_advice_and_never_the_service_text() {
         ),
         (
             409,
-            Some("workflow-version-conflict"),
+            Some("workflow-revision-mismatch"),
             "service-refused",
             "caller policy",
         ),
@@ -305,8 +312,8 @@ async fn a_refusal_names_its_problem_code_and_trace_for_the_operator() {
         ),
         (
             409,
-            json!({"detail":detail, "code":"flow.version-conflict"}),
-            format!("{detail} (problem flow.version-conflict)"),
+            json!({"detail":detail, "code":"workflow.revision-mismatch"}),
+            format!("{detail} (problem workflow.revision-mismatch)"),
         ),
         (
             503,
@@ -427,7 +434,11 @@ async fn a_relative_token_file_is_read_from_the_current_directory() {
     let output = tokio::task::spawn_blocking(move || {
         Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
             .current_dir(directory)
-            .args(["--format", "json", "start", "--flow", "follow-up"])
+            .args(["--format", "json", "start", "--workflow", "follow-up"])
+            .args([
+                "--workflow-revision",
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            ])
             .args(["--input", "input.json", "--key-file", "key"])
             .args(["--url", &origin, "--token-file", "token"])
             .output()

@@ -9,9 +9,9 @@
 use std::path::Path;
 
 use registry_breg::proposal_retention::{
-    AttachmentCleanup, ProposalDetailErasureScope, ProposalRetentionDryRun, ProposalRetentionErase,
-    ProposalRetentionError, ProposalRetentionListPage, ProposalRetentionOperatorService,
-    MAX_PROPOSAL_RETENTION_OPERATOR_PAGE_SIZE,
+    AttachmentCleanup, MAX_PROPOSAL_RETENTION_OPERATOR_PAGE_SIZE, ProposalDetailErasureScope,
+    ProposalRetentionDryRun, ProposalRetentionErase, ProposalRetentionError,
+    ProposalRetentionListPage, ProposalRetentionOperatorService,
 };
 use registry_platform_config::PackageDigestMismatch;
 use serde::Serialize;

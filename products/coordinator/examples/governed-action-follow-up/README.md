@@ -19,7 +19,7 @@ The run starts at once and has a `deadlineSeconds` of 300:
 2. `needs-information` calls `information_route` on the record. When
    `domainData.complete` is true the run finishes with outcome
    `no-information-request-needed` and no output; otherwise it continues.
-3. `request-information` calls `invoke-breg-action` with action
+3. `request-information` calls `breg.invoke-action/v1` with action
    `request-information` and two inputs: `applicationId`, and a `reason` built
    from the record's `domainData.missingField`. A package-declared business
    refusal takes `onDeclaredRefusal` to `action-refused`, which finishes with
@@ -32,7 +32,7 @@ The run starts at once and has a `deadlineSeconds` of 300:
 
 BReg decides whether the action runs. It checks its action metadata, the
 `workflow-actions` profile, the action's conditions and current authority; the
-action name in `functions.rhai` grants nothing. `invoke-breg-action` uses the
+imported Action reference grants nothing. `breg.invoke-action/v1` uses the
 connection's standing service identity and accepts no Casework grant, so this
 connection has no `taskAuthority`. Only a package-declared, no-effect action
 refusal takes the authored refusal edge. Authentication, authorization,
@@ -71,10 +71,16 @@ For a deployment, the institution must supply these prerequisites:
   `information-requested` version `1` and locale `en` for the `case-system`
   caller.
 - Callers hold a Coordinator access token for the `governed-action-follow-up`
-  flow, and an explicit operator policy grants inspection and recovery
+  workflow, and an explicit operator policy grants inspection and recovery
   separately.
 
 The runtime template uses loopback endpoints and secret references only. Copy
 it outside the package and adapt its endpoints, PostgreSQL identity and roles,
 clients and package pin. Follow [the deployment runbook](../../DEPLOYMENT.md)
 for installation and apply.
+
+The `contracts` import uses the owning BReg-generated Action export. The Operation alias selects
+its exact Action ID and pins its revision, mode, policy, input, output, and declared refusals.
+Regenerate the owner export and review a changed contract before packaging a new workflow version.
+Functions declare named input schemas and take one object of those inputs; they do not select
+transport credentials or replace the imported Action contract.

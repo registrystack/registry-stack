@@ -23,7 +23,6 @@ CASEWORK_PRINCIPALS = {
     "producer": "synthetic-casework-producer",
     "review-producer": "synthetic-coordinator-review-producer",
 }
-REQUEST_FIELDS = ["tenant", "record", "proposed-email", "reason"]
 APPLICATION_FIELDS = [
     "tenant",
     "applicant-name",
@@ -43,17 +42,15 @@ def _write(path, document):
         output.write(json.dumps(document, indent=2) + "\n")
 
 
-def _permission(entity, operations, fields, *, writable=False, request=False):
+def _permission(entity, operations, fields, *, writable=False):
     result = {
-        "entity": entity,
+        "recordType": entity,
         "operations": operations,
         "readableFields": fields,
         "rowBoundaries": BOUNDARY,
     }
     if writable:
         result["writableFields"] = fields
-    if request:
-        result["readableRequestFields"] = ["reason", "review-state"]
     return result
 
 
@@ -64,7 +61,7 @@ def _profile(name, kind, client, permissions, *, purpose=True):
         "actorKind": kind,
         "requesterClients": [client],
         "requiredScopes": ["records:get"],
-        "permissions": {"entities": permissions},
+        "permissions": {"records": permissions},
     }
     if purpose:
         profile["requiredPurposes"] = ["review"]
@@ -90,7 +87,7 @@ def _jwks_port(urls):
     return port
 
 
-def write_breg(root, urls):
+def write_breg(root, urls, review_policy=None):
     """Write registry.yaml and issuer-owner dev-clients.yaml; return root."""
     root = Path(root)
     applications = {
@@ -99,7 +96,7 @@ def write_breg(root, urls):
         "route": "applications",
         "mutationMode": "mutable",
         "classification": "internal",
-        "changeControl": {"requiredFor": ["patch"]},
+        "mutationPolicy": {"patch": "proposal-required"},
         "fields": [
             {"id": "tenant", "type": "string", "minimumLength": 1, "maximumLength": 64,
              "required": True, "classification": "internal"},
@@ -117,102 +114,90 @@ def write_breg(root, urls):
              "classification": "internal"},
         ],
     }
-    request = {
-        "id": "application-change",
-        "primaryDataset": "synthetic-applications",
-        "route": "application-changes",
-        "mutationMode": "mutable",
-        "classification": "internal",
-        "fields": [
-            {"id": "tenant", "type": "string", "minimumLength": 1, "maximumLength": 64,
-             "required": True, "classification": "internal"},
-            {"id": "record", "type": "reference", "target": "application",
-             "required": True, "classification": "internal"},
-            {"id": "proposed-email", "type": "string", "minimumLength": 1,
-             "maximumLength": 254, "required": True, "classification": "internal"},
-            {"id": "reason", "type": "text", "maximumLength": 1000,
-             "required": True, "classification": "internal"},
-        ],
-        "changeRequest": {
-            "effects": [{"target": {"fromField": "record"}, "operation": "patch",
-                         "set": {"email": {"fromField": "proposed-email"}}}],
-            "review": {"type": "none"},
+    def proposal_action(identifier, value_field, value_type, target_field):
+        value = {"id": value_field, "type": value_type, "required": True,
+                 "classification": "internal"}
+        if value_type == "string":
+            value.update(minimumLength=1, maximumLength=254)
+        return {
+            "id": identifier,
+            "execution": {"mode": "proposal", "proposal": {
+                "review": {"type": "none"}, "retention": {"mode": "operator-erase"}}},
+            "inputs": [
+                {"id": "application", "apiName": "applicationId", "type": "reference",
+                 "target": "application", "required": True, "classification": "internal"},
+                value,
+                {"id": "reason", "type": "string", "required": True,
+                 "maximumLength": 1000, "classification": "internal"},
+            ],
+            "commitGuards": {"targets": [{"input": "application", "revision": "unchanged"}]},
+            "plan": {"type": "fixed", "effects": [{"id": "application",
+                "target": {"fromInput": "application"}, "operation": "patch",
+                "set": {target_field: {"fromInput": value_field}}}]},
+        }
+    actions = [
+        proposal_action("correct-email", "proposed-email", "string", "email"),
+        proposal_action("correct-amount", "proposed-amount", "int64", "requested-amount"),
+        proposal_action("correct-notice-permission", "proposed-notice-allowed", "boolean", "notice-allowed"),
+    ]
+    actions[0]["execution"]["proposal"]["reviewContext"] = {
+        "id": "application-email-context", "fields": {
+            "tenant": {"fromRecord": "application", "field": "tenant"},
+            "applicationId": {"fromInput": "application"},
+            "currentEmail": {"fromRecord": "application", "field": "email"},
+            "proposedEmail": {"fromInput": "proposed-email"},
+            "reason": {"fromInput": "reason"},
         },
     }
-    def direct_change(identifier, route, value_field, value_type, target_field):
-        fields = [
-            {"id": "tenant", "type": "string", "minimumLength": 1, "maximumLength": 64,
-             "required": True, "classification": "internal"},
-            {"id": "record", "type": "reference", "target": "application",
-             "required": True, "classification": "internal"},
-            {"id": value_field, "type": value_type, "required": True,
-             "classification": "internal"},
-            {"id": "reason", "type": "text", "maximumLength": 1000,
-             "required": True, "classification": "internal"},
-        ]
-        return {
-            "id": identifier, "primaryDataset": "synthetic-applications", "route": route,
-            "mutationMode": "mutable", "classification": "internal", "fields": fields,
-            "changeRequest": {
-                "effects": [{"target": {"fromField": "record"}, "operation": "patch",
-                             "set": {target_field: {"fromField": value_field}}}],
-                "review": {"type": "none"},
-            },
+    if review_policy is not None:
+        # This is an exact binding exported by the owning Casework compiler.
+        actions[0]["execution"]["proposal"]["review"] = {
+            "type": "required", "authority": "casework", "source": SOURCE,
+            "policy": review_policy,
         }
-    amount_change = direct_change("application-amount-change", "application-amount-changes",
-                                  "proposed-amount", "int64", "requested-amount")
-    notice_change = direct_change("application-notice-change", "application-notice-changes",
-                                  "proposed-notice-allowed", "boolean", "notice-allowed")
     profiles = [
         _profile("seeder", "service", "seed-client", [
-            _permission("application", ["create", "get", "list"], APPLICATION_FIELDS,
-                        writable=True),
-            _permission("application-change", ["create", "get", "list", "submit-request"],
-                        REQUEST_FIELDS, writable=True, request=True),
-            _permission("application-amount-change", ["create", "get", "list", "submit-request"],
-                        ["tenant", "record", "proposed-amount", "reason"], writable=True, request=True),
-            _permission("application-notice-change", ["create", "get", "list", "submit-request"],
-                        ["tenant", "record", "proposed-notice-allowed", "reason"], writable=True, request=True),
+            _permission("application", ["create", "get", "list"], APPLICATION_FIELDS, writable=True),
         ]),
         _profile("follow-up-reader", "service", "application-reader", [
             _permission("application", ["get"], APPLICATION_FIELDS),
         ]),
-        _profile("reviewer", "human", "staff", [
-            _permission("application-change", ["get"], REQUEST_FIELDS, request=True),
-        ]),
-        _profile("reader", "service", "source-reader", [
-            _permission("application-change", ["get", "list"], REQUEST_FIELDS, request=True),
-        ]),
+        _profile("reviewer", "human", "staff", []),
+        _profile("reader", "service", "source-reader", []),
         _profile("approved-reader", "agent", "task-agent", [
             _permission("application", ["get"], APPLICATION_FIELDS),
         ]),
     ]
+    targets = [{"recordType": "application", "rowBoundaries": BOUNDARY}]
     profiles[0]["default"] = True
+    profiles[0]["permissions"]["actions"] = [
+        {"action": action["id"], "operations": ["start"], "targets": targets}
+        for action in actions
+    ]
+    profiles[0]["permissions"]["proposals"] = [
+        {"action": action["id"], "operations": ["get", "submit", "cancel"],
+         "ownership": "caller", "targets": targets}
+        for action in actions
+    ]
+    profiles[2]["permissions"]["proposals"] = [{"action": "correct-email",
+        "operations": ["get", "get-review-context"], "targets": targets,
+        "readableContextFields": ["tenant", "applicationId", "currentEmail", "proposedEmail", "reason"]}]
+    profiles[3]["permissions"]["proposals"] = [{"action": "correct-email",
+        "operations": ["get-review-status"], **({"reviewAuthority": "casework"}
+            if review_policy is not None else {"targets": targets})}]
     profiles[-1]["taskGrant"] = {"sourceIssuer": AUTHORITY}
-    # The request compiler requires an explicit complete application ceiling.
-    # This seed-service profile is not used by the external-review journey.
-    apply = _permission("application-change", ["get", "apply-request"], REQUEST_FIELDS,
-                        request=True)
-    apply["applyTargets"] = [{"entity": "application", "rowBoundaries": BOUNDARY}]
-    profiles.append(_profile("applier", "service", "seed-client", [apply]))
-    for entity, fields in (
-        ("application-amount-change", ["tenant", "record", "proposed-amount", "reason"]),
-        ("application-notice-change", ["tenant", "record", "proposed-notice-allowed", "reason"]),
-    ):
-        permission = _permission(entity, ["get", "apply-request"], fields, request=True)
-        permission["applyTargets"] = [{"entity": "application", "rowBoundaries": BOUNDARY}]
-        profiles[-1]["permissions"]["entities"].append(permission)
     _write(root / "registry.yaml", {
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
         "kind": "BRegProject",
         "project": {"id": SOURCE, "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://synthetic.example.invalid/coordinator"},
         "package": {"sourceRevision": "coordinator-synthetic-1"},
-        "entities": [applications, request, amount_change, notice_change],
+        "datasets": [{"id": "synthetic-applications"}],
+        "recordTypes": [applications], "actions": actions,
         "accessProfiles": profiles,
     })
     clients = [
-        _owner_client("seed-client", ["records:get"], ["seeder", "applier"], TENANT_CLAIMS),
+        _owner_client("seed-client", ["records:get"], ["seeder"], TENANT_CLAIMS),
         _owner_client("application-reader", ["records:get"], ["follow-up-reader"], TENANT_CLAIMS),
         _owner_client("source-reader", ["records:get"], ["reader"],
                       {"registry_actor_kind": "service", **TENANT_CLAIMS}),
@@ -283,10 +268,10 @@ def write_breg(root, urls):
         "apiVersion": "id.registrystack.org/formats/breg/journeys/v1",
         "kind": "BRegJourneys",
         "journeys": [{"id": "synthetic-application", "steps": [
-            {"id": "create", "entity": "application", "accessProfile": "seeder", "claims": claims,
+            {"id": "create", "recordType": "application", "accessProfile": "seeder", "claims": claims,
              "request": {"type": "create", "data": data},
              "expect": {"outcome": "success", "status": 201}, "capture": "application"},
-            {"id": "read", "entity": "application", "accessProfile": "seeder", "claims": claims,
+            {"id": "read", "recordType": "application", "accessProfile": "seeder", "claims": claims,
              "request": {"type": "get", "recordCapture": "application"},
              "expect": {"outcome": "success", "status": 200, "fields": data}},
         ]}],

@@ -75,7 +75,7 @@ class MutationRetryTests(unittest.TestCase):
     def test_a_flow_the_deployment_does_not_serve_is_never_resent_and_reports_the_outcome_known(
         self,
     ) -> None:
-        self.service.script(problem(404, "flow.not-served"), ok(STATUS))
+        self.service.script(problem(404, "workflow.not-served"), ok(STATUS))
         client = CoordinatorClient(self.service.base_url, max_mutation_retries=2)
 
         with self.assertRaises(CoordinatorClientError) as raised:
@@ -83,7 +83,7 @@ class MutationRetryTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.kind, "problem")
         self.assertEqual(raised.exception.status, 404)
-        self.assertEqual(raised.exception.code, "flow.not-served")
+        self.assertEqual(raised.exception.code, "workflow.not-served")
         self.assertIs(raised.exception.outcome_unknown, False)
         self.assertNotIn("canary", f"{raised.exception!r} {raised.exception}")
         self.assertEqual(len(self.service.observations()), 1)

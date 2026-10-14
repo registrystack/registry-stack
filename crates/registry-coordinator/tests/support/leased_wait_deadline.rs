@@ -15,23 +15,35 @@ kind: CoordinatorProject
 project:
   id: leased-timer
   version: v1
-input: {type: object}
-connections: {}
-functionsFile: functions.rhai
-deadlineSeconds: 3600
-start: wait
-steps:
-  wait:
-    type: wait-until
-    waitUntil: {type: function, function: timer, arguments: [{type: input}]}
-    next: choose
-  choose:
-    type: choose
-    choose: {type: function, function: choice, arguments: [{type: input}]}
-    cases: {done: done}
-  done: {type: finish, outcome: done}
-outcomes:
-  done: {type: 'null'}
+functions:
+  timer:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: timer
+    inputs: {input: {type: object}}
+    output: {type: string, format: date-time}
+  choice:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: choice
+    inputs: {input: {type: object}}
+    output: {type: string, enum: [done]}
+workflow:
+  input: {type: object}
+  deadlineSeconds: 3600
+  start: wait
+  steps:
+    wait:
+      type: wait-until
+      waitUntil: {type: function, function: timer, inputs: {input: {type: input}}}
+      next: choose
+    choose:
+      type: choose
+      choose: {type: function, function: choice, inputs: {input: {type: input}}}
+      cases: {done: done}
+    done: {type: finish, outcome: done}
+  outcomes:
+    done: {type: 'null'}
 "#;
 
 struct NoCalls;
@@ -57,7 +69,7 @@ async fn leased_wait_deadline_is_checked_atomically_before_advancing() {
     std::fs::write(project.path().join("workflow.yaml"), WORKFLOW).unwrap();
     std::fs::write(
         project.path().join("functions.rhai"),
-        "fn timer(input) { input.at }\nfn choice(input) { \"done\" }\n",
+        "fn timer(args) { args.input.at }\nfn choice(args) { \"done\" }\n",
     )
     .unwrap();
     let definition = Definition::load(project.path()).expect("local timer graph");

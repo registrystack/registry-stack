@@ -39,6 +39,8 @@ pub struct Definition {
     functions: Functions,
     input_schema: Arc<JSONSchema>,
     outcome_schemas: BTreeMap<String, Arc<JSONSchema>>,
+    operation_contracts: BTreeMap<String, Arc<crate::contracts::OperationContract>>,
+    completion_schemas: BTreeMap<(String, String), Arc<JSONSchema>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -50,7 +52,12 @@ pub struct Workflow {
     pub version: String,
     pub input: Value,
     pub connections: BTreeMap<String, String>,
-    pub functions: String,
+    pub functions: BTreeMap<String, FunctionDefinition>,
+    pub operations: BTreeMap<String, ResolvedOperation>,
+    pub types: BTreeMap<String, Value>,
+    pub contracts: BTreeMap<String, Value>,
+    pub presentation: Presentation,
+    pub references: BTreeMap<String, SourceReference>,
     pub deadline: String,
     pub start: String,
     pub steps: BTreeMap<String, Step>,
@@ -64,7 +71,7 @@ pub struct Workflow {
 pub enum Mapping {
     Function {
         function: String,
-        arguments: Vec<Reference>,
+        inputs: BTreeMap<String, Reference>,
     },
     Fields {
         fields: BTreeMap<String, Reference>,
@@ -119,10 +126,9 @@ impl Mapping {
     /// Each reference with its member path below the mapping.
     pub(crate) fn references(&self) -> Vec<(String, &Reference)> {
         match self {
-            Self::Function { arguments, .. } => arguments
+            Self::Function { inputs, .. } => inputs
                 .iter()
-                .enumerate()
-                .map(|(index, reference)| (format!(".arguments[{index}]"), reference))
+                .map(|(name, reference)| (format!(".inputs.{name}"), reference))
                 .collect(),
             Self::Fields { fields } => fields
                 .iter()
@@ -136,32 +142,125 @@ impl Mapping {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Call {
+    pub alias: String,
     pub connection: String,
     pub operation: Operation,
 }
 
-/// The event a wait-for step waits for.
+/// An accepted call and the typed completion it exposes.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum WaitEvent {
-    /// The result of the review request the named call step submitted.
-    ReviewResult { request: String },
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompletionReference {
+    pub step: String,
+    pub name: String,
 }
 
-impl WaitEvent {
-    /// The event type an author writes.
-    pub fn id(&self) -> &'static str {
-        match self {
-            Self::ReviewResult { .. } => "review-result",
-        }
-    }
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Presentation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub steps: BTreeMap<String, Value>,
+}
 
-    /// The call step whose accepted request the event correlates with.
-    pub fn request(&self) -> &str {
-        match self {
-            Self::ReviewResult { request } => request,
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceReference {
+    pub target: String,
+    pub source: registry_platform_yaml::Source,
+}
+
+/// Effective limits may narrow, never widen, the platform pure profile.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct FunctionLimits {
+    pub operations: u64,
+    pub call_levels: usize,
+    pub expression_depth: usize,
+    pub string_bytes: usize,
+    pub array_items: usize,
+    pub map_entries: usize,
+    pub source_bytes: usize,
+}
+
+impl Default for FunctionLimits {
+    fn default() -> Self {
+        Self {
+            operations: 100_000,
+            call_levels: 32,
+            expression_depth: 64,
+            string_bytes: 16_384,
+            array_items: 256,
+            map_entries: 256,
+            source_bytes: 65_536,
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FunctionDefinition {
+    pub runtime: String,
+    pub profile: String,
+    pub capabilities: BTreeSet<String>,
+    pub abi: String,
+    pub source: String,
+    pub entrypoint: String,
+    pub inputs: BTreeMap<String, Value>,
+    pub output: Value,
+    pub limits: FunctionLimits,
+    pub revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedOperation {
+    pub uses: Operation,
+    pub connection: String,
+    pub input: Value,
+    pub output: Value,
+    pub refusal: Option<Value>,
+    pub completions: BTreeMap<String, CompletionDefinition>,
+    pub revision: String,
+    /// Exact imported specialization, when the owning product exports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<crate::breg_action::ActionContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompletionDefinition {
+    pub kind: CompletionKind,
+    pub output: Value,
+    pub revision: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum CompletionKind {
+    CaseworkResult {},
+    BregApplication {},
+    BoundedPoll {
+        interpret: String,
+        interval_seconds: u32,
+    },
 }
 
 /// The longest wait a wait-for step declares, in seconds: one year, the
@@ -169,7 +268,7 @@ impl WaitEvent {
 pub(crate) const MAXIMUM_WAIT_SECONDS: u32 = 31_536_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(untagged, deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Step {
     WaitUntil {
         #[serde(rename = "waitUntil")]
@@ -177,8 +276,8 @@ pub enum Step {
         next: String,
     },
     WaitFor {
-        #[serde(rename = "waitFor")]
-        wait_for: WaitEvent,
+        #[serde(rename = "completion")]
+        wait_for: CompletionReference,
         #[serde(rename = "timeoutSeconds")]
         timeout_seconds: u32,
         next: String,
@@ -203,6 +302,7 @@ pub enum Step {
         cases: BTreeMap<String, String>,
     },
     Finish {
+        #[serde(rename = "outcome")]
         finish: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<Mapping>,
@@ -269,7 +369,7 @@ impl Step {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Snapshot {
     workflow: Workflow,
-    source: String,
+    sources: BTreeMap<String, String>,
     adapter_abi: String,
     interpreter_abi: String,
     schema_abi: String,
@@ -364,23 +464,31 @@ impl Definition {
             .map_err(|_| fail("definition.read").at(project, ""))?;
         let path = project.join("workflow.yaml");
         let bytes = read_bytes(&path, MAX_DOCUMENT_BYTES)?;
-        let (workflow, document) = crate::authoring::parse_project(&path, &bytes)?;
-        // A project deliberately has one local source file, rather than an import
-        // loader or arbitrary path vocabulary.
-        if workflow.functions != "functions.rhai" {
-            return Err(crate::authoring::positioned(
-                &document,
-                fail("definition.functions_file").at(&path, "functions"),
-            ));
+        let (mut workflow, document) = crate::authoring::parse_project(&path, &bytes)?;
+        let mut sources = BTreeMap::new();
+        for (name, function) in &workflow.functions {
+            if !sources.contains_key(&function.source) {
+                let source_path = crate::authoring::asset_path(&project, &function.source)
+                    .map_err(|error| {
+                        crate::authoring::positioned(
+                            &document,
+                            error.at(&path, format!("/functions/{name}/source")),
+                        )
+                    })?;
+                let source = read_text(&source_path, 65_536).map_err(|error| {
+                    crate::authoring::positioned(
+                        &document,
+                        error.at(&path, format!("/functions/{name}/source")),
+                    )
+                })?;
+                sources.insert(function.source.clone(), source);
+            }
         }
-        let source = read_text(&project.join(&workflow.functions), 65_536).map_err(|error| {
-            let exit = error.exit_code;
-            crate::authoring::positioned(&document, error.at(&path, "functions")).with_exit(exit)
-        })?;
+        seal_revisions(&mut workflow, &sources)?;
         let definition = Self::restore_checked(Snapshot {
             operation_identities: operation_identities(&workflow),
             workflow,
-            source,
+            sources,
             adapter_abi: ADAPTER_ABI.into(),
             interpreter_abi: INTERPRETER_ABI.into(),
             schema_abi: SCHEMA_ABI.into(),
@@ -416,6 +524,15 @@ impl Definition {
 
     /// Restore a snapshot, or report every independent refusal of it.
     fn restore_checked(frozen: Snapshot) -> std::result::Result<Self, Vec<CoordinatorError>> {
+        let source_names = frozen
+            .workflow
+            .functions
+            .values()
+            .map(|function| function.source.as_str())
+            .collect::<BTreeSet<_>>();
+        if source_names != frozen.sources.keys().map(String::as_str).collect() {
+            return Err(vec![fail("definition.abi")]);
+        }
         let operations_match = frozen.operation_identities
             == operation_identities(&frozen.workflow)
             && frozen
@@ -430,13 +547,13 @@ impl Definition {
             return Err(vec![fail("definition.abi")]);
         }
         let mut findings = workflow_findings(&frozen.workflow);
-        let mappings = frozen
-            .workflow
-            .steps
-            .iter()
-            .filter_map(|(name, step)| Some((name.as_str(), step.role(), step.mapping()?)))
-            .collect::<Vec<_>>();
-        let functions = Functions::compile(&frozen.source, &mappings)
+        let mut resealed = frozen.workflow.clone();
+        match seal_revisions(&mut resealed, &frozen.sources) {
+            Ok(()) if resealed != frozen.workflow => findings.push(fail("definition.abi")),
+            Err(error) => findings.push(error),
+            _ => {}
+        }
+        let functions = Functions::compile(&frozen.sources, &frozen.workflow.functions)
             .map_err(|refused| findings.extend(refused))
             .ok();
         let input_schema = compile_schema(&frozen.workflow.input)
@@ -476,26 +593,55 @@ impl Definition {
                 }
             }
         }
+        let mut operation_contracts = BTreeMap::new();
+        let mut completion_schemas = BTreeMap::new();
+        for (alias, operation) in &frozen.workflow.operations {
+            match crate::contracts::OperationContract::new(
+                operation.input.clone(),
+                operation.output.clone(),
+                operation.refusal.clone(),
+                operation.action.clone(),
+            ) {
+                Ok(contract) => {
+                    operation_contracts.insert(alias.clone(), Arc::new(contract));
+                }
+                Err(error) => {
+                    findings.push(error.at("workflow.yaml", format!("/operations/{alias}")))
+                }
+            }
+            for (name, completion) in &operation.completions {
+                match compile_schema(&completion.output) {
+                    Ok(schema) => {
+                        completion_schemas.insert((alias.clone(), name.clone()), Arc::new(schema));
+                    }
+                    Err(error) => findings.push(error.at(
+                        "workflow.yaml",
+                        format!("/operations/{alias}/completions/{name}"),
+                    )),
+                }
+            }
+        }
         let (Some(functions), Some(input_schema), true) =
             (functions, input_schema, findings.is_empty())
         else {
             return Err(findings);
         };
         let input_schema = Arc::new(input_schema);
-        let bytes = snapshot_bytes(&frozen).map_err(|error| vec![error])?;
+        snapshot_bytes(&frozen).map_err(|error| vec![error])?;
         Ok(Self {
             workflow: frozen.workflow.clone(),
-            digest: sha256_uri(&bytes),
+            digest: semantic_revision(&frozen).map_err(|error| vec![error])?,
             frozen,
             functions,
             input_schema,
             outcome_schemas,
+            operation_contracts,
+            completion_schemas,
         })
     }
 
     fn check_integrity(&self) -> Result<()> {
-        if self.workflow != self.frozen.workflow
-            || self.digest != sha256_uri(&snapshot_bytes(&self.frozen)?)
+        if self.workflow != self.frozen.workflow || self.digest != semantic_revision(&self.frozen)?
         {
             return Err(fail("definition.changed"));
         }
@@ -506,6 +652,31 @@ impl Definition {
     /// runtime destinations or secret material.
     pub fn explain(&self) -> Result<Value> {
         self.check_integrity()?;
+        let contracts = self
+            .workflow
+            .contracts
+            .iter()
+            .map(|(id, artifact)| {
+                let source = self
+                    .workflow
+                    .references
+                    .get(&format!("/contracts/{id}/source"))
+                    .map(|reference| &reference.target);
+                semantic_hash(artifact).map(|digest| {
+                    (
+                        id.clone(),
+                        serde_json::json!({"digest":digest,"source":source}),
+                    )
+                })
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let operation_contracts = self
+            .workflow
+            .operations
+            .values()
+            .map(|operation| operation.uses.descriptor())
+            .map(|descriptor| (descriptor.id, descriptor.host_contract()))
+            .collect::<BTreeMap<_, _>>();
         let steps = graph_order(&self.workflow)
             .into_iter()
             .map(|id| {
@@ -520,8 +691,8 @@ impl Definition {
                 let mut item = serde_json::json!({"id":id,"kind":kind,"next":step.targets()});
                 if let Some(mapping) = step.mapping() {
                     item["mapping"] = serde_json::json!(mapping);
-                    if let Mapping::Function { arguments, .. } = mapping {
-                        item["mapping"]["arity"] = serde_json::json!(arguments.len());
+                    if let Mapping::Function { inputs, .. } = mapping {
+                        item["mapping"]["inputs"] = serde_json::json!(inputs);
                     }
                 }
                 match step {
@@ -531,7 +702,8 @@ impl Definition {
                         ..
                     } => {
                         item["connection"] = serde_json::json!(call.connection);
-                        item["operation"] = serde_json::json!(call.operation);
+                        item["operation"] = serde_json::json!(call.alias);
+                        item["uses"] = serde_json::json!(call.operation);
                         item["product"] = serde_json::json!(call.operation.product());
                         item["mutating"] = serde_json::json!(call.operation.is_mutating());
                         item["effect"] = serde_json::json!(call.operation.descriptor().effect);
@@ -547,8 +719,7 @@ impl Definition {
                         on_cancel,
                         ..
                     } => {
-                        item["event"] = serde_json::json!(wait_for.id());
-                        item["request"] = serde_json::json!(wait_for.request());
+                        item["completion"] = serde_json::json!(wait_for);
                         item["timeoutSeconds"] = serde_json::json!(timeout_seconds);
                         item["onTimeout"] = serde_json::json!(on_timeout);
                         item["onCancel"] = serde_json::json!(on_cancel);
@@ -557,15 +728,18 @@ impl Definition {
                     Step::Finish { finish, .. } => item["outcome"] = serde_json::json!(finish),
                     _ => {}
                 }
+                if let Some(presentation) = self.workflow.presentation.steps.get(id) {
+                    item["presentation"] = presentation.clone();
+                }
                 item
             })
             .collect::<Vec<_>>();
         Ok(
-            serde_json::json!({"workflow":self.workflow.id,"version":self.workflow.version,"definitionDigest":self.digest,
+            serde_json::json!({"workflow":self.workflow.id,"version":self.workflow.version,"workflowRevision":self.digest,
             "start":self.workflow.start,"deadlineSeconds":parse_duration(&self.workflow.deadline)?.num_seconds(),
-            "connections":self.workflow.connections,"outcomes":self.workflow.outcomes.keys().collect::<Vec<_>>(),"steps":steps,
-            "limits":crate::functions::limits(),"interpreterAbi":self.frozen.interpreter_abi,"schemaAbi":self.frozen.schema_abi,"adapterAbi":self.frozen.adapter_abi,
-            "networkAccess":false,"databaseAccess":false,"secretResolution":false,
+            "contracts":contracts,"operations":self.workflow.operations,"operationContracts":operation_contracts,"functions":self.workflow.functions,"types":self.workflow.types,"references":self.workflow.references,"presentation":self.workflow.presentation,"connections":self.workflow.connections,"outcomes":self.workflow.outcomes.keys().collect::<Vec<_>>(),"steps":steps,
+            "limits":crate::functions::limits(),"valueLimits":crate::functions::value_limits(),"interpreterAbi":self.frozen.interpreter_abi,"schemaAbi":self.frozen.schema_abi,"adapterAbi":self.frozen.adapter_abi,
+
             "recovery":"A run restores this exact snapshot. retry-same preserves a frozen command and cannot adopt edited mappings or repeat an uncertain hold-after-dispatch evaluation."}),
         )
     }
@@ -573,6 +747,56 @@ impl Definition {
     pub fn snapshot(&self) -> Result<String> {
         self.check_integrity()?;
         String::from_utf8(snapshot_bytes(&self.frozen)?).map_err(|_| fail("definition.snapshot"))
+    }
+
+    pub fn operation_contract(&self, call: &Call) -> Result<&crate::contracts::OperationContract> {
+        self.check_integrity()?;
+        if self
+            .workflow
+            .operations
+            .get(&call.alias)
+            .is_none_or(|operation| {
+                operation.uses != call.operation || operation.connection != call.connection
+            })
+        {
+            return Err(fail("definition.operation"));
+        }
+        self.operation_contracts
+            .get(&call.alias)
+            .map(Arc::as_ref)
+            .ok_or_else(|| fail("definition.operation"))
+    }
+
+    pub fn validate_completion(
+        &self,
+        reference: &CompletionReference,
+        value: &Value,
+    ) -> Result<()> {
+        self.check_integrity()?;
+        check_value(value)?;
+        let Some(Step::Call { call, .. }) = self.workflow.steps.get(&reference.step) else {
+            return Err(fail("definition.wait"));
+        };
+        let schema = self
+            .completion_schemas
+            .get(&(call.alias.clone(), reference.name.clone()))
+            .ok_or_else(|| fail("definition.wait"))?;
+        if !schema.is_valid(value) {
+            return Err(fail("definition.completion"));
+        }
+        Ok(())
+    }
+
+    pub fn completion(&self, reference: &CompletionReference) -> Result<&CompletionDefinition> {
+        self.check_integrity()?;
+        self.workflow
+            .completion(reference)
+            .ok_or_else(|| fail("definition.wait"))
+    }
+
+    pub fn evaluate_function(&self, name: &str, inputs: &Value, synthetic: bool) -> Result<Value> {
+        self.check_integrity()?;
+        self.functions.evaluate(name, inputs, synthetic)
     }
 
     pub fn validate_input(&self, input: &Value) -> Result<()> {
@@ -653,21 +877,19 @@ impl Definition {
         let mapping = step.mapping().ok_or_else(|| fail("mapping.unknown"))?;
         let field = format!("steps.{name}.{}", step.role());
         let value = match mapping {
-            Mapping::Function {
-                function,
-                arguments,
-            } => {
-                let arguments = arguments
+            Mapping::Function { function, inputs } => {
+                let arguments = inputs
                     .iter()
-                    .enumerate()
-                    .map(|(index, reference)| {
-                        resolve(reference, input, outputs).map_err(|error| {
-                            error.at("workflow.yaml", format!("{field}.arguments[{index}]"))
-                        })
+                    .map(|(name, reference)| {
+                        resolve(reference, input, outputs)
+                            .map(|value| (name.clone(), value.clone()))
+                            .map_err(|error| {
+                                error.at("workflow.yaml", format!("{field}.inputs.{name}"))
+                            })
                     })
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<serde_json::Map<_, _>>>()?;
                 self.functions
-                    .evaluate(function, arguments, synthetic)
+                    .evaluate(function, &Value::Object(arguments), synthetic)
                     .map_err(|error| error.at("workflow.yaml", &field))?
             }
             Mapping::Fields { fields } => {
@@ -789,6 +1011,151 @@ impl Definition {
     }
 }
 
+impl Workflow {
+    pub fn operation(&self, call: &Call) -> &ResolvedOperation {
+        &self.operations[&call.alias]
+    }
+    pub fn completion(&self, reference: &CompletionReference) -> Option<&CompletionDefinition> {
+        let Step::Call { call, .. } = self.steps.get(&reference.step)? else {
+            return None;
+        };
+        self.operations
+            .get(&call.alias)?
+            .completions
+            .get(&reference.name)
+    }
+}
+
+fn seal_revisions(workflow: &mut Workflow, sources: &BTreeMap<String, String>) -> Result<()> {
+    for function in workflow.functions.values_mut() {
+        let source = sources
+            .get(&function.source)
+            .ok_or_else(|| fail("function.definition"))?;
+        function.revision = crate::functions::revision(function, source)?;
+    }
+    for operation in workflow.operations.values_mut() {
+        for completion in operation.completions.values_mut() {
+            let function = match &completion.kind {
+                CompletionKind::BoundedPoll { interpret, .. } => Some(
+                    &workflow
+                        .functions
+                        .get(interpret)
+                        .ok_or_else(|| fail("definition.abi"))?
+                        .revision,
+                ),
+                _ => None,
+            };
+            completion.revision = semantic_hash(
+                &serde_json::json!({"kind":completion.kind,"output":semantic_schema(&completion.output),"function":function}),
+            )?;
+        }
+        operation.revision = semantic_hash(
+            &serde_json::json!({"uses":operation.uses.identity(),"host":operation.uses.descriptor().host_contract(),"connection":operation.connection,
+            "input":semantic_schema(&operation.input),"output":semantic_schema(&operation.output),"refusal":operation.refusal.as_ref().map(semantic_schema),
+            "completions":operation.completions.iter().map(|(name,completion)| (name,&completion.revision)).collect::<BTreeMap<_,_>>(),"action":operation.action}),
+        )?;
+    }
+    Ok(())
+}
+
+fn semantic_hash(value: &Value) -> Result<String> {
+    let bytes = registry_platform_canonical_json::canonicalize_json(value)
+        .map_err(|_| fail("definition.canonical"))?;
+    Ok(sha256_uri(&bytes))
+}
+
+/// Remove JSON Schema presentation only in schema positions, never inside a
+/// literal const/enum value whose member may itself be called title.
+pub(crate) fn semantic_schema(schema: &Value) -> Value {
+    let Some(object) = schema.as_object() else {
+        return schema.clone();
+    };
+    let mut semantic = object.clone();
+    for annotation in ["title", "description", "$comment", "examples"] {
+        semantic.remove(annotation);
+    }
+    for keyword in [
+        "properties",
+        "patternProperties",
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+    ] {
+        if let Some(Value::Object(members)) = semantic.get_mut(keyword) {
+            for schema in members.values_mut() {
+                *schema = semantic_schema(schema);
+            }
+        }
+    }
+    for keyword in [
+        "items",
+        "additionalProperties",
+        "unevaluatedProperties",
+        "contains",
+        "propertyNames",
+        "not",
+        "if",
+        "then",
+        "else",
+        "additionalItems",
+        "unevaluatedItems",
+    ] {
+        if let Some(schema) = semantic.get_mut(keyword) {
+            *schema = semantic_schema(schema);
+        }
+    }
+    for keyword in ["oneOf", "anyOf", "allOf", "prefixItems"] {
+        if let Some(Value::Array(schemas)) = semantic.get_mut(keyword) {
+            for schema in schemas {
+                *schema = semantic_schema(schema);
+            }
+        }
+    }
+    Value::Object(semantic)
+}
+
+fn semantic_revision(snapshot: &Snapshot) -> Result<String> {
+    let flow = &snapshot.workflow;
+    let mut used_operations = BTreeSet::new();
+    let mut used_functions = BTreeSet::new();
+    for step in flow.steps.values() {
+        if let Step::Call { call, .. } = step {
+            used_operations.insert(call.alias.as_str());
+        }
+        if let Some(Mapping::Function { function, .. }) = step.mapping() {
+            used_functions.insert(function.as_str());
+        }
+        if let Step::WaitFor { wait_for, .. } = step {
+            if let Some(CompletionDefinition {
+                kind: CompletionKind::BoundedPoll { interpret, .. },
+                ..
+            }) = flow.completion(wait_for)
+            {
+                used_functions.insert(interpret.as_str());
+            }
+        }
+    }
+    let operations = used_operations
+        .into_iter()
+        .map(|name| (name, &flow.operations[name].revision))
+        .collect::<BTreeMap<_, _>>();
+    let functions = used_functions
+        .into_iter()
+        .map(|name| {
+            flow.functions
+                .get(name)
+                .map(|function| (name, &function.revision))
+                .ok_or_else(|| fail("definition.abi"))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let semantic = serde_json::json!({"id":flow.id,"input":semantic_schema(&flow.input),"deadline":flow.deadline,"start":flow.start,
+        "steps":flow.steps,"outcomes":flow.outcomes.iter().map(|(name,schema)| (name,semantic_schema(schema))).collect::<BTreeMap<_,_>>(),"operations":operations,"functions":functions,
+        "adapterAbi":snapshot.adapter_abi,"interpreterAbi":snapshot.interpreter_abi,"schemaAbi":snapshot.schema_abi,"valueLimits":crate::functions::value_limits()});
+    let bytes = registry_platform_canonical_json::canonicalize_json(&semantic)
+        .map_err(|_| fail("definition.canonical"))?;
+    Ok(sha256_uri(&bytes))
+}
+
 /// The value a reference names. Errors carry no value.
 fn resolve<'a>(
     reference: &'a Reference,
@@ -894,6 +1261,10 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
         ("steps", flow.steps.len(), 1, 64),
         ("connections", flow.connections.len(), 0, 16),
         ("outcomes", flow.outcomes.len(), 1, 64),
+        ("operations", flow.operations.len(), 0, 64),
+        ("functions", flow.functions.len(), 0, 128),
+        ("types", flow.types.len(), 0, 128),
+        ("contracts", flow.contracts.len(), 0, 16),
     ] {
         if !(minimum..=maximum).contains(&size) {
             findings.push(authored(
@@ -923,11 +1294,7 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
             &format!("Set start to one of the declared steps: {steps}."),
         ));
     }
-    if flow.api_version != API_VERSION
-        || flow.kind != "Workflow"
-        || !valid_name(&flow.id)
-        || flow.functions != "functions.rhai"
-    {
+    if flow.api_version != API_VERSION || flow.kind != "Workflow" || !valid_name(&flow.id) {
         findings.push(fail("definition.shape"));
     }
     if let Err(error) = parse_duration(&flow.deadline) {
@@ -941,6 +1308,81 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
         {
             findings.push(fail("definition.connection").at("workflow.yaml", "connections"));
         }
+    }
+    for (alias, operation) in &flow.operations {
+        for (name, completion) in &operation.completions {
+            let valid = match &completion.kind {
+                CompletionKind::CaseworkResult {} => {
+                    operation.uses == Operation::SubmitReviewRequest
+                        && completion.output == *crate::contracts::casework_completion_schema()
+                }
+                CompletionKind::BregApplication {} => {
+                    operation.uses == Operation::SubmitBregProposal
+                        && completion.output == *crate::contracts::breg_application_schema()
+                }
+                CompletionKind::BoundedPoll {
+                    interpret,
+                    interval_seconds,
+                } => {
+                    operation.uses == Operation::ExternalGet
+                        && (1..=86_400).contains(interval_seconds)
+                        && flow.functions.get(interpret).is_some_and(|function| {
+                            function.inputs.len() == 2
+                                && function.inputs.get("command") == Some(&operation.input)
+                                && function.inputs.get("response") == Some(&operation.output)
+                                && crate::authoring::terminal_schema(&function.output, "")
+                                    .is_ok_and(|output| output == completion.output)
+                        })
+                }
+            };
+            if !valid {
+                findings.push(authored("definition.abi", &format!("/operations/{alias}/completions/{name}"),
+                "the completion does not match its host-enforced Operation contract", "Recompile the canonical project; local metadata cannot widen host completion capabilities."));
+            }
+        }
+        if operation.refusal.is_some() && !operation.uses.descriptor().declared_refusal {
+            findings.push(fail("definition.abi"));
+        }
+    }
+    for (name, step) in &flow.steps {
+        if let Step::Call { call, .. } = step {
+            if flow.operations.get(&call.alias).is_none_or(|resolved| {
+                resolved.uses != call.operation || resolved.connection != call.connection
+            }) {
+                findings.push(authored(
+                    "definition.operation",
+                    &format!("steps.{name}.operation"),
+                    "the compiled call does not match its resolved Operation alias",
+                    "Recompile the project from its canonical Operation aliases.",
+                ));
+            }
+        }
+    }
+    let mut resolved_connections = BTreeMap::new();
+    for (name, step) in &flow.steps {
+        let Step::Call { call, .. } = step else {
+            continue;
+        };
+        let Some(operation) = flow.operations.get(&call.alias) else {
+            continue;
+        };
+        if resolved_connections
+            .insert(
+                operation.connection.clone(),
+                operation.uses.product().to_owned(),
+            )
+            .is_some_and(|product| product != operation.uses.product())
+        {
+            findings.push(authored(
+                "definition.connection",
+                &format!("/operations/{name}/connection"),
+                "one logical connection cannot bind different Operation interfaces",
+                "Use a separate logical connection for each interface.",
+            ));
+        }
+    }
+    if resolved_connections != flow.connections {
+        findings.push(fail("definition.abi"));
     }
     let connections = listed(flow.connections.keys().map(String::as_str));
     let declared_outcomes = listed(flow.outcomes.keys().map(String::as_str));
@@ -964,6 +1406,16 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                         &format!("Point the transition at one of the declared steps: {steps}."),
                     ));
                 }
+            }
+        }
+        if let Some(Mapping::Function { function, inputs }) = step.mapping() {
+            match flow.functions.get(function) {
+                None => findings.push(authored("mapping.function", &format!("steps.{name}.{}.function", step.role()),
+                    &format!("Function {function} is not declared; available Functions are {}", listed(flow.functions.keys().map(String::as_str))),
+                    "Name one of the declared Functions, or add its typed signature and reviewed source asset.")),
+                Some(signature) if inputs.keys().ne(signature.inputs.keys()) => findings.push(authored("mapping.function", &format!("steps.{name}.{}.inputs",step.role()),
+                    "the named Function inputs must match its declared signature exactly", "Supply every declared input name once and remove undeclared names.")),
+                _ => {},
             }
         }
         match step {
@@ -1007,7 +1459,13 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                     )),
                     Some(_) => {}
                 }
-                if on_declared_refusal.is_some() && !call.operation.descriptor().declared_refusal {
+                if on_declared_refusal.is_some()
+                    && (!call.operation.descriptor().declared_refusal
+                        || flow
+                            .operations
+                            .get(&call.alias)
+                            .is_none_or(|operation| operation.refusal.is_none()))
+                {
                     findings.push(authored(
                         "definition.operation",
                         &format!("steps.{name}.onDeclaredRefusal"),
@@ -1067,82 +1525,40 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
 /// member that holds them.
 type Incoming<'a> = BTreeMap<&'a str, Vec<(&'a str, &'static str)>>;
 
-/// The steps that submit a review request a wait-for step may wait on.
-fn review_requests(flow: &Workflow) -> String {
-    listed(flow.steps.iter().filter_map(|(name, step)| match step {
-        Step::Call { call, .. } if call.operation == Operation::SubmitReviewRequest => {
-            Some(name.as_str())
-        }
-        _ => None,
-    }))
-}
-
-/// Whether `request` is a step whose output a wait for `event` correlates
-/// with.
-fn correlates(flow: &Workflow, event: &WaitEvent) -> bool {
-    match event {
-        WaitEvent::ReviewResult { request } => matches!(
-            flow.steps.get(request),
-            Some(Step::Call { call, .. }) if call.operation == Operation::SubmitReviewRequest
-        ),
+/// A wait may observe only a named completion on its accepted call.
+fn correlates(flow: &Workflow, completion: &CompletionReference) -> bool {
+    match flow.steps.get(&completion.step) {
+        Some(Step::Call { call, .. }) => flow
+            .operations
+            .get(&call.alias)
+            .is_some_and(|operation| operation.completions.contains_key(&completion.name)),
+        _ => false,
     }
 }
 
-/// A wait-for step names the call whose accepted request it correlates with,
-/// and a timeout a run can reach before its deadline. Whether the request
-/// precedes the wait on every route is a graph finding.
 fn wait_findings(
     flow: &Workflow,
     name: &str,
-    event: &WaitEvent,
+    completion: &CompletionReference,
     timeout: u32,
 ) -> Vec<CoordinatorError> {
     let mut findings = Vec::new();
-    let request = event.request();
-    let field = format!("steps.{name}.waitFor.request");
-    let requests = review_requests(flow);
-    let action = format!(
-        "Name the call step that submits the review request this step waits for; the steps that call submit-review-request are {requests}."
-    );
-    match flow.steps.get(request) {
-        None => findings.push(authored(
-            "definition.wait",
-            &field,
-            &format!(
-                "request names step {request}, which is not declared; the steps that call submit-review-request are {requests}"
-            ),
-            &action,
-        )),
-        Some(_) if !correlates(flow, event) => findings.push(authored(
-            "definition.wait",
-            &field,
-            &format!(
-                "request names step {request}, which does not call submit-review-request; the steps that call submit-review-request are {requests}"
-            ),
-            &action,
-        )),
-        Some(_) => {}
+    if !correlates(flow, completion) {
+        findings.push(authored("definition.wait", &format!("steps.{name}.completion"),
+            "the completion must name a call step and one completion declared by that call's Operation",
+            "Name an earlier accepted call under completion.step and one of its completion names."));
     }
     let deadline = parse_duration(&flow.deadline)
         .ok()
         .map(|deadline| deadline.num_seconds());
-    if !(1..=MAXIMUM_WAIT_SECONDS).contains(&timeout) {
+    if !(1..=MAXIMUM_WAIT_SECONDS).contains(&timeout)
+        || deadline.is_some_and(|deadline| i64::from(timeout) >= deadline)
+    {
         findings.push(authored(
             "definition.wait",
             &format!("steps.{name}.timeoutSeconds"),
-            "expected 1 to 31536000 seconds",
-            "Set timeoutSeconds to a bounded wait, at most one year.",
-        ));
-    } else if let Some(deadline) = deadline.filter(|deadline| i64::from(timeout) >= *deadline) {
-        // A wait that starts at admission still reaches the deadline first, so
-        // its run would expire rather than take the timeout route.
-        findings.push(authored(
-            "definition.wait",
-            &format!("steps.{name}.timeoutSeconds"),
-            &format!(
-                "the wait times out after {timeout} seconds, which is not shorter than the {deadline}-second run deadline"
-            ),
-            "Set timeoutSeconds below deadlineSeconds so a run can reach its timeout, or raise deadlineSeconds.",
+            "expected a wait from 1 to 31536000 seconds shorter than the workflow deadline",
+            "Set timeoutSeconds below workflow.deadlineSeconds.",
         ));
     }
     findings
@@ -1190,7 +1606,7 @@ fn graph_order(flow: &Workflow) -> Vec<&str> {
 pub(crate) enum OutputRoute {
     CallSuccess,
     DeclaredRefusal,
-    WaitEvent,
+    Completion,
 }
 
 pub(crate) type AvailableOutputs = BTreeMap<String, OutputRoute>;
@@ -1212,7 +1628,7 @@ fn edge_output(step: &Step, member: &str) -> Option<OutputRoute> {
     match (step, member) {
         (Step::Call { .. }, "next") => Some(OutputRoute::CallSuccess),
         (Step::Call { .. }, "onDeclaredRefusal") => Some(OutputRoute::DeclaredRefusal),
-        (Step::WaitFor { .. }, "next") => Some(OutputRoute::WaitEvent),
+        (Step::WaitFor { .. }, "next") => Some(OutputRoute::Completion),
         _ => None,
     }
 }
@@ -1318,14 +1734,14 @@ fn graph_findings<'a>(flow: &'a Workflow, incoming: &Incoming<'a>) -> Vec<Coordi
         }
         if let Step::WaitFor { wait_for, .. } = &flow.steps[*name] {
             if correlates(flow, wait_for)
-                && outputs.get(wait_for.request()) != Some(&OutputRoute::CallSuccess)
+                && outputs.get(&wait_for.step) != Some(&OutputRoute::CallSuccess)
             {
                 findings.push(authored(
                     "definition.wait",
-                    &format!("steps.{name}.waitFor.request"),
+                    &format!("steps.{name}.completion.step"),
                     &format!(
                         "the review request of step {} is not submitted on every route to this step",
-                        wait_for.request()
+                        wait_for.step
                     ),
                     "Move the submitting call before the branch, so every route to the wait submits the request it waits for.",
                 ));
@@ -1383,14 +1799,6 @@ fn validate_mapping(
     let step = &flow.steps[name];
     let base = format!("steps.{name}.{}", step.role());
     match (step, mapping) {
-        (Step::Call { .. } | Step::Finish { .. }, Mapping::Reference(_)) => {
-            return Err(authored(
-                "mapping.reference",
-                &base,
-                "a call input or finish output is a function or fields, not a single reference",
-                "Build the value with fields, or pass the reference to a function.",
-            ))
-        }
         (Step::WaitUntil { .. } | Step::Choose { .. }, Mapping::Fields { .. }) => {
             return Err(authored(
                 "mapping.reference",
@@ -1500,19 +1908,63 @@ pub(crate) fn compile_schema(schema: &Value) -> Result<JSONSchema> {
         if depth > 32 {
             return false;
         }
-        match value {
-            Value::Object(fields) => fields.iter().all(|(k, v)| {
-                if matches!(k.as_str(), "$ref" | "$dynamicRef" | "$recursiveRef") {
-                    v.as_str().is_some_and(|s| s.starts_with('#'))
-                } else if k == "$id" {
-                    false
-                } else {
-                    local(v, depth + 1)
-                }
-            }),
-            Value::Array(items) => items.iter().all(|v| local(v, depth + 1)),
-            _ => true,
+        let Some(fields) = value.as_object() else {
+            return value.is_boolean();
+        };
+        if fields.contains_key("$id")
+            || ["$ref", "$dynamicRef", "$recursiveRef"]
+                .iter()
+                .any(|keyword| {
+                    fields.get(*keyword).is_some_and(|reference| {
+                        !reference.as_str().is_some_and(|text| text.starts_with('#'))
+                    })
+                })
+        {
+            return false;
         }
+        // Walk schema positions only. A const/enum/default may contain ordinary
+        // JSON members named $id or $ref without declaring schema resources.
+        for keyword in [
+            "properties",
+            "patternProperties",
+            "$defs",
+            "definitions",
+            "dependentSchemas",
+        ] {
+            if let Some(Value::Object(members)) = fields.get(keyword) {
+                if !members.values().all(|schema| local(schema, depth + 1)) {
+                    return false;
+                }
+            }
+        }
+        for keyword in [
+            "items",
+            "additionalProperties",
+            "unevaluatedProperties",
+            "contains",
+            "propertyNames",
+            "not",
+            "if",
+            "then",
+            "else",
+            "additionalItems",
+            "unevaluatedItems",
+        ] {
+            if fields
+                .get(keyword)
+                .is_some_and(|schema| !local(schema, depth + 1))
+            {
+                return false;
+            }
+        }
+        for keyword in ["oneOf", "anyOf", "allOf", "prefixItems"] {
+            if let Some(Value::Array(schemas)) = fields.get(keyword) {
+                if !schemas.iter().all(|schema| local(schema, depth + 1)) {
+                    return false;
+                }
+            }
+        }
+        true
     }
     check_value(schema)?;
     if !(schema.is_object() || schema.is_boolean()) || !local(schema, 0) {
@@ -1538,7 +1990,7 @@ fn read_text(path: &Path, maximum: usize) -> Result<String> {
     String::from_utf8(bytes).map_err(|_| fail("definition.read").at(path, ""))
 }
 
-fn read_bytes(path: &Path, maximum: usize) -> Result<Vec<u8>> {
+pub(crate) fn read_bytes(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     let metadata =
         std::fs::symlink_metadata(path).map_err(|_| fail("definition.read").at(path, ""))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {

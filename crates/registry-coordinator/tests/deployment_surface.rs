@@ -63,7 +63,8 @@ fn unrelated_connection_and_signing_rotation_preserve_workflow_binding() {
         .connections
         .get_mut("notices")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .signing_key_ref =
         registry_platform_config::SecretReference::parse("secret:file/rotated-key").unwrap();
     assert_eq!(
@@ -74,7 +75,8 @@ fn unrelated_connection_and_signing_rotation_preserve_workflow_binding() {
         .connections
         .get_mut("notices")
         .unwrap()
-        .authorization
+        .authorization_mut()
+        .unwrap()
         .client_id = "changed-identity".into();
     assert_ne!(
         original,
@@ -102,13 +104,12 @@ async fn verified_subject_owns_runs_and_exact_policy_restricts_flow_action() {
     .with_scope_claim("scope")
     .with_allowed_clients(vec!["producer".into()]);
     let policy = ClientPolicy {
-        client_id: "producer".into(),
         required_scopes: vec!["coordinator:start".into()],
-        flows: vec!["follow-up".into()],
+        workflows: vec!["follow-up".into()],
         actions: Vec::from([Action::Start, Action::Status]),
         operator: false,
     };
-    let auth = Authenticator::new(verifier, keys, vec![policy], false);
+    let auth = Authenticator::new(verifier, keys, [("producer".into(), policy)].into(), false);
     let token = issuer.issue_access_token(
         "producer",
         "actual-subject",
@@ -296,7 +297,7 @@ fn flows_are_keyed_by_workflow_id_with_an_order_independent_set_digest() {
 
     let mut config = packaged_config(&delayed.root, delayed.expected_digest.as_deref().unwrap());
     config.packages = vec![delayed.clone(), governed.clone()];
-    let flows = deployment::load_flows(&config).unwrap();
+    let flows = deployment::load_workflows(&config).unwrap();
     assert_eq!(flows.len(), 2);
     let ids: Vec<_> = flows.iter().map(|(flow, _)| flow.as_str()).collect();
     assert_eq!(ids, ["delayed-follow-up", "governed-action-follow-up"]);
@@ -317,17 +318,20 @@ fn flows_are_keyed_by_workflow_id_with_an_order_independent_set_digest() {
             ),
         ])
     );
-    assert_eq!(flows.digest(), deployment::flows_digest(&config).unwrap());
+    assert_eq!(
+        flows.digest(),
+        deployment::workflows_digest(&config).unwrap()
+    );
 
     config.packages = vec![governed.clone(), delayed.clone()];
-    let reordered = deployment::load_flows(&config).unwrap();
+    let reordered = deployment::load_workflows(&config).unwrap();
     assert_eq!(reordered.digest(), flows.digest());
     config.packages = vec![delayed.clone()];
-    let single = deployment::load_flows(&config).unwrap();
+    let single = deployment::load_workflows(&config).unwrap();
     assert_ne!(single.digest(), flows.digest());
 
     config.packages = vec![delayed, governed, variant];
-    let error = deployment::load_flows(&config).err().unwrap();
+    let error = deployment::load_workflows(&config).err().unwrap();
     assert_eq!(error.code, "coordinator.deployment.configuration");
     assert_eq!(error.field.as_deref(), Some("/deployment/packages/2"));
     assert!(error
@@ -335,4 +339,67 @@ fn flows_are_keyed_by_workflow_id_with_an_order_independent_set_digest() {
         .as_deref()
         .unwrap()
         .contains("delayed-follow-up"));
+}
+
+#[tokio::test]
+async fn runtime_authenticator_derives_exact_admission_from_policy_keys() {
+    use registry_platform_config::{JwksSource, OidcIssuerConfig};
+    use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
+    let issuer = TestAuthorizationServerBuilder::default()
+        .with_signing_key(generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap())
+        .client(TestClient::new("urn:client:producer.v1"))
+        .client(TestClient::new("display-label"))
+        .client(TestClient::new("urn:client:Producer.v1"))
+        .start()
+        .await;
+    let file = tempfile::NamedTempFile::new().unwrap();
+    fs::write(
+        file.path(),
+        include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml"),
+    )
+    .unwrap();
+    let mut runtime = RuntimeConfig::load(&file.path().canonicalize().unwrap()).unwrap();
+    let access = &mut runtime.deployment.as_mut().unwrap().authentication;
+    access.issuer = OidcIssuerConfig {
+        issuer: issuer.issuer().parse().unwrap(),
+        audience: "urn:coordinator:test".into(),
+        jwks_source: JwksSource::Uri {
+            uri: issuer.jwks_uri().parse().unwrap(),
+        },
+    };
+    access.scope_claim = "scope".into();
+    let mut policy = access.policies.remove("institution-producer").unwrap();
+    policy.workflows = vec!["follow-up".into()];
+    access.policies = [("urn:client:producer.v1".into(), policy)].into();
+    let auth = access
+        .authenticator(&runtime.secret_providers, true)
+        .await
+        .unwrap();
+    for (client, scopes, permitted) in [
+        ("urn:client:producer.v1", "coordinator:start", true),
+        ("display-label", "coordinator:start", false),
+        ("urn:client:Producer.v1", "coordinator:start", false),
+        ("urn:client:producer.v1", "coordinator:operate", false),
+    ] {
+        let token = issuer.issue_access_token(
+            client,
+            "actual-subject",
+            "urn:coordinator:test",
+            scopes,
+            Utc::now().timestamp() + 300,
+        );
+        let caller = auth.authenticate(&token).await;
+        assert_eq!(caller.is_ok(), permitted, "{client} / {scopes}");
+        if let Ok(caller) = caller {
+            assert_eq!(caller.actor.client_id, "urn:client:producer.v1");
+            caller.authorize(Action::Start, Some("follow-up")).unwrap();
+            assert!(caller
+                .authorize(Action::Start, Some("concealed-workflow"))
+                .is_err());
+            assert!(caller
+                .authorize(Action::Inspect, Some("follow-up"))
+                .is_err());
+        }
+    }
+    issuer.stop().await;
 }

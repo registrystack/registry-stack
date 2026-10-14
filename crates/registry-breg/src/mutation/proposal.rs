@@ -2301,7 +2301,7 @@ impl MutationCoordinator {
             || row.get::<_, String>(1) != frozen.effect_digest().as_str()
             || row.get::<_, Value>(2)
                 != serde_json::to_value(policy).map_err(|_| MutationError::Unavailable)?
-            || create.kind != policy.id
+            || create.policy != *policy
             || create.subject.source != *source
             || create.subject.subject_type != "proposal"
             || create.subject.id != document.proposal_id.to_string()
@@ -2543,6 +2543,16 @@ impl MutationCoordinator {
             .and_then(|workflow| workflow.current_proposal())
         {
             value["effectDigest"] = json!(proposal.effect_digest().as_str());
+            value["applicationStatus"] = proposal_application_status(
+                tx,
+                document,
+                proposal,
+                workflow
+                    .as_ref()
+                    .and_then(|workflow| workflow.application())
+                    .is_some(),
+            )
+            .await?;
         }
         if let Some(application) = workflow
             .as_ref()
@@ -2916,6 +2926,108 @@ async fn proposal_review_result(
             "resultId":row.get::<_,Uuid>(1),"completedAt":row.get::<_,String>(2),"availableUntil":row.get::<_,String>(3)})
         }
     })
+}
+
+/// Project only this frozen submission's retained ledger. Observation never
+/// evaluates a guard, fetches approval, acquires executor authority or retries.
+async fn proposal_application_status(
+    tx: &Transaction<'_>,
+    document: &ProposalDocument,
+    frozen: &crate::proposal_workflow::ProposalSnapshot,
+    has_application: bool,
+) -> Result<Value, MutationError> {
+    let automatic = frozen.application_policy().is_automatic();
+    let mut status = json!({"mode":if automatic {"automatic"} else {"manual"}});
+    match document.header.state.as_str() {
+        "applied" if has_application => {
+            status["state"] = json!("applied");
+            return Ok(status);
+        }
+        "cancelled" => {
+            status["state"] = json!("cancelled");
+            return Ok(status);
+        }
+        "submitted" => status["state"] = json!("pending"),
+        _ => return Err(MutationError::Unavailable),
+    }
+    let mut job_state = None;
+    let mut job_error = None;
+    if automatic {
+        let maximum = i32::from(frozen.application_policy().maximum_attempts());
+        status["automaticRetry"] =
+            json!({"scheduled":false,"attempts":0,"maximumAttempts":maximum});
+        if let Some(job) = tx.query_opt(
+            "SELECT state,proposal_digest,system_grant_revision,executor,maximum_attempts,attempt_count,last_error_code
+             FROM registry_internal.registry_proposal_application_jobs
+             WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+            &[&document.action_id,&document.proposal_id,&document.header.submission_version],
+        ).await.map_err(map_database_error)? {
+            let attempts: i32 = job.get(5);
+            if job.get::<_,String>(1) != frozen.effect_digest().as_str()
+                || Some(job.get::<_,String>(2).as_str()) != frozen.system_grant_revision()
+                || job.get::<_,String>(3) != "builtin"
+                || job.get::<_,i32>(4) != maximum || attempts < 0 || attempts > maximum
+            { return Err(MutationError::Unavailable); }
+            status["automaticRetry"]["attempts"] = json!(attempts);
+            job_state = Some(job.get::<_,String>(0));
+            job_error = job.get::<_,Option<String>>(6);
+            status["automaticRetry"]["scheduled"] = json!(matches!(job_state.as_deref(),Some("queued"|"applying")) && attempts < maximum);
+        }
+    }
+    if document.blocked_reason.is_some() {
+        return Ok(blocked_application_status(
+            status,
+            "contract-changed",
+            "refresh",
+        ));
+    }
+    if matches!(
+        frozen.review_requirement(),
+        CompiledProposalReview::Required { .. }
+    ) {
+        let result = proposal_review_result(tx, document).await?;
+        match result["state"].as_str() {
+            Some("pending" | "approved") => {}
+            Some("rejected" | "changes-requested" | "cancelled" | "superseded" | "expired") => {
+                return Ok(blocked_application_status(
+                    status,
+                    "review-unavailable",
+                    "correct-input",
+                ));
+            }
+            _ => return Err(MutationError::Unavailable),
+        }
+    }
+    match job_state.as_deref() {
+        None | Some("queued") => {}
+        Some("applying") => status["state"] = json!("applying"),
+        Some("blocked") => {
+            let (reason, recovery) = match job_error.as_deref() {
+                Some("dependency-outage" | "source-unavailable" | "executor-unavailable") => {
+                    ("dependency-outage", "retry")
+                }
+                Some("lease-expired") => ("lease-expired", "retry"),
+                Some("application-refused") => ("application-refused", "correct-input"),
+                Some("application-attempts-exhausted") => ("attempts-exhausted", "correct-input"),
+                _ => return Err(MutationError::Unavailable),
+            };
+            return Ok(blocked_application_status(status, reason, recovery));
+        }
+        // Applied evidence is released only through the atomic Proposal
+        // application receipt and matching enclosing applied state above.
+        _ => return Err(MutationError::Unavailable),
+    }
+    Ok(status)
+}
+
+fn blocked_application_status(mut status: Value, reason: &str, recovery: &str) -> Value {
+    status["state"] = json!("blocked");
+    status["reason"] = json!(reason);
+    status["recovery"] = json!(recovery);
+    if let Some(retry) = status.get_mut("automaticRetry") {
+        retry["scheduled"] = json!(false);
+    }
+    status
 }
 
 fn reference_input_entity<'a>(

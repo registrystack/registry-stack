@@ -97,7 +97,7 @@ type MessagingHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof messaging>>
 type SchedulingHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof scheduling>>
 type CoordinatorHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof coordinator>>
 
-void coordinatorClient.start('header.payload.signature', 'run-1', { flow: 'onboarding', input: {} })
+void coordinatorClient.start('header.payload.signature', 'run-1', { workflow: 'onboarding', workflowRevision: `sha256:${'0'.repeat(64)}`, input: {} })
 void coordinatorClient.status('header.payload.signature', 'run-1')
 void coordinatorClient.list('header.payload.signature', 20)
 void coordinatorClient.retrySame('header.payload.signature', 'run-1', 'operator reviewed the inspection')

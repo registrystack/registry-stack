@@ -105,7 +105,11 @@ async fn review_kind_fixture_response(State(response): State<Value>) -> impl Int
 async fn review_create_refuses_an_accepted_binding_for_another_policy() {
     let digest = ContentDigest::for_bytes(b"submission");
     let request = ReviewCreateRequest {
-        kind: "registry-correction".to_owned(),
+        policy: registry_casework_client::PolicyBinding {
+            id: "registry-correction".to_owned(),
+            version: "1".to_owned(),
+            digest: ContentDigest::for_bytes(b"expected-policy"),
+        },
         subject: SubjectBinding {
             source: "registry".to_owned(),
             subject_type: "change-request".to_owned(),

@@ -7,9 +7,9 @@ mod support;
 
 use registry_casework_client::{submission_digest, ReviewCreateRequest};
 use registry_coordinator::{
-    adapters::{ConnectionConfig, HttpAdapters, Product, RuntimeConfig},
-    definition::WaitEvent,
-    protocol::{AdapterSet, CallOutcome, CallRequest, Operation, ReviewRead},
+    adapters::{ConnectionConfig, HttpAdapters, RuntimeConfig},
+    definition::{CompletionDefinition, CompletionKind},
+    protocol::{AdapterSet, CallOutcome, CallRequest, CompletionObservation, Operation},
     runtime::ReviewCompletionConfig,
 };
 use registry_platform_config::SecretReference;
@@ -28,7 +28,7 @@ const CANARY: &str = "private-review-canary";
 
 fn create() -> Value {
     json!({
-        "kind": "notice-review",
+        "policy": {"id":"notice-review","version":"1","digest":format!("sha256:{}","b".repeat(64))},
         "subject": {"source": "applications", "type": "application",
             "id": support::RECORD, "version": "3",
             "digest": format!("sha256:{}", "a".repeat(64))},
@@ -108,6 +108,7 @@ fn describe(outcome: &CallOutcome) -> String {
 
 fn submit(key: &str) -> CallRequest {
     CallRequest {
+        operation_contract: None,
         connection: "review".into(),
         operation: Operation::SubmitReviewRequest,
         input: create(),
@@ -117,6 +118,7 @@ fn submit(key: &str) -> CallRequest {
 
 fn cancel(key: &str) -> CallRequest {
     CallRequest {
+        operation_contract: None,
         connection: "review".into(),
         operation: Operation::CancelReviewRequest,
         input: json!({"request": accepted(&digest(PRODUCER)), "reason": "review-timed-out"}),
@@ -137,22 +139,25 @@ async fn fixture() -> Fixture {
     let root = tempfile::tempdir().unwrap();
     let issuer = support::issuer().await;
     let mut config = support::config(root.path(), &issuer, &casework.uri(), &casework.uri());
-    let mut authorization = config.connections["applications"].authorization.clone();
+    let mut authorization = config.connections["applications"]
+        .authorization()
+        .unwrap()
+        .clone();
     authorization.token_endpoint = format!("{}/token", token.uri()).parse().unwrap();
     authorization.resource = "urn:example:casework".into();
     authorization.scopes = vec!["casework:review".into()];
     config.connections.insert(
         "review".into(),
-        ConnectionConfig {
-            product: Product::Casework,
-            base_url: casework.uri().parse().unwrap(),
-            authorization,
-            profile: Some(PROFILE.into()),
-            observation_authorization: None,
-            producer: Some(PRODUCER.into()),
-            completion: None,
-            result_check_seconds: None,
-        },
+        ConnectionConfig::CaseworkReviewProducer(
+            registry_coordinator::runtime::CaseworkConnectionConfig {
+                base_url: casework.uri().parse().unwrap(),
+                authorization,
+                profile: PROFILE.into(),
+                producer: PRODUCER.into(),
+                completion: None,
+                result_check_seconds: None,
+            },
+        ),
     );
     Mock::given(method("POST"))
         .and(path("/token"))
@@ -217,6 +222,28 @@ async fn submit_review_request_holds_an_acceptance_bound_to_another_producer() {
         "{}",
         describe(&outcome)
     );
+}
+
+#[tokio::test]
+async fn accepted_policy_must_match_the_exact_requested_revision() {
+    for (field, value) in [
+        ("id", json!("other-policy")),
+        ("version", json!("2")),
+        ("digest", json!(format!("sha256:{}", "d".repeat(64)))),
+    ] {
+        let fixture = fixture().await;
+        let mut response = accepted(&digest(PRODUCER));
+        response["policy"][field] = value;
+        Mock::given(method("POST"))
+            .and(path("/v1/review-requests"))
+            .respond_with(json_answer(201, response))
+            .expect(1)
+            .mount(&fixture.casework)
+            .await;
+        assert!(
+            matches!(fixture.adapters.call(&submit("exact-policy")).await,CallOutcome::Uncertain {code} if code=="invalid-response")
+        );
+    }
 }
 
 #[tokio::test]
@@ -385,13 +412,12 @@ async fn a_refused_producer_credential_sends_nothing_to_casework() {
 }
 
 /// A result read's kind and code; a settled read shows no value.
-fn describe_read(read: &ReviewRead) -> String {
+fn describe_read(read: &CompletionObservation) -> String {
     match read {
-        ReviewRead::Settled(_) => "settled".into(),
-        ReviewRead::Pending => "pending".into(),
-        ReviewRead::Unknown => "unknown".into(),
-        ReviewRead::Expired => "expired".into(),
-        ReviewRead::Failed(outcome) => format!("failed {}", describe(outcome)),
+        CompletionObservation::Settled(_) => "settled".into(),
+        CompletionObservation::Pending { .. } => "pending".into(),
+        CompletionObservation::Retryable { code, .. } => format!("retryable {code}"),
+        CompletionObservation::Hold { code } => format!("hold {code}"),
     }
 }
 
@@ -406,15 +432,12 @@ async fn a_result_read_names_each_casework_answer_without_a_value() {
     let cases: Vec<(ResponseTemplate, &str)> = vec![
         (json_answer(200, result("approved")), "settled"),
         (empty(202), "pending"),
-        (empty(404), "unknown"),
-        (empty(410), "expired"),
-        (
-            json_answer(200, substituted),
-            "failed refused invalid-response",
-        ),
+        (empty(404), "hold review-request-unknown"),
+        (empty(410), "hold review-result-expired"),
+        (json_answer(200, substituted), "hold invalid-response"),
         (
             problem(429, "edge.rate-limited", "Slow down", CANARY),
-            "failed retryable rate-limited",
+            "retryable rate-limited",
         ),
         (
             problem(
@@ -423,31 +446,31 @@ async fn a_result_read_names_each_casework_answer_without_a_value() {
                 "Authentication refused",
                 "The bearer credential is missing, invalid, or expired. Sign in again.",
             ),
-            "failed refused product-forbidden",
+            "hold product-forbidden",
         ),
         (
             problem(503, "edge.unavailable", "Unavailable", CANARY),
-            "failed retryable transport-unavailable",
+            "retryable transport-unavailable",
         ),
         (
             ResponseTemplate::new(200)
                 .insert_header("traceparent", support::TRACE)
                 .set_body_raw(CANARY, "application/json"),
-            "failed refused invalid-response",
+            "hold invalid-response",
         ),
         // An intermediary's own page is outside Casework's catalogue, but its
         // status still says the read may be repeated.
         (
             empty(408).set_body_raw(CANARY, "text/html"),
-            "failed retryable transport-unavailable",
+            "retryable transport-unavailable",
         ),
         (
             empty(429).set_body_raw(CANARY, "text/html"),
-            "failed retryable rate-limited",
+            "retryable rate-limited",
         ),
         (
             empty(502).set_body_raw(CANARY, "text/html"),
-            "failed retryable transport-unavailable",
+            "retryable transport-unavailable",
         ),
     ];
     for (answer, expected) in cases {
@@ -462,18 +485,20 @@ async fn a_result_read_names_each_casework_answer_without_a_value() {
             .await;
         let read = fixture
             .adapters
-            .read_review_result("review", &accepted(&digest(PRODUCER)))
+            .observe_completion(
+                &review_read("review"),
+                &accepted(&digest(PRODUCER)),
+                &completion(),
+            )
             .await;
         let observed = describe_read(&read);
         assert!(!observed.contains(CANARY));
         assert_eq!(observed, expected);
-        if let ReviewRead::Settled(value) = read {
+        if let CompletionObservation::Settled(value) = read {
             assert_eq!(value, result("approved"));
-            registry_coordinator::contracts::event_contract(&WaitEvent::ReviewResult {
-                request: "submit-review".into(),
-            })
-            .check(&value)
-            .unwrap();
+            registry_coordinator::contracts::completion_contract(&completion())
+                .check(&value)
+                .unwrap();
         }
     }
 }
@@ -484,22 +509,22 @@ async fn a_result_read_without_an_accepted_request_or_casework_binding_sends_not
     let mut unknown_member = accepted(&digest(PRODUCER));
     unknown_member["extra"] = json!(CANARY);
     for (connection, value, expected) in [
-        ("review", unknown_member, "failed refused invalid-command"),
-        ("review", json!(CANARY), "failed refused invalid-command"),
+        ("review", unknown_member, "hold invalid-command"),
+        ("review", json!(CANARY), "hold invalid-command"),
         (
             "notices",
             accepted(&digest(PRODUCER)),
-            "failed refused operation-unbound",
+            "hold operation-unbound",
         ),
         (
             "absent",
             accepted(&digest(PRODUCER)),
-            "failed refused operation-unbound",
+            "hold operation-unbound",
         ),
     ] {
         let read = fixture
             .adapters
-            .read_review_result(connection, &value)
+            .observe_completion(&review_read(connection), &value, &completion())
             .await;
         assert_eq!(describe_read(&read), expected);
     }
@@ -515,8 +540,11 @@ fn with_completion(config: &mut RuntimeConfig, root: &std::path::Path, name: &st
     let file = format!("{name}-completion-token");
     support::private_file(&root.join(&file), token.as_bytes());
     let mut connection = config.connections["review"].clone();
-    connection.result_check_seconds = None;
-    connection.completion = Some(ReviewCompletionConfig {
+    let ConnectionConfig::CaseworkReviewProducer(ref mut binding) = connection else {
+        panic!("Casework binding")
+    };
+    binding.result_check_seconds = None;
+    binding.completion = Some(ReviewCompletionConfig {
         recipient_binding: format!("{name}-v1"),
         bearer_token_ref: SecretReference::parse(format!("secret:file/{file}")).unwrap(),
     });
@@ -534,16 +562,19 @@ async fn completion_fixture() -> (HttpAdapters, tempfile::TempDir) {
     );
     config.connections.insert(
         "review".into(),
-        ConnectionConfig {
-            product: Product::Casework,
-            base_url: "http://127.0.0.1:9".parse().unwrap(),
-            authorization: config.connections["applications"].authorization.clone(),
-            profile: Some(PROFILE.into()),
-            observation_authorization: None,
-            producer: Some(PRODUCER.into()),
-            completion: None,
-            result_check_seconds: Some(registry_platform_yaml::BoundedU32::new(120).unwrap()),
-        },
+        ConnectionConfig::CaseworkReviewProducer(
+            registry_coordinator::runtime::CaseworkConnectionConfig {
+                base_url: "http://127.0.0.1:9".parse().unwrap(),
+                authorization: config.connections["applications"]
+                    .authorization()
+                    .unwrap()
+                    .clone(),
+                profile: PROFILE.into(),
+                producer: PRODUCER.into(),
+                completion: None,
+                result_check_seconds: Some(registry_platform_yaml::BoundedU32::new(120).unwrap()),
+            },
+        ),
     );
     with_completion(
         &mut config,
@@ -603,9 +634,9 @@ async fn a_completion_names_one_connection_only_for_its_own_token_and_binding() 
     }
     // A connection without a completion block accepts no completion at all.
     assert!(adapters.review_completion("", "review-v1").is_none());
-    assert_eq!(adapters.result_check_seconds("review"), 120);
+    assert_eq!(adapters.observation_interval("review", &completion()), 120);
     assert_eq!(
-        adapters.result_check_seconds("intake"),
+        adapters.observation_interval("intake", &completion()),
         registry_coordinator::runtime::DEFAULT_RESULT_CHECK_SECONDS
     );
 }
@@ -622,16 +653,19 @@ async fn a_completion_token_that_is_not_a_bearer_token_refuses_the_configuration
     );
     config.connections.insert(
         "review".into(),
-        ConnectionConfig {
-            product: Product::Casework,
-            base_url: "http://127.0.0.1:9".parse().unwrap(),
-            authorization: config.connections["applications"].authorization.clone(),
-            profile: Some(PROFILE.into()),
-            observation_authorization: None,
-            producer: Some(PRODUCER.into()),
-            completion: None,
-            result_check_seconds: None,
-        },
+        ConnectionConfig::CaseworkReviewProducer(
+            registry_coordinator::runtime::CaseworkConnectionConfig {
+                base_url: "http://127.0.0.1:9".parse().unwrap(),
+                authorization: config.connections["applications"]
+                    .authorization()
+                    .unwrap()
+                    .clone(),
+                profile: PROFILE.into(),
+                producer: PRODUCER.into(),
+                completion: None,
+                result_check_seconds: None,
+            },
+        ),
     );
     issuer.stop().await;
     for token in ["completion token\n", "", "token with space"] {
@@ -641,5 +675,22 @@ async fn a_completion_token_that_is_not_a_bearer_token_refuses_the_configuration
         };
         assert_eq!(error.code, "adapter.configuration");
         assert!(!error.to_string().contains("token with space"));
+    }
+}
+
+fn completion() -> CompletionDefinition {
+    CompletionDefinition {
+        kind: CompletionKind::CaseworkResult {},
+        output: registry_coordinator::contracts::casework_completion_schema().clone(),
+        revision: format!("sha256:{}", "0".repeat(64)),
+    }
+}
+fn review_read(connection: &str) -> CallRequest {
+    CallRequest {
+        connection: connection.into(),
+        operation: Operation::SubmitReviewRequest,
+        input: create(),
+        idempotency_key: None,
+        operation_contract: None,
     }
 }

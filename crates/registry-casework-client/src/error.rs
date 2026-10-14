@@ -25,6 +25,7 @@ const REVIEW_INITIATOR_EXCLUDED_PROBLEM: &str = "review.initiator-excluded";
 const REVIEW_INITIATOR_REQUIRED_PROBLEM: &str = "review.initiator-required";
 const REVIEW_RESULT_EXPIRED_PROBLEM: &str = "review.result-expired";
 const REVIEW_SUBMISSION_CONFLICT_PROBLEM: &str = "review.submission-conflict";
+const REVIEW_POLICY_MISMATCH_PROBLEM: &str = "review.policy-mismatch";
 const REVIEW_TASK_NOT_HELD_PROBLEM: &str = "review.task-not-held";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +70,7 @@ pub enum CaseworkProblemCode {
     ReviewInitiatorRequired,
     ReviewResultExpired,
     ReviewSubmissionConflict,
+    ReviewPolicyMismatch,
     ReviewTaskNotHeld,
     RuntimeFailure,
     ServiceUnavailable,
@@ -96,7 +98,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 47] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -125,6 +127,7 @@ impl CaseworkProblemCode {
         Self::ReviewInitiatorRequired,
         Self::ReviewResultExpired,
         Self::ReviewSubmissionConflict,
+        Self::ReviewPolicyMismatch,
         Self::ReviewTaskNotHeld,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
@@ -176,6 +179,7 @@ impl CaseworkProblemCode {
             Self::ReviewInitiatorExcluded => REVIEW_INITIATOR_EXCLUDED_PROBLEM,
             Self::ReviewInitiatorRequired => REVIEW_INITIATOR_REQUIRED_PROBLEM,
             Self::ReviewSubmissionConflict => REVIEW_SUBMISSION_CONFLICT_PROBLEM,
+            Self::ReviewPolicyMismatch => REVIEW_POLICY_MISMATCH_PROBLEM,
             Self::ReviewTaskNotHeld => REVIEW_TASK_NOT_HELD_PROBLEM,
             Self::RuntimeFailure => RUNTIME_FAILURE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
@@ -228,6 +232,7 @@ impl CaseworkProblemCode {
             REVIEW_INITIATOR_EXCLUDED_PROBLEM => Self::ReviewInitiatorExcluded,
             REVIEW_INITIATOR_REQUIRED_PROBLEM => Self::ReviewInitiatorRequired,
             REVIEW_SUBMISSION_CONFLICT_PROBLEM => Self::ReviewSubmissionConflict,
+            REVIEW_POLICY_MISMATCH_PROBLEM => Self::ReviewPolicyMismatch,
             REVIEW_TASK_NOT_HELD_PROBLEM => Self::ReviewTaskNotHeld,
             RUNTIME_FAILURE_PROBLEM => Self::RuntimeFailure,
             SERVICE_UNAVAILABLE_PROBLEM => Self::ServiceUnavailable,
@@ -285,6 +290,7 @@ impl CaseworkProblemCode {
             | Self::WorkItemNotOffered
             | Self::WorkItemProposalChanged
             | Self::WorkItemRecoveryPending
+            | Self::ReviewPolicyMismatch
             | Self::ReviewSubmissionConflict
             | Self::ReviewTaskNotHeld
             | Self::WorkItemSuperseded => 409,
@@ -405,6 +411,7 @@ impl CaseworkProblemCode {
                 "Review result expired",
                 "The retained review result is no longer available. Reconcile through the producer's retained source correlation.",
             ),
+            Self::ReviewPolicyMismatch => ("Review policy changed", "Discover the active review policy and submit its exact identifier, version, and digest with a new command identity."),
             Self::ReviewSubmissionConflict => (
                 "Review submission conflict",
                 "The same producer, source subject, version, and policy were already submitted with different canonical content.",

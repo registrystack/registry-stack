@@ -26,16 +26,25 @@ pub enum RecoverySemantics {
 #[allow(non_upper_case_globals)]
 impl Operation {
     // Preserve the existing call-site names and portable operation spellings.
-    pub const ReadRecord: Self = Self("read-record");
-    pub const SubmitMessage: Self = Self("submit-message");
-    pub const ReadScheduling: Self = Self("read-scheduling");
-    pub const ReadAvailability: Self = Self("read-availability");
-    pub const CreateAppointment: Self = Self("create-appointment");
-    pub const InvokeBregAction: Self = Self("invoke-breg-action");
-    pub const ExternalGet: Self = Self("external-get");
-    pub const EvaluateDecision: Self = Self("evaluate-decision");
-    pub const SubmitReviewRequest: Self = Self("submit-review-request");
-    pub const CancelReviewRequest: Self = Self("cancel-review-request");
+    pub const ReadRecord: Self = Self("breg.read-record/v1");
+    pub const SubmitMessage: Self = Self("messaging.submit-message/v1");
+    pub const ReadScheduling: Self = Self("scheduling.read-service/v1");
+    pub const ReadAvailability: Self = Self("scheduling.read-availability/v1");
+    pub const CreateAppointment: Self = Self("scheduling.create-appointment/v1");
+    pub const InvokeBregAction: Self = Self("breg.invoke-action/v1");
+    pub const ExternalGet: Self = Self("external.get/v1");
+    pub const EvaluateDecision: Self = Self("evaluation.evaluate/v1");
+    pub const SubmitReviewRequest: Self = Self("casework.submit-review-request/v1");
+    pub const CancelReviewRequest: Self = Self("casework.cancel-review-request/v1");
+
+    pub const SubmitBregProposal: Self = Self("breg.submit-proposal/v1");
+    pub const ApplyBregProposal: Self = Self("breg.apply-proposal/v1");
+    pub const RetryBregProposal: Self = Self("breg.retry-proposal/v1");
+    pub const CancelBregProposal: Self = Self("breg.cancel-proposal/v1");
+
+    pub fn from_catalog_id(identifier: &str) -> Option<Self> {
+        Self::parse(identifier)
+    }
 
     pub fn parse(identifier: &str) -> Option<Self> {
         crate::operations::descriptor(identifier).map(|descriptor| Self(descriptor.id))
@@ -140,6 +149,8 @@ pub struct CallRequest {
     pub operation: Operation,
     pub input: Value,
     pub idempotency_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_contract: Option<crate::breg_action::ActionContract>,
 }
 
 /// One package-declared business refusal from a validated product response.
@@ -231,20 +242,34 @@ mod declared_refusal_tests {
     }
 }
 
-/// One read of a review result for a waiting step. A read never changes the
-/// review, so no answer is uncertain: a failure either repeats or ends the
-/// wait under its bounded code.
-pub enum ReviewRead {
-    /// The producer's terminal result, already matched to the accepted
-    /// request's subject, policy and submission digest.
+/// Authenticated observation of one retained accepted call. An observation
+/// never dispatches a mutation or reconciles an unknown command.
+pub enum CompletionObservation {
     Settled(Value),
-    /// The review is still open.
-    Pending,
-    /// The producer cannot see a request with this identifier.
-    Unknown,
-    /// The result existed and its availability window has passed.
-    Expired,
-    Failed(CallOutcome),
+    Pending {
+        retry_after: Option<Duration>,
+    },
+    Retryable {
+        code: String,
+        retry_after: Option<Duration>,
+    },
+    /// Missing, stale, concealed or invalid evidence needs inspection. It is
+    /// neither a business result nor proof that an effect did not happen.
+    Hold {
+        code: String,
+    },
+}
+
+impl CompletionObservation {
+    pub(crate) fn from_failure(outcome: CallOutcome) -> Self {
+        match outcome {
+            CallOutcome::Retryable { code, retry_after } => Self::Retryable { code, retry_after },
+            CallOutcome::Refused { code } | CallOutcome::Uncertain { code } => Self::Hold { code },
+            _ => Self::Hold {
+                code: "invalid-response".into(),
+            },
+        }
+    }
 }
 
 #[async_trait]
@@ -299,19 +324,48 @@ pub trait AdapterSet: Send + Sync {
         }
     }
 
-    /// Read the result of the review request a call step accepted, with the
-    /// producer authorization of the named connection. `accepted` is that
-    /// step's protected output, never operator text.
-    async fn read_review_result(&self, _connection: &str, _accepted: &Value) -> ReviewRead {
-        ReviewRead::Failed(CallOutcome::Refused {
+    /// Observe a named completion of the exact accepted call. Both arguments
+    /// are protected durable values. The host interprets bounded external
+    /// reads using the immutable Workflow Function, never an adapter script.
+    async fn observe_completion(
+        &self,
+        _request: &CallRequest,
+        _accepted: &Value,
+        _completion: &crate::definition::CompletionDefinition,
+    ) -> CompletionObservation {
+        CompletionObservation::Hold {
             code: "operation-unbound".into(),
-        })
+        }
     }
 
-    /// The seconds between two result checks of a review wait on the named
-    /// connection.
-    fn result_check_seconds(&self, _connection: &str) -> u32 {
-        crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
+    fn observation_interval(
+        &self,
+        _connection: &str,
+        completion: &crate::definition::CompletionDefinition,
+    ) -> u32 {
+        match completion.kind {
+            crate::definition::CompletionKind::BoundedPoll {
+                interval_seconds, ..
+            } => interval_seconds,
+            _ => crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
+        }
+    }
+
+    /// Minimum spacing enforced even when authenticated signals arrive. The
+    /// aggregate ceiling derives from this spacing, not the fallback poll time.
+    fn minimum_observation_interval(
+        &self,
+        connection: &str,
+        completion: &crate::definition::CompletionDefinition,
+    ) -> u32 {
+        if matches!(
+            completion.kind,
+            crate::definition::CompletionKind::CaseworkResult {}
+        ) {
+            crate::store::WAIT_READ_SPACING_SECONDS
+        } else {
+            self.observation_interval(connection, completion)
+        }
     }
 
     /// The connection whose configured completion credential and recipient
@@ -349,6 +403,7 @@ mod tests {
             operation: Operation::SubmitMessage,
             input: Value::Null,
             idempotency_key: Some("fixture-key".into()),
+            operation_contract: None,
         };
         let Ok(prepared) = adapters.prepare(&request).await else {
             panic!("default preparation must accept an existing adapter")

@@ -323,6 +323,19 @@ impl CoordinatorClient {
         )
     }
 
+    fn workflow<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        workflow: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        complete(
+            py,
+            py.detach(|| self.runtime.block_on(self.inner.workflow(&token, workflow))),
+        )
+    }
+
     fn status<'py>(
         &self,
         py: Python<'py>,

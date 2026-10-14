@@ -25,7 +25,11 @@ type Observations = Arc<Mutex<Vec<(Method, String, HeaderMap)>>>;
 
 fn create_request() -> ReviewCreateRequest {
     ReviewCreateRequest {
-        kind: "registry-correction".to_owned(),
+        policy: registry_review_protocol::PolicyBinding {
+            id: "registry-correction".to_owned(),
+            version: "1".to_owned(),
+            digest: ContentDigest::parse(DIGEST).unwrap(),
+        },
         subject: subject(),
         requester_reference: "proposal-7".to_owned(),
         initiator: None,

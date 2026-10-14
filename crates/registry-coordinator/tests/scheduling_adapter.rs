@@ -3,7 +3,7 @@ mod support;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_coordinator::{
-    adapters::{ConnectionConfig, HttpAdapters, Product, TaskAuthorityConfig},
+    adapters::{ConnectionConfig, HttpAdapters, TaskAuthorityConfig},
     contracts::contract,
     protocol::{AdapterSet, CallOutcome, CallRequest, Operation, ReconciliationOutcome},
 };
@@ -109,6 +109,7 @@ async fn protocol_transient_http_failures_retry_reads_but_hold_ambiguous_mutatio
         );
         assert_eq!(original.input["appointment"], admission());
         let read = CallRequest {
+            operation_contract: None,
             connection: "bookings".into(),
             operation: Operation::ReadAvailability,
             input: json!({"grant":{"id":GRANT,"expiresAt":deadline},
@@ -214,6 +215,7 @@ fn appointment() -> Value {
 
 fn command(deadline: i64) -> CallRequest {
     CallRequest {
+        operation_contract: None,
         connection: "bookings".into(),
         operation: Operation::CreateAppointment,
         input: json!({"grant":{"id":GRANT,"expiresAt":deadline},"appointment":admission()}),
@@ -278,7 +280,10 @@ async fn fixture(
     } = binding;
     let issuer = support::issuer().await;
     let mut config = support::config(root, &issuer, &scheduling.uri(), &scheduling.uri());
-    let mut auth = config.connections["applications"].authorization.clone();
+    let mut auth = config.connections["applications"]
+        .authorization()
+        .unwrap()
+        .clone();
     auth.token_endpoint = format!("{}/token", token.uri()).parse().unwrap();
     auth.resource = "urn:example:scheduling".into();
     auth.scopes = vec!["scheduling:read".into(), "scheduling:book".into()];
@@ -301,16 +306,13 @@ async fn fixture(
     };
     config.connections.insert(
         "bookings".into(),
-        ConnectionConfig {
-            product: Product::Scheduling,
-            base_url: scheduling.uri().parse().unwrap(),
-            authorization: auth,
-            profile: None,
-            observation_authorization,
-            producer: None,
-            completion: None,
-            result_check_seconds: None,
-        },
+        ConnectionConfig::Scheduling(Box::new(
+            registry_coordinator::runtime::SchedulingConnectionConfig {
+                base_url: scheduling.uri().parse().unwrap(),
+                authorization: auth,
+                observation_authorization,
+            },
+        )),
     );
     Mock::given(method("POST")).and(path("/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access_token":"fixture-token",
@@ -392,6 +394,7 @@ async fn standing_reads_are_bounded_and_never_authorize_a_commitment() {
         .mount(&product)
         .await;
     let metadata = CallRequest {
+        operation_contract: None,
         connection: "bookings".into(),
         operation: Operation::ReadScheduling,
         input: json!({}),
@@ -405,6 +408,7 @@ async fn standing_reads_are_bounded_and_never_authorize_a_commitment() {
         Ok(())
     );
     let mut read = CallRequest {
+        operation_contract: None,
         connection: "bookings".into(),
         operation: Operation::ReadAvailability,
         input: json!({"offering":"application-review","start":"2026-10-10T10:00:00Z","end":"2026-10-10T11:00:00Z","limit":20}),

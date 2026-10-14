@@ -2,7 +2,7 @@
 //! Authenticated, bounded Coordinator service surface.
 use crate::{
     access::{Action, Authenticator, Caller},
-    deployment::{self, Flows},
+    deployment::{self, Workflows},
     metrics::AuthenticationRefusal,
     problem::{for_error, type_uri, ProblemCode},
     protocol::AdapterSet,
@@ -62,14 +62,15 @@ pub struct HttpState {
     pub store: Arc<Store>,
     pub recovery_only: bool,
     pub runtime: Arc<RuntimeConfig>,
-    pub flows: Arc<Flows>,
+    pub workflows: Arc<Workflows>,
     pub authenticator: Arc<Authenticator>,
     pub adapters: Arc<dyn AdapterSet>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Start {
-    flow: String,
+    workflow: String,
+    workflow_revision: String,
     input: Value,
 }
 #[derive(Deserialize)]
@@ -98,6 +99,7 @@ pub fn router(state: HttpState) -> Router {
             "/ready",
             get(move || ready(ready_state.clone(), ready_bindings.clone())),
         )
+        .route("/v1/workflows/{workflow}", get(workflow_contract))
         .route("/v1/runs", post(start).get(list))
         .route("/v1/runs/{run}", get(status))
         .route("/v1/runs/{run}/inspect", get(inspect))
@@ -306,7 +308,7 @@ async fn authenticated_caller(s: &HttpState, headers: &HeaderMap) -> Result<Call
 }
 async fn ready(s: HttpState, bindings: Arc<BindingReadiness>) -> Response {
     if !s.recovery_only
-        && deployment::check(&s.store, &s.runtime, s.flows.digest())
+        && deployment::check(&s.store, &s.runtime, s.workflows.digest())
             .await
             .is_ok()
         && s.store.is_ready().await.unwrap_or(false)
@@ -512,7 +514,7 @@ mod problem_tests {
         for (internal, status, public) in [
             ("access.denied", 403, "operation.not-authorized"),
             ("run-absent", 404, "run.not-visible"),
-            ("flow-absent", 404, "flow.not-served"),
+            ("workflow-absent", 404, "workflow.not-served"),
             ("start-conflict", 409, "idempotency.key-reused"),
             ("store-unavailable", 503, "service.unavailable"),
             (
@@ -784,12 +786,34 @@ async fn json_body<T: DeserializeOwned>(headers: &HeaderMap, body: BoundedBody) 
     }
     request_body(Ok(bytes))
 }
+async fn workflow_contract(
+    State(s): State<HttpState>,
+    headers: HeaderMap,
+    workflow: std::result::Result<Path<String>, PathRejection>,
+) -> Response {
+    answer(async {
+        let c = caller(&s, &headers).await?;
+        c.authorize(Action::Start, None)?;
+        let Path(workflow) = workflow.map_err(|_| CoordinatorError::new("request.invalid", "supply one bounded workflow identifier"))?;
+        c.authorize(Action::Start, Some(&workflow))?;
+        let package = s.workflows.get(&workflow).ok_or_else(|| CoordinatorError::new("workflow-absent", "this deployment does not serve the named workflow"))?;
+        deployment::check(&s.store, &s.runtime, s.workflows.digest()).await?;
+        Ok(json!({"workflow":package.definition.workflow.id, "workflowRevision":package.definition.digest, "input":package.definition.workflow.input, "outcomes":package.definition.workflow.outcomes}))
+    }.await)
+}
+
 async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody) -> Response {
     let result = async {
         let c = caller(&s, &headers).await?;
         c.authorize(Action::Start, None)?;
         let body: Start = json_body(&headers, body).await?;
-        c.authorize(Action::Start, Some(&body.flow))?;
+        c.authorize(Action::Start, Some(&body.workflow))?;
+        if registry_platform_yaml::Digest::new(&body.workflow_revision).is_err() {
+            return Err(CoordinatorError::new(
+                "request.invalid",
+                "supply the computed workflow revision",
+            ));
+        }
         if s.recovery_only {
             return Err(CoordinatorError::new(
                 "recovery-only",
@@ -797,14 +821,14 @@ async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody
             )
             .suggest("establish persistent recovery hold before resuming an ordinary service"));
         }
-        let package = s.flows.get(&body.flow).ok_or_else(|| {
+        let package = s.workflows.get(&body.workflow).ok_or_else(|| {
             CoordinatorError::new(
-                "flow-absent",
-                "this deployment does not serve the named flow",
+                "workflow-absent",
+                "this deployment does not serve the named workflow",
             )
-            .suggest("name a flow whose package this deployment lists")
+            .suggest("name a workflow whose package this deployment lists")
         })?;
-        deployment::check(&s.store, &s.runtime, s.flows.digest()).await?;
+        deployment::check(&s.store, &s.runtime, s.workflows.digest()).await?;
         let key = headers
             .get("idempotency-key")
             .and_then(|v| v.to_str().ok())
@@ -825,6 +849,7 @@ async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody
                 key,
                 &binding,
                 &s.runtime,
+                &body.workflow_revision,
             )
             .await?;
         s.store.status_owned(id, &c.actor).await.and_then(|v| {
@@ -843,7 +868,7 @@ async fn run_caller(
     action: Action,
 ) -> Result<(Caller, RunStatus)> {
     let c = caller(s, headers).await?;
-    let flows = c.authorized_flows(action)?;
+    let workflows = c.authorized_workflows(action)?;
     let Path(run) = run.map_err(|_| {
         CoordinatorError::new("request.invalid", "supply a bounded UUID run identifier")
     })?;
@@ -858,7 +883,10 @@ async fn run_caller(
     .ok_or_else(|| {
         CoordinatorError::new("request.invalid", "supply a bounded UUID run identifier")
     })?;
-    let status = s.store.status_owned_for_flows(run, &c.actor, flows).await?;
+    let status = s
+        .store
+        .status_owned_for_workflows(run, &c.actor, workflows)
+        .await?;
     Ok((c, status))
 }
 fn answer(result: Result<Value>) -> Response {
@@ -893,7 +921,7 @@ async fn list(
     answer(
         async {
             let c = caller(&s, &headers).await?;
-            let flows = c.authorized_flows(Action::Status)?;
+            let workflows = c.authorized_workflows(Action::Status)?;
             let Query(q) = query.map_err(|_| {
                 CoordinatorError::new("request.invalid", "supply the declared bounded list query")
             })?;
@@ -911,7 +939,7 @@ async fn list(
                         q.state,
                         q.attention,
                         &c.actor,
-                        flows,
+                        workflows,
                     )
                     .await?,
             )
@@ -1003,7 +1031,8 @@ async fn doctor(State(s): State<HttpState>, headers: HeaderMap) -> Response {
         async {
             let c = caller(&s, &headers).await?;
             c.authorize_deployment(Action::Doctor)?;
-            let active = deployment::check_serving(&s.store, &s.runtime, s.flows.digest()).await;
+            let active =
+                deployment::check_serving(&s.store, &s.runtime, s.workflows.digest()).await;
             let status = s.store.doctor().await?;
             Ok(json!({"activationReady":active.is_ok(),"state":status}))
         }
@@ -1214,7 +1243,8 @@ fn summary(operation_id: &str) -> &'static str {
     match operation_id {
         "live" => "Liveness",
         "ready" => "Readiness",
-        "startRun" => "Start a run of a served flow",
+        "workflowContract" => "Discover the active workflow revision and typed contract",
+        "startRun" => "Start a run of a served workflow",
         "listRuns" => "List a page of caller-visible runs",
         "runStatus" => "Read one run's status",
         "inspectRun" => "Inspect a run's steps and recovery options",
@@ -1236,7 +1266,19 @@ pub fn openapi() -> Value {
     use ProblemCode as P;
     let run_param = json!({"name":"run","in":"path","required":true,"schema":{"type":"string","format":"uuid"}});
     let mut paths = serde_json::Map::new();
-    let operations: [DocumentedOperation; 13] = [
+    let operations: [DocumentedOperation; 14] = [
+        (
+            "/v1/workflows/{workflow}",
+            "get",
+            "workflowContract",
+            None,
+            "WorkflowContract",
+            vec![
+                P::WorkflowNotServed,
+                P::DeploymentRefused,
+                P::DeploymentActivationChanged,
+            ],
+        ),
         (
             "/v1/runs",
             "get",
@@ -1254,7 +1296,7 @@ pub fn openapi() -> Value {
             [
                 &BODY_PROBLEMS[..],
                 &[
-                    P::FlowNotServed,
+                    P::WorkflowNotServed,
                     P::AdmissionRecoveryOnly,
                     P::AdmissionHeld,
                     P::ExecutionHeld,
@@ -1263,7 +1305,7 @@ pub fn openapi() -> Value {
                     P::DefinitionRefused,
                     P::BindingConflict,
                     P::BindingLiveConflict,
-                    P::FlowVersionConflict,
+                    P::WorkflowRevisionMismatch,
                     P::IdempotencyKeyInvalid,
                     P::IdempotencyKeyReused,
                     P::InputInvalid,
@@ -1420,6 +1462,9 @@ pub fn openapi() -> Value {
         if path.contains("{run}") {
             op["parameters"] = json!([run_param.clone()]);
         }
+        if path.contains("{workflow}") {
+            op["parameters"] = json!([{"name":"workflow","in":"path","required":true,"schema":{"type":"string","minLength":1,"maxLength":64}}]);
+        }
         if id == "listRuns" {
             op["parameters"] = json!([
                 {"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":20}},
@@ -1481,9 +1526,10 @@ pub fn openapi() -> Value {
         .iter()
         .map(|operation| operation.id)
         .collect();
-    let status = json!({"type":"object","required":["runId","workflowId","workflowVersion","definitionDigest","bindingDigest","step","state","admittedAt","deadlineAt","uncertain","cancelRequested","authoredCancelRequested","restoreReviewRequired"],"properties":{"runId":{"type":"string","format":"uuid"},"workflowId":{"type":"string"},"workflowVersion":{"type":"string"},"definitionDigest":{"type":"string"},"bindingDigest":{"type":"string"},"step":{"type":"string"},"state":{"type":"string"},"outcome":nullable_text,"output":{},"failureCode":nullable_text,"failurePath":nullable_text,"admittedAt":date,"deadlineAt":date,"nextDueAt":{"type":["string","null"],"format":"date-time"},"uncertain":{"type":"boolean"},"cancelRequested":{"type":"boolean","description":"Ordinary cancellation is irreversible and prevents later workflow effects; an uncertain evaluation may still have run at its provider."},"authoredCancelRequested":{"type":"boolean","description":"An authorized cancellation took a parked wait's authored onCancel path; cleanup on that path remains runnable."},"restoreReviewRequired":{"type":"boolean"}}});
+    let status = json!({"type":"object","required":["runId","workflow","workflowRevision","bindingDigest","step","state","admittedAt","deadlineAt","uncertain","cancelRequested","authoredCancelRequested","restoreReviewRequired"],"properties":{"runId":{"type":"string","format":"uuid"},"workflow":{"type":"string"},"workflowRevision":{"type":"string"},"bindingDigest":{"type":"string"},"step":{"type":"string"},"state":{"type":"string"},"outcome":nullable_text,"output":{},"failureCode":nullable_text,"failurePath":nullable_text,"admittedAt":date,"deadlineAt":date,"nextDueAt":{"type":["string","null"],"format":"date-time"},"uncertain":{"type":"boolean"},"cancelRequested":{"type":"boolean","description":"Ordinary cancellation is irreversible and prevents later workflow effects; an uncertain evaluation may still have run at its provider."},"authoredCancelRequested":{"type":"boolean","description":"An authorized cancellation took a parked wait's authored onCancel path; cleanup on that path remains runnable."},"restoreReviewRequired":{"type":"boolean"}}});
     let schemas = json!({
-      "Start":{"type":"object","additionalProperties":false,"required":["flow","input"],"properties":{"flow":{"type":"string","minLength":1,"maxLength":128},"input":{}}},
+      "WorkflowContract":{"type":"object","additionalProperties":false,"required":["workflow","workflowRevision","input","outcomes"],"properties":{"workflow":{"type":"string"},"workflowRevision":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"input":{},"outcomes":{"type":"object","minProperties":1,"maxProperties":64}}},
+      "Start":{"type":"object","additionalProperties":false,"required":["workflow","workflowRevision","input"],"properties":{"workflow":{"type":"string","minLength":1,"maxLength":64},"workflowRevision":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"input":{}}},
       "Reason":{"type":"object","additionalProperties":false,"required":["reason"],"properties":{"reason":{"type":"string","minLength":1,"maxLength":256}}},
       "ExecutionRecovery":{"type":"object","additionalProperties":false,"required":["recoveryReference","executionHistoryComplete","priorDeploymentFenced"],"properties":{"recoveryReference":{"type":"string","minLength":1,"maxLength":256},"executionHistoryComplete":{"type":"boolean"},"priorDeploymentFenced":{"type":"boolean"}}},
       "ExecutionReviewed":{"type":"object","required":["executionRecoveryReviewed"],"properties":{"executionRecoveryReviewed":{"type":"boolean"}}},
@@ -1493,7 +1539,9 @@ pub fn openapi() -> Value {
       "RunStatus":status,"RunList":{"type":"object","required":["runs"],"properties":{"runs":{"type":"array","maxItems":100,"items":{"$ref":"#/components/schemas/RunStatus"}},"nextCursor":{"type":"string","description":"Present when another page may exist; continue with the same filters."}}},
       "StepStatus":{"type":"object","required":["step","state","generation","attempt","commandPrepared","uncertain","receiptExpired"],"properties":{"step":{"type":"string"},"state":{"type":"string"},"generation":{"type":"integer"},"attempt":{"type":"integer"},"nextDueAt":{"type":["string","null"],"format":"date-time"},"leaseExpiresAt":{"type":["string","null"],"format":"date-time"},"commandPrepared":{"type":"boolean"},"uncertain":{"type":"boolean"},"receiptExpired":{"type":"boolean"},"failureCode":{"type":["string","null"]},"failurePath":{"type":["string","null"]}}},
       "OperationIdentity":{"type":"object","additionalProperties":false,"description":"Pinned public operation contract; does not establish current authority or receipt availability.","required":["id","version","product","effect","keyRequirement","requiresPreparation","recovery","readReceipt"],"properties":{"id":{"type":"string","enum":operation_ids},"version":{"type":"integer","minimum":1},"product":{"type":"string"},"effect":{"type":"string","enum":["read","mutation","evaluation"]},"keyRequirement":{"type":"string","enum":["none","required"]},"requiresPreparation":{"type":"boolean"},"recovery":{"type":"string","enum":["read-again","same-command-and-receipt","same-command","hold-after-dispatch"]},"readReceipt":{"type":"boolean"}}},
-      "RunInspection":{"type":"object","required":["run","steps","recovery"],"properties":{"run":{"$ref":"#/components/schemas/RunStatus"},"steps":{"type":"array","items":{"$ref":"#/components/schemas/StepStatus"}},"recovery":{"type":"object","required":["retryAllowed"],"properties":{"retryAllowed":{"type":"boolean"},"reason":{"type":["string","null"]},"operation":{"$ref":"#/components/schemas/OperationIdentity"}}}}},
+      "EffectStatus":{"type":"object","additionalProperties":false,"required":["step","operation","operationRevision","state"],"properties":{"step":{"type":"string"},"operation":{"$ref":"#/components/schemas/OperationIdentity"},"operationRevision":{"type":"string"},"state":{"type":"string","enum":["accepted","unknown"]}}},
+      "WaitStatus":{"type":"object","additionalProperties":false,"required":["step","acceptedStep","completion","completionRevision","timeoutAt","nextObservationAt","notBefore","minimumIntervalSeconds","observations","observationLimit"],"properties":{"step":{"type":"string"},"acceptedStep":{"type":"string"},"completion":{"type":"string"},"completionRevision":{"type":"string"},"timeoutAt":date,"nextObservationAt":{"type":["string","null"],"format":"date-time"},"notBefore":date,"minimumIntervalSeconds":{"type":"integer","minimum":30,"maximum":86400},"observations":{"type":"integer","minimum":0},"observationLimit":{"type":"integer","minimum":1}}},
+      "RunInspection":{"type":"object","required":["run","steps","effects","waits","recovery"],"properties":{"run":{"$ref":"#/components/schemas/RunStatus"},"steps":{"type":"array","items":{"$ref":"#/components/schemas/StepStatus"}},"effects":{"type":"array","items":{"$ref":"#/components/schemas/EffectStatus"}},"waits":{"type":"array","items":{"$ref":"#/components/schemas/WaitStatus"}},"recovery":{"type":"object","required":["retryAllowed"],"properties":{"retryAllowed":{"type":"boolean"},"reason":{"type":["string","null"]},"operation":{"$ref":"#/components/schemas/OperationIdentity"}}}}},
       "Doctor":{"type":"object","required":["activationReady","state"],"properties":{"activationReady":{"type":"boolean"},"state":{"type":"object","required":["databaseId","schemaVersion","restoreHold","auditReady","admissionsHold","restoreReviewRequired","states","uncertain","terminalPayloads","oldestTerminalPayloadAt"],"properties":{"databaseId":{"type":"string"},"schemaVersion":{"type":"integer"},"restoreHold":{"type":"boolean"},"auditReady":{"type":"boolean"},"admissionsHold":{"type":"boolean"},"restoreReviewRequired":{"type":"integer","minimum":0},"states":{"type":"object","additionalProperties":{"type":"integer"}},"uncertain":{"type":"integer"},"oldestDueAt":{"type":["string","null"],"format":"date-time"},"terminalPayloads":{"type":"integer","minimum":0},"oldestTerminalPayloadAt":{"type":["string","null"],"format":"date-time"}}}}},
       "RetryScheduled":{"type":"object","required":["runId","status"],"properties":{"runId":{"type":"string","format":"uuid"},"status":{"const":"retry-scheduled"}}},
       "Hold":{"type":"object","required":["restoreHold"],"properties":{"restoreHold":{"type":"boolean"}}},"Erased":{"type":"object","required":["erased"],"properties":{"erased":{"type":"integer","minimum":0}}},

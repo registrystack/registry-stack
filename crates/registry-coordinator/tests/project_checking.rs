@@ -268,14 +268,14 @@ fn missing_external_binding_names_its_runtime_container_and_repair() {
     let findings = report["diagnostics"].as_array().unwrap();
     assert_eq!(findings.len(), 1, "{report}");
     assert_eq!(findings[0]["code"], "coordinator.runtime.workflow-binding");
-    assert_eq!(findings[0]["path"], "/externalHttpConnections/directory");
+    assert_eq!(findings[0]["path"], "/connections/directory");
     assert!(findings[0]["source"]["line"]
         .as_u64()
         .is_some_and(|line| line > 2));
     assert!(findings[0]["suggestedAction"]
         .as_str()
         .unwrap()
-        .contains("externalHttpConnections.directory"));
+        .contains("same logical name"));
     fs::write(root.join("runtime.yaml"), runtime).unwrap();
     assert_eq!(check(&root, &[]).0, 0);
 }
@@ -304,7 +304,7 @@ fn project_check_skips_custody_warns_for_children_and_deduplicates_explicit_runt
     assert!(!report.to_string().contains("PRIVATE-"));
     fs::write(
         root.join("runtime.yaml"),
-        RUNTIME.replace("product: breg", "product: ${COORDINATOR_CHECK_PRODUCT}"),
+        RUNTIME.replace("type: breg", "type: ${COORDINATOR_CHECK_PRODUCT}"),
     )
     .unwrap();
     let runtime = root.join("runtime.yaml");
@@ -315,7 +315,7 @@ fn project_check_skips_custody_warns_for_children_and_deduplicates_explicit_runt
             .as_array()
             .unwrap()
             .iter()
-            .filter(|finding| finding["path"] == "/connections/applications/product")
+            .filter(|finding| finding["path"] == "/connections/applications/type")
             .count(),
         1,
         "{report}"
@@ -351,4 +351,44 @@ fn project_check_refuses_misplaced_kinds_links_and_excess_entries() {
         check(&root, &[]).1["diagnostics"][0]["code"],
         "coordinator.project.too-many-files"
     );
+}
+
+#[test]
+fn declared_contract_and_code_directories_are_checked_without_hiding_other_companions() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    fs::create_dir(root.join("generated")).unwrap();
+    fs::create_dir(root.join("code")).unwrap();
+    fs::write(root.join("generated/facilities.json"),
+        include_str!("../../../products/coordinator/examples/proposal-follow-up/generated/facilities.contract.json"))
+        .unwrap();
+    fs::write(root.join("code/functions.rhai"), FUNCTIONS).unwrap();
+    fs::write(
+        root.join("workflow.yaml"),
+        format!(
+            "{}\ncontracts:\n  facilities: {{type: breg, source: generated/facilities.json}}\n",
+            WORKFLOW.replace("source: functions.rhai", "source: code/functions.rhai")
+        ),
+    )
+    .unwrap();
+    let (exit, report) = check(&root, &["--deny-warnings"]);
+    assert_eq!(exit, 0, "{report}");
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
+    fs::create_dir(root.join("code/unrelated")).unwrap();
+    fs::write(
+        root.join("code/unrelated/extra.yaml"),
+        "PRIVATE-UNREAD-CANARY",
+    )
+    .unwrap();
+    let (exit, report) = check(&root, &["--deny-warnings"]);
+    assert_eq!(exit, 1, "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "coordinator.project.unread-directory"
+    );
+    assert!(report["diagnostics"][0]["source"]["file"]
+        .as_str()
+        .unwrap()
+        .ends_with("/code"));
+    assert!(!report.to_string().contains("PRIVATE-UNREAD-CANARY"));
 }

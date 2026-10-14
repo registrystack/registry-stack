@@ -246,6 +246,30 @@
         },
         {
           "additionalProperties": false,
+          "description": "The host repeats the accepted external read and interprets these\nsynthetic typed responses under the completion's named Function.",
+          "properties": {
+            "responses": {
+              "description": "One to 128 bounded response objects in observation order.",
+              "items": {
+                "x-registry-foreign": "json"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "observations",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "responses"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "No event arrives: the clock moves by the step's `timeoutSeconds`, and\nthe run continues at its `onTimeout`, or stops as `timed-out` when the\nstep has none. A deadline that passes first stops the run as\n`deadline-exceeded`.",
           "properties": {
             "type": {

@@ -54,7 +54,7 @@ For a deployment, the institution must supply these prerequisites:
 - Messaging permits sender profile `transactional`, template
   `application-follow-up` version `1` and locale `en` for the `case-system`
   caller.
-- Callers hold a Coordinator access token for the `delayed-follow-up` flow,
+- Callers hold a Coordinator access token for the `delayed-follow-up` workflow,
   and an explicit operator policy grants inspection and recovery separately.
 
 The runtime template uses loopback endpoints and secret references only. Copy

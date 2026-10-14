@@ -26,10 +26,10 @@ const TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
 fn status() -> Value {
-    json!({"runId":RUN,"workflowId":"nursing-notice","workflowVersion":"1","definitionDigest":"sha256:definition","bindingDigest":"sha256:binding","step":"notify","state":"pending","outcome":null,"output":null,"failureCode":null,"failurePath":null,"admittedAt":"2026-10-10T12:00:00Z","deadlineAt":"2026-10-10T12:05:00Z","nextDueAt":null,"uncertain":false,"restoreReviewRequired":false,"cancelRequested":false,"authoredCancelRequested":false})
+    json!({"runId":RUN,"workflow":"nursing-notice","workflowRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","bindingDigest":"sha256:binding","step":"notify","state":"pending","outcome":null,"output":null,"failureCode":null,"failurePath":null,"admittedAt":"2026-10-10T12:00:00Z","deadlineAt":"2026-10-10T12:05:00Z","nextDueAt":null,"uncertain":false,"restoreReviewRequired":false,"cancelRequested":false,"authoredCancelRequested":false})
 }
 fn inspection() -> Value {
-    json!({"run":status(),"steps":[{"step":"notify","state":"unknown","generation":1,"attempt":1,"nextDueAt":null,"leaseExpiresAt":null,"commandPrepared":true,"uncertain":true,"receiptExpired":false,"failureCode":"response-lost","failurePath":null}],"recovery":{"retryAllowed":true,"reason":null,"operation":{"id":"submit-message","version":1,"product":"messaging","effect":"mutation","keyRequirement":"required","requiresPreparation":false,"recovery":"same-command-and-receipt","readReceipt":true}}})
+    json!({"run":status(),"effects":[],"waits":[],"steps":[{"step":"notify","state":"unknown","generation":1,"attempt":1,"nextDueAt":null,"leaseExpiresAt":null,"commandPrepared":true,"uncertain":true,"receiptExpired":false,"failureCode":"response-lost","failurePath":null}],"recovery":{"retryAllowed":true,"reason":null,"operation":{"id":"submit-message","version":1,"product":"messaging","effect":"mutation","keyRequirement":"required","requiresPreparation":false,"recovery":"same-command-and-receipt","readReceipt":true}}})
 }
 type Seen = Arc<Mutex<Vec<(Method, String, Option<String>, Bytes)>>>;
 type Reply = (u16, String, String);
@@ -143,7 +143,8 @@ fn token() -> BearerToken {
 }
 fn request() -> StartRunRequest {
     StartRunRequest {
-        flow: "nursing-notice".into(),
+        workflow: "nursing-notice".into(),
+        workflow_revision: format!("sha256:{}", "0".repeat(64)),
         input: json!({"requestId":"one", "values":[null,true,23]}),
     }
 }
@@ -452,7 +453,7 @@ async fn invalid_admission_and_recovery_fail_before_io() {
         ));
     }
     let mut input = request();
-    input.flow = "../other".into();
+    input.workflow = "../other".into();
     assert!(client.start(&token(), "key", &input).await.is_err());
     input = request();
     input.input = json!({"tooMuch":"x".repeat(65_536)});
@@ -518,7 +519,7 @@ async fn a_problem_keeps_the_answered_status_and_code_without_a_client_side_stat
 #[tokio::test]
 async fn a_flow_the_deployment_does_not_serve_is_refused_once_with_a_known_outcome() {
     let server = Server::new(status()).await;
-    server.answer(404, PROBLEM_MEDIA, &problem(404, "flow.not-served"));
+    server.answer(404, PROBLEM_MEDIA, &problem(404, "workflow.not-served"));
     let error = server
         .client()
         .start(&token(), "key", &request())
@@ -526,11 +527,11 @@ async fn a_flow_the_deployment_does_not_serve_is_refused_once_with_a_known_outco
         .err()
         .unwrap();
     assert!(
-        matches!(&error, CoordinatorClientError::Problem { status: 404, code } if code == "flow.not-served")
+        matches!(&error, CoordinatorClientError::Problem { status: 404, code } if code == "workflow.not-served")
     );
     assert!(!error.is_outcome_unknown());
     assert!(!format!("{error:?} {error}").contains("canary"));
-    assert_eq!(server.count(), 1, "an absent flow is never resent");
+    assert_eq!(server.count(), 1, "an absent workflow is never resent");
 }
 
 #[tokio::test]
@@ -658,7 +659,7 @@ async fn a_refusal_after_an_unknown_admission_outcome_keeps_the_outcome_unknown(
 async fn an_answer_that_would_repeat_unchanged_is_not_resent() {
     let server = Server::new(status()).await;
     let mut other = status();
-    other["workflowId"] = json!("other-flow");
+    other["workflow"] = json!("other-workflow");
     server.answer(200, "application/json", &other.to_string());
     let error = server
         .client()
@@ -880,7 +881,7 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
         (&schemas["RetryScheduled"], retry_scheduled()),
         (
             &schemas["Problem"],
-            problem_document(404, "flow.not-served"),
+            problem_document(404, "workflow.not-served"),
         ),
     ] {
         assert_eq!(properties(schema), fields(&value));
@@ -891,7 +892,7 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
     for code in [
         "audit.response-unavailable",
         "authentication.refused",
-        "flow.not-served",
+        "workflow.not-served",
         "idempotency.key-reused",
         "operation.not-authorized",
         "request.invalid",
@@ -942,4 +943,100 @@ fn run_and_step_status_carry_the_failure_path_a_refused_call_input_names() {
         assert_eq!(run.failure_path.as_deref(), expected);
         assert_eq!(step.failure_path.as_deref(), expected);
     }
+}
+
+#[tokio::test]
+async fn workflow_contract_discovery_is_one_confined_read_with_a_revision_pin() {
+    let contract = json!({"workflow":"nursing-notice", "workflowRevision":request().workflow_revision, "input":{"type":"object"}, "outcomes":{"sent":{"type":"object"}}});
+    let server = Server::new(contract.clone()).await;
+    let client = server.client();
+    let found = client.workflow(&token(), "nursing-notice").await.unwrap();
+    assert_eq!(found.value.workflow_revision, request().workflow_revision);
+    {
+        let seen = server.fixture.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, Method::GET);
+        assert_eq!(seen[0].1, "/deployment/v1/workflows/nursing-notice");
+        assert!(seen[0].2.is_none());
+        assert!(seen[0].3.is_empty());
+    }
+    assert!(client.workflow(&token(), "../elsewhere").await.is_err());
+    assert_eq!(server.count(), 1);
+    for (member, value) in [
+        ("workflow", json!("other-workflow")),
+        ("workflowRevision", json!("author-version-1")),
+        ("outcomes", json!({})),
+    ] {
+        let mut malformed = contract.clone();
+        malformed[member] = value;
+        server.answer(200, "application/json", &malformed.to_string());
+        assert!(matches!(
+            client.workflow(&token(), "nursing-notice").await,
+            Err(CoordinatorClientError::Protocol { .. })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn admission_revision_is_required_before_io_and_bound_to_the_answer() {
+    let server = Server::new(status()).await;
+    let client = server.client();
+    for revision in [
+        "".into(),
+        "1".into(),
+        format!("sha256:{}", "A".repeat(64)),
+        format!("sha256:{}", "0".repeat(63)),
+    ] {
+        let mut input = request();
+        input.workflow_revision = revision;
+        assert!(matches!(
+            client.start(&token(), "pin-key", &input).await,
+            Err(CoordinatorClientError::InvalidRequest { .. })
+        ));
+    }
+    assert_eq!(server.count(), 0);
+    let mut other = status();
+    other["workflowRevision"] = json!(format!("sha256:{}", "1".repeat(64)));
+    server.answer(200, "application/json", &other.to_string());
+    let client = CoordinatorClient::new(
+        CoordinatorClientConfig::new(server.url.clone()).with_max_mutation_retries(0),
+    )
+    .unwrap();
+    assert!(matches!(
+        client.start(&token(), "pin-key", &request()).await,
+        Err(CoordinatorClientError::Protocol { .. })
+    ));
+    assert_eq!(server.count(), 1);
+}
+
+#[tokio::test]
+async fn inspection_preserves_minimized_effects_and_waits_without_accepting_correlation_payloads() {
+    const CANARY: &str = "protected-correlation-canary";
+    let mut document = inspection();
+    document["effects"] = json!([{"step":"submit","operation":document["recovery"]["operation"],"operationRevision":request().workflow_revision,"state":"accepted"}]);
+    document["waits"] = json!([{"step":"observe","acceptedStep":"submit","completion":"result","completionRevision":request().workflow_revision,"timeoutAt":"2026-10-10T12:05:00Z","nextObservationAt":null,"notBefore":"2026-10-10T12:01:00Z","minimumIntervalSeconds":30,"observations":1,"observationLimit":10}]);
+    let server = Server::new(document.clone()).await;
+    let value = server
+        .client()
+        .inspect(&token(), RUN.parse().unwrap())
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        value.effects[0].state,
+        registry_coordinator_client::EffectState::Accepted
+    );
+    assert_eq!(value.waits[0].accepted_step, "submit");
+    assert_eq!(value.waits[0].observation_limit, 10);
+    assert!(value.waits[0].next_observation_at.is_none());
+    document["waits"][0]["correlation"] = json!(CANARY);
+    server.answer(200, "application/json", &document.to_string());
+    let error = server
+        .client()
+        .inspect(&token(), RUN.parse().unwrap())
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, CoordinatorClientError::Protocol { .. }));
+    assert!(!error.to_string().contains(CANARY));
 }

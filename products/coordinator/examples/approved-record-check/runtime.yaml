@@ -10,7 +10,7 @@ database:
 namespace: coordinator_approved_check
 connections:
   source:
-    product: breg
+    type: breg
     baseUrl: http://127.0.0.1:8100
     profile: approved-reader
     authorization:

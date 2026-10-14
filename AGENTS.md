@@ -25,9 +25,10 @@ The maintained runtime products include:
   product clients, separated by waits, with progress kept durable across
   outages and restarts. Products retain effect ownership and authorization; a
   wait never renews an approval or creates downstream authority. A run
-  waits either until an instant or for the result of a Casework review an
-  earlier step requested, and Casework's completion event only brings the next
-  result read forward. A run never starts from a product event, only from an
+  waits until an instant or for a named completion exposed by an accepted operation,
+  including a Casework result, exact BReg Proposal application, or bounded external
+  read. A completion wake-up only advances an eligible authoritative read.
+  A run never starts from a product event, only from an
   explicit caller request, so it sequences product calls for the caller who
   started the run; it does not let one product start work in another.
 

@@ -2,20 +2,20 @@
 //! Supervised loopback webhook inbox. Receipt is distinct from runtime delivery state.
 
 use super::private;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use axum::{
-    body::{to_bytes, Body},
+    Router,
+    body::{Body, to_bytes},
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
     routing::post,
-    Router,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, KeyInit, Mac};
 use registry_breg::model::{CompiledEventDelivery, CompiledRegistry};
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::Sha256;
 use std::{
     collections::BTreeMap,
@@ -27,7 +27,7 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::oneshot;
 use zeroize::Zeroizing;
 
@@ -239,8 +239,10 @@ async fn receive(
     record["destinationId"] = Value::String(delivery.destination_id.clone());
     match append(&inbox.root, &record) {
         Ok(()) => (StatusCode::NO_CONTENT, ""),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
-            "local event storage unavailable: verify owner-only permissions and the 16 MiB inbox bound"),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "local event storage unavailable: verify owner-only permissions and the 16 MiB inbox bound",
+        ),
     }
 }
 
@@ -434,7 +436,9 @@ fn append(root: &Path, record: &Value) -> Result<()> {
     let mut bytes = private::read(&path, MAX_STORAGE)?;
     let line = serde_json::to_vec(record)?;
     if bytes.len() as u64 + line.len() as u64 + 1 > MAX_STORAGE {
-        bail!("local event inbox reached its 16 MiB bound; stop the session and move the journal to an owner-only location before restarting");
+        bail!(
+            "local event inbox reached its 16 MiB bound; stop the session and move the journal to an owner-only location before restarting"
+        );
     }
     if !bytes.is_empty() && !bytes.ends_with(b"\n") {
         bail!("local event inbox has an incomplete record");
@@ -515,8 +519,8 @@ mod tests {
     use super::*;
     use axum::http::HeaderValue;
     use registry_breg::{
-        compiler::{compile_project, CompileProfile},
-        contract::{parse_project_json, EventTrigger},
+        compiler::{CompileProfile, compile_project},
+        contract::{EventTrigger, parse_project_json},
     };
     use registry_platform_canonical_json::canonicalize_json;
     use std::{io::Write, net::TcpStream, os::unix::fs::PermissionsExt, time::Instant};
@@ -719,9 +723,11 @@ mod tests {
         assert!(!receiver.exited());
         let metadata = report(root.path(), false).unwrap();
         assert!(!metadata.to_string().contains("projected-value-canary"));
-        assert!(!metadata
-            .to_string()
-            .contains("00000000-0000-4000-8000-000000000002"));
+        assert!(
+            !metadata
+                .to_string()
+                .contains("00000000-0000-4000-8000-000000000002")
+        );
         let records = metadata["deliveries"].as_array().unwrap();
         assert_eq!(records.len(), 3);
         assert_eq!(records[1]["attempt"], 2);
@@ -798,10 +804,12 @@ mod tests {
         body.push(b' ');
         sign(&mut headers, &body);
         assert_eq!(request(port, headers, body), 401);
-        assert!(report(root.path(), false).unwrap()["deliveries"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(
+            report(root.path(), false).unwrap()["deliveries"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -989,13 +997,15 @@ mod tests {
         let reader = thread::spawn(move || {
             for _ in 0..20 {
                 let snapshot = report(&path, false).unwrap();
-                assert!(snapshot["deliveries"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .all(|record| {
-                        record["status"] == "received" && record.get("payload").is_none()
-                    }));
+                assert!(
+                    snapshot["deliveries"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|record| {
+                            record["status"] == "received" && record.get("payload").is_none()
+                        })
+                );
             }
         });
         for attempt in 1..=5 {

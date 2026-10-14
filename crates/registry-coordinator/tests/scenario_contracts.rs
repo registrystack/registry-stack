@@ -3,21 +3,22 @@
 //! contracts: each computed call input must satisfy the operation input, and
 //! each synthetic success value must satisfy the operation output.
 use registry_coordinator::{authoring, definition::Definition, scenarios};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{fs, path::Path, process::Command};
 
 fn workflow() -> Value {
     json!({
         "apiVersion": authoring::API_VERSION, "kind": authoring::KIND,
         "project": {"id": "contracted", "version": "1"},
+        "operations": {"read-record": {"uses": "breg.read-record/v1", "connection": "applications"}},
+        "workflow": {
         "input": {"type": "object", "additionalProperties": false,
             "required": ["applicationId"],
             "properties": {"applicationId": {}}},
-        "connections": {"applications": "breg"},
-        "functionsFile": "functions.rhai", "deadlineSeconds": 86400,
+        "deadlineSeconds": 86400,
         "start": "read",
         "steps": {
-            "read": {"type": "call", "connection": "applications", "operation": "read-record",
+            "read": {"type": "call", "operation": "read-record",
                 "input": {"type": "fields", "fields": {
                     "collection": {"type": "literal", "value": "applications"},
                     "recordId": {"type": "input", "path": "/applicationId"}
@@ -30,7 +31,7 @@ fn workflow() -> Value {
         "outcomes": {
             "accepted": {"type": "object", "additionalProperties": false,
                 "required": ["record"], "properties": {"record": {"type": "string"}}}
-        }
+        }}
     })
 }
 
@@ -80,7 +81,6 @@ fn project(root: &Path, cases: Vec<Value>) {
         serde_json::to_string(&workflow()).unwrap(),
     )
     .unwrap();
-    fs::write(root.join("functions.rhai"), "").unwrap();
     fs::write(root.join("scenarios.yaml"), scenarios(cases)).unwrap();
 }
 
@@ -109,10 +109,11 @@ fn checked(cases: Vec<Value>) -> Value {
     findings[0].clone()
 }
 
-const INPUT_MESSAGE: &str = "expected a value of type string at /recordId in the input step read computes, as the read-record input declares; the computed input does not match";
-const INPUT_ACTION: &str = "Correct the steps.read.input mapping, or the scenario data it reads, so the computed input satisfies the read-record input.";
-const OUTPUT_MESSAGE: &str = "expected a value of type string at /data/revisionIdentifier in a success reply to step read, as the read-record output declares; the synthetic value does not match";
-const OUTPUT_ACTION: &str = "Correct the synthetic value so it satisfies the read-record output.";
+const INPUT_MESSAGE: &str = "expected a value of type string at /recordId in the input step read computes, as the breg.read-record/v1 input declares; the computed input does not match";
+const INPUT_ACTION: &str = "Correct the steps.read.input mapping, or the scenario data it reads, so the computed input satisfies the breg.read-record/v1 input.";
+const OUTPUT_MESSAGE: &str = "expected a value of type string at /data/revisionIdentifier in a success reply to step read, as the breg.read-record/v1 output declares; the synthetic value does not match";
+const OUTPUT_ACTION: &str =
+    "Correct the synthetic value so it satisfies the breg.read-record/v1 output.";
 
 #[test]
 fn scenarios_that_fit_both_contracts_pass() {
@@ -193,7 +194,7 @@ fn a_declared_refusal_reply_is_rejected_for_an_operation_without_that_contract()
     assert_eq!(error.field.as_deref(), Some("/cases/0/replies/read/0"));
     assert_eq!(
         error.message,
-        "step read calls read-record, which cannot return a package-declared business refusal"
+        "step read calls breg.read-record/v1, which cannot return a package-declared business refusal"
     );
 }
 
@@ -213,6 +214,6 @@ fn a_missing_member_is_reported_at_the_object_that_lacks_it() {
     );
     assert_eq!(
         error.message,
-        "expected the required member datasetIdentifier at /meta in a success reply to step read, as the read-record output declares; the synthetic value does not match"
+        "expected the required member datasetIdentifier at /meta in a success reply to step read, as the breg.read-record/v1 output declares; the synthetic value does not match"
     );
 }

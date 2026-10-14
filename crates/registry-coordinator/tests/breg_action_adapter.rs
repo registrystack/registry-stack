@@ -8,12 +8,12 @@ use std::sync::{
 
 use async_trait::async_trait;
 use registry_breg_client::{
-    BRegProblemCode, BaseRegistryClient, BaseRegistryClientConfig, BearerToken, TokenError,
-    TokenProvider,
+    BRegActionMode, BRegProblemCode, BaseRegistryClient, BaseRegistryClientConfig, BearerToken,
+    TokenError, TokenProvider,
 };
 use registry_coordinator::{
     adapters::HttpAdapters,
-    breg_action::{execute, prepare},
+    breg_action::{execute, prepare, ActionContract},
     contracts::contract,
     protocol::{AdapterSet, CallOutcome, CallRequest, Operation, ReconciliationOutcome},
 };
@@ -54,19 +54,24 @@ fn request() -> CallRequest {
     CallRequest {
         connection: "applications".into(),
         operation: Operation::InvokeBregAction,
-        input: json!({"action":"update-item", "input":{"targetId": RECORD, "label":"Original"}}),
+        input: json!({"input":{"targetId": RECORD, "label":"Original"}}),
         idempotency_key: Some("durable-action-key".into()),
+        operation_contract: Some(ActionContract {
+            action_id: "update-item".into(),
+            action_revision: FINGERPRINT.into(),
+            mode: BRegActionMode::Immediate,
+        }),
     }
 }
 
 fn metadata() -> Value {
     json!({
         "id":"fixture-registry", "version":"1", "revision":REVISION,
-        "metadataVersion":"1", "entities":[], "operations":[],
+        "metadataVersion":"1", "recordTypes":[], "operations":[],
         "actions":[{
             "id":"update-item", "route":"/v1/actions/update-item",
             "conditionRoute":"/v1/actions/update-item/target-conditions",
-            "contractFingerprint":FINGERPRINT,
+            "apiName":"updateItem", "revision":FINGERPRINT, "display":{}, "execution":{"mode":"immediate"},
             "inputMode":"fixed", "maximumInputStringBytes":null,
             "inputs":[
                 {"id":"target", "apiName":"targetId", "required":true,
@@ -76,9 +81,9 @@ fn metadata() -> Value {
                  "nullable":false, "classification":"internal",
                  "fieldType":{"type":"string", "minimumLength":1, "maximumLength":16}}
             ],
-            "referenceInputs":[{"input":"target", "apiName":"targetId", "targetEntity":"item"}],
+            "referenceInputs":[{"input":"target", "apiName":"targetId", "targetRecordType":"item"}],
             "requiredConditionKeys":["targetId"],
-            "resultEffects":[{"effect":"item", "entity":"item", "operation":"patch"}],
+            "resultEffects":[{"effect":"item", "recordType":"item", "operation":"patch"}],
             "access":{"selectedProfile":"writer"},
             "routes":{
                 "invoke":{"method":"POST", "path":"/v1/actions/update-item",
@@ -97,7 +102,7 @@ fn metadata() -> Value {
 
 fn receipt() -> Value {
     json!({"action":"update-item", "applicationId":APPLICATION,
-        "results":{"item":{"entity":"item", "recordId":RECORD, "revision":2}}})
+        "results":{"item":{"recordType":"item", "recordId":RECORD, "revision":2}}})
 }
 
 fn response(value: Value) -> ResponseTemplate {
@@ -136,6 +141,83 @@ fn refusal(outcome: CallOutcome, expected: &str) {
         CallOutcome::Refused { code } => assert_eq!(code, expected),
         _ => panic!("expected a bounded refusal"),
     }
+}
+
+#[tokio::test]
+async fn proposal_mode_starts_only_a_draft_and_retains_the_exact_action_pin() {
+    let server = MockServer::start().await;
+    let mut contract = metadata();
+    let action = &mut contract["actions"][0];
+    action["execution"]["mode"] = json!("proposal");
+    action["conditionRoute"] = Value::Null;
+    action["requiredConditionKeys"] = json!([]);
+    let mut start = action["routes"]["invoke"].take();
+    start["operationId"] = json!("actions.update-item.start");
+    action["routes"] = json!({"start":start});
+    Mock::given(method("GET"))
+        .and(path("/tenant/base/v1/registry"))
+        .respond_with(response(contract))
+        .mount(&server)
+        .await;
+    let draft = json!({"id":APPLICATION,"actionId":"update-item","actionRevision":FINGERPRINT,
+        "submissionVersion":1,"revision":1,"state":"draft",
+        "links":{"self":{"method":"GET","path":format!("/v1/proposals/{APPLICATION}"),"accessProfile":"writer","operation":"get"}}});
+    let returned = Arc::new(Mutex::new(draft.clone()));
+    let peer = returned.clone();
+    Mock::given(method("POST"))
+        .and(path("/tenant/base/v1/actions/update-item"))
+        .respond_with(move |_: &wiremock::Request| response(peer.lock().unwrap().clone()))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let client = client(&server, Arc::new(CountingToken::default()));
+    let mut command = request();
+    command.operation_contract.as_mut().unwrap().mode = BRegActionMode::Proposal;
+    let prepared = prepare(&client, "writer", &command)
+        .await
+        .unwrap_or_else(|_| panic!("prepare proposal"));
+    match execute(&client, "writer", &command, &prepared).await {
+        CallOutcome::Success(value) => assert_eq!(value, json!({"proposal":draft})),
+        _ => panic!("proposal start returns draft, never an application receipt"),
+    }
+    *returned.lock().unwrap() = receipt();
+    assert!(
+        matches!(
+            execute(&client, "writer", &command, &prepared).await,
+            CallOutcome::Uncertain { .. }
+        ),
+        "a successful status with another operation's result cannot prove draft creation"
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "POST")
+            .count(),
+        2
+    );
+    assert!(requests
+        .iter()
+        .all(|request| !request.url.path().ends_with("/submit")));
+}
+
+#[tokio::test]
+async fn specialized_input_cannot_select_another_action_or_omit_its_pin() {
+    let server = MockServer::start().await;
+    let client = client(&server, Arc::new(CountingToken::default()));
+    let mut command = request();
+    command.input["action"] = json!("another-action");
+    match prepare(&client, "writer", &command).await {
+        Err(outcome) => refusal(outcome, "invalid-command"),
+        Ok(_) => panic!("selector input is forbidden"),
+    }
+    let mut command = request();
+    command.operation_contract = None;
+    match prepare(&client, "writer", &command).await {
+        Err(outcome) => refusal(outcome, "action-contract-missing"),
+        Ok(_) => panic!("missing package pin is forbidden"),
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -232,8 +314,8 @@ async fn changed_command_metadata_and_profile_never_send_a_mutation() {
         .await
         .unwrap_or_else(|_| panic!("valid preparation"));
     for changed in [
-        json!({"action":"update-item", "input":{"targetId":RECORD, "label":"Changed"}}),
-        json!({"action":"update-item", "input":{"targetId":APPLICATION, "label":"Original"}}),
+        json!({"input":{"targetId":RECORD, "label":"Changed"}}),
+        json!({"input":{"targetId":APPLICATION, "label":"Original"}}),
     ] {
         let mut command = request();
         command.input = changed;
@@ -248,14 +330,18 @@ async fn changed_command_metadata_and_profile_never_send_a_mutation() {
         execute(&client, "writer", &command, &prepared).await,
         "prepared-command-mismatch",
     );
-    for pointer in ["/revision", "/actions/0/contractFingerprint"] {
+    for pointer in ["/revision", "/actions/0/revision"] {
         let mut changed = metadata();
         *changed.pointer_mut(pointer).unwrap() =
             json!("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
         *current.lock().unwrap() = changed;
         refusal(
             execute(&client, "writer", &original, &prepared).await,
-            "prepared-command-mismatch",
+            if pointer == "/revision" {
+                "prepared-command-mismatch"
+            } else {
+                "action-contract-changed"
+            },
         );
     }
     let mut changed = metadata();
@@ -472,9 +558,13 @@ async fn configured_adapter_requires_preparation_and_never_reconciles_by_sending
     let issuer = support::issuer().await;
     let root = tempfile::tempdir().unwrap();
     let mut config = support::config(root.path(), &issuer, &server.uri(), &server.uri());
-    let connection = config.connections.get_mut("applications").unwrap();
+    let registry_coordinator::runtime::ConnectionConfig::Breg(connection) =
+        config.connections.get_mut("applications").unwrap()
+    else {
+        panic!("BReg connection")
+    };
     connection.base_url = format!("{}/tenant/base/", server.uri()).parse().unwrap();
-    connection.profile = Some("writer".into());
+    connection.profile = "writer".into();
     connection.authorization.scopes = vec!["applications:act".into()];
     let adapters = HttpAdapters::new(&config).unwrap();
     let command = request();

@@ -5,7 +5,12 @@ use registry_platform_yaml::{
     ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, Report, Severity,
     Source,
 };
-use std::{fs, io::Read as _, path::Path};
+use std::{
+    collections::BTreeSet,
+    fs,
+    io::Read as _,
+    path::{Path, PathBuf},
+};
 
 const MAXIMUM_ENTRIES: usize = 1024;
 const FORMATS: &[FormatSpec<'static>] = &[
@@ -152,6 +157,17 @@ pub(crate) fn check_directory(
     };
     entries.sort_by_key(fs::DirEntry::file_name);
     let explicit = explicit_runtime.and_then(|path| path.canonicalize().ok());
+    let assets = definition
+        .map(|definition| {
+            definition
+                .workflow
+                .references
+                .values()
+                .filter_map(|reference| reference.target.strip_prefix("asset:"))
+                .map(|asset| root.join(asset))
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
     for entry in entries {
         let path = entry.path();
         let name = entry.file_name();
@@ -168,6 +184,10 @@ pub(crate) fn check_directory(
             }
         };
         if kind.is_dir() {
+            let mut budget = MAXIMUM_ENTRIES;
+            if declared_asset_directory(&path, &assets, &mut budget) {
+                continue;
+            }
             let mut diagnostic = file_error(&path, "coordinator.project.unread-directory", "check reads only the project root; this child directory was not checked", "Move authored YAML companions into the project root, or check the child as a separate project.");
             diagnostic.severity = Severity::Warning;
             report.push(diagnostic);
@@ -247,6 +267,38 @@ pub(crate) fn check_directory(
         }
     }
     (report, exit)
+}
+
+/// Inspect names only along declared asset paths. The compiler already read
+/// these assets; unknown directories and authored companions stay unchecked.
+fn declared_asset_directory(path: &Path, assets: &BTreeSet<PathBuf>, budget: &mut usize) -> bool {
+    if !assets.iter().any(|asset| asset.starts_with(path)) {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    for entry in entries {
+        if *budget == 0 {
+            return false;
+        }
+        *budget -= 1;
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let Ok(kind) = entry.file_type() else {
+            return false;
+        };
+        let child = entry.path();
+        if kind.is_dir() {
+            if !declared_asset_directory(&child, assets, budget) {
+                return false;
+            }
+        } else if !kind.is_file() || !assets.contains(&child) {
+            return false;
+        }
+    }
+    true
 }
 
 fn file_error(path: &Path, code: &'static str, message: &str, action: &str) -> Diagnostic {

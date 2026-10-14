@@ -8,11 +8,11 @@ use std::io::Read;
 use std::path::Path;
 
 use registry_breg::fixtures::{
-    read_schema_test_receipt, validate_fixture_journeys, validate_schema_test_receipt_for_package,
-    FixtureError, SchemaTestReceipt,
+    FixtureError, SchemaTestReceipt, read_schema_test_receipt, validate_fixture_journeys,
+    validate_schema_test_receipt_for_package,
 };
 use registry_breg::package::{
-    PackageError, PackageFileRole, PreparedPackage, FIXTURE_JOURNEYS_PATH,
+    FIXTURE_JOURNEYS_PATH, PackageError, PackageFileRole, PreparedPackage,
 };
 
 use crate::safe_path::{EntryStat, SafeDir, SafeEntry};
@@ -323,7 +323,7 @@ fn read_test_receipt(path: &Path) -> Result<Vec<u8>, PackageLifecycleError> {
     let stat = match entry.stat() {
         Ok(stat) => stat,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(PackageLifecycleError::TestReceiptMissing)
+            return Err(PackageLifecycleError::TestReceiptMissing);
         }
         Err(_) => return Err(receipt_refused("the schema-test receipt is not readable")),
     };

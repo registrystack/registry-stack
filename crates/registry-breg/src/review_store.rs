@@ -9,10 +9,9 @@
 use chrono::{DateTime, Utc};
 use registry_platform_httputil::client::TokenProvider;
 use registry_review_client::{
-    BearerToken, ReviewAuth, ReviewClient, ReviewClientError, ReviewCompletion,
+    submission_digest, BearerToken, ReviewAuth, ReviewClient, ReviewClientError, ReviewCompletion,
     ReviewCompletionType, ReviewCreateRequest, ReviewRequestAccepted, ReviewResult,
     ReviewResultResponse, ReviewResultsQuery, SourceContextBinding, SubjectBinding,
-    submission_digest,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -1488,7 +1487,12 @@ pub(crate) async fn enqueue_submission(
         proposal.version().get()
     );
     let create = ReviewCreateRequest {
-        kind: policy.id.clone(),
+        policy: registry_review_client::PolicyBinding {
+            id: policy.id.clone(),
+            version: policy.version.clone(),
+            digest: registry_review_client::ContentDigest::parse(policy.digest.as_str())
+                .map_err(|_| MutationError::Unavailable)?,
+        },
         subject: SubjectBinding {
             source: source.clone(),
             subject_type: "proposal".to_owned(),
@@ -2433,37 +2437,33 @@ mod tests {
 
     #[test]
     fn completion_sender_bindings_must_be_unique_pairs() {
-        assert!(
-            ReviewAuthorityRegistry::new(BTreeMap::from([
-                (
-                    "casework-a".to_owned(),
-                    authority("casework-a", Some(("shared-sender", "registry-a"))),
-                ),
-                (
-                    "casework-b".to_owned(),
-                    authority("casework-b", Some(("shared-sender", "registry-a"))),
-                ),
-            ]))
-            .is_err()
-        );
+        assert!(ReviewAuthorityRegistry::new(BTreeMap::from([
+            (
+                "casework-a".to_owned(),
+                authority("casework-a", Some(("shared-sender", "registry-a"))),
+            ),
+            (
+                "casework-b".to_owned(),
+                authority("casework-b", Some(("shared-sender", "registry-a"))),
+            ),
+        ]))
+        .is_err());
 
-        assert!(
-            ReviewAuthorityRegistry::new(BTreeMap::from([
-                (
-                    "casework-a".to_owned(),
-                    authority("casework-a", Some(("shared-sender", "registry-a"))),
-                ),
-                (
-                    "casework-b".to_owned(),
-                    authority("casework-b", Some(("shared-sender", "registry-b"))),
-                ),
-                (
-                    "casework-c".to_owned(),
-                    authority("casework-c", Some(("other-sender", "registry-a"))),
-                ),
-            ]))
-            .is_ok()
-        );
+        assert!(ReviewAuthorityRegistry::new(BTreeMap::from([
+            (
+                "casework-a".to_owned(),
+                authority("casework-a", Some(("shared-sender", "registry-a"))),
+            ),
+            (
+                "casework-b".to_owned(),
+                authority("casework-b", Some(("shared-sender", "registry-b"))),
+            ),
+            (
+                "casework-c".to_owned(),
+                authority("casework-c", Some(("other-sender", "registry-a"))),
+            ),
+        ]))
+        .is_ok());
     }
 
     #[test]

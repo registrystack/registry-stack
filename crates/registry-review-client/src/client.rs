@@ -104,7 +104,7 @@ impl ReviewClient {
             .await?;
         check_accepted(
             &complete.value,
-            &request.kind,
+            &request.policy,
             &request.subject,
             expected_submission_digest,
             &complete.trace_id,
@@ -131,11 +131,35 @@ impl ReviewClient {
         auth: ReviewAuth<'_>,
         expected: &ReviewRequestAccepted,
     ) -> Result<ReviewResultResponse, ReviewClientError> {
+        self.result_observation(auth, expected).await.outcome
+    }
+
+    pub async fn result_observation(
+        &self,
+        auth: ReviewAuth<'_>,
+        expected: &ReviewRequestAccepted,
+    ) -> crate::ReviewResultObservation {
+        let mut retry_after = registry_platform_httputil::client::RetryAfter::Absent;
+        let outcome = self.result_exchange(auth, expected, &mut retry_after).await;
+        crate::ReviewResultObservation {
+            outcome,
+            retry_after,
+        }
+    }
+
+    async fn result_exchange(
+        &self,
+        auth: ReviewAuth<'_>,
+        expected: &ReviewRequestAccepted,
+        retry_after: &mut registry_platform_httputil::client::RetryAfter,
+    ) -> Result<ReviewResultResponse, ReviewClientError> {
         let request_id = expected.request_id;
         let url = self.url_from_constant(&review_result_path(request_id))?;
         let response = self
             .send(self.authorized(self.http.get(url), &auth)?)
             .await?;
+        *retry_after =
+            registry_platform_httputil::client::RetryAfter::from_headers(response.headers());
         let status = response.status();
         let trace_id = response_trace(status, response.headers())?;
         match status {
@@ -475,7 +499,7 @@ impl ReviewClient {
 
 fn check_accepted(
     value: &ReviewRequestAccepted,
-    expected_kind: &str,
+    expected_policy: &registry_review_protocol::PolicyBinding,
     expected_subject: &registry_review_protocol::SubjectBinding,
     expected_submission_digest: &SubmissionDigest,
     trace_id: &str,
@@ -498,7 +522,7 @@ fn check_accepted(
     // A nil request identifier cannot anchor the later result polls,
     // cancellations, and completion correlations the binding is kept for.
     if value.request_id.is_nil()
-        || value.policy.id != expected_kind
+        || value.policy != *expected_policy
         || value.subject != *expected_subject
         || value.submission_digest != *expected_submission_digest
     {

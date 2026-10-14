@@ -10,7 +10,7 @@ from registry_coordinator_client import CoordinatorClient, CoordinatorClientErro
 
 BASE = "https://coordinator.example.invalid/deployment"
 RUN = "7e367d42-b001-4d44-b94c-9447bfa182aa"
-REQUEST = {"flow": "nursing-notice", "input": {"requestId": "one"}}
+REQUEST = {"workflow": "nursing-notice", "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "input": {"requestId": "one"}}
 
 
 class ConstructionTests(unittest.TestCase):
@@ -120,16 +120,16 @@ class ConstructionTests(unittest.TestCase):
         data: dict[str, object] = {}
         data["cycle"] = data
         with self.assertRaises(CoordinatorClientError) as raised:
-            CoordinatorClient(BASE).start("valid-token", "key-1", {"flow": "nursing-notice", "input": data})
+            CoordinatorClient(BASE).start("valid-token", "key-1", {"workflow": "nursing-notice", "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "input": data})
         self.assertEqual(raised.exception.kind, "invalid-request")
 
     def test_a_malformed_start_request_is_rejected_before_io(self) -> None:
         client = CoordinatorClient(BASE)
         for request in (
             {**REQUEST, "extra": True},
-            {"flow": "nursing-notice"},
+            {"workflow": "nursing-notice"},
             {"input": {}},
-            {"flow": 1, "input": {}},
+            {"workflow": 1, "input": {}},
             "not a mapping",
             None,
         ):

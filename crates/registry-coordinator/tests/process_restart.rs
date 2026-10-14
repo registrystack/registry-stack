@@ -332,9 +332,8 @@ async fn exited_decision_workers_hold_unknown_results_and_reuse_completed_result
         let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let runtime = root.path().join("runtime.yaml");
         let mut value = serde_json::to_value(config(root.path(), &issuer, &base, &base)).unwrap();
-        value["connections"] = json!({});
-        value["decisionConnections"] = json!({"assessor":{
-            "protocol":"system-one","baseUrl":base,"model":"fixture-model",
+        value["connections"] = json!({"assessor":{
+            "type":"evaluation","protocol":"system-one","baseUrl":base,"model":"fixture-model",
             "authorization":{"local":{}}
         }});
         let config = serde_json::from_value(value).unwrap();
@@ -347,27 +346,42 @@ async fn exited_decision_workers_hold_unknown_results_and_reuse_completed_result
 apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project: {id: process-decision, version: '1'}
-input: {type: object}
-connections: {assessor: decision}
-functionsFile: functions.rhai
-deadlineSeconds: 3600
-start: evaluate
-steps:
+functions:
+  decision-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: decision_request
+    inputs: {input: {type: object}}
+    output: {operationInput: evaluate}
+  timer:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: timer
+    inputs: {input: {type: object}}
+    output: {type: string, format: date-time}
+operations:
   evaluate:
-    type: call
+    uses: evaluation.evaluate/v1
     connection: assessor
-    operation: evaluate-decision
-    input: {type: function, function: decision_request, arguments: [{type: input}]}
-    next: wait
-  wait:
-    type: wait-until
-    waitUntil: {type: function, function: timer, arguments: [{type: input}]}
-    next: done
-  done:
-    type: finish
-    outcome: assessed
-    output: {type: function, function: decision_result, arguments: [{type: step, step: evaluate}]}
-outcomes: {assessed: {type: object}}
+workflow:
+  input: {type: object}
+  deadlineSeconds: 3600
+  start: evaluate
+  steps:
+    evaluate:
+      type: call
+      operation: evaluate
+      input: {type: function, function: decision-request, inputs: {input: {type: input}}}
+      next: wait
+    wait:
+      type: wait-until
+      waitUntil: {type: function, function: timer, inputs: {input: {type: input}}}
+      next: done
+    done:
+      type: finish
+      outcome: assessed
+      output: {type: step, step: evaluate}
+  outcomes: {assessed: {operationOutput: evaluate}}
 "#,
         )
         .unwrap();
@@ -375,7 +389,7 @@ outcomes: {assessed: {type: object}}
 fn decision_request(input) {
     #{ state: #{ synthetic: true }, questions: #{ route: #{ type: "choice", instructions: "Assess supplied facts", criteria: #{ a: "Proceed", b: "Review" } } } }
 }
-fn timer(input) { input.at }
+fn timer(args) { args.input.at }
 fn decision_result(result) { result }
 "#).unwrap();
         let input = root.path().join("input.json");

@@ -3,14 +3,14 @@
 You operate one Coordinator service beside PostgreSQL 17 or newer and the
 institution's existing OIDC issuer. Receiving Registry Stack products still
 verify their own caller and task authority. Coordinator runs finite reviewed
-workflow packages, one per flow, and preserves every admitted run's original
+workflow packages, one per workflow, and preserves every admitted run's original
 definition.
 
 ## Deployment checklist
 
 Do these tasks in order. Each one links to the section with the details.
 
-1. [Install the binaries and build each flow's package](#install-and-package).
+1. [Install the binaries and build each workflow's package](#install-and-package).
    Record the package digest that `package` prints.
 
    ```sh
@@ -135,11 +135,11 @@ coordinatorctl package --project ./follow-up --output ./follow-up-package
 When the project has a `scenarios.yaml`, `package` runs it first and writes
 nothing unless every case passes.
 Install the directory read-only, record the returned package digest, and pin it
-as that flow's `deployment.packages` entry, with `root` and `expectedDigest`.
+as that workflow's `deployment.packages` entry, with `root` and `expectedDigest`.
 [Package digest and definition digest](#package-digest-and-definition-digest)
 explains which of the two digests to pin.
-One project is one flow and one package; its workflow ID is the flow name
-callers start. A deployment lists one pinned package per flow, up to sixteen.
+One project is one workflow and one package; its workflow ID is the workflow name
+callers start. A deployment lists one pinned package per workflow, up to sixteen.
 Offline checks and startup refuse an empty list, a package root or digest
 listed twice, and two packages with the same workflow ID, each naming the entry
 to fix. [two-flow-runtime.yaml](examples/two-flow-runtime.yaml) serves the
@@ -153,30 +153,27 @@ payload tombstones, before activating a reused version.
 
 ### Package digest and definition digest
 
-A package has two digests. Pin the package digest.
+Pin the package digest for exact bytes; use `workflowRevision` for execution semantics.
 
-- The definition digest is the SHA-256 of `definition.json`, the workflow
-  snapshot. `check` prints it on its `Definition:` line, and `start`, `status`,
-  `list` and `inspect` report it as `definitionDigest` for each run. A run keeps
-  the definition digest it was admitted under, so after an upgrade it tells you
-  which definition the run follows.
-- The package digest is the SHA-256 of `SHA256SUMS`. That file lists the
-  digest of `definition.json`, so the package digest covers the whole package
-  and changes whenever the definition changes. `package` prints it, `plan`
-  reports it for each flow as `packageDigest` (the listed package) and
-  `activePackageDigest` (the active one), and `deployment-status` reports it
-  for each flow under `flows`.
+- The computed Workflow revision hashes the input, graph, outcomes, used Operation and Function
+  revisions, and host execution contracts. Presentation titles and descriptions do not change it.
+  `check` prints this revision on its `Definition:` line. Start, status, list, and inspect report it
+  as `workflowRevision`. Existing runs keep their admitted revision.
+- The package digest is the SHA-256 of `SHA256SUMS`. That file covers the exact `definition.json`
+  snapshot bytes, including presentation metadata. `package` prints the digest; `plan` reports
+  listed `packageDigest` and `activePackageDigest`; `deployment-status` reports package pins under
+  `workflows`.
 
 Put the package digest in `expectedDigest`. `plan`, `apply` and startup check
 the installed directory against it and refuse a package whose content no
 longer matches with `coordinator.deployment.refused` and the advice to restore
-the exact pinned package. `flowsDigest` identifies the whole set of pinned
+the exact pinned package. `workflowsDigest` identifies the whole set of pinned
 packages; the `active` activation record in `plan`, `apply` and
 `deployment-status` carries that set digest in its `packageDigest` field.
 When a workflow version that already admitted runs would name a different
 definition digest, `plan` and `apply` both refuse with
 `coordinator.command.workflow-version-conflict` and the advice to give that
-flow's changed definition a new `project.version`; `apply` keeps the active
+workflow's changed definition a new `project.version`; `apply` keeps the active
 package. A run admitted after `plan` can still make `apply` refuse.
 
 ## Create the keys and secrets
@@ -325,38 +322,32 @@ issuer and caller policy. The example contains references only. Provision each
 secret separately through its enabled shared provider.
 
 The shared `jwksSource` block selects its variant with `type`, for example
-`type: discovery`. Write `allowedClients` as a nonempty list of exact client IDs;
-Coordinator refuses omission, an empty list and `unrestricted`. Each listed
-client also needs its explicit action and workflow policy. Coordinator reads a
-token's scopes from its `registry_scopes` claim. For an issuer that puts them in
-the standard `scope` claim, set `scopeClaim: scope` under
-`deployment.authentication`.
+`type: discovery`. Key `authentication.policies` by exact verified client identity.
+Each entry declares required scopes, actions, and permitted `workflows` for run actions.
+The policy keys are the admitted client set. Coordinator reads scopes from `registry_scopes`;
+set `scopeClaim: scope` when the issuer uses the standard `scope` claim.
 
-For `invoke-breg-action`, configure a Base Registry Engine (BReg) connection with
+For `breg.invoke-action/v1`, configure a Base Registry Engine (BReg) connection with
 an ordinary service `authorization` and an explicitly permitted `profile`. Do not configure
 `authorization.taskAuthority` on that connection: this operation accepts no
 Casework grant and has no task-authority fallback. Keep a task-bound record-read
 connection separate when the workflow needs both authority types.
 
-For `external-get`, configure `externalHttpConnections` separately from product
-`connections`. Declare `baseUrl`, exact `paths`, optional `queryParameters`,
-optional ordinary service `authorization`, and the required `responseSchema`
-for `{status, body}`. Omitted authorization permits a public read and never
-borrows the caller's token. The default attempt timeout is 2000 milliseconds
-and the default response limit is 65,536 bytes; both may be reduced. Use HTTPS
-for institutional endpoints; plain HTTP requires an explicit numeric loopback
-address. See the [external directory example](examples/external-directory/runtime.yaml)
-and [configuration reference](../../docs/site/src/content/docs/reference/coordinator-configuration.mdx).
+Use one `connections` map for all logical connections. Each entry selects its complete
+contract with `type`: `breg`, `casework-review-producer`, `messaging`, `scheduling`,
+`external-http`, or `evaluation`. Declare at most sixteen names.
 
-For `evaluate-decision`, bind a logical `decision` connection under
-`decisionConnections`. Select `system-one` or `openai-decisions`, an explicit
-`baseUrl` and `model`, and either `authorization.bearer` with `tokenRef` and
-`principal`, or explicit `authorization.local: {}` on numeric loopback. The
-configured principal identifies the model account across credential rotation;
-ensure a replacement key belongs to that same account. Request and response
-limits default to 65,536 bytes and the attempt limit to 8000 milliseconds.
-These limits can be reduced. Names across all three connection maps must be
-unique, with at most 16 in total.
+For `external.get/v1`, use `type: external-http` with `baseUrl`, exact `paths`, optional
+`queryParameters`, optional ordinary service `authorization`, and the required `responseSchema`
+for `{status, body}`. Omitted authorization means a public read. Attempt timeout defaults to
+2000 milliseconds and response size to 65,536 bytes; both can be reduced. Use HTTPS for
+institutional endpoints; HTTP requires numeric loopback.
+
+For `evaluation.evaluate/v1`, use `type: evaluation` with protocol `system-one` or
+`openai-decisions`, `baseUrl`, `model`, and either `authorization.bearer` (`tokenRef` and stable
+account `principal`) or explicit `authorization.local: {}` on numeric loopback. Request and
+response limits default to 65,536 bytes and the attempt limit to 8000 milliseconds. Rotate
+credentials under the same provider account and binding.
 
 Review the data your mappings disclose before activating a remote model binding.
 Model calls may incur cost. Inputs and results use Coordinator's existing protected
@@ -380,7 +371,7 @@ same conservative hold applies to HTTP 429, including temporary rate limits with
 unknown-result cases; terminal `needs-review` returns control to the caller and
 does not create a resumable approval task.
 
-For `submit-review-request` and `cancel-review-request`, configure a Casework
+For `casework.submit-review-request/v1` and `casework.cancel-review-request/v1`, configure a Casework
 connection as one of Casework's review producers. `profile` names the Casework
 access profile the producer's client is admitted to, `producer` names the
 producer's `id` in the Casework project's `reviewProducers`, and the ordinary
@@ -397,7 +388,7 @@ review completes:
 ```yaml
 connections:
   review:
-    product: casework
+    type: casework-review-producer
     baseUrl: https://casework.example.org
     profile: coordinator-producer
     producer: coordinator
@@ -508,16 +499,16 @@ deployment:
 [Watch metrics](#watch-metrics) lists the series it serves.
 
 Caller policies list exact admitted OAuth clients, required scopes, actions and,
-for run actions, allowed flow identifiers. Each verified client resolves one
+for run actions, allowed workflow identifiers. Each verified client resolves one
 policy. Ownership and admission idempotency come from the token's exact verified
 `iss` and `sub`, never input fields. The run actions `start`, `status`,
-`inspect`, `retry-same`, `cancel` and `reconcile` reach only the flows the policy
-lists in `flows`, which is required when the policy lists any of them. The
+`inspect`, `retry-same`, `cancel` and `reconcile` reach only the workflows the policy
+lists in `workflows`, which is required when the policy lists any of them. The
 deployment-wide actions `doctor`, `restore-hold`, `release-restore-hold`,
 `release-admission-hold`, `complete-execution-recovery` and `retain` act on every
-flow at once, including flows added later, and need `operator: true` on the
-policy. They take no flow list: a policy that lists only deployment-wide actions
-omits `flows`, and the configuration check refuses one that sets it.
+workflow at once, including workflows added later, and need `operator: true` on the
+policy. They take no workflow list: a policy that lists only deployment-wide actions
+omits `workflows`, and the configuration check refuses one that sets it.
 Do not give institutional producers operator authority. A task-exchanged inbound
 token also requires the matching declared assertion issuer for that client.
 
@@ -530,16 +521,16 @@ coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml deploymen
 coordinator --runtime-config /etc/registry-coordinator/runtime.yaml
 ```
 
-`plan` reports, for each flow, whether apply would `install`, `replace`,
+`plan` reports, for each workflow, whether apply would `install`, `replace`,
 leave `unchanged` or `remove` its package, with the configured and active
-package digests, the `flowsDigest` of the listed set and the observed
+package digests, the `workflowsDigest` of the listed set and the observed
 activation/schema, without claiming deployment validity. `deployment-status` checks the pinned packages,
 database identity, supported migration ledger, effective split runtime role,
 narrow control grants and retained live binding compatibility. The connected
 PostgreSQL `current_user`, configured `runtimeRole` and activated runtime role
 must agree. It uses runtime credentials only, never migration
 credentials, and does not migrate, activate or change recovery holds. JSON output
-returns `status: checked`, `databaseId`, `flowsDigest`, `flows` (each flow's
+returns `status: checked`, `databaseId`, `workflowsDigest`, `workflows` (each workflow's
 package digest), `schemaVersion`,
 `runtimeRole` and the checked `active` activation. Refused checks exit nonzero
 with `deployment.refused` for deployment-contract refusals or
@@ -585,15 +576,15 @@ attempt of a worker that crashed.
 
 Apply serializes activation with database locks, migrates the dedicated schema,
 grants the runtime role, records the verified set of packages in the shared
-ledger and each flow's active package in the control record.
+ledger and each workflow's active package in the control record.
 A refused incompatible live binding must be resolved by restoring the previous
 binding or finishing/reconciling affected work. Compatible definitions govern new
 admissions while old runs keep their encrypted snapshots and command identities.
 Adding an unrelated logical connection does not change a workflow binding digest.
 Reusing an idempotency key returns the original run rather than creating new work.
 
-This source version creates protected state schema version 2. A namespace created
-by an earlier pilot with schema version 1 is refused: apply reports `schema-version`,
+This source version creates protected state schema version 3. A namespace created
+by an earlier pilot with schema versions 1 or 2 is refused: apply reports `schema-version`,
 and runtime state access (including `deployment-status`) fails closed as
 `store-unavailable`. Apply does not silently adopt or rewrite it. Settle and retain the old pilot's work under
 its matching binary, then create a fresh namespace and database identity for this
@@ -634,32 +625,32 @@ state, `state.uncertain` counts steps whose effect waits for an operator, and
 `state.terminalPayloads` counts the terminal payloads retention can erase, and
 `state.oldestTerminalPayloadAt` is when the oldest of those runs ended.
 
-### Add, upgrade, roll back and remove a flow
+### Add, upgrade, roll back and remove a workflow
 
-Each flow's package is applied on its own. One deployment is one trust domain,
-so flows that must not share connections run in separate deployments. To add a
-flow, list its pinned package; to upgrade or roll one back, change only that entry's `root` and
-`expectedDigest` to the new or previous package. Apply reports each flow's
-change and leaves every other flow's active package and runs untouched. Runs in
-flight on a replaced flow keep the definition they were admitted with; new
-starts of that flow use the replacement. Any apply that changes the listed set
+Each workflow's package is applied on its own. One deployment is one trust domain,
+so workflows that must not share connections run in separate deployments. To add a
+workflow, list its pinned package; to upgrade or roll one back, change only that entry's `root` and
+`expectedDigest` to the new or previous package. Apply reports each workflow's
+change and leaves every other workflow's active package and runs untouched. Runs in
+flight on a replaced workflow keep the definition they were admitted with; new
+starts of that workflow use the replacement. Any apply that changes the listed set
 fences services started under the previous set until they restart, so restart
 every service after each apply.
 
-Dropping an entry never retires a flow by itself. Plan and apply refuse an
-active flow missing from the list with `coordinator.deployment.flow-unlisted`
+Dropping an entry never retires a workflow by itself. Plan and apply refuse an
+active workflow missing from the list with `coordinator.deployment.workflow-unlisted`
 until it is listed again or named explicitly:
 
 ```sh
-coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml plan --remove-flow governed-action-follow-up
-coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml apply --remove-flow governed-action-follow-up
+coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml plan --remove-workflow governed-action-follow-up
+coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml apply --remove-workflow governed-action-follow-up
 ```
 
-Removal is refused with `coordinator.deployment.flow-live-runs` while the flow
+Removal is refused with `coordinator.deployment.workflow-live-runs` while the workflow
 has a run that retention could not yet erase: running, waiting, uncertain,
 recoverable or awaiting restore review. Let those runs settle or cancel them
 first; removal, unlike replacement, leaves no definition to finish them under.
-Naming a flow that is still listed or not active is refused. A removed flow's
+Naming a workflow that is still listed or not active is refused. A removed workflow's
 terminal runs stay readable and inspectable, and starts naming it are refused.
 
 ## Watch metrics
@@ -708,11 +699,11 @@ that scrape has no `coordinator_dispatch_jobs` samples rather than zeros, and
 the service logs a warning with the failure code. Alert on the gauge going
 absent as well as on its value.
 
-No label carries a flow, run, input, principal or other caller text, and flow
-identifiers are deliberately not a label. A flow is configuration, so labelling
-by it would grow the series with every flow added and keep series for flows
-removed; an attempt whose snapshot cannot be decoded has no trustworthy flow to
-label; and per-flow and per-run detail already lives in the audit journal and in
+No label carries a workflow, run, input, principal or other caller text, and workflow
+identifiers are deliberately not a label. A workflow is configuration, so labelling
+by it would grow the series with every workflow added and keep series for workflows
+removed; an attempt whose snapshot cannot be decoded has no trustworthy workflow to
+label; and per-workflow and per-run detail already lives in the audit journal and in
 `coordinatorctl status` and `inspect`. Log lines carry fixed messages and
 failure codes, never tokens, run inputs, step outputs, command bodies or caller
 text. Bind the metrics listener where only your monitoring can reach it: the
@@ -729,10 +720,12 @@ your approved registry; `sendAfter` is an RFC 3339 time within the workflow dead
 ```sh
 umask 077
 python3 -c 'import uuid; print(uuid.uuid4())' > ./idempotency-key
+coordinatorctl workflow --workflow delayed-follow-up \
+  --url https://coordinator.example.org --token-file /run/producer-token
 cat > ./input.json <<'JSON'
 {"applicationId":"00000000-0000-0000-0000-000000000001","sendAfter":"<RFC3339_TIME>"}
 JSON
-coordinatorctl start --flow delayed-follow-up --input ./input.json --key-file ./idempotency-key \
+coordinatorctl start --workflow delayed-follow-up --workflow-revision <workflow-revision> --input ./input.json --key-file ./idempotency-key \
   --url https://coordinator.example.org --token-file /run/producer-token
 coordinatorctl status --run RUN_UUID \
   --url https://coordinator.example.org --token-file /run/producer-token
@@ -740,11 +733,15 @@ coordinatorctl inspect --run RUN_UUID \
   --url https://coordinator.example.org --token-file /run/operator-token
 ```
 
-`start` sends `{ "flow": "delayed-follow-up", "input": ... }` to `POST /v1/runs`
+`start` sends `workflow`, expected `workflowRevision`, and `input` to `POST /v1/runs`
 with the idempotency key as `Idempotency-Key`. Status and list show authorized
 progress and the reviewed terminal projection. Inspection shows bounded durable
 step state. It never returns original inputs, raw product responses or prepared
 command payloads.
+
+Inspection also reports accepted or unknown `effects` with pinned operation revisions, and
+`waits` with completion revisions, deadlines, next observations, persistent floors, and count/limit.
+Protected command and correlation values remain absent.
 
 Inspection includes `recovery.operation` for a compatible current call, with its
 pinned ID, version, product, effect, key/preparation requirements, recovery and
@@ -756,15 +753,20 @@ and `readReceipt: false`. `retryAllowed` and `reason` describe scheduling
 eligibility; neither the descriptor nor that eligibility proves current product
 authority or the existence of an original-key receipt.
 
-A start is admitted under the named flow's active definition; retained runs
-keep their original definitions. A caller whose policy does not list the flow
-is refused with HTTP 403 `operation.not-authorized`; an allowed flow this
-deployment does not serve is refused with HTTP 404 `flow.not-served`. `GET /v1/runs` returns at
+Use the discovered `workflowRevision` in the start command. A fresh admission must match
+that active revision. If admission is unknown, resend the original identity, key, revision, and
+input, including after a package change. A mismatch on new work returns
+`workflow.revision-mismatch`; conflicting key reuse returns `idempotency.key-reused`.
+
+A start is admitted under the named workflow's active definition; retained runs
+keep their original definitions. A caller whose policy does not list the workflow
+is refused with HTTP 403 `operation.not-authorized`; an allowed workflow this
+deployment does not serve is refused with HTTP 404 `workflow.not-served`. `GET /v1/runs` returns at
 most 100 of the caller's most recently admitted runs, newest first, from the
-flows its policy lists; an operator policy lists every owner's runs in those
-flows. `limit` takes 1 to 100 and defaults to 20. Use `state` to filter by effective state, or `attention=true` for effective states
+workflows its policy lists; an operator policy lists every owner's runs in those
+workflows. `limit` takes 1 to 100 and defaults to 20. Use `state` to filter by effective state, or `attention=true` for effective states
 `attention` and `failed` (`attention=false` excludes both). Pass `nextCursor` as
-`cursor` with the same filters to continue; each page rechecks current caller and flow
+`cursor` with the same filters to continue; each page rechecks current caller and workflow
 permissions. The order is admission time and run ID, newest first. Keep the run ID a
 start returns for direct lookup with `GET /v1/runs/{run}`. Use the
 authenticated HTTP API for application integration, through the maintained
@@ -819,7 +821,7 @@ the call's failure code. After the tenth attempt the run reports `failed` with
 that code and waits for the recovery below. Uncertain answers are never
 retried automatically.
 
-An `external-get` reply with status 429, 502, 503 or 504 is a definite
+An `external.get/v1` reply with status 429, 502, 503 or 504 is a definite
 retryable answer on every attempt but the tenth: 429 retries as
 `external-rate-limited` and the others as `external-unavailable`. The tenth
 attempt delivers that status to the workflow like any other, held to the
@@ -846,36 +848,35 @@ cancellation, restore holds and the original workflow deadline still fence
 dispatch. Task-bound operations retain their original approval deadline too.
 
 Casework review requests have no read-only receipt either. `reconcile` reports
-`reconciliation-unavailable` for an uncertain `submit-review-request` or
-`cancel-review-request`, and `retry-same` resends the saved request with its
+`reconciliation-unavailable` for an uncertain `casework.submit-review-request/v1` or
+`casework.cancel-review-request/v1`, and `retry-same` resends the saved request with its
 original key. Casework answers a repeated key with its stored response while
 it keeps one; after that the step reports an expired receipt and the effect
 stays unresolved.
 
-A `wait-for` step's result reads change nothing in Casework, so a read is never
-uncertain. A definite retryable answer, or a read that cannot reach Casework,
-leaves the wait open like a review that is still open and spends no attempt:
-the next read follows Casework's `Retry-After`, no sooner than 30 seconds and
-no later than `resultCheckSeconds`. Without one it comes after the five-minute
-longest retry delay, or after `resultCheckSeconds` when that is shorter, so
-waiting runs do not all read again the moment Casework recovers. A completion
-event still brings the read forward. An outage shorter than the timeout therefore never fails a waiting
-run; `coordinator_step_attempts_total` counts each such read as `transient`. A
-read Casework refuses fails the run with its code. A run that failed this way
-before its deadline keeps its wait, and `retry-same` resumes the reads under
-the original timeout. `wait-timed-out`, `review-request-unknown` and `review-result-expired`
-end the wait, as do the run deadline, cancellation and retention, and
-`retry-same` cannot resume an ended wait. An optional `onCancel` edge on a review
-wait takes an authored forward path instead of ordinary stop cancellation. A parked
-wait switches to that path durably; a read already leased records the intent and
-switches when the lease settles or expires. The path can call `cancel-review-request`
-with the original accepted request. Status reports `authoredCancelRequested: true`,
-and repeating `cancel` does not interrupt this cleanup or issue a second withdrawal.
-The Casework call still uses current producer authority, the original command key,
-and the run deadline. Route on its `outcome`: a result already decided is
-`already-terminal`, never a successful withdrawal. Without `onCancel`, or after
-the result has advanced the wait, ordinary cancellation stops future calls where it
-can and leaves an open Casework request for explicit withdrawal there.
+A `wait-for` observes a named completion, correlated to an earlier accepted call.
+Casework exposes `result`; BReg Proposal submission exposes `application`; external GET can
+expose an authored bounded-poll completion. These observations are read-only and spend no
+mutation attempt. Pending Casework and BReg reads default to 900 seconds. Casework allows
+`resultCheckSeconds` from 60 to 86,400 seconds; an external completion declares `intervalSeconds`.
+
+The durable read floor is at least 30 seconds. Top-level `minimumObservationIntervalSeconds`
+can raise it up to 86,400 seconds across the deployment. Restart, event wake-up, retry, and
+timeout never bypass it. Retry hints postpone reads within the host ceiling of 86,400 seconds;
+unusable hints hold the wait. Inspection exposes the floor, next read, count, and budget without
+protected correlation values. A completion event cannot settle a result.
+
+Transient outages leave observations pending within the original deadline. Invalid, refused,
+blocked, or mismatched evidence holds the wait for investigation; it cannot route as a negative
+business outcome. `retry-same` retains the same completion identity, floor, and timeout.
+An ended wait cannot be restarted. Timeout can take `onTimeout`, or report `wait-timed-out`.
+It neither cancels a Proposal nor establishes that BReg failed to apply one.
+
+An optional `onCancel` takes an authored forward cleanup path. An active read records the intent
+and routes when the lease settles or expires. Repeating cancellation preserves cleanup.
+A Casework cancellation uses current producer authority, the original key, and the run deadline;
+route on its `outcome`, because `already-terminal` means a decision won the race. Ordinary
+cancellation leaves downstream work for explicit owner-authorized withdrawal.
 
 If a product call succeeds but the following wait mapping is invalid, the run
 reports `failed` with `mapping-invalid` while retaining that call's successful
@@ -1007,7 +1008,7 @@ runtime file with a different admission key with `state-key-custody`. When the
 key is exposed, close the deployment and admit new work in a fresh one.
 
 1. Stop admissions. Remove `start` from each caller policy's `actions`; remove
-   a policy left with no action, and its client from `allowedClients`. Restart
+   a policy left with no action, and its client policy. Restart
    the service. Starts are then refused with HTTP 403
    `operation.not-authorized`, while status, inspection and operator actions
    keep working. Do not use
@@ -1016,7 +1017,7 @@ key is exposed, close the deployment and admit new work in a fresh one.
 
 2. Let runs finish, or cancel the ones you will not wait for. Doctor counts the
    runs still `running` in `state.states` and the steps waiting for an operator
-   in `state.uncertain`. `list` shows the newest runs of the operator's flows,
+   in `state.uncertain`. `list` shows the newest runs of the operator's workflows,
    up to 100. Settle each uncertain step as [Recover safely](#recover-safely)
    describes before you stop the service.
 
@@ -1064,7 +1065,7 @@ start only for work the old deployment did not admit.
 
 Back up PostgreSQL, all still-needed state-key versions, the stable admission
 key, audit key, durable audit stream and the exact immutable package of every
-listed flow. Preserve
+listed workflow. Preserve
 custody records and test their restore procedure. Never restore only the database
 and manufacture replacement keys. A backup can predate a downstream effect.
 

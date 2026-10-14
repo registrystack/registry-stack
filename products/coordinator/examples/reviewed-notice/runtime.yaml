@@ -14,7 +14,7 @@ database:
 namespace: coordinator_review
 connections:
   applications:
-    product: breg
+    type: breg
     baseUrl: https://registry.example.org
     profile: follow-up-reader
     authorization:
@@ -24,7 +24,7 @@ connections:
       resource: urn:example:applications
       scopes: [records:get]
   review:
-    product: casework
+    type: casework-review-producer
     baseUrl: https://casework.example.org
     profile: coordinator-producer
     producer: coordinator
@@ -39,7 +39,7 @@ connections:
       bearerTokenRef: secret:file/review-completion-token
     resultCheckSeconds: 900
   notices:
-    product: messaging
+    type: messaging
     baseUrl: https://messaging.example.org
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
@@ -61,15 +61,14 @@ deployment:
     audience: urn:example:coordinator
     jwksSource:
       type: discovery
-    allowedClients: [institution-producer, institution-operator]
     policies:
-      - clientId: institution-producer
+      institution-producer:
         requiredScopes: [coordinator:start]
-        flows: [reviewed-notice]
+        workflows: [reviewed-notice]
         actions: [start, status]
-      - clientId: institution-operator
+      institution-operator:
         requiredScopes: [coordinator:operate]
-        flows: [reviewed-notice]
+        workflows: [reviewed-notice]
         actions: [status, inspect, retry-same, cancel, reconcile, doctor, restore-hold, release-restore-hold, release-admission-hold, complete-execution-recovery, retain]
         operator: true
   auditFile: /var/lib/registry-coordinator/audit.jsonl

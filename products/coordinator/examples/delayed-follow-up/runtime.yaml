@@ -12,7 +12,7 @@ database:
 namespace: coordinator_demo
 connections:
   applications:
-    product: breg
+    type: breg
     baseUrl: http://127.0.0.1:8100
     profile: follow-up-reader
     authorization:
@@ -22,7 +22,7 @@ connections:
       resource: urn:example:applications
       scopes: [applications:read]
   notices:
-    product: messaging
+    type: messaging
     baseUrl: http://127.0.0.1:8101
     authorization:
       tokenEndpoint: http://127.0.0.1:8090/token

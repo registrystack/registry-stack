@@ -15,16 +15,16 @@ use std::process::ExitCode;
 use registry_breg::literal_text::{
     LiteralText, WRITE_THE_VALUE, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
 };
-use registry_breg::{data, fixtures, migration_plan, CompiledRegistry};
+use registry_breg::{CompiledRegistry, data, fixtures, migration_plan};
 use registry_platform_yaml::{
-    Diagnostic, Document, Expect, FormatSpec, NodeValue, Reader, Report, Severity, Source,
-    MAXIMUM_DOCUMENT_BYTES,
+    Diagnostic, Document, Expect, FormatSpec, MAXIMUM_DOCUMENT_BYTES, NodeValue, Reader, Report,
+    Severity, Source,
 };
 use serde::Serialize;
 
 use crate::{
-    data_lifecycle, dev, init_from_model, test_lifecycle, write_ctl_report, OutputFormat,
-    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
+    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, OutputFormat, data_lifecycle, dev,
+    init_from_model, test_lifecycle, write_ctl_report,
 };
 
 /// What `bregctl check --file` was asked to check.
@@ -404,7 +404,7 @@ fn journeys(input: &Input<'_>) -> Result<Vec<Diagnostic>, Failure> {
         match fixtures::validate_fixture_journeys(input.bytes, registry) {
             Ok(_) => Vec::new(),
             Err(fixtures::FixtureError::JourneyDocument(report)) => {
-                return Err(Failure::Refused(report))
+                return Err(Failure::Refused(report));
             }
             Err(error) => vec![journey_refusal(input.document, error)],
         },

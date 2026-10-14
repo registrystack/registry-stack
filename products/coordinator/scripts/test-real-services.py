@@ -103,6 +103,20 @@ def http(method, url, token=None, body=None, headers=None, expected=(200,)):
     return json.loads(raw) if raw else None
 
 
+def bind_review_policy(project, binding):
+    """Pin one task-owned authored request to the owning compiled PolicyBinding."""
+    assert set(binding) == {"id", "version", "digest"}, "require an exact owning PolicyBinding"
+    assert binding["id"] == "application-review" and binding["version"] == "1"
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", binding["digest"])
+    path = Path(project) / "functions.rhai"
+    source = path.read_text()
+    pattern = r'policy:\s*#\{id:\s*"application-review",\s*version:\s*"1",\s*digest:\s*"sha256:[0-9a-f]{64}"\}'
+    replacement = 'policy: #{id: "application-review", version: "1", digest: ' + json.dumps(binding["digest"]) + '}'
+    source, changed = re.subn(pattern, lambda _: replacement, source)
+    assert changed == 1, "the native copy must contain one exact review-policy request binding"
+    private(path, source)
+
+
 def subject(token):
     # Display data from our own dev fixture. Products still verify signatures.
     payload = token.split(".")[1]
@@ -399,37 +413,65 @@ class Journey:
         assert set(prepared) == {"applicationId", "applicationRevision", "applicationDigest"}
         return prepared
 
-    def patch_application(self, owner, application, field, value):
-        """Apply one exact no-review BReg change request and return the new record."""
+    def start_proposal(self, owner, action_id, inputs):
         token = self.token("bregctl", owner, "seed-client")
-        route, value_field = {
-            "requestedAmount": ("application-amount-changes", "proposedAmount"),
-            "noticeAllowed": ("application-notice-changes", "proposedNoticeAllowed"),
+        metadata = http("GET", self.urls["breg"] + "/v1/registry?accessProfile=seeder", token)
+        action = next(action for action in metadata["actions"] if action["id"] == action_id)
+        assert action["execution"]["mode"] == "proposal"
+        route = action["routes"]["start"]
+        assert route["method"] == "POST"
+        url = urllib.parse.urljoin(self.urls["breg"], route["path"]) + "?accessProfile=seeder"
+        proposal = http("POST", url, token, {"input": inputs},
+                        {"Idempotency-Key": str(uuid.uuid4())}, (200, 201))
+        assert proposal["state"] == "draft" and proposal["actionId"] == action_id
+        assert proposal["actionRevision"] == action["revision"]
+        assert "application" not in proposal
+        return proposal
+
+    def proposal_transition(self, owner, proposal, operation, body=None):
+        link = proposal["links"][operation]
+        assert link["method"] == "POST" and link["operation"] == operation
+        assert link["availability"]["available"]
+        url = urllib.parse.urljoin(self.urls["breg"], link["path"]) + "?" + urllib.parse.urlencode({"accessProfile": link["accessProfile"]})
+        return http("POST", url, self.token("bregctl", owner, "seed-client"),
+                    {} if body is None else body,
+                    {"Idempotency-Key": str(uuid.uuid4()), "If-Match": link["ifMatch"]}, (200, 201))
+
+    def read_proposal(self, owner, proposal):
+        link = proposal["links"]["self"]
+        assert link["method"] == "GET" and link["operation"] == "get"
+        url = urllib.parse.urljoin(self.urls["breg"], link["path"]) + "?" + urllib.parse.urlencode({"accessProfile": link["accessProfile"]})
+        return http("GET", url, self.token("bregctl", owner, "seed-client"))
+
+    def patch_application(self, owner, application, field, value):
+        """Submit one genuine no-review Proposal and observe its exact application."""
+        action, value_field = {
+            "requestedAmount": ("correct-amount", "proposedAmount"),
+            "noticeAllowed": ("correct-notice-permission", "proposedNoticeAllowed"),
         }[field]
-        created = http("POST", self.urls["breg"] + f"/v1/records/{route}?accessProfile=seeder", token,
-            {"data": {"tenant": "tenant-a", "record": application, value_field: value,
-                      "reason": "Exercise the reviewed-notice post-review guard"}},
-            {"Idempotency-Key": str(uuid.uuid4())}, (201,))
-        change = created["data"]["recordIdentifier"]
-        seeder_path = self.urls["breg"] + f"/v1/records/{route}/{change}?accessProfile=seeder"
-        record = http("GET", seeder_path, token)
-        submit = next(action for action in record["data"]["request"]["actions"]
-                      if action["operation"] == "submit-request")
-        http("POST", urllib.parse.urljoin(self.urls["breg"], submit["href"]), token, {},
-             {"Idempotency-Key": str(uuid.uuid4()), "If-Match": submit["ifMatch"]})
-        applier_path = self.urls["breg"] + f"/v1/records/{route}/{change}?accessProfile=applier"
-        record = http("GET", applier_path, token)
-        apply = next(action for action in record["data"]["request"]["actions"]
-                     if action["operation"] == "apply-request")
-        request = record["data"]["request"]
-        http("POST", urllib.parse.urljoin(self.urls["breg"], apply["href"]), token,
-             {"proposalVersion": request["proposalVersion"], "effectDigest": request["effectDigest"]},
-             {"Idempotency-Key": str(uuid.uuid4()), "If-Match": apply["ifMatch"]})
+        draft = self.start_proposal(owner, action, {"applicationId": application,
+            value_field: value, "reason": "Exercise the reviewed-notice post-review guard"})
+        submitted = self.proposal_transition(owner, draft, "submit")
+        assert submitted["state"] == "submitted" and submitted["effectDigest"]
+        binding = {key: submitted[key] for key in ("id", "actionId", "actionRevision", "submissionVersion", "effectDigest")}
+        deadline = time.monotonic() + 30
+        while True:
+            current = self.read_proposal(owner, submitted)
+            assert {key: current[key] for key in binding} == binding, "a successor cannot satisfy exact application observation"
+            if current["state"] == "applied":
+                assert current["application"]["submissionVersion"] == binding["submissionVersion"]
+                assert current["application"]["effectDigest"] == binding["effectDigest"]
+                break
+            assert current["state"] == "submitted" and time.monotonic() < deadline, "the no-review mutation did not apply"
+            time.sleep(0.1)
         return http("GET", self.urls["breg"] +
-                    f"/v1/records/applications/{application}?accessProfile=seeder", token)
+                    f"/v1/records/applications/{application}?accessProfile=seeder",
+                    self.token("bregctl", owner, "seed-client"))
 
     def start(self, owner, url, label, data, flow="deferred-appointment"):
-        body = {"flow": flow, "input": data}
+        contract = self.producer_request(owner, "GET", url + "/v1/workflows/" + urllib.parse.quote(flow, safe=""))
+        assert contract["workflow"] == flow, "the served workflow contract must match the selected workflow"
+        body = {"workflow": flow, "workflowRevision": contract["workflowRevision"], "input": data}
         first = self.producer_request(owner, "POST", url + "/v1/runs", body, {"Idempotency-Key": label})
         repeat = self.producer_request(owner, "POST", url + "/v1/runs", body, {"Idempotency-Key": label})
         assert repeat["runId"] == first["runId"]
@@ -623,14 +665,14 @@ class Journey:
         task = {"baseUrl": self.urls["casework"], "issuer": AUTHORITY, "subject": agent,
             "exchangeAudience": self.urls["issuer"], "bootstrapResource": resource}
         return self.coordinator_service("deferred-appointment", keys, {
-            "applications": {"product": "breg", "baseUrl": self.urls["breg"], "profile": "follow-up-reader",
+            "applications": {"type": "breg", "baseUrl": self.urls["breg"], "profile": "follow-up-reader",
                 "authorization": self.authorization(reader, resource, ["records:get"])},
-            "catalogue": {"product": "scheduling", "baseUrl": scheduling_url,
+            "catalogue": {"type": "scheduling", "baseUrl": scheduling_url,
                 "authorization": self.authorization(catalogue, SCHEDULING_RESOURCE, ["scheduling:read"])},
-            "bookings": {"product": "scheduling", "baseUrl": scheduling_url,
+            "bookings": {"type": "scheduling", "baseUrl": scheduling_url,
                 "authorization": self.authorization(booking, SCHEDULING_RESOURCE, ["scheduling:read", "scheduling:commit"], taskAuthority=task),
                 "observationAuthorization": self.authorization(booking, SCHEDULING_RESOURCE, ["scheduling:read"])},
-            "notices": {"product": "messaging", "baseUrl": messaging_url,
+            "notices": {"type": "messaging", "baseUrl": messaging_url,
                 "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
         }, free_ports(1)[0], "coordinator-before-wait")
 
@@ -639,6 +681,11 @@ class Journey:
         projects = [(flow, REPO / "products/coordinator/examples" / flow), *additional_projects]
         packages = []
         for flow_id, project in projects:
+            if flow_id.startswith("reviewed-notice"):
+                bound_project = self.root / ("bound-" + flow_id)
+                shutil.copytree(project, bound_project)
+                bind_review_policy(bound_project, self.review_policy_binding)
+                project = bound_project
             package = self.root / f"coordinator-{flow_id}-package"
             packaged = self.ctl("coordinatorctl", "package", "--project", project, "--output", package)
             packages.append({"root": str(package), "expectedDigest": packaged["packageDigest"]})
@@ -671,10 +718,10 @@ class Journey:
             "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "development-loopback"},
             "authentication": {"issuer": self.urls["issuer"], "audience": COORDINATOR_RESOURCE,
                 "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
-                "allowedClients": ["coordinator-producer"], "policies": [{"clientId": "coordinator-producer",
+                "policies": {"coordinator-producer": {
                     "requiredScopes": ["coordinator:start", "coordinator:operate"],
-                    "flows": [flow_id for flow_id, _ in projects],
-                    "actions": ["start", "status", "inspect", "reconcile", "retry-same", "cancel", "doctor"], "operator": True}]},
+                    "workflows": [flow_id for flow_id, _ in projects],
+                    "actions": ["start", "status", "inspect", "reconcile", "retry-same", "cancel"], "operator": True}}},
             "auditFile": str(self.root / f"audit/coordinator-{flow}.ndjson"), "auditKeyRef": "secret:file/audit-key",
             "activeStateKey": 1, "stateKeys": {"1": {"keyRef": "secret:file/state-key"}}, "admissionKeyRef": "secret:file/admission-key",
         }
@@ -683,7 +730,7 @@ class Journey:
         self.ctl("coordinatorctl", "--runtime-config", runtime, "plan")
         applied = self.ctl("coordinatorctl", "--runtime-config", runtime, "apply")
         assert applied["activation"]["roleMode"] == "split", "serving role must not migrate or activate"
-        assert [(item["flow"], item["change"]) for item in applied["flows"]] == [
+        assert [(item["workflow"], item["change"]) for item in applied["workflows"]] == [
             (flow_id, "install") for flow_id, _ in projects]
         url = f"http://127.0.0.1:{port}"
         child = self.spawn("coordinator", runtime, label)
@@ -941,7 +988,8 @@ class Journey:
     def review_casework(self, owner, resource, port, completion_url, completion_token):
         """Serve a Casework whose review producer's completions reach the Coordinator."""
         project = write_review_casework(self.root / "review-casework", self.urls)
-        self.ctl("caseworkctl", "check", project)
+        checked = self.ctl("caseworkctl", "check", project)
+        self.review_policy_binding = next(binding for binding in checked["policyBindings"] if binding["id"] == "application-review")
         package = self.root / "review-casework-package"
         self.ctl("caseworkctl", "package", project, "--output", package)
         database, root_certificate = self.tls_database("review-casework-database")
@@ -1015,14 +1063,14 @@ class Journey:
         private(short_scenarios, scenarios.replace(
             "workflowElapsedSeconds: 1209600", "workflowElapsedSeconds: 2"))
         runtime, url, worker = self.coordinator_service("reviewed-notice", keys, {
-            "applications": {"product": "breg", "baseUrl": self.urls["breg"],
+            "applications": {"type": "breg", "baseUrl": self.urls["breg"],
                 "profile": "follow-up-reader",
                 "authorization": self.authorization(reader, resource, ["records:get"])},
-            "review": {"product": "casework", "baseUrl": casework_url, "profile": "coordinator-producer",
+            "review": {"type": "casework-review-producer", "baseUrl": casework_url, "profile": "coordinator-producer",
                 "producer": "coordinator", "authorization": self.authorization(reviewer, resource, ["casework:review"]),
                 "completion": {"recipientBinding": "coordinator-v1", "bearerTokenRef": "secret:file/review-completion-token"},
                 "resultCheckSeconds": 900},
-            "notices": {"product": "messaging", "baseUrl": messaging_url,
+            "notices": {"type": "messaging", "baseUrl": messaging_url,
                 "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
         }, coordinator_port, "coordinator-reviewed-notice",
             [("reviewed-notice-short-timeout", short_timeout_project)])

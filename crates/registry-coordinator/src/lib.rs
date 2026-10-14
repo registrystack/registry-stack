@@ -4,6 +4,7 @@
 pub mod adapters;
 pub mod authoring;
 pub mod breg_action;
+pub mod breg_proposal;
 pub mod completion;
 pub mod contracts;
 pub mod decision;
@@ -35,3 +36,4 @@ pub mod scenarios;
 
 pub mod cli;
 pub mod service;
+pub mod sdk;

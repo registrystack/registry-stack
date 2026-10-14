@@ -10,15 +10,15 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use anyhow::{bail, Context as _, Result};
-use axum::{routing::get, Json, Router};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use anyhow::{Context as _, Result, bail};
+use axum::{Json, Router, routing::get};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig};
 use registry_thunderid_tooling::description::{
     ExchangeAttributeKind, ExchangeIssuer, ExchangeMapping,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroizing;

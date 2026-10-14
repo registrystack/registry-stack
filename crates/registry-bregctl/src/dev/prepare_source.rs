@@ -133,7 +133,7 @@ struct Transition {
 /// journal stays within the shared reader's document bound.
 mod authoring_text {
     use registry_platform_yaml::Invalid;
-    use serde::{ser::Error as _, ser::SerializeMap, Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer, ser::Error as _, ser::SerializeMap};
     use std::{collections::BTreeMap, path::PathBuf};
 
     pub(super) fn serialize<S: Serializer>(
@@ -172,9 +172,9 @@ mod authoring_text {
 /// The prepared record a transition installs, written as the full document
 /// and read back through the same reader as `source-prepared-<client>.json`.
 mod prepared_record {
-    use super::{read_prepared, PreparedSource};
+    use super::{PreparedSource, read_prepared};
     use registry_platform_yaml::Invalid;
-    use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
     const PREPARED: Invalid = Invalid::expected(
         "the prepared source record",
@@ -201,9 +201,9 @@ mod prepared_record {
 /// The clients a transition installs, written as the full retained document
 /// and read back through the same reader as `.breg/dev/clients.json`.
 mod retained_clients {
-    use super::{config, Clients};
+    use super::{Clients, config};
     use registry_platform_yaml::Invalid;
-    use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
     const CLIENTS: Invalid = Invalid::expected(
         "the retained development clients document",
@@ -243,7 +243,7 @@ struct PreparedSource {
 /// shared reader refuses in a configuration position.
 mod report_text {
     use registry_platform_yaml::Invalid;
-    use serde::{ser::Error as _, Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer, ser::Error as _};
     use serde_json::Value;
 
     pub(super) fn serialize<S: Serializer>(
@@ -428,7 +428,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         .unwrap_or_default();
     let captured = capture(&project, &bytes)?;
     if captured.digest != state.source_digest {
-        bail!("authored inputs differ from the retained session; restore the recorded inputs before preparing a source. Arbitrary changes require the reviewed package lifecycle");
+        bail!(
+            "authored inputs differ from the retained session; restore the recorded inputs before preparing a source. Arbitrary changes require the reviewed package lifecycle"
+        );
     }
     let mut docs = documents(&captured.files)?;
     let compiled = crate::compile(&project, crate::ProfileArg::Production, "prepare-source")
@@ -442,7 +444,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             || args.all_records
             || args.row_field.is_some()
         {
-            bail!("select --entity, --selector-field, --readable-fields and explicit row authority to preview or apply");
+            bail!(
+                "select --entity, --selector-field, --readable-fields and explicit row authority to preview or apply"
+            );
         }
         return Ok(report);
     };
@@ -455,7 +459,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         )
         .map_err(|_| anyhow::anyhow!(INVALID_PREPARATION))?;
         if prepared.request_digest != request_digest {
-            bail!("selected source client already has different prepared authority; use fresh IDs for a separate source");
+            bail!(
+                "selected source client already has different prepared authority; use fresh IDs for a separate source"
+            );
         }
         let mut report = prepared.report;
         report["requiresRestart"] = json!(!state.activated);
@@ -468,7 +474,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         || !state.activated
         || state.package_digest.is_none()
     {
-        bail!("prepare-source requires a normally stopped, activated retained session; finish the pending dev start then stop it before adding a source");
+        bail!(
+            "prepare-source requires a normally stopped, activated retained session; finish the pending dev start then stop it before adding a source"
+        );
     }
     for value in [&args.client, &args.access_profile, &args.selector_profile] {
         if !config::identifier(value) {
@@ -488,7 +496,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         bail!("select 1..16 distinct --readable-fields explicitly");
     }
     if !args.all_records && args.row_field.is_none() {
-        bail!("select --all-records or an explicit --row-field, --row-claim and --row-value-file binding");
+        bail!(
+            "select --all-records or an explicit --row-field, --row-claim and --row-value-file binding"
+        );
     }
     let mut clients = config::clients(&state.clients_file.display().to_string(), &bytes)?;
     if clients
@@ -520,7 +530,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         .iter()
         .any(|f| f["id"] == *selector && identifier(entity, f))
     {
-        bail!("selector must be an existing required, bounded scalar field with an exact single-field unique constraint");
+        bail!(
+            "selector must be an existing required, bounded scalar field with an exact single-field unique constraint"
+        );
     }
     for id in &args.readable_fields {
         if !fields.iter().any(|f| f["id"] == *id && scalar(f)) {
@@ -700,13 +712,26 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             report[key] = value;
         }
         if args.apply {
-            let originals = replacements.keys().map(|path| {
-                let expected = if path == &state.clients_file { bytes.clone() } else {
-                    captured.files[path.strip_prefix(&project)?.to_str().context("source path must be UTF-8")?].clone()
-                };
-                if read_authoring(path)? != expected { bail!("authoring changed during source preview; inspect the changes and retry"); }
-                Ok((path.clone(),expected))
-            }).collect::<Result<_>>()?;
+            let originals = replacements
+                .keys()
+                .map(|path| {
+                    let expected = if path == &state.clients_file {
+                        bytes.clone()
+                    } else {
+                        captured.files[path
+                            .strip_prefix(&project)?
+                            .to_str()
+                            .context("source path must be UTF-8")?]
+                        .clone()
+                    };
+                    if read_authoring(path)? != expected {
+                        bail!(
+                            "authoring changed during source preview; inspect the changes and retry"
+                        );
+                    }
+                    Ok((path.clone(), expected))
+                })
+                .collect::<Result<_>>()?;
             let transition = Transition {
                 api_version: transition_api_version(),
                 kind: transition_kind(),
@@ -722,7 +747,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             let journal = serde_json::to_vec(&transition)?;
             // A journal the reader would refuse could never be recovered.
             if journal.len() > registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES {
-                bail!("source transition exceeds the 1 MiB retained journal bound; reduce the size of the registry project's model documents and retry");
+                bail!(
+                    "source transition exceeds the 1 MiB retained journal bound; reduce the size of the registry project's model documents and retry"
+                );
             }
             private::replace(&root.join("source-transition.json"), &journal)?;
             finish(&state, &transition)?;
@@ -1129,10 +1156,12 @@ mod tests {
                     .unwrap()
             })
             .collect();
-        assert!(grants
-            .iter()
-            .any(|role| role["permissions"][0]["permissions"]
-                == json!(["registry:source-reader:lookup"])));
+        assert!(
+            grants
+                .iter()
+                .any(|role| role["permissions"][0]["permissions"]
+                    == json!(["registry:source-reader:lookup"]))
+        );
         let prepared: Value = serde_norway::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(prepared["accessProfiles"].as_array().unwrap().len(), 1);
         assert_eq!(prepared["accessProfiles"][0]["id"], "source-reader");
@@ -1230,10 +1259,12 @@ mod tests {
             b"unrelated interrupted edit",
         )
         .unwrap();
-        assert!(recover(&root)
-            .unwrap_err()
-            .to_string()
-            .contains("input changed"));
+        assert!(
+            recover(&root)
+                .unwrap_err()
+                .to_string()
+                .contains("input changed")
+        );
         replace_authoring(
             &state.project.join("registry.yaml"),
             &originals[&state.project.join("registry.yaml")],
@@ -1248,10 +1279,12 @@ mod tests {
         assert!(!root.join("source-transition.json").exists());
         let mut changed = args(&state);
         changed.readable_fields.push("status".into());
-        assert!(run(changed)
-            .unwrap_err()
-            .to_string()
-            .contains("different prepared authority"));
+        assert!(
+            run(changed)
+                .unwrap_err()
+                .to_string()
+                .contains("different prepared authority")
+        );
     }
 
     #[test]
@@ -1292,17 +1325,21 @@ mod tests {
         inspect.readable_fields.clear();
         inspect.all_records = false;
         let inventory = run(inspect).unwrap();
-        assert!(!inventory["entities"][0]["selectorFields"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|field| field["id"] == "code"));
+        assert!(
+            !inventory["entities"][0]["selectorFields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field["id"] == "code")
+        );
         let mut selected = args(&state);
         selected.apply = true;
-        assert!(run(selected)
-            .unwrap_err()
-            .to_string()
-            .contains("cannot be exported"));
+        assert!(
+            run(selected)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be exported")
+        );
         assert_eq!(fs::read(path).unwrap(), bytes);
         assert!(!state.root().join("source-transition.json").exists());
         assert!(!state.root().join("credentials/source-reader").exists());
@@ -1408,10 +1445,12 @@ mod tests {
             selected.row_field = Some("label".into());
             selected.row_claim = Some("existing_row".into());
             selected.row_value_file = Some(row_value);
-            assert!(run(selected)
-                .unwrap_err()
-                .to_string()
-                .contains("different value shapes"));
+            assert!(
+                run(selected)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("different value shapes")
+            );
             assert_eq!(fs::read(&path).unwrap(), model);
             assert_eq!(fs::read(&state.clients_file).unwrap(), clients);
             assert_eq!(
@@ -1470,17 +1509,21 @@ mod tests {
             .find(|entity| entity["id"] == "record")
             .unwrap();
         for key in ["selectorFields", "readableFields"] {
-            assert!(record[key]
+            assert!(
+                record[key]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|field| field["id"] == "organization" && field["type"] == "reference")
+            );
+        }
+        assert!(
+            !record["rowFields"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|field| field["id"] == "organization" && field["type"] == "reference"));
-        }
-        assert!(!record["rowFields"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|field| field["id"] == "organization"));
+                .any(|field| field["id"] == "organization")
+        );
         let selected = || {
             let mut selected = args(&state);
             selected.selector_field = Some("organization".into());
@@ -1559,10 +1602,12 @@ mod tests {
         assert!(run(selected).unwrap_err().to_string().contains("unique"));
         let mut selected = args(&state);
         selected.all_records = false;
-        assert!(run(selected)
-            .unwrap_err()
-            .to_string()
-            .contains("--all-records"));
+        assert!(
+            run(selected)
+                .unwrap_err()
+                .to_string()
+                .contains("--all-records")
+        );
     }
 
     #[test]
@@ -1812,15 +1857,19 @@ clients:
                 )
                 .unwrap()
         };
-        assert!(check_state(&read("state.json", &DEV_STATE_FORMAT))
+        assert!(
+            check_state(&read("state.json", &DEV_STATE_FORMAT))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            check_prepared(&read(
+                "source-prepared-source.json",
+                &PREPARED_SOURCE_FORMAT
+            ))
             .unwrap()
-            .is_empty());
-        assert!(check_prepared(&read(
-            "source-prepared-source.json",
-            &PREPARED_SOURCE_FORMAT
-        ))
-        .unwrap()
-        .is_empty());
+            .is_empty()
+        );
         assert!(
             check_transition(&read("source-transition.json", &SOURCE_TRANSITION_FORMAT))
                 .unwrap()

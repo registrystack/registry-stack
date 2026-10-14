@@ -10,38 +10,128 @@ const CANARY: &str = "private-canary-value";
 
 fn project() -> Value {
     json!({
-        "apiVersion": authoring::API_VERSION, "kind": authoring::KIND,
-        "project": {"id": "declarative", "version": "1"},
-        "input": {"type": "object", "additionalProperties": false,
-            "required": ["applicationId", "sendAfter", "route"],
-            "properties": {
-                "applicationId": {"type": "string"},
-                "sendAfter": {"type": "string", "format": "date-time"},
-                "route": {"type": "string", "enum": ["send", "skip"]}
-            }},
-        "connections": {"applications": "breg"},
-        "functionsFile": "functions.rhai", "deadlineSeconds": 86400,
-        "start": "due",
-        "steps": {
-            "due": {"type": "wait-until", "waitUntil": {"type": "input", "path": "/sendAfter"}, "next": "read"},
-            "read": {"type": "call", "connection": "applications", "operation": "read-record",
-                "input": {"type": "fields", "fields": {
-                    "collection": {"type": "literal", "value": "applications"},
-                    "recordId": {"type": "input", "path": "/applicationId"}
-                }},
-                "next": "route"},
-            "route": {"type": "choose", "choose": {"type": "input", "path": "/route"},
-                "cases": {"send": "done", "skip": "skipped"}},
-            "done": {"type": "finish", "outcome": "accepted", "output": {"type": "fields", "fields": {
-                "record": {"type": "step", "step": "read", "path": "/data/recordIdentifier"},
-                "note": {"type": "literal", "value": null}
-            }}},
-            "skipped": {"type": "finish", "outcome": "skipped"}
+        "apiVersion": "id.registrystack.org/formats/coordinator/project/v1alpha1",
+        "kind": "CoordinatorProject",
+        "project": {
+            "id": "declarative",
+            "version": "1"
         },
-        "outcomes": {
-            "accepted": {"type": "object", "additionalProperties": false, "required": ["record", "note"],
-                "properties": {"record": {"type": "string"}, "note": {"type": "null"}}},
-            "skipped": {"type": "null"}
+        "operations": {
+            "read-record": {
+                "uses": "breg.read-record/v1",
+                "connection": "applications"
+            }
+        },
+        "workflow": {
+            "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "applicationId",
+                    "sendAfter",
+                    "route"
+                ],
+                "properties": {
+                    "applicationId": {
+                        "type": "string"
+                    },
+                    "sendAfter": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "route": {
+                        "type": "string",
+                        "enum": [
+                            "send",
+                            "skip"
+                        ]
+                    }
+                }
+            },
+            "deadlineSeconds": 86400,
+            "start": "due",
+            "steps": {
+                "due": {
+                    "type": "wait-until",
+                    "waitUntil": {
+                        "type": "input",
+                        "path": "/sendAfter"
+                    },
+                    "next": "read"
+                },
+                "read": {
+                    "type": "call",
+                    "operation": "read-record",
+                    "input": {
+                        "type": "fields",
+                        "fields": {
+                            "collection": {
+                                "type": "literal",
+                                "value": "applications"
+                            },
+                            "recordId": {
+                                "type": "input",
+                                "path": "/applicationId"
+                            }
+                        }
+                    },
+                    "next": "route"
+                },
+                "route": {
+                    "type": "choose",
+                    "choose": {
+                        "type": "input",
+                        "path": "/route"
+                    },
+                    "cases": {
+                        "send": "done",
+                        "skip": "skipped"
+                    }
+                },
+                "done": {
+                    "type": "finish",
+                    "outcome": "accepted",
+                    "output": {
+                        "type": "fields",
+                        "fields": {
+                            "record": {
+                                "type": "step",
+                                "step": "read",
+                                "path": "/data/recordIdentifier"
+                            },
+                            "note": {
+                                "type": "literal",
+                                "value": null
+                            }
+                        }
+                    }
+                },
+                "skipped": {
+                    "type": "finish",
+                    "outcome": "skipped"
+                }
+            },
+            "outcomes": {
+                "accepted": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "record",
+                        "note"
+                    ],
+                    "properties": {
+                        "record": {
+                            "type": "string"
+                        },
+                        "note": {
+                            "type": "null"
+                        }
+                    }
+                },
+                "skipped": {
+                    "type": "null"
+                }
+            }
         }
     })
 }
@@ -58,10 +148,11 @@ fn record() -> Value {
 }
 
 fn load(project: &Value, source: &str) -> registry_coordinator::Result<Definition> {
+    let project = declare_test_functions(project);
     let root = tempfile::tempdir().unwrap();
     fs::write(
         root.path().join("workflow.yaml"),
-        serde_json::to_string(project).unwrap(),
+        serde_json::to_string(&project).unwrap(),
     )
     .unwrap();
     fs::write(root.path().join("functions.rhai"), source).unwrap();
@@ -123,15 +214,10 @@ fn references_and_fields_carry_plumbing_without_a_function() {
 #[test]
 fn function_arguments_accept_paths_and_literals() {
     let mut project = project();
-    project["steps"]["done"]["output"] = json!({"type": "function", "function": "combine", "arguments": [
-        {"type": "input", "path": "/applicationId"},
-        {"type": "literal", "value": {"nested": [1, true, null]}},
-        {"type": "step", "step": "read", "path": "/data"},
-        {"type": "step", "step": "read"}
-    ]});
+    project["workflow"]["steps"]["done"]["output"] = json!({"type": "function", "function": "combine", "inputs": {"arg0": {"type": "input", "path": "/applicationId"}, "arg1": {"type": "literal", "value": {"nested": [1, true, null]}}, "arg2": {"type": "step", "step": "read", "path": "/data"}, "arg3": {"type": "step", "step": "read"}}});
     let definition = load(
         &project,
-        "fn combine(id, literal, data, whole) { let count = if literal.nested.len() == 3 && literal.nested[1] { \"3\" } else { \"?\" }; #{ record: data.recordIdentifier + \":\" + id + \":\" + count + \":\" + whole.meta.datasetIdentifier, note: () } }",
+        "fn combine(__named) { let id = __named.arg0; let literal = __named.arg1; let data = __named.arg2; let whole = __named.arg3;  let count = if literal.nested.len() == 3 && literal.nested[1] { \"3\" } else { \"?\" }; #{ record: data.recordIdentifier + \":\" + id + \":\" + count + \":\" + whole.meta.datasetIdentifier, note: () } }",
     )
     .unwrap();
     let outputs = BTreeMap::from([("read".to_owned(), record())]);
@@ -144,8 +230,9 @@ fn function_arguments_accept_paths_and_literals() {
 #[test]
 fn a_path_selects_through_escaped_members_and_indexes() {
     let mut project = project();
-    project["input"]["properties"]["tags"] = json!({"type": "object"});
-    project["steps"]["route"]["choose"] = json!({"type": "input", "path": "/tags/a~1b~0c/1"});
+    project["workflow"]["input"]["properties"]["tags"] = json!({"type": "object"});
+    project["workflow"]["steps"]["route"]["choose"] =
+        json!({"type": "input", "path": "/tags/a~1b~0c/1"});
     let definition = load(&project, "").unwrap();
     let mut input = input();
     input["tags"] = json!({"a/b~c": ["skip", "send"]});
@@ -207,11 +294,15 @@ fn a_malformed_pointer_is_refused_at_its_member() {
         format!("/{}", "a".repeat(256)),
     ] {
         let mut project = project();
-        project["steps"]["read"]["input"]["fields"]["recordId"]["path"] = json!(pointer);
+        project["workflow"]["steps"]["read"]["input"]["fields"]["recordId"]["path"] =
+            json!(pointer);
         let error = parse_refused(&project);
         let finding = &error.diagnostics[0];
         assert_eq!(finding.code, "config.invalid-value", "{pointer}");
-        assert_eq!(finding.path, "/steps/read/input/fields/recordId/path");
+        assert_eq!(
+            finding.path,
+            "/workflow/steps/read/input/fields/recordId/path"
+        );
         assert_eq!(
             finding.message,
             "expected a JSON Pointer of at most 256 characters, such as /member/0"
@@ -228,43 +319,43 @@ fn a_malformed_pointer_is_refused_at_its_member() {
 fn an_input_names_its_form_function_or_fields() {
     for (value, path, code, message, action) in [
         (
-            json!({"function": "f", "arguments": []}),
-            "/steps/read/input",
+            json!({"function": "f", "inputs": {}}),
+            "/workflow/steps/read/input",
             "config.missing-key",
             "the member `type` is missing; it names which form this mapping takes",
-            "Add `type` with one of `function`, `fields`.",
+            "Add `type` with one of `function`, `fields`, `input`, `step`, `literal`.",
         ),
         (
-            json!({"type": "input"}),
-            "/steps/read/input/type",
+            json!({"type": "unknown"}),
+            "/workflow/steps/read/input/type",
             "config.unknown-variant",
-            "expected one of `function`, `fields`",
-            "Use one of `function`, `fields`.",
+            "expected one of `function`, `fields`, `input`, `step`, `literal`",
+            "Use one of `function`, `fields`, `input`, `step`, `literal`.",
         ),
         (
             json!({"type": "function", "function": "f"}),
-            "/steps/read/input",
+            "/workflow/steps/read/input",
             "config.missing-key",
-            "the required member `arguments` is missing",
-            "Add `arguments`.",
+            "the required member `inputs` is missing",
+            "Add `inputs`.",
         ),
         (
             json!({"type": "fields"}),
-            "/steps/read/input",
+            "/workflow/steps/read/input",
             "config.missing-key",
             "the required member `fields` is missing",
             "Add `fields`.",
         ),
         (
-            json!({"type": "function", "function": "f", "arguments": [], "fields": {}}),
-            "/steps/read/input/fields",
+            json!({"type": "function", "function": "f", "inputs": {}, "fields": {}}),
+            "/workflow/steps/read/input/fields",
             "config.unknown-key",
             "`fields` is not a member of this mapping",
-            "Remove `fields`; the accepted keys are `type`, `function`, `arguments`.",
+            "Remove `fields`; the accepted keys are `type`, `function`, `inputs`.",
         ),
     ] {
         let mut project = project();
-        project["steps"]["read"]["input"] = value.clone();
+        project["workflow"]["steps"]["read"]["input"] = value.clone();
         let error = parse_refused(&project);
         let finding = finding_at(&error, path);
         assert_eq!(finding.code, code, "{value}");
@@ -277,57 +368,57 @@ fn an_input_names_its_form_function_or_fields() {
 fn a_selector_names_its_form_function_or_one_reference() {
     for (value, path, code, message, action) in [
         (
-            json!({"function": "f", "arguments": []}),
-            "/steps/route/choose",
+            json!({"function": "f", "inputs": {}}),
+            "/workflow/steps/route/choose",
             "config.missing-key",
             "the member `type` is missing; it names which form this mapping takes",
-            "Add `type` with one of `function`, `input`, `step`, `literal`.",
+            "Add `type` with one of `function`, `fields`, `input`, `step`, `literal`.",
         ),
         (
-            json!({"type": "fields", "fields": {}}),
-            "/steps/route/choose/type",
+            json!({"type": "unknown"}),
+            "/workflow/steps/route/choose/type",
             "config.unknown-variant",
-            "expected one of `function`, `input`, `step`, `literal`",
-            "Use one of `function`, `input`, `step`, `literal`.",
+            "expected one of `function`, `fields`, `input`, `step`, `literal`",
+            "Use one of `function`, `fields`, `input`, `step`, `literal`.",
         ),
         (
             json!({"type": "step"}),
-            "/steps/route/choose",
+            "/workflow/steps/route/choose",
             "config.missing-key",
             "the required member `step` is missing",
             "Add `step`.",
         ),
         (
             json!({"type": "literal"}),
-            "/steps/route/choose",
+            "/workflow/steps/route/choose",
             "config.missing-key",
             "the required member `value` is missing",
             "Add `value`.",
         ),
         (
             json!({"type": "input", "step": "read"}),
-            "/steps/route/choose/step",
+            "/workflow/steps/route/choose/step",
             "config.unknown-key",
             "`step` is not a member of this mapping",
             "Remove `step`; the accepted keys are `type`, `path`.",
         ),
         (
             json!({"type": "literal", "value": "send", "path": "/x"}),
-            "/steps/route/choose/path",
+            "/workflow/steps/route/choose/path",
             "config.unknown-key",
             "`path` is not a member of this mapping",
             "Remove `path`; the accepted keys are `type`, `value`.",
         ),
         (
-            json!({"type": "function", "function": "f", "arguments": [], "path": "/x"}),
-            "/steps/route/choose/path",
+            json!({"type": "function", "function": "f", "inputs": {}, "path": "/x"}),
+            "/workflow/steps/route/choose/path",
             "config.unknown-key",
             "`path` is not a member of this mapping",
-            "Remove `path`; the accepted keys are `type`, `function`, `arguments`.",
+            "Remove `path`; the accepted keys are `type`, `function`, `inputs`.",
         ),
     ] {
         let mut project = project();
-        project["steps"]["route"]["choose"] = value.clone();
+        project["workflow"]["steps"]["route"]["choose"] = value.clone();
         let error = parse_refused(&project);
         let finding = finding_at(&error, path);
         assert_eq!(finding.code, code, "{value}");
@@ -339,11 +430,11 @@ fn a_selector_names_its_form_function_or_one_reference() {
 #[test]
 fn field_names_and_counts_are_bounded() {
     let mut project = project();
-    project["steps"]["read"]["input"]["fields"]["bad.name"] = json!({"type": "input"});
+    project["workflow"]["steps"]["read"]["input"]["fields"]["bad.name"] = json!({"type": "input"});
     let error = parse_refused(&project);
     let finding = &error.diagnostics[0];
     assert_eq!(finding.code, "config.invalid-value");
-    assert_eq!(finding.path, "/steps/read/input/fields/bad.name");
+    assert_eq!(finding.path, "/workflow/steps/read/input/fields/bad.name");
     assert_eq!(
         finding.message,
         "expected a field name of 1 to 64 ASCII letters, digits, hyphens or underscores, starting with a letter"
@@ -353,11 +444,11 @@ fn field_names_and_counts_are_bounded() {
     let fields = (0..65)
         .map(|index| (format!("f{index}"), json!({"type": "input"})))
         .collect::<serde_json::Map<_, _>>();
-    project["steps"]["read"]["input"]["fields"] = Value::Object(fields);
+    project["workflow"]["steps"]["read"]["input"]["fields"] = Value::Object(fields);
     let error = parse_refused(&project);
     let finding = &error.diagnostics[0];
     assert_eq!(finding.code, "config.invalid-value");
-    assert_eq!(finding.path, "/steps/read/input/fields");
+    assert_eq!(finding.path, "/workflow/steps/read/input/fields");
     assert_eq!(finding.message, "expected at most 64 fields");
     assert_eq!(
         finding.suggested_action,
@@ -368,11 +459,15 @@ fn field_names_and_counts_are_bounded() {
 #[test]
 fn a_literal_must_fit_the_structured_value_bounds() {
     let mut project = project();
-    project["steps"]["read"]["input"]["fields"]["collection"]["value"] = json!("x".repeat(16_385));
+    project["workflow"]["steps"]["read"]["input"]["fields"]["collection"]["value"] =
+        json!("x".repeat(16_385));
     let error = refused(load(&project, ""));
     let finding = &error.diagnostics[0];
     assert_eq!(finding.code, "coordinator.mapping.literal");
-    assert_eq!(finding.path, "/steps/read/input/fields/collection/value");
+    assert_eq!(
+        finding.path,
+        "/workflow/steps/read/input/fields/collection/value"
+    );
     assert_eq!(
         finding.message,
         "the literal exceeds the structured value bounds"
@@ -383,19 +478,19 @@ fn a_literal_must_fit_the_structured_value_bounds() {
 fn a_step_reference_must_precede_on_every_path() {
     let mut project = project();
     // route is a choose, not a call, so its output is never available.
-    project["steps"]["done"]["output"]["fields"]["record"] =
+    project["workflow"]["steps"]["done"]["output"]["fields"]["record"] =
         json!({"type": "step", "step": "route"});
     let error = refused(load(&project, ""));
     let finding = &error.diagnostics[0];
     assert_eq!(finding.code, "coordinator.mapping.dominance");
-    assert_eq!(finding.path, "/steps/done/output/fields/record");
+    assert_eq!(finding.path, "/workflow/steps/done/output/fields/record");
 
     let mut project = self::project();
-    project["steps"]["route"]["choose"] = json!({"type": "step", "step": "done"});
+    project["workflow"]["steps"]["route"]["choose"] = json!({"type": "step", "step": "done"});
     let error = refused(load(&project, ""));
     let finding = &error.diagnostics[0];
     assert_eq!(finding.code, "coordinator.mapping.dominance");
-    assert_eq!(finding.path, "/steps/route/choose");
+    assert_eq!(finding.path, "/workflow/steps/route/choose");
 }
 
 #[test]
@@ -432,7 +527,7 @@ fn reference_selectors_keep_their_result_contracts() {
     let mut input = input();
     input["route"] = json!("elsewhere");
     let mut project = project();
-    project["input"]["properties"]["route"] = json!({"type": "string"});
+    project["workflow"]["input"]["properties"]["route"] = json!({"type": "string"});
     let definition = load(&project, "").unwrap();
     assert_eq!(
         definition
@@ -443,7 +538,8 @@ fn reference_selectors_keep_their_result_contracts() {
     );
     // A string without a format may hold any text, so the run decides.
     let mut project = self::project();
-    project["steps"]["due"]["waitUntil"] = json!({"type": "input", "path": "/applicationId"});
+    project["workflow"]["steps"]["due"]["waitUntil"] =
+        json!({"type": "input", "path": "/applicationId"});
     let definition = load(&project, "").unwrap();
     assert_eq!(
         definition
@@ -452,4 +548,35 @@ fn reference_selectors_keep_their_result_contracts() {
             .code,
         "mapping.timestamp"
     );
+}
+
+fn declare_test_functions(project: &Value) -> Value {
+    fn mapping(value: &Value, functions: &mut serde_json::Map<String, Value>) {
+        if let Some(object) = value.as_object() {
+            if object.get("type") == Some(&json!("function")) {
+                if let (Some(name), Some(inputs)) = (
+                    object.get("function").and_then(Value::as_str),
+                    object.get("inputs").and_then(Value::as_object),
+                ) {
+                    let signature = inputs
+                        .keys()
+                        .map(|name| (name.clone(), json!({})))
+                        .collect::<serde_json::Map<_, _>>();
+                    functions.insert(name.into(),json!({"runtime":"rhai","source":"functions.rhai","entrypoint":name,"inputs":signature,"output":{}}));
+                }
+            }
+            for value in object.values() {
+                mapping(value, functions);
+            }
+        } else if let Some(items) = value.as_array() {
+            for value in items {
+                mapping(value, functions);
+            }
+        }
+    }
+    let mut project = project.clone();
+    let mut functions = serde_json::Map::new();
+    mapping(&project["workflow"]["steps"], &mut functions);
+    project["functions"] = Value::Object(functions);
+    project
 }

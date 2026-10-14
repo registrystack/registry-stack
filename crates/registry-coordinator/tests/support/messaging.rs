@@ -3,6 +3,9 @@
 //! contract, with disposable PostgreSQL and a synthetic template. No delivery
 //! claim is made; only authoritative acceptance and receipts are observed.
 
+#[path = "failed_fixture.rs"]
+mod failed_fixture;
+
 use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -37,7 +40,7 @@ fn operator(binary: &Path, arguments: &[&std::ffi::OsStr], log: &Path) {
 }
 
 pub struct Messaging {
-    _root: tempfile::TempDir,
+    _root: failed_fixture::FixtureDirectory,
     pub base_url: String,
     pub admin: Arc<tokio_postgres::Client>,
     schema: String,
@@ -66,7 +69,9 @@ impl Messaging {
             .batch_execute(&format!("CREATE SCHEMA {schema}"))
             .await
             .unwrap();
-        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let root = failed_fixture::FixtureDirectory::new(
+            tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap(),
+        );
         let project = root.path().join("project");
         let template = project.join("templates/application-follow-up/1");
         std::fs::create_dir_all(template.join("en")).unwrap();

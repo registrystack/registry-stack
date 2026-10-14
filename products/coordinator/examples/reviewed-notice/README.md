@@ -50,7 +50,7 @@ The run has a thirty-day deadline and follows these checks:
 1. read-for-review reads the application from BReg. If its identifier or
    revision differs from the trusted input, the run finishes
    application-changed without creating a review.
-2. submit-review sends the bounded facts to Casework as kind
+2. submit-review sends the expected exact PolicyBinding and bounded facts to Casework as kind
    application-review. Casework owns reviewer eligibility, policy and the
    decision.
 3. await-review waits up to fourteen days. A Casework completion event wakes
@@ -104,3 +104,8 @@ Copy it outside the package and adapt its endpoints, database identity, client
 registrations, completion secret and package digest. Follow the
 [deployment runbook](../../DEPLOYMENT.md) for packaging, activation and
 recovery.
+
+The review wait names `completion: {step: submit-review, name: result}`. Casework remains the
+review authority. This example does not submit or apply a BReg Proposal; use the
+[Proposal follow-up](../proposal-follow-up/README.md) for that separate path. Completion wake-ups
+respect the durable observation floor and do not provide a result the workflow can trust directly.
