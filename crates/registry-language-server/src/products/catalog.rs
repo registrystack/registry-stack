@@ -454,86 +454,98 @@ const BREG_MODULE_FILES: &[FileRule] = &[
 
 const CASEWORK_DECLARATIONS: &[N] = &[
     N::global("project/id", "Casework project"),
-    N::global("sources/*/id", "Casework source"),
     N::global("queues/*/id", "Casework queue"),
     N::global("accessProfiles/*/id", "Casework access profile"),
-    N::global("reviewKinds/*/id", "Casework review kind"),
+    N::global("teams/*/id", "Casework team"),
+    N::global("contextProviders/*/id", "Casework context provider"),
+    N::global(
+        "contextProviders/*/deploymentRef",
+        "Casework context provider deployment",
+    ),
+    N::global("reviewPolicies/*/id", "Casework review policy"),
     N::scoped(
-        "reviewKinds/*/stages/*/id",
+        "reviewPolicies/*/stages/*/id",
         "Casework review stage",
         1,
         "id",
     ),
     N::scoped(
-        "reviewKinds/*/outcomes/*/id",
+        "reviewPolicies/*/outcomes/*/id",
         "Casework review outcome",
         1,
         "id",
     ),
-    N::global("reviewProducers/*/id", "Casework review producer"),
+    N {
+        scope: Scope::Ancestor {
+            skip: 2,
+            field: "id",
+        },
+        reports_unresolved: false,
+        ..N::global(
+            "reviewPolicies/*/displaySchema/properties/$key",
+            "Casework context field",
+        )
+    },
+    N::global("trustedProducers/*/id", "Casework trusted producer"),
     N::global("calendars/*/id", "Casework calendar"),
     N::global("clocks/*/id", "Casework clock"),
     N::global("taskTemplates/*/id", "Casework task template"),
 ];
 const CASEWORK_REFERENCES: &[N] = &[
+    N::global(
+        "reviewPolicies/*/context/provider",
+        "Casework context provider",
+    ),
+    N::scoped(
+        "reviewPolicies/*/routing/*/when/stage",
+        "Casework review stage",
+        2,
+        "id",
+    ),
     N {
-        reports_unresolved: false,
-        ..N::scoped(
-            "sources/*/requests/*/entity",
-            "Casework request entity",
-            1,
-            "id",
-        )
-    },
-    N {
-        scope: Scope::Composite(&[(2, "id"), (0, "entity")]),
-        reports_unresolved: false,
-        ..N::global("sources/*/requests/*/projection/*", "Casework source field")
-    },
-    N {
-        scope: Scope::Composite(&[(2, "id"), (0, "entity")]),
+        scope: Scope::Ancestor {
+            skip: 3,
+            field: "id",
+        },
         reports_unresolved: false,
         ..N::global(
-            "sources/*/requests/*/contextProjection/*",
-            "Casework source field",
+            "reviewPolicies/*/routing/*/when/fields/$key",
+            "Casework context field",
         )
     },
-    N {
-        scope: Scope::Composite(&[(5, "id"), (0, "entity")]),
-        reports_unresolved: false,
-        ..N::global(
-            "sources/*/requests/*/routing/*/when/fields/$key",
-            "Casework source field",
-        )
-    },
-    N::global("sources/*/requests/*/queue", "Casework queue"),
-    N::global("sources/*/requests/*/clock", "Casework clock"),
-    N::global("reviewKinds/*/stages/*/queue", "Casework queue"),
+    N::global("reviewPolicies/*/routing/*/queue", "Casework queue"),
+    N::global("reviewPolicies/*/stages/*/queue", "Casework queue"),
     N::global(
-        "reviewKinds/*/stages/*/decidingProfiles/*",
+        "reviewPolicies/*/stages/*/decidingProfiles/*",
         "Casework access profile",
     ),
-    N::global("reviewProducers/*/profile", "Casework access profile"),
+    N::global("reviewPolicies/*/clocks/*", "Casework clock"),
+    N::global("trustedProducers/*/profile", "Casework access profile"),
     N::global(
-        "reviewProducers/*/initiatorProfile",
+        "trustedProducers/*/initiatorProfile",
         "Casework access profile",
     ),
-    N::global("reviewProducers/*/kinds/*", "Casework review kind"),
-    N {
-        reports_unresolved: false,
-        ..N::global("reviewProducers/*/sourceNamespaces/*", "Casework source")
-    },
+    N::global(
+        "trustedProducers/*/reviewPolicies/*",
+        "Casework review policy",
+    ),
+    N::global("teams/*/serves/*", "Casework queue"),
+    N::global("teams/*/memberProfiles/*", "Casework access profile"),
+    N::global("teams/*/supervisorProfiles/*", "Casework access profile"),
+    N::global("calendars/*/holidaySet", "Casework holiday set"),
     N::global("clocks/*/calendar", "Casework calendar"),
     N::global("clocks/*/steps/*/action/reassign/queue", "Casework queue"),
-    N::global("sources/*/requests/*/routing/*/queue", "Casework queue"),
+    N::global("taskTemplates/*/eligibleTeams/*", "Casework team"),
     N::global(
         "taskTemplates/*/eligibleProfiles/*",
         "Casework access profile",
     ),
-    N::global("taskTemplates/*/source", "Casework source"),
-    N::global("taskTemplates/*/reviewKinds/*", "Casework review kind"),
-    N::global("sources/$key", "Casework source"),
+    N::global("taskTemplates/*/reviewPolicies/*", "Casework review policy"),
 ];
+const CASEWORK_RUNTIME_REFERENCES: &[N] = &[N::global(
+    "contextProviders/$key",
+    "Casework context provider deployment",
+)];
 
 const SCHEDULING_DECLARATIONS: &[N] = &[
     N::global("scheduling/id", "Scheduling project"),
@@ -591,43 +603,21 @@ const CASEWORK_DOCUMENTS: &[DocumentRules] = &[
         pattern: "@document",
         declarations: CASEWORK_DECLARATIONS,
         references: CASEWORK_REFERENCES,
-        files: &[FileRule::root("sources/*/description", true)],
+        files: &[
+            FileRule::root("reviewPolicies/*/displaySchema/$ref", false),
+            FileRule::root("reviewPolicies/*/resultSchema/$ref", false),
+        ],
     },
     DocumentRules {
         pattern: "runtime.yaml",
         declarations: &[],
-        references: &[N::global("sources/$key", "Casework source")],
+        references: CASEWORK_RUNTIME_REFERENCES,
         files: &[],
     },
     DocumentRules {
-        pattern: "@source-description",
-        declarations: &[
-            N::scoped(
-                "requests/*/requestEntity",
-                "Casework request entity",
-                0,
-                "sourceId",
-            ),
-            N {
-                scope: Scope::Composite(&[(0, "sourceId"), (0, "requestEntity")]),
-                ..N::global("requests/*/fields/*/field", "Casework source field")
-            },
-            N::scoped(
-                "request/requestEntity",
-                "Casework request entity",
-                0,
-                "sourceId",
-            ),
-            N {
-                scope: Scope::Composite(&[(0, "sourceId"), (0, "requestEntity")]),
-                ..N::global("request/fields/*/field", "Casework source field")
-            },
-        ],
-        references: &[
-            N::global("sourceId", "Casework source"),
-            N::global("request/review/policyId", "Casework review kind"),
-            N::global("requests/*/review/policyId", "Casework review kind"),
-        ],
+        pattern: "runtime.example.yaml",
+        declarations: &[],
+        references: CASEWORK_RUNTIME_REFERENCES,
         files: &[],
     },
     DocumentRules {
@@ -643,22 +633,44 @@ const CASEWORK_DOCUMENTS: &[DocumentRules] = &[
     },
     DocumentRules {
         pattern: "fixtures/*.yaml",
-        declarations: &[N::global("name", "Casework fixture")],
+        declarations: &[N::global("id", "Casework fixture")],
         references: &[
-            N::global("review/kind", "Casework review kind"),
-            N::global("source/id", "Casework source"),
-            N {
-                reports_unresolved: false,
-                ..N::scoped("source/requestEntity", "Casework request entity", 0, "id")
-            },
+            N::global("review/policy", "Casework review policy"),
             N::global("expect/queue", "Casework queue"),
             N::scoped(
                 "expect/outcomes/*",
                 "Casework review outcome",
                 0,
-                "review.kind",
+                "review.policy",
             ),
         ],
+        files: &[],
+    },
+    DocumentRules {
+        pattern: "fixtures/*.yml",
+        declarations: &[N::global("id", "Casework fixture")],
+        references: &[
+            N::global("review/policy", "Casework review policy"),
+            N::global("expect/queue", "Casework queue"),
+            N::scoped(
+                "expect/outcomes/*",
+                "Casework review outcome",
+                0,
+                "review.policy",
+            ),
+        ],
+        files: &[],
+    },
+    DocumentRules {
+        pattern: "holiday-sets/*.yaml",
+        declarations: &[N::global("holidaySet", "Casework holiday set")],
+        references: &[],
+        files: &[],
+    },
+    DocumentRules {
+        pattern: "holiday-sets/*.yml",
+        declarations: &[N::global("holidaySet", "Casework holiday set")],
+        references: &[],
         files: &[],
     },
 ];

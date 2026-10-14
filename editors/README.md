@@ -31,7 +31,7 @@ cannot replace unsaved content.
 | Product | Project entry | Semantic navigation |
 |---|---|---|
 | Base Registry Engine | `registry.yaml` declaring `BRegProject` | Entities, fields, access profiles, actions, and authored modules |
-| Registry Casework | `casework.yaml` | Sources, queues, routing, review policies, and directory references |
+| Registry Casework | `casework.yaml` | Review policies, queues, profiles, teams, read-only context providers, routing, clocks, task templates, fixtures, and directory references |
 | Registry Scheduling | `scheduling.yaml` | Services, locations, offerings, opening patterns, holiday sets, and fixture references |
 | Registry Messaging | `messaging.yaml` | Templates and versions, access profiles, providers, and template files |
 | Registry Discovery | `origins.yaml` | Origin and mapping declarations across the project |
@@ -75,7 +75,7 @@ Setup copies maintained schemas from this checkout and adds a **Registry Stack:
 check** task where the product supplies a validation command. Use **Tasks: Run
 Task** in VS Code or **task: spawn** in Zed. No validator is run automatically
 when a file opens. Casework publishes schemas for its project, runtime, fixture,
-simulation, holiday-set, and development clients files. Messaging publishes
+`holiday-sets/*.yaml` and `holiday-sets/*.yml`, and development clients files. Messaging publishes
 project, template, provider, and runtime schemas; its check task validates the
 whole project. Wallet delivery publishes a runtime schema. Scheduling publishes
 schemas for its project, records, fixture, and runtime files. Render maps its

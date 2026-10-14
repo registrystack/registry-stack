@@ -130,6 +130,44 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("breg", project, self.workspace, None)
         self.assertEqual((self.workspace / ".vscode/settings.json").read_bytes(), snapshot)
 
+    def test_every_shared_mapping_names_a_maintained_schema(self):
+        for product, mappings in configure.SCHEMAS.items():
+            for source, _ in mappings:
+                with self.subTest(product=product, source=source):
+                    self.assertTrue((ROOT / source).is_file(), source)
+
+    def test_casework_maps_only_current_authored_files(self):
+        project = self.project(
+            "casework",
+            "casework.yaml",
+            "products/casework/examples/multi-stage-routing-clocks/casework.yaml",
+        )
+        configure.configure("casework", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas,
+            {
+                (managed / "project.schema.json").as_uri(): [str(project / "casework.yaml")],
+                (managed / "runtime.schema.json").as_uri(): [
+                    str(project / "runtime.yaml"),
+                    str(project / "runtime.example.yaml"),
+                ],
+                (managed / "fixture.schema.json").as_uri(): [
+                    str(project / "fixtures/*.yaml"),
+                    str(project / "fixtures/*.yml"),
+                ],
+                (managed / "holiday-set.schema.json").as_uri(): [
+                    str(project / "holiday-sets/*.yaml"),
+                    str(project / "holiday-sets/*.yml"),
+                ],
+                (managed / "dev-clients.schema.json").as_uri(): [
+                    str(project / "dev-clients.yaml")
+                ],
+            },
+        )
+        self.assertNotIn("simulation.schema.json", {path.name for path in managed.iterdir()})
+
     def test_refuses_jsonc_before_writing_anything(self):
         project = self.project("casework", "casework.yaml")
         settings_path = self.workspace / ".vscode/settings.json"
@@ -260,7 +298,7 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("casework", casework, self.workspace, None)
         configure.configure("breg", breg, self.workspace, None)
         settings = json.loads(settings_path.read_text())
-        self.assertEqual(len(settings["yaml.schemas"]), 14)
+        self.assertEqual(len(settings["yaml.schemas"]), 13)
         breg_dev_clients = (breg / ".registry-stack-editor/schemas/dev-clients.v1alpha1.schema.json").as_uri()
         self.assertEqual(settings["yaml.schemas"][breg_dev_clients], [str(breg / "dev-clients.yaml")])
         self.assertEqual(settings["yaml.schemas"][unrelated_uri], [str(self.workspace / "unrelated/registry.yaml")])

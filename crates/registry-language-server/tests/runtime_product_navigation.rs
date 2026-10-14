@@ -13,7 +13,7 @@ use support::{
 
 const BREG: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: <|project|>example}\nmodules: [{id: <|module-use|>core}]\naccessProfiles:\n  - id: reader\n    permissions:\n      records:\n        - recordType: <|use|>person\n          readableFields: [<|field-use|>name]\n";
 const BREG_MODULE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|module|>core\nrecordTypes:\n  - id: <|definition|>person\n    fields: [{id: <|field|>name, type: string}]\n";
-const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: [{id: <|definition|>triage}]\nsources:\n  - id: source\n    description: <|file-use|>sources/import.json\n    requests: [{queue: <|use|>triage}]\naccessProfiles: [{id: staff}]\nreviewKinds:\n  - id: decision\n    stages: [{id: review, queue: triage, decidingProfiles: [staff]}]\n";
+const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: [{id: <|definition|>triage, label: Triage}]\naccessProfiles: [{id: staff, principalClaim: sub, requiredScopes: [casework:staff], role: staff}]\nreviewPolicies:\n  - id: decision\n    version: '1'\n    purpose: answer\n    context: {mode: submitted}\n    stages: [{id: review, queue: <|use|>triage, decidingProfiles: [staff], requiredApprovals: 1}]\n    retention: {terminalDays: 30, accountabilityDays: 90}\n    displaySchema: {type: object}\n";
 const SCHEDULING: &str = "apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\nkind: SchedulingProject\nservices: [{id: <|definition|>visit}]\nofferings: [{id: consultation, service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}]\n";
 const RECORDS: &str = "locations: [{id: <|location|>office}]\npools: [{id: <|pool|>stations}]\n";
 const MESSAGING: &str = "apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1\nkind: MessagingProject\nproviders: [{id: <|definition|>smtp}]\nsenderProfiles: [{id: transactional, provider: <|use|>smtp}]\ntemplates: [{id: <|template|>notice, version: '1'}, {id: notice, version: '2'}]\naccessProfiles: [{id: staff, senderProfiles: [transactional], templates: [<|template-use|>notice]}]\n";
@@ -32,10 +32,7 @@ fn projects() -> Vec<(ProductKind, &'static str, Project, &'static str)> {
         (
             ProductKind::Casework,
             "casework.yaml",
-            Project::new(&[
-                file("casework.yaml", CASEWORK),
-                file("sources/import.json", "{\"fields\": []}"),
-            ]),
+            Project::new(&[file("casework.yaml", CASEWORK)]),
             "triage",
         ),
         (
@@ -113,10 +110,6 @@ fn runtime_products_resolve_scoped_names_files_and_completion_candidates() {
                     && symbol.location.range.start == project.cursor(document, "project")));
         }
         if kind == ProductKind::Casework {
-            assert_eq!(
-                index.definitions_at(&path, project.cursor(document, "file-use"))[0].path,
-                project.path("sources/import.json")
-            );
             assert!(index
                 .document_symbols(&path)
                 .iter()
@@ -371,38 +364,95 @@ fn module_assets_named_constraints_and_action_results_keep_their_own_scope() {
 }
 
 #[test]
-fn casework_imported_fields_and_development_directory_resolve_locally() {
-    let project=Project::new(&[
-        file("casework.yaml","kind: CaseworkProject\nqueues: [{id: <|queue|>triage}]\naccessProfiles: [{id: <|profile|>staff}]\nreviewKinds: [{id: <|review|>decision}]\nsources:\n  - id: regional\n    description: imports/source-description.json\n    requests:\n      - entity: <|entity-use|>correction\n        queue: triage\n        projection: [<|field-use|>region]\n        routing: [{id: north, when: {fields: {<|routing|>region: {equals: north}}}, queue: triage}]\n"),
-        file("imports/source-description.json","{\"sourceId\":\"regional\",\"request\":{\"requestEntity\":\"<|entity|>correction\",\"review\":{\"policyId\":\"<|review-use|>decision\"},\"fields\":[{\"field\":\"<|field|>region\"}]}}"),
-        file("dev-clients.yaml","clients: [{id: <|client|>alice, accessProfile: <|profile-use|>staff}]\ndirectory: [{queue: <|queue-use|>triage, staff: [<|client-use|>alice], supervisors: [alice]}]\n"),
+fn casework_current_policy_directory_and_fixture_relationships_resolve() {
+    let casework = fixture("products/casework/examples/standalone-decision/casework.yaml")
+        .replacen("  - id: staff", "  - id: <|profile|>staff", 1)
+        .replacen("  - id: decisions", "  - id: <|queue|>decisions", 1)
+        .replacen("  - id: decision", "  - id: <|policy|>decision", 1)
+        .replacen("      - id: answer", "      - id: <|stage|>answer", 1)
+        .replacen(
+            "  - id: requester",
+            "  - id: <|requester-profile|>requester",
+            1,
+        )
+        .replacen(
+            "      - id: confirmed",
+            "      - id: <|outcome|>confirmed",
+            1,
+        )
+        .replacen(
+            "    profile: requester",
+            "    profile: <|producer-profile|>requester",
+            1,
+        )
+        .replacen(
+            "    reviewPolicies: [decision]",
+            "    reviewPolicies: [<|producer-policy|>decision]",
+            1,
+        );
+    let clients = fixture("products/casework/examples/standalone-decision/dev-clients.yaml")
+        .replacen(
+            "    accessProfile: staff",
+            "    accessProfile: <|profile-use|>staff",
+            1,
+        )
+        .replacen(
+            "    queue: decisions",
+            "    queue: <|queue-use|>decisions",
+            1,
+        )
+        .replacen("    staff: [staff]", "    staff: [<|client-use|>staff]", 1)
+        .replacen("  - id: staff", "  - id: <|client|>staff", 1);
+    let fixture_source =
+        fixture("products/casework/examples/standalone-decision/fixtures/standalone-decision.yaml")
+            .replacen("  policy: decision", "  policy: <|policy-use|>decision", 1)
+            .replacen(
+                "  queue: decisions",
+                "  queue: <|fixture-queue|>decisions",
+                1,
+            )
+            .replacen(
+                "  outcomes: [confirmed, rejected]",
+                "  outcomes: [<|outcome-use|>confirmed, rejected]",
+                1,
+            );
+    let project = Project::new(&[
+        file("casework.yaml", &casework),
+        file("dev-clients.yaml", &clients),
+        file("fixtures/standalone-decision.yaml", &fixture_source),
     ]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Casework).unwrap();
     assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
     for (document, reference, target, definition) in [
         (
             "casework.yaml",
-            "entity-use",
-            "imports/source-description.json",
-            "entity",
+            "producer-profile",
+            "casework.yaml",
+            "requester-profile",
         ),
         (
             "casework.yaml",
-            "field-use",
-            "imports/source-description.json",
-            "field",
+            "producer-policy",
+            "casework.yaml",
+            "policy",
         ),
         (
+            "fixtures/standalone-decision.yaml",
+            "policy-use",
             "casework.yaml",
-            "routing",
-            "imports/source-description.json",
-            "field",
+            "policy",
         ),
         (
-            "imports/source-description.json",
-            "review-use",
+            "fixtures/standalone-decision.yaml",
+            "fixture-queue",
             "casework.yaml",
-            "review",
+            "queue",
+        ),
+        (
+            "fixtures/standalone-decision.yaml",
+            "outcome-use",
+            "casework.yaml",
+            "outcome",
         ),
         (
             "dev-clients.yaml",
@@ -430,51 +480,50 @@ fn casework_imported_fields_and_development_directory_resolve_locally() {
 }
 
 #[test]
-fn plural_casework_source_descriptions_resolve_each_owned_request() {
-    let project=Project::new(&[
-        file("casework.yaml","kind: CaseworkProject\nqueues: [{id: <|queue|>triage}]\naccessProfiles: [{id: <|profile|>staff}]\nreviewKinds: [{id: <|review|>decision}]\nsources:\n  - id: regional\n    description: imports/source-description.json\n    requests:\n      - entity: <|entity-use|>correction\n        queue: triage\n        projection: [<|field-use|>region]\n        routing: [{id: north, when: {fields: {<|routing|>region: {equals: north}}}, queue: triage}]\n"),
-        file("imports/source-description.json","{\"sourceId\":\"regional\",\"requests\":[{\"requestEntity\":\"<|entity|>correction\",\"review\":{\"policyId\":\"<|review-use|>decision\"},\"fields\":[{\"field\":\"<|field|>region\"}]}]}"),
-        file("dev-clients.yaml","clients: [{id: <|client|>alice, accessProfile: <|profile-use|>staff}]\ndirectory: [{queue: <|queue-use|>triage, staff: [<|client-use|>alice], supervisors: [alice]}]\n"),
+fn casework_read_only_context_provider_and_schema_files_resolve() {
+    let casework = fixture("products/casework/examples/canonical-review/casework.yaml")
+        .replacen(
+            "  - id: facility-proposal-context",
+            "  - id: <|provider|>facility-proposal-context",
+            1,
+        )
+        .replacen(
+            "    deploymentRef: facility-registry",
+            "    deploymentRef: <|deployment|>facility-registry",
+            1,
+        )
+        .replacen(
+            "      provider: facility-proposal-context",
+            "      provider: <|provider-use|>facility-proposal-context",
+            1,
+        )
+        .replacen(
+            "      $ref: schemas/correct-address.schema.json",
+            "      $ref: <|schema-use|>schemas/correct-address.schema.json",
+            1,
+        );
+    let runtime = fixture("products/casework/examples/canonical-review/runtime.example.yaml")
+        .replacen(
+            "  facility-registry:",
+            "  <|deployment-use|>facility-registry:",
+            1,
+        );
+    let schema =
+        fixture("products/casework/examples/canonical-review/schemas/correct-address.schema.json");
+    let project = Project::new(&[
+        file("casework.yaml", &casework),
+        file("runtime.example.yaml", &runtime),
+        file("schemas/correct-address.schema.json", &schema),
     ]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Casework).unwrap();
     assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
     for (document, reference, target, definition) in [
+        ("casework.yaml", "provider-use", "casework.yaml", "provider"),
         (
+            "runtime.example.yaml",
+            "deployment-use",
             "casework.yaml",
-            "entity-use",
-            "imports/source-description.json",
-            "entity",
-        ),
-        (
-            "casework.yaml",
-            "field-use",
-            "imports/source-description.json",
-            "field",
-        ),
-        (
-            "casework.yaml",
-            "routing",
-            "imports/source-description.json",
-            "field",
-        ),
-        (
-            "imports/source-description.json",
-            "review-use",
-            "casework.yaml",
-            "review",
-        ),
-        (
-            "dev-clients.yaml",
-            "profile-use",
-            "casework.yaml",
-            "profile",
-        ),
-        ("dev-clients.yaml", "queue-use", "casework.yaml", "queue"),
-        (
-            "dev-clients.yaml",
-            "client-use",
-            "dev-clients.yaml",
-            "client",
+            "deployment",
         ),
     ] {
         let definitions =
@@ -486,41 +535,373 @@ fn plural_casework_source_descriptions_resolve_each_owned_request() {
             project.cursor(target, definition)
         );
     }
-}
-
-// A source description is authored YAML or JSON. A description that names any other file, such
-// as a signing key, must not make the server read it, even when its bytes parse as YAML.
-#[test]
-fn casework_source_descriptions_follow_only_authoring_documents() {
-    const SOURCE: &str = "sourceId: regional\nrequest: {requestEntity: correction}\n";
-    for (description, followed) in [
-        ("keys/signing.key", false),
-        ("keys/signing.pem", false),
-        ("imports/source-description", false),
-        ("imports/source-description.yaml", true),
-        ("imports/source-description.yml", true),
-        ("imports/source-description.json", true),
-    ] {
-        let project = Project::new(&[
-            file(
-                "casework.yaml",
-                &format!(
-                    "kind: CaseworkProject\n\
-                     queues: [{{id: triage}}]\n\
-                     sources:\n  \
-                     - id: regional\n    \
-                     description: {description}\n    \
-                     requests: [{{entity: <|entity-use|>correction, queue: triage}}]\n"
-                ),
-            ),
-            file(description, SOURCE),
-        ]);
-        let index = ProjectIndex::load_product(project.root(), ProductKind::Casework).unwrap();
-        let definitions = index.definitions_at(
+    assert_eq!(
+        index.definitions_at(
             &project.path("casework.yaml"),
-            project.cursor("casework.yaml", "entity-use"),
+            project.cursor("casework.yaml", "schema-use"),
+        )[0]
+        .path,
+        project.path("schemas/correct-address.schema.json")
+    );
+
+    let missing_schema_project = Project::new(&[
+        file("casework.yaml", &casework),
+        file("runtime.example.yaml", &runtime),
+    ]);
+    let missing_schema_index =
+        ProjectIndex::load_product(missing_schema_project.root(), ProductKind::Casework).unwrap();
+    assert!(missing_schema_index.diagnostics().iter().any(|diagnostic| {
+        diagnostic.path == missing_schema_project.path("casework.yaml")
+            && diagnostic.range.start
+                == missing_schema_project.cursor("casework.yaml", "schema-use")
+    }));
+}
+
+#[test]
+fn casework_routing_teams_clocks_and_holiday_sets_resolve() {
+    let casework = fixture("products/casework/examples/multi-stage-routing-clocks/casework.yaml")
+        .replacen("{id: staff,", "{id: <|profile|>staff,", 1)
+        .replacen("{id: triage,", "{id: <|triage|>triage,", 1)
+        .replacen(
+            "{id: northern-review,",
+            "{id: <|northern|>northern-review,",
+            1,
+        )
+        .replacen("{id: overdue-review,", "{id: <|overdue|>overdue-review,", 1)
+        .replacen("  - id: regional-team", "  - id: <|team|>regional-team", 1)
+        .replacen("    serves: [triage,", "    serves: [<|serves|>triage,", 1)
+        .replacen(
+            "    memberProfiles: [staff]",
+            "    memberProfiles: [<|member-profile|>staff]",
+            1,
+        )
+        .replacen(
+            "  - id: regional-review",
+            "  - id: <|policy|>regional-review",
+            1,
+        )
+        .replacen(
+            "          stage: technical",
+            "          stage: <|stage-use|>technical",
+            1,
+        )
+        .replacen(
+            "          fields: {region:",
+            "          fields: {<|field-use|>region:",
+            1,
+        )
+        .replacen(
+            "        queue: northern-review",
+            "        queue: <|route-queue|>northern-review",
+            1,
+        )
+        .replacen("      - id: technical", "      - id: <|stage|>technical", 1)
+        .replacen(
+            "        queue: triage",
+            "        queue: <|stage-queue|>triage",
+            1,
+        )
+        .replacen(
+            "        decidingProfiles: [staff]",
+            "        decidingProfiles: [<|deciding-profile|>staff]",
+            1,
+        )
+        .replacen(
+            "    clocks: [review-deadline, response-budget]",
+            "    clocks: [<|clock-use|>review-deadline, response-budget]",
+            1,
+        )
+        .replacen(
+            "      - {id: approved,",
+            "      - {id: <|outcome|>approved,",
+            1,
+        )
+        .replacen(
+            "        region: {type: string,",
+            "        <|field|>region: {type: string,",
+            1,
+        )
+        .replacen("  - id: office", "  - id: <|calendar|>office", 1)
+        .replacen(
+            "    holidaySet: office-holidays",
+            "    holidaySet: <|holiday-use|>office-holidays",
+            1,
+        )
+        .replacen(
+            "  - id: review-deadline",
+            "  - id: <|clock|>review-deadline",
+            1,
+        )
+        .replacen(
+            "    calendar: office",
+            "    calendar: <|calendar-use|>office",
+            1,
+        )
+        .replacen(
+            "        action: {reassign: {queue: overdue-review}}",
+            "        action: {reassign: {queue: <|step-queue|>overdue-review}}",
+            1,
+        )
+        .replacen(
+            "    reviewPolicies: [regional-review]",
+            "    reviewPolicies: [<|producer-policy|>regional-review]",
+            1,
         );
-        assert_eq!(definitions.len(), usize::from(followed), "{description}");
+    let fixture_source = fixture(
+        "products/casework/examples/multi-stage-routing-clocks/fixtures/multi-stage-policy.yaml",
+    )
+    .replacen(
+        "  policy: regional-review",
+        "  policy: <|fixture-policy|>regional-review",
+        1,
+    )
+    .replacen("  queue: triage", "  queue: <|fixture-queue|>triage", 1)
+    .replacen(
+        "  outcomes: [approved, rejected]",
+        "  outcomes: [<|fixture-outcome|>approved, rejected]",
+        1,
+    );
+    let holiday = fixture(
+        "products/casework/examples/multi-stage-routing-clocks/holiday-sets/office-holidays-7.yaml",
+    )
+    .replacen(
+        "holidaySet: office-holidays",
+        "holidaySet: <|holiday|>office-holidays",
+        1,
+    );
+    let project = Project::new(&[
+        file("casework.yaml", &casework),
+        file("fixtures/multi-stage-policy.yaml", &fixture_source),
+        file("holiday-sets/office-holidays-7.yaml", &holiday),
+    ]);
+    let index = ProjectIndex::load_product(project.root(), ProductKind::Casework).unwrap();
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    for (document, reference, target, definition) in [
+        ("casework.yaml", "serves", "casework.yaml", "triage"),
+        (
+            "casework.yaml",
+            "member-profile",
+            "casework.yaml",
+            "profile",
+        ),
+        ("casework.yaml", "stage-use", "casework.yaml", "stage"),
+        ("casework.yaml", "field-use", "casework.yaml", "field"),
+        ("casework.yaml", "route-queue", "casework.yaml", "northern"),
+        ("casework.yaml", "stage-queue", "casework.yaml", "triage"),
+        (
+            "casework.yaml",
+            "deciding-profile",
+            "casework.yaml",
+            "profile",
+        ),
+        ("casework.yaml", "clock-use", "casework.yaml", "clock"),
+        ("casework.yaml", "calendar-use", "casework.yaml", "calendar"),
+        (
+            "casework.yaml",
+            "holiday-use",
+            "holiday-sets/office-holidays-7.yaml",
+            "holiday",
+        ),
+        ("casework.yaml", "step-queue", "casework.yaml", "overdue"),
+        (
+            "casework.yaml",
+            "producer-policy",
+            "casework.yaml",
+            "policy",
+        ),
+        (
+            "fixtures/multi-stage-policy.yaml",
+            "fixture-policy",
+            "casework.yaml",
+            "policy",
+        ),
+        (
+            "fixtures/multi-stage-policy.yaml",
+            "fixture-queue",
+            "casework.yaml",
+            "triage",
+        ),
+        (
+            "fixtures/multi-stage-policy.yaml",
+            "fixture-outcome",
+            "casework.yaml",
+            "outcome",
+        ),
+    ] {
+        let definitions =
+            index.definitions_at(&project.path(document), project.cursor(document, reference));
+        assert_eq!(definitions.len(), 1, "{document} {reference}");
+        assert_eq!(definitions[0].path, project.path(target));
+        assert_eq!(
+            definitions[0].range.start,
+            project.cursor(target, definition)
+        );
+    }
+}
+
+#[test]
+fn casework_policy_scopes_and_task_template_references_stay_local() {
+    let project = Project::new(&[
+        file(
+            "casework.yaml",
+            "kind: CaseworkProject\n\
+             queues: [{id: queue}]\n\
+             accessProfiles: [{id: <|profile|>staff}]\n\
+             teams: [{id: <|team|>reviewers}]\n\
+             contextProviders:\n  \
+               - id: provider\n    \
+                 sourceNamespace: <|provider-namespace|>opaque-source\n    \
+                 deploymentRef: deployment\n\
+             reviewPolicies:\n  \
+               - id: alpha\n    \
+                 context: {mode: submitted}\n    \
+                 stages: [{id: <|alpha-stage|>review, queue: queue, decidingProfiles: [staff]}]\n    \
+                 outcomes: [{id: <|alpha-outcome|>approved}]\n  \
+               - id: <|beta-policy|>beta\n    \
+                 context: {mode: submitted}\n    \
+                 routing: [{id: route, when: {stage: <|stage-use|>review}, queue: queue}]\n    \
+                 stages: [{id: <|beta-stage|>review, queue: queue, decidingProfiles: [staff]}]\n    \
+                 outcomes: [{id: <|beta-outcome|>approved}]\n\
+             trustedProducers:\n  \
+               - id: producer\n    \
+                 sourceNamespaces: [<|producer-namespace|>opaque-source]\n    \
+                 reviewPolicies: [beta]\n\
+             taskTemplates:\n  \
+               - id: task\n    \
+                 eligibleTeams: [<|team-use|>reviewers]\n    \
+                 eligibleProfiles: [<|profile-use|>staff]\n    \
+                 source: <|template-namespace|>opaque-source\n    \
+                 reviewPolicies: [<|template-policy|>beta]\n",
+        ),
+        file(
+            "fixtures/scoped.yml",
+            "kind: CaseworkFixture\nid: scoped\nreview: {policy: <|fixture-policy|>beta, display: {}}\nexpect: {outcomes: [<|fixture-outcome|>approved]}\n",
+        ),
+    ]);
+    let index = ProjectIndex::load_product(project.root(), ProductKind::Casework).unwrap();
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    for (document, reference, definition) in [
+        ("casework.yaml", "stage-use", "beta-stage"),
+        ("casework.yaml", "team-use", "team"),
+        ("casework.yaml", "profile-use", "profile"),
+        ("casework.yaml", "template-policy", "beta-policy"),
+        ("fixtures/scoped.yml", "fixture-policy", "beta-policy"),
+        ("fixtures/scoped.yml", "fixture-outcome", "beta-outcome"),
+    ] {
+        let definitions =
+            index.definitions_at(&project.path(document), project.cursor(document, reference));
+        assert_eq!(definitions.len(), 1, "{document} {reference}");
+        assert_eq!(
+            definitions[0].range.start,
+            project.cursor("casework.yaml", definition)
+        );
+    }
+    for marker in [
+        "provider-namespace",
+        "producer-namespace",
+        "template-namespace",
+    ] {
+        assert!(
+            index
+                .definitions_at(
+                    &project.path("casework.yaml"),
+                    project.cursor("casework.yaml", marker)
+                )
+                .is_empty(),
+            "{marker} is an opaque source namespace"
+        );
+    }
+}
+
+#[test]
+fn casework_current_bad_references_are_reported_at_the_written_values() {
+    let project = Project::new(&[
+        file(
+            "casework.yaml",
+            "kind: CaseworkProject\n\
+             queues: [{id: queue}]\n\
+             accessProfiles: [{id: staff}]\n\
+             teams:\n  \
+               - id: team\n    \
+                 serves: [<|team-queue|>missing-queue]\n    \
+                 memberProfiles: [<|team-profile|>missing-profile]\n\
+             contextProviders:\n  \
+               - id: provider\n    \
+                 sourceNamespace: <|opaque-provider|>remote-source\n    \
+                 deploymentRef: deployment\n\
+             reviewPolicies:\n  \
+               - id: policy\n    \
+                 context: {mode: current-source, provider: <|provider|>missing-provider}\n    \
+                 routing: [{id: route, when: {stage: <|stage|>missing-stage}, queue: <|route-queue|>missing-queue}]\n    \
+                 stages: [{id: review, queue: <|stage-queue|>missing-queue, decidingProfiles: [<|stage-profile|>missing-profile]}]\n    \
+                 clocks: [<|policy-clock|>missing-clock]\n    \
+                 outcomes: [{id: outcome}]\n\
+             trustedProducers:\n  \
+               - id: producer\n    \
+                 profile: <|producer-profile|>missing-profile\n    \
+                 sourceNamespaces: [<|opaque-producer|>remote-source]\n    \
+                 reviewPolicies: [<|producer-policy|>missing-policy]\n\
+             calendars: [{id: calendar, holidaySet: <|holiday|>missing-holiday}]\n\
+             clocks:\n  \
+               - id: clock\n    \
+                 type: activity\n    \
+                 calendar: <|calendar|>missing-calendar\n    \
+                 steps: [{action: {reassign: {queue: <|clock-queue|>missing-queue}}}]\n\
+             taskTemplates:\n  \
+               - id: task\n    \
+                 eligibleTeams: [<|template-team|>missing-team]\n    \
+                 eligibleProfiles: [<|template-profile|>missing-profile]\n    \
+                 source: <|opaque-template|>remote-source\n    \
+                 reviewPolicies: [<|template-policy|>missing-policy]\n",
+        ),
+        file(
+            "runtime.yaml",
+            "kind: CaseworkRuntimeConfig\ncontextProviders: {<|runtime-provider|>missing-deployment: {}}\n",
+        ),
+        file(
+            "fixtures/bad.yaml",
+            "kind: CaseworkFixture\nid: bad\nreview: {policy: <|fixture-policy|>missing-policy, display: {}}\nexpect: {queue: <|fixture-queue|>missing-queue, outcomes: [<|fixture-outcome|>missing-outcome]}\n",
+        ),
+    ]);
+    let index = ProjectIndex::load_product(project.root(), ProductKind::Casework).unwrap();
+    for (document, marker) in [
+        ("casework.yaml", "team-queue"),
+        ("casework.yaml", "team-profile"),
+        ("casework.yaml", "provider"),
+        ("casework.yaml", "stage"),
+        ("casework.yaml", "route-queue"),
+        ("casework.yaml", "stage-queue"),
+        ("casework.yaml", "stage-profile"),
+        ("casework.yaml", "policy-clock"),
+        ("casework.yaml", "producer-profile"),
+        ("casework.yaml", "producer-policy"),
+        ("casework.yaml", "holiday"),
+        ("casework.yaml", "calendar"),
+        ("casework.yaml", "clock-queue"),
+        ("casework.yaml", "template-team"),
+        ("casework.yaml", "template-profile"),
+        ("casework.yaml", "template-policy"),
+        ("runtime.yaml", "runtime-provider"),
+        ("fixtures/bad.yaml", "fixture-policy"),
+        ("fixtures/bad.yaml", "fixture-queue"),
+        ("fixtures/bad.yaml", "fixture-outcome"),
+    ] {
+        assert!(
+            index.diagnostics().iter().any(|diagnostic| {
+                diagnostic.path == project.path(document)
+                    && diagnostic.range.start == project.cursor(document, marker)
+            }),
+            "missing diagnostic at {document} <|{marker}|>: {:?}",
+            index.diagnostics()
+        );
+    }
+    for marker in ["opaque-provider", "opaque-producer", "opaque-template"] {
+        assert!(
+            index.diagnostics().iter().all(|diagnostic| {
+                diagnostic.range.start != project.cursor("casework.yaml", marker)
+            }),
+            "{marker} is an opaque source namespace"
+        );
     }
 }
 

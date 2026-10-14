@@ -205,11 +205,6 @@ fn document_rules(
         .filter(|rules| {
             if rules.pattern == "@document" {
                 path == entry
-            } else if rules.pattern == "@source-description" {
-                path != entry
-                    && relative != "runtime.yaml"
-                    && relative != "dev-clients.yaml"
-                    && !relative.starts_with("fixtures/")
             } else {
                 matches_pattern(rules.pattern, relative)
             }
@@ -228,10 +223,7 @@ pub(crate) fn is_project_document(
     };
     is_authoring_document(path)
         && is_safe_authored_file(root, path)
-        && (documents.contains_key(path)
-            || document_rules(root, path, &entry, product)
-                .iter()
-                .any(|rules| rules.pattern != "@source-description"))
+        && (documents.contains_key(path) || !document_rules(root, path, &entry, product).is_empty())
 }
 
 struct Match<'a> {
@@ -770,7 +762,7 @@ pub(crate) fn build_index(
                             path: path.clone(),
                             range: found.scalar.range,
                         },
-                        reports_unresolved: product != ProductKind::Casework,
+                        reports_unresolved: true,
                         style: found.scalar.style,
                         offers: None,
                     });
@@ -872,7 +864,7 @@ mod tests {
         for path in [
             "casework.yaml",
             "mappings/other.yml",
-            "imports/source-description.json",
+            "imports/descriptor.json",
             ".registry-stack-editor/project.json",
         ] {
             assert!(is_authoring_document(Path::new(path)));
@@ -931,31 +923,28 @@ mod tests {
     }
 
     #[test]
-    fn casework_follows_only_authoring_source_descriptions() {
-        for (description, followed) in [
-            ("keys/signing.key", false),
-            ("keys/signing.pem", false),
-            ("imports/source-description", false),
-            ("imports/source-description.yaml", true),
-            ("imports/source-description.yml", true),
-            ("imports/source-description.json", true),
-        ] {
-            let directory = project(&[
-                (
-                    "casework.yaml",
-                    &format!(
-                        "kind: CaseworkProject\n\
-                         sources: [{{id: regional, description: {description}}}]\n"
-                    ),
-                ),
-                (description, "sourceId: regional\n"),
-            ]);
-            assert_eq!(
-                loaded(&directory, ProductKind::Casework).contains(description),
-                followed,
-                "{description}"
-            );
-        }
+    fn casework_loads_only_current_authored_document_patterns() {
+        let directory = project(&[
+            ("casework.yaml", "kind: CaseworkProject\n"),
+            ("runtime.yaml", "kind: CaseworkRuntimeConfig\n"),
+            ("dev-clients.yaml", "kind: CaseworkDevClients\n"),
+            ("fixtures/review.yml", "kind: CaseworkFixture\n"),
+            (
+                "holiday-sets/office.yaml",
+                "kind: CaseworkHolidaySet\nholidaySet: office\n",
+            ),
+            ("imports/retired.json", "{\"sourceId\":\"retired\"}"),
+        ]);
+        assert_eq!(
+            loaded(&directory, ProductKind::Casework),
+            BTreeSet::from([
+                "casework.yaml".to_owned(),
+                "dev-clients.yaml".to_owned(),
+                "fixtures/review.yml".to_owned(),
+                "holiday-sets/office.yaml".to_owned(),
+                "runtime.yaml".to_owned(),
+            ])
+        );
     }
 
     #[test]
