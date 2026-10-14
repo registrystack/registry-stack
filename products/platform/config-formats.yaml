@@ -2871,6 +2871,8 @@ formats:
     restrictingMembers: []
 
 outOfScope:
+  - files: products/breg/generated/event-schemas/proposal-lifecycle.schema.json
+    reason: Generated Proposal lifecycle event payload, governed by the BReg event contract rather than a configuration format.
   - files: products/breg/generated/*/generated/**
     reason: Compiled package content; the registry/package format governs the envelope.
   - files: products/evidence/contracts/{audit-event,authority-context,definitions,evidence,request,request-batch,request-batch-response,request-batch-audit-event}.schema.yaml
