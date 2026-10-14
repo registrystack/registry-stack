@@ -147,17 +147,24 @@ curl --silent --show-error --fail-with-body \
 Verify the exact response offline before reading its value:
 
 ```sh
+umask 077
+verification_at="$(python3 -c \
+  'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 evidencectl verify adult-status.jws.json \
   --context .evidence/requests/adult-status/verification.json \
   --output adult-status.verified.json
+printf '%s\n' "$verification_at" \
+  > .evidence/requests/adult-status/verified-at.txt
 ```
 
 ```text test-expect
 VERIFIED
 ```
 
-The verified assertion contains one Boolean adult-status output. It excludes the birth date,
-residence, source token, and address canary used by the synthetic source.
+The verified assertion contains one Boolean adult-status output. The owner-only `verified-at.txt`
+records the start of that successful verification and is published only after success. The
+assertion excludes the birth date, residence, source token, and address canary used by the
+synthetic source.
 
 ## Inspect the audit and clean up
 

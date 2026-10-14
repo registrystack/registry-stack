@@ -18,158 +18,179 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting this
-tutorial. You will reuse that assertion to show why an application must not trust an Evidence Gateway
-payload because it arrived over HTTPS or because it can be decoded, and how independently retained
-trust and request expectations support later offline review.
+Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting
+this tutorial. You will preserve its response, the trust decisions fixed before that response
+existed, and the recorded start of its successful verification, then replay the decision without a
+service.
 
 <QuickstartMeta
-  outcome="An Evidence Gateway response re-verified offline at the recorded decision time."
+  outcome="An Evidence Gateway response accepted and later re-verified at the recorded decision time."
   time="About 10 minutes"
   level="Local verification with synthetic data"
   prerequisites={[
     'The completed first Evidence Gateway assertion tutorial',
-    'The retained assertion.jws.json, verified.json, and first-assertion request artifacts',
-    'Python 3 and the evidence binary',
+    'Its retained adult-status response, verified payload, and request artifacts',
+    'Python 3 and the matching evidence binary',
   ]}
 />
 
-## Start with three separate inputs
+## Preserve four independent inputs
 
-Enter the existing project. No service or registry needs to be running:
+Enter the project left by the first tutorial. Evidence Gateway, its issuer, and the source can all
+remain stopped.
 
 ```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
-The prior preparation retained trust and expectations before the response existed. Split that
-local tutorial context into the same two verification inputs a production consumer governs
-independently:
+The first tutorial left these files:
+
+- `adult-status.jws.json`, the exact untrusted response bytes;
+- `adult-status.verified.json`, the payload published by the first successful verification;
+- `.evidence/requests/adult-status/verification.json`, the owner-only context fixed before the
+  response existed;
+- `.evidence/requests/adult-status/verified-at.txt`, the recorded start of that successful
+  verification.
+
+Create an owner-only consumer record. Copy the response exactly, and split the local context into
+the two inputs a production relying party governs separately.
 
 ```sh
 umask 077
+install -d -m 700 consumer-record
 python3 - <<'PY'
 import json
+import shutil
 from pathlib import Path
 
-context = json.loads(
-    Path(".evidence/requests/first-assertion/verification.json").read_text()
-)
-Path("trusted-issuer-keys.json").write_text(
+request_dir = Path(".evidence/requests/adult-status")
+record_dir = Path("consumer-record")
+context = json.loads((request_dir / "verification.json").read_text())
+
+shutil.copyfile("adult-status.jws.json", record_dir / "response.jws.json")
+shutil.copyfile(request_dir / "verified-at.txt", record_dir / "verified-at.txt")
+(record_dir / "trusted-jwks.json").write_text(
     json.dumps(context["trustedJwks"], indent=2) + "\n"
 )
-Path("verification-policy.json").write_text(
+(record_dir / "verification-policy.json").write_text(
     json.dumps(context["verificationPolicy"], indent=2) + "\n"
 )
 PY
 ```
 
-You now have:
+The tutorial derives the JWKS and policy from a private context that `evidencectl request prepare`
+created before it received a response. A production consumer obtains these from its own reviewed
+trust configuration and transaction state. Do not take keys, expected claims, or a policy from the
+response or from live discovery during verification.
 
-- `assertion.jws.json`, the exact untrusted response bytes you stored;
-- `trusted-issuer-keys.json`, the public keys your relying party trusts;
-- `verification-policy.json`, expectations retained from your own request and governance.
+## Replay the accepted response
 
-The tutorial extracts the latter two from the private local context because it recorded them before
-the response. A production consumer builds and stores them in its own transaction and trust
-records. Never decode an untrusted response and copy its claims into the policy used to verify that
-same response.
-
-## Re-verify the recorded decision
-
-Use the time from the already verified transaction record as the historical decision instant:
+Check the retained policy, then verify at the instant recorded immediately before the first
+successful verification. The first tutorial published that owner-only time only after verification
+succeeded.
 
 ```sh
-verified_at="$(python3 -c \
-  'import json; print(json.load(open("verified.json"))["issuedAt"])')"
+evidence check-policy \
+  --verification-policy consumer-record/verification-policy.json
 evidence verify \
-  --jws assertion.jws.json \
-  --jwks trusted-issuer-keys.json \
-  --policy verification-policy.json \
-  --at "$verified_at"
+  --jws consumer-record/response.jws.json \
+  --jwks consumer-record/trusted-jwks.json \
+  --policy consumer-record/verification-policy.json \
+  --at "$(cat consumer-record/verified-at.txt)" \
+  > consumer-record/verification.txt
 ```
 
-The result begins:
+`evidence verify` opens no listener, contacts no issuer, fetches no discovery document, and calls
+no source. It prints the payload only after the pinned key signed the exact bytes, every retained
+expectation matched, and the assertion was current at the named instant. `evidencectl verify`
+internally used its current clock and does not expose that exact instant, so the retained time is
+precisely the recorded start of the successful operation. It is not the assertion's signed
+`issuedAt`. Application code should pass and retain its own explicit decision instant when its
+verifier supports that contract.
 
-```text test-excerpt
-verified-at: <recorded-instant>
-authentic: yes
-currently-valid: yes
+Application code can now publish verified data from `consumer-record/verification.txt` to decision
+logic.
+
+## Replay the same decision
+
+Later, re-run the verifier with the retained time. The answer is about that historical decision,
+even if the assertion is no longer current today.
+
+```sh
+evidence verify \
+  --jws consumer-record/response.jws.json \
+  --jwks consumer-record/trusted-jwks.json \
+  --policy consumer-record/verification-policy.json \
+  --at "$(cat consumer-record/verified-at.txt)"
 ```
 
-The command then prints the verified Evidence Gateway payload, which carries the same answer the first
-tutorial verified:
+`authentic` and `currently-valid` answer different questions. A stored response can remain
+authentic after its validity window, but it cannot support a new current decision. Replaying the
+retained instant accounts for the earlier decision; verifying at the current time answers whether
+the same response is usable now.
 
-```json test-excerpt
-{
-  "providesValueFor": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-  "value": true
-}
+## Prove the response remains untrusted input
+
+Change one encoded payload byte in a copy. The pinned key, policy, and historical instant stay the
+same.
+
+```sh
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+source = Path("consumer-record/response.jws.json")
+document = json.loads(source.read_text())
+payload = document["payload"]
+document["payload"] = ("A" if payload[0] != "A" else "B") + payload[1:]
+Path("consumer-record/tampered.jws.json").write_text(json.dumps(document) + "\n")
+PY
 ```
 
-It opens no listener, contacts no issuer, fetches no discovery document, and calls no source. The
-named JWKS file is the complete trust set for this verification.
+Verification refuses the changed bytes and never prints a verified payload.
 
-A policy `evidence verify` cannot read fails as `stored response verification failed (malformed)`,
-which says nothing about where the policy is wrong. Run
-`evidence check-policy --verification-policy verification-policy.json` to read the policy exactly
-as `verify` reads it and report every problem with its line, column, and code, without repeating a
-value written in the policy. It exits `0` when the policy reads, `1` when it was refused, and `3`
-when the file could not be read. A holder-bound policy takes `--holder-bound-policy` instead, as
-`evidence verify-presentation` reads it (`crates/registry-evidence/src/cli.rs`).
-
-`authentic` and `currently-valid` answer different questions. An expired stored response can remain
-authentic evidence of what was signed and accepted at an earlier decision time. It must not be used
-as a current answer. Record the instant at which your application made its decision and use that
-same instant for later audit re-verification.
+```sh test-exit="1"
+evidence verify \
+  --jws consumer-record/tampered.jws.json \
+  --jwks consumer-record/trusted-jwks.json \
+  --policy consumer-record/verification-policy.json \
+  --at "$(cat consumer-record/verified-at.txt)"
+```
 
 ## Put the boundary in application code
 
-Your consuming application must preserve this order:
+Preserve this order in a consuming application:
 
-1. Generate and retain the request nonce and all expected policy fields before sending the
-   request.
-2. Select the trusted provider identity and pinned key set through your own configuration.
+1. Generate and retain the request nonce and every policy expectation before sending the request.
+2. Select the trusted provider identity and pinned key set through reviewed configuration.
 3. Store the returned bytes as untrusted input.
-4. Verify the exact response format against the retained policy and keys.
+4. Record a verification instant, verify the exact response format against the retained policy and
+   keys, and publish the instant only after success.
 5. Publish only the verified payload to decision logic.
-6. Record the verification instant, result, response digest, and policy revision under your own
-   retention rules.
+6. Retain the instant, result, response digest, and policy and JWKS revisions under your retention
+   rules.
 
-Do not expose a decoded payload through an application object that looks the same before and after
-verification. Use distinct types, files, or process boundaries so unverified input cannot reach a
-decision by accident.
+Use distinct types, files, or process boundaries for unverified bytes and verified values. An
+application object that looks usable before verification makes accidental trust more likely.
 
-## Decide what to retain
+Retain enough to repeat the decision without asking the provider to recreate it: the signed bytes
+and format, the original application transaction, the expected request and subject bindings, the
+pinned key revision, the verification policy and instant, and the verified result or its governed
+digest. The source record does not belong in this verifier record.
 
-Retain enough to repeat the decision without asking the provider to recreate it:
+The opaque subject binding is meaningful only for the audience and purpose that produced it. Keep
+the application's mapping from its person or case to the transaction in its own protected records;
+the assertion does not disclose that local identifier.
 
-- the exact signed response bytes and their response format;
-- the original request or application transaction record that maps the internal person or case to
-  the request;
-- the request nonce and expected subjects, concepts, purpose, audience, provider, issuer, and
-  configuration revision;
-- the trusted JWKS revision used at the decision;
-- the verification instant and maximum accepted lifetime;
-- the resulting verified payload or a governed digest, according to your data-retention policy.
+## If a retained input is missing
 
-This does not require retaining the source record. The application transaction record says that
-the request concerned `person-123`; the verification policy holds the expected opaque binding and
-nonce; and successful verification proves the signed response matches both. The assertion alone
-cannot reveal `person-123`.
-
-The opaque binding is meaningful only inside the audience and purpose for which the provider
-produced it. The same subject produces an unrelated binding for another audience or purpose.
-
-## If the retained inputs are missing
-
-Every step reads files the first tutorial left behind. The Python steps raise `FileNotFoundError`
-when `.evidence/requests/first-assertion/verification.json` or `verified.json` is absent, and
-`evidence verify` reports `evidence: stored response verification failed (malformed)` when
-`assertion.jws.json` is. All three mean the same thing: the earlier request was prepared under a
-different `--name`, or that working directory is gone. Rerun the request and verification steps of
-[Get your first Evidence Gateway assertion](../first-evidence-assertion/), naming the request
-`first-assertion`, then return here. No service needs to be running for this tutorial.
+Missing input is a failed verification record, not a reason to fetch replacement trust. Rerun the
+request and verification steps in [Get your first Evidence Gateway assertion](../first-evidence-assertion/)
+when `adult-status.jws.json`, `adult-status.verified.json`,
+`.evidence/requests/adult-status/verification.json`, or
+`.evidence/requests/adult-status/verified-at.txt` is absent. A production retention policy must
+decide whether to reject the operation, recover an authoritative archived revision, or make a new
+request.
 
 ## Next
 
