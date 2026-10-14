@@ -77,9 +77,11 @@ transport and pinned version, and local TLS trust files. It also records which
 gated acquisition kinds this deployment enables, which is a decision the
 deployment withholds by default rather than one it grants. The runtime file
 cannot override service identity, trust domain,
-authentication, authority, sources, request policy, scripts, disclosure, rate
+authentication, sources, request policy, scripts, disclosure, rate
 limits, signing policy, or audit fail-closed behavior. The two content hashes
-identify the exact loaded inputs but are not trust decisions. The operator
+identify the exact loaded inputs but are not trust decisions. Complete grants are compiled
+separately, activated into the runtime's authority store and captured at startup; they may only
+narrow the installed package ceilings. The operator
 establishes trust through review, distribution controls, read-only mounts, and
 process replacement for every revision.
 
@@ -113,8 +115,9 @@ not an approval, promotion, deployment, key-generation, caller-registration,
 or service-start command. It runs the real `evidence` binary through its
 bundle-only validation entry point and evaluates every referenced fixture
 without generating a temporary signing key or other validation secret. It then
-atomically publishes one closed package with `SHA256SUMS` and an optional
-`REVISION`. Runtime configuration remains in the deployment target. The package contains no production private key, credential, token,
+atomically publishes a candidate containing immutable `bundle/` with `SHA256SUMS`
+and an optional `REVISION`, plus separate `runtime.yaml` and
+`compiled-authority.yaml` handoff documents. The package contains no production private key, credential, token,
 local request, audit entry, or source response.
 
 The operator reviews and transfers the exact package, records its package
@@ -123,7 +126,7 @@ subject-binding HMAC key, and source credentials below the runtime's secret
 root. Secret ownership and mode requirements remain unchanged: each referenced
 secret is a regular owner-only file accepted by the eventual service identity.
 The package and runtime must be non-writable to that identity. The
-runtime is target-specific and remains outside the package. Signed assertions continue to carry only a configuration
+runtime is target-specific and remains outside the immutable `bundle/`. Signed assertions continue to carry only a configuration
 revision as `configurationRevision`. That value is scoped to the one requirement
 the assertion answers, not to the whole package digest. The public signing keys and
 `signing.revokedKeyIds` are outside it: publishing, activating, retiring, or
@@ -136,9 +139,11 @@ Run the following grouped handoff after provisioning and whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
 
 ```sh
-evidencectl doctor --runtime-config '<deployment-target>/runtime.yaml'
+evidence authority activate --runtime-config '<candidate>/runtime.yaml' \
+  --document '<candidate>/compiled-authority.yaml'
+evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
 evidencectl test '<editable-project>' --target '<deployment-target>'
-evidence serve --runtime-config '<deployment-target>/runtime.yaml'
+evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
 
 `doctor` delegates the runtime-owned startup dependency preflight without
@@ -153,7 +158,7 @@ its access and disclosure audit entries reached the audit destination.
 Configure an HTTPS OIDC issuer independently of Evidence. Its client registration
 must bind the approved resource and scopes; the governed bundle pins issuer,
 JWKS URI, audience, allowed algorithms, token types, and claim mappings.
-Inspect the installed package and target with `evidencectl artifact inspect <deployment-target>` and verify
+Inspect the installed package and target with `evidencectl artifact inspect <candidate>` and verify
 an actual issuer-to-resource request at handoff. Inspection does not register a
 client, decide authority, or issue a token. Maintained local tooling uses pinned
 stock ThunderID.
@@ -179,12 +184,12 @@ shared/
   evidence-project/
 environments/
   local/
-    evidence/{evidence.yaml,governance.yaml,source-keys/,secrets/}
+    evidence/{target.yaml,authority.yaml,public-keys/}
   staging/
-    evidence/{evidence.yaml,governance.yaml,source-keys/,secrets/}
+    evidence/{target.yaml,authority.yaml,public-keys/}
     transit/{proxy-configs/,policies/}
   production/
-    evidence/{evidence.yaml,governance.yaml,source-keys/,secrets/}
+    evidence/{target.yaml,authority.yaml,public-keys/}
     transit/{proxy-configs/,policies/}
 ```
 
@@ -491,38 +496,27 @@ named legal issuer.
 
 ### Service signing-key rotation
 
-Planned rotation is an overlap, switch, drain sequence:
+The normalized target binds one service public key through `signer.publicJwkFile`
+and its matching provider version through `signer.keyVersion`. It does not author
+additional published service keys or a signing-key denylist.
 
-1. Create the next non-exportable Transit key version and export only its
-   public key.
-2. Commit that exact JWK under `public-keys/<thumbprint>.jwk.json` and add its
-   path to `publishedPublicJwkFiles`.
-3. Deploy and restart every replica so all of them publish both keys.
-4. Wait at least the relying clients' maximum metadata-cache interval before
-   activating the next key. The progressive client caps that interval at 600
-   seconds. This ensures a client that refreshed immediately before publication
-   can learn the next key before Evidence signs with it.
-5. Keep the named Transit key's minimum signing version low enough for both
-   pinned application versions. The ordinary Vault/OpenBao ACL grants the
-   named key path, not a request-body key version.
-6. Move the next path to `activePublicJwkFile`, keep the predecessor in
-   `publishedPublicJwkFiles`, pin `signer.keyVersion` to the next version, and
-   deploy and restart.
-7. After `maximumAssertionValiditySeconds + verifierClockSkewSeconds`, remove
-   the predecessor public key and raise the Transit key's minimum signing
-   version, or otherwise disable the predecessor provider-side.
+For planned rotation, create a successor non-exportable Transit version and commit
+its exact public JWK under a new thumbprint filename. Distribute that key to relying
+parties before switching. Their approved trust set must retain the predecessor
+through the assertion-validity-plus-clock-skew window. Consumers using only cached
+service JWKS need a coordinated refresh or a cutover window.
 
-The full overlap therefore accounts for both metadata-cache propagation before
-the switch and the maximum assertion lifetime plus clock skew after the switch.
+Build and check a new candidate with the successor `signer.publicJwkFile` and
+`signer.keyVersion`, install its bundle, activate its complete authority and restart
+every replica. Keep both provider versions permitted during the rollout. After all
+replicas use the successor and the validity window has elapsed, remove the old
+version from the proxy policy and raise the provider's `min_encryption_version`.
 
-Emergency rotation has no overlap guarantee. First disable provider signing
-authority for the compromised version. Then remove its public JWK, add its
-thumbprint to `revokedKeyIds`, activate a replacement or leave the service
-unavailable, and restart every issuer and verifier that consumes the key set.
-If the compromised key issued access tokens, add its key identifier to Evidence
-authentication `revokedKeyIds` in the same incident rollout. This
-shortens availability when necessary and is intentionally stronger than the
-ordinary validity window.
+Emergency rotation first disables provider signing for the compromised version.
+Distribute its thumbprint to consumer denylists, then deploy a checked successor or
+leave the service unavailable. Never mutate sealed bundle bytes to add an
+unsupported authoring field. For a compromised caller-token issuer key, set
+`authentication.oidc.revokedKeyIds` in the target and rebuild before restart.
 
 ## Source and selector controls
 

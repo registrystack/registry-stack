@@ -10,9 +10,36 @@
         "create",
         "invoke",
         "get",
-        "history"
+        "history",
+        "start",
+        "inspect",
+        "submit",
+        "apply",
+        "edit",
+        "revise",
+        "rebase",
+        "retry",
+        "cancel"
       ],
       "type": "string"
+    },
+    "ProposalExpectation": {
+      "additionalProperties": false,
+      "properties": {
+        "problemCode": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "status": {
+          "format": "uint32",
+          "maximum": 599,
+          "minimum": 400,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "Scenario": {
       "additionalProperties": false,
@@ -56,6 +83,9 @@
         "client": {
           "$ref": "#/$defs/LocalId"
         },
+        "expect": {
+          "$ref": "#/$defs/ProposalExpectation"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -64,6 +94,9 @@
         },
         "operation": {
           "$ref": "#/$defs/Operation"
+        },
+        "proposal": {
+          "$ref": "#/$defs/LocalId"
         },
         "record": {
           "$ref": "#/$defs/LocalId"

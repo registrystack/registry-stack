@@ -1746,7 +1746,7 @@ fn a_read_project_or_module_serializes_to_source_the_reader_reads_again() {
         &mut files,
     );
     for canonical in [
-        "examples/refactor/minimal/registry.yaml",
+        "examples/minimal/registry.yaml",
         "acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml",
     ] {
         assert!(

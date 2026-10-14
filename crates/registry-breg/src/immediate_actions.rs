@@ -289,7 +289,9 @@ fn compile_action(
     if let crate::contract::ActionExecutionSource::Proposal { proposal } = &action.execution {
         if let Some(context) = &proposal.review_context {
             for projection in context.fields.values() {
-                if let (Some(input), Some(field)) = (&projection.from_record, &projection.field) {
+                if let crate::contract::ProposalContextValueSource::Record { input, field } =
+                    projection
+                {
                     if let Some(binding) = input_map.get(input.as_str()) {
                         if let FieldTypeSource::Reference { target, .. } = &binding.field_type {
                             if let Some(existing) = target_uses.iter_mut().find(|use_| use_.operation == Operation::Get && matches!(&use_.source, CompiledActionTargetUseSource::Input { input: selected } if selected == input)) {
@@ -2133,7 +2135,15 @@ fn compile_action_routes(
         .map(|(_, profile)| profile.id.clone())
         .collect::<BTreeSet<_>>();
     let mut routes = vec![CompiledActionRoute {
-        id: format!("actions.{}.invoke", action.id),
+        id: format!(
+            "actions.{}.{}",
+            action.id,
+            if action.execution.is_proposal() {
+                "start"
+            } else {
+                "invoke"
+            }
+        ),
         action_id: action.id.clone(),
         kind: ActionRouteKind::Invoke,
         method: HttpMethod::Post,
@@ -2425,23 +2435,25 @@ fn compile_execution(
             }) {
                 errors.push(Diagnostic::error("breg.proposal.review-authority-unknown","actions[].execution.proposal.review.authority","required review must name a declared authority implementing the review protocol"));
             }
-            let binding = registry_review_protocol::PolicyBinding {
+            let selection = registry_review_protocol::PolicySelection {
                 id: policy.id.clone(),
                 version: policy.version.clone(),
-                digest: registry_review_protocol::ContentDigest::parse(policy.digest.as_str())
-                    .expect("reader checked SHA-256 digest"),
+                digest: policy.digest.as_ref().map(|digest| {
+                    registry_review_protocol::ContentDigest::parse(digest.as_str())
+                        .expect("reader checked SHA-256 digest")
+                }),
             };
-            if binding.check().is_err()
+            if selection.check().is_err()
                 || source.is_empty()
                 || source.len() > 256
                 || source.chars().any(char::is_control)
             {
-                errors.push(Diagnostic::error("breg.proposal.review-binding-invalid", "actions[].execution.proposal.review", "review source and exact policy identifier/version must satisfy the review protocol bounds"));
+                errors.push(Diagnostic::error("breg.proposal.review-binding-invalid", "actions[].execution.proposal.review", "review source and policy identifier must satisfy the review protocol bounds; omit both version and digest to select the current policy, or supply both for an exact pin"));
             }
             CompiledProposalReview::Required {
                 authority: authority.clone(),
                 source: source.clone(),
-                policy: binding,
+                policy: selection,
             }
         }
     };
@@ -2663,9 +2675,12 @@ fn compile_execution(
                     "review-context fields must use distinct public API names",
                 ));
             }
-            let valid = match (&value.from_input, &value.from_record, &value.field) {
-                (Some(input), None, None) => action.inputs.iter().any(|field| &field.id == input),
-                (None, Some(input), Some(field)) => action
+            use crate::contract::ProposalContextValueSource;
+            let valid = match value {
+                ProposalContextValueSource::Input { input } => {
+                    action.inputs.iter().any(|field| &field.id == input)
+                }
+                ProposalContextValueSource::Record { input, field } => action
                     .inputs
                     .iter()
                     .find(|entry| &entry.id == input)
@@ -2676,13 +2691,28 @@ fn compile_execution(
                             .is_some_and(|field| field.encryption.is_none()),
                         _ => false,
                     }),
-                _ => false,
+                ProposalContextValueSource::Changes {
+                    record_type,
+                    fields,
+                } => {
+                    !fields.is_empty()
+                        && fields.len() <= 64
+                        && fields.iter().collect::<BTreeSet<_>>().len() == fields.len()
+                        && entities.get(record_type).is_some_and(|entity| {
+                            fields.iter().all(|field| {
+                                entity
+                                    .fields
+                                    .get(field)
+                                    .is_some_and(|field| field.encryption.is_none())
+                            })
+                        })
+                }
             };
             if !valid {
                 errors.push(Diagnostic::error(
                     "breg.proposal.context-mapping-invalid",
                     "actions[].execution.proposal.reviewContext.fields",
-                    "context must project an input or an unencrypted referenced Record field",
+                    "context must select an input, an unencrypted referenced Record field, or 1–64 distinct unencrypted fields from frozen Record changes",
                 ));
             }
         }

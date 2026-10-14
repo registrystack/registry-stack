@@ -592,14 +592,14 @@ admissions while old runs keep their encrypted snapshots and command identities.
 Adding an unrelated logical connection does not change a workflow binding digest.
 Reusing an idempotency key returns the original run rather than creating new work.
 
-This source version creates protected state schema version 3. A namespace created
-by an earlier pilot with schema versions 1 or 2 is refused: apply reports `schema-version`,
-and runtime state access (including `deployment-status`) fails closed as
-`store-unavailable`. Apply does not silently adopt or rewrite it. Settle and retain the old pilot's work under
-its matching binary, then create a fresh namespace and database identity for this
-version. Keep its original keys, package and audit history until retention permits
-erasure. Runtime publication remains held, so this is a pilot source compatibility
-boundary rather than an in-place released migration.
+This source version creates protected state schema version 4. Earlier protected
+state layouts are refused: apply reports `schema-version`, and runtime state
+access, including `deployment-status`, fails closed as `store-unavailable`.
+Apply does not adopt or rewrite them. Settle retained work with its matching
+binary, then create a fresh namespace and database identity for this version.
+Keep the original keys, packages, and audit history until retention permits
+erasure. This source compatibility boundary does not promise an in-place state
+migration.
 
 Startup does not migrate or activate. The service reads its runtime file from
 an absolute path; `coordinatorctl` also accepts a path relative to the current

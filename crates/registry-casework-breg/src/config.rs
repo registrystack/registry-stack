@@ -10,7 +10,7 @@ pub const DESCRIPTION_API_VERSION: &str =
 pub const DESCRIPTION_KIND: &str = "CaseworkBregContextExport";
 
 /// The schema bytes are exported by BReg before the consumer policy is compiled.
-/// The producer's compiled registry revision covers the projection and schema revision.
+/// Its contract revision covers the exact source, projection meaning and field semantics.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -18,7 +18,6 @@ pub struct BregContextExport {
     pub api_version: String,
     pub kind: String,
     pub source_namespace: String,
-    pub registry_revision: String,
     pub action_id: String,
     pub context_id: String,
     pub contract: ReviewContextContract,
@@ -49,10 +48,11 @@ impl BregContextExport {
                 .get("x-registry-definition-revision")
                 .and_then(Value::as_str)
                 != Some(self.contract.revision.as_str())
-            || registry_casework_core::ContentDigest::parse(&self.registry_revision).is_err()
             || observed_revision.as_ref().and_then(Value::as_str)
                 != Some(self.contract.revision.as_str())
             || sha256_uri(&canonical) != self.contract.revision.as_str()
+            || self.schema["x-registry-review-context"]["sourceNamespace"].as_str()
+                != Some(self.source_namespace.as_str())
             || self.schema["x-registry-review-context"]["actionId"].as_str()
                 != Some(self.action_id.as_str())
             || self.schema["x-registry-review-context"]["contextId"].as_str()

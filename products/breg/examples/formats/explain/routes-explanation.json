@@ -1,31 +1,383 @@
 {
-  "apiVersion": "id.registrystack.org/formats/breg/routes-explanation/v1alpha4",
+  "apiVersion": "id.registrystack.org/formats/breg/routes-explanation/v1alpha5",
   "kind": "BRegRoutesExplanation",
   "routes": [
     {
       "accessProfiles": [
-        "district-reader"
+        "directory-editor"
       ],
-      "defaultAccessProfile": "district-reader",
-      "entityId": "record",
-      "id": "records.record.list",
+      "defaultAccessProfile": "directory-editor",
+      "id": "records.directory-entry.list",
       "method": "GET",
       "operation": "list",
-      "path": "/v1/records/records",
+      "path": "/v1/records/directory-entries",
       "queryKind": "list",
-      "type": "entity"
+      "recordType": "directory-entry",
+      "type": "record"
     },
     {
       "accessProfiles": [
-        "district-reader"
+        "directory-editor"
       ],
-      "defaultAccessProfile": "district-reader",
-      "entityId": "record",
-      "id": "records.record.get",
+      "defaultAccessProfile": "directory-editor",
+      "id": "records.directory-entry.create",
+      "method": "POST",
+      "operation": "create",
+      "path": "/v1/records/directory-entries",
+      "recordType": "directory-entry",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "directory-editor"
+      ],
+      "defaultAccessProfile": "directory-editor",
+      "id": "records.directory-entry.get",
       "method": "GET",
       "operation": "get",
-      "path": "/v1/records/records/{record_id}",
-      "type": "entity"
+      "path": "/v1/records/directory-entries/{record_id}",
+      "recordType": "directory-entry",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "directory-editor"
+      ],
+      "defaultAccessProfile": "directory-editor",
+      "id": "records.directory-entry.patch",
+      "method": "PATCH",
+      "operation": "patch",
+      "path": "/v1/records/directory-entries/{record_id}",
+      "recordType": "directory-entry",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "facility-reader"
+      ],
+      "defaultAccessProfile": "facility-reader",
+      "id": "records.facility.list",
+      "method": "GET",
+      "operation": "list",
+      "path": "/v1/records/facilities",
+      "queryKind": "list",
+      "recordType": "facility",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "facility-reader",
+        "proposal-reviewer"
+      ],
+      "defaultAccessProfile": null,
+      "id": "records.facility.get",
+      "method": "GET",
+      "operation": "get",
+      "path": "/v1/records/facilities/{record_id}",
+      "recordType": "facility",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "facility-reader"
+      ],
+      "defaultAccessProfile": "facility-reader",
+      "id": "records.facility.path.operators",
+      "method": "GET",
+      "operation": "list",
+      "path": "/v1/records/facilities/{record_id}/operators",
+      "queryKind": "list",
+      "recordType": "facility",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "facility-reader"
+      ],
+      "defaultAccessProfile": "facility-reader",
+      "id": "records.facility-assignment.list",
+      "method": "GET",
+      "operation": "list",
+      "path": "/v1/records/facility-assignments",
+      "queryKind": "list",
+      "recordType": "facility-assignment",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "facility-reader"
+      ],
+      "defaultAccessProfile": "facility-reader",
+      "id": "records.facility-assignment.get",
+      "method": "GET",
+      "operation": "get",
+      "path": "/v1/records/facility-assignments/{record_id}",
+      "recordType": "facility-assignment",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "facility-reader",
+        "operator-editor"
+      ],
+      "defaultAccessProfile": null,
+      "id": "records.operator.list",
+      "method": "GET",
+      "operation": "list",
+      "path": "/v1/records/operators",
+      "queryKind": "list",
+      "recordType": "operator",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "operator-editor"
+      ],
+      "defaultAccessProfile": "operator-editor",
+      "id": "records.operator.create",
+      "method": "POST",
+      "operation": "create",
+      "path": "/v1/records/operators",
+      "recordType": "operator",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "facility-reader",
+        "operator-editor"
+      ],
+      "defaultAccessProfile": null,
+      "id": "records.operator.get",
+      "method": "GET",
+      "operation": "get",
+      "path": "/v1/records/operators/{record_id}",
+      "recordType": "operator",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "operator-editor"
+      ],
+      "defaultAccessProfile": "operator-editor",
+      "id": "records.operator.patch",
+      "method": "PATCH",
+      "operation": "patch",
+      "path": "/v1/records/operators/{record_id}",
+      "recordType": "operator",
+      "type": "record"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "actionId": "correct-address",
+      "actionRouteKind": "start",
+      "defaultAccessProfile": "facility-correction-author",
+      "id": "actions.correct-address.start",
+      "method": "POST",
+      "operation": "start",
+      "path": "/v1/actions/correct-address/proposals",
+      "requiresIdempotencyKey": true,
+      "type": "action"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "actionId": "deactivate-facility",
+      "actionRouteKind": "start",
+      "defaultAccessProfile": "facility-correction-author",
+      "id": "actions.deactivate-facility.start",
+      "method": "POST",
+      "operation": "start",
+      "path": "/v1/actions/deactivate-facility/proposals",
+      "requiresIdempotencyKey": true,
+      "type": "action"
+    },
+    {
+      "accessProfiles": [
+        "facility-registrar"
+      ],
+      "actionId": "register-facility",
+      "actionRouteKind": "invoke",
+      "defaultAccessProfile": "facility-registrar",
+      "id": "actions.register-facility.invoke",
+      "method": "POST",
+      "operation": "invoke",
+      "path": "/v1/actions/register-facility",
+      "requiresIdempotencyKey": true,
+      "type": "action"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-applier",
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.list",
+      "method": "GET",
+      "path": "/v1/proposals",
+      "requiresIdempotencyKey": false,
+      "requiresIfMatch": false,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-applier",
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.get",
+      "method": "GET",
+      "path": "/v1/proposals/{proposal_id}",
+      "requiresIdempotencyKey": false,
+      "requiresIfMatch": false,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-applier"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.apply",
+      "method": "POST",
+      "path": "/v1/proposals/{proposal_id}/apply",
+      "requiresIdempotencyKey": true,
+      "requiresIfMatch": true,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.attachments.supporting-document.delete",
+      "method": "DELETE",
+      "path": "/v1/proposals/{proposal_id}/attachments/supporting-document",
+      "requiresIdempotencyKey": true,
+      "requiresIfMatch": true,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.attachments.supporting-document.get",
+      "method": "GET",
+      "path": "/v1/proposals/{proposal_id}/attachments/supporting-document",
+      "requiresIdempotencyKey": false,
+      "requiresIfMatch": false,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.attachments.supporting-document.patch",
+      "method": "PATCH",
+      "path": "/v1/proposals/{proposal_id}/attachments/supporting-document",
+      "requiresIdempotencyKey": true,
+      "requiresIfMatch": true,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.cancel",
+      "method": "POST",
+      "path": "/v1/proposals/{proposal_id}/cancel",
+      "requiresIdempotencyKey": true,
+      "requiresIfMatch": true,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.edit",
+      "method": "POST",
+      "path": "/v1/proposals/{proposal_id}/edit",
+      "requiresIdempotencyKey": true,
+      "requiresIfMatch": true,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.rebase",
+      "method": "POST",
+      "path": "/v1/proposals/{proposal_id}/rebase",
+      "requiresIdempotencyKey": true,
+      "requiresIfMatch": true,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.retry",
+      "method": "POST",
+      "path": "/v1/proposals/{proposal_id}/retry",
+      "requiresIdempotencyKey": true,
+      "requiresIfMatch": true,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "proposal-reviewer"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.get-review-context",
+      "method": "GET",
+      "path": "/v1/proposals/{proposal_id}/review-context",
+      "requiresIdempotencyKey": false,
+      "requiresIfMatch": false,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "casework-review-status",
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.get-review-status",
+      "method": "GET",
+      "path": "/v1/proposals/{proposal_id}/review-status",
+      "requiresIdempotencyKey": false,
+      "requiresIfMatch": false,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.revise",
+      "method": "POST",
+      "path": "/v1/proposals/{proposal_id}/revise",
+      "requiresIdempotencyKey": true,
+      "requiresIfMatch": true,
+      "type": "proposal"
+    },
+    {
+      "accessProfiles": [
+        "facility-correction-author"
+      ],
+      "defaultAccessProfile": null,
+      "id": "proposals.submit",
+      "method": "POST",
+      "path": "/v1/proposals/{proposal_id}/submit",
+      "requiresIdempotencyKey": true,
+      "requiresIfMatch": true,
+      "type": "proposal"
     }
   ]
 }

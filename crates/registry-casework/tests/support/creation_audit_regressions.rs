@@ -76,7 +76,10 @@ async fn producer_supersession_cannot_bypass_an_unavailable_audit_writer() {
 #[tokio::test]
 async fn creation_response_is_withheld_until_audit_and_exact_recovery_releases_it() {
     let f = Fixture::new(project_value(false, false)).await;
-    let request = f.request("notice");
+    let mut request = f.request("notice");
+    request.policy = PolicySelection::current("notice-review");
+    let expected_policy = f.project.compile_policy("notice-review").unwrap().binding();
+    let expected_digest = submission_digest("notice-service", "notice-source", &request).unwrap();
     let producer = actor("notice-service", CaseworkRole::Requester);
     f.audit.refuse_after(1);
     assert!(matches!(
@@ -95,9 +98,11 @@ async fn creation_response_is_withheld_until_audit_and_exact_recovery_releases_i
     // A failed destination stays stopped. Recovery uses a restarted runtime
     // with a working writer against the same committed database.
     let (audit, capture) = CaseworkAudit::capture();
+    let mut updated_project = f.project.clone();
+    updated_project.review_policies[0].version = "2".into();
     let recovered_service = CaseworkService::new(
         f.store.clone().with_audit(audit),
-        f.project.clone(),
+        updated_project,
         Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .unwrap();
@@ -106,6 +111,8 @@ async fn creation_response_is_withheld_until_audit_and_exact_recovery_releases_i
         .await
         .unwrap();
     assert!(recovered.recovered);
+    assert_eq!(recovered.accepted.policy, expected_policy);
+    assert_eq!(recovered.accepted.submission_digest, expected_digest);
     assert_eq!(
         f.db.query_one("SELECT count(*) FROM casework_review_requests", &[])
             .await

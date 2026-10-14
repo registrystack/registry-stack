@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha4.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha5.schema.json",
   "title": "LifecycleExplanation",
   "description": "The native engine-owned Proposal lifecycle, pinned independently of project source.",
   "type": "object",
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha5"
     },
     "kind": {
       "const": "BRegLifecycleExplanation"

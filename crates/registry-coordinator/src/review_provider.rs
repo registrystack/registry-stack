@@ -180,7 +180,6 @@ fn bounded(text: &str) -> bool {
 pub(crate) struct ReviewAdmission {
     pub request: ReviewCreateRequest,
     pub producer: ReviewProducer,
-    pub policy: ReviewPolicy,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -202,7 +201,12 @@ pub(crate) struct ReviewCancellation {
 }
 
 impl ReviewAdmission {
-    pub(crate) fn retain(&self, run: Uuid) -> Result<RetainedReview> {
+    pub(crate) fn retain(
+        &self,
+        run: Uuid,
+        binding: PolicyBinding,
+        policy: &ReviewPolicy,
+    ) -> Result<RetainedReview> {
         let digest = registry_review_protocol::submission_digest(
             &self.producer.id,
             &self.producer.source_namespace,
@@ -213,12 +217,12 @@ impl ReviewAdmission {
             accepted: ReviewRequestAccepted {
                 request_id: run,
                 subject: self.request.subject.clone(),
-                policy: self.request.policy.clone(),
+                policy: binding,
                 submission_digest: digest,
             },
             requester_reference: self.request.requester_reference.clone(),
             producer: self.producer.clone(),
-            policy: self.policy.clone(),
+            policy: policy.clone(),
             result: None,
             cancellation: None,
         })

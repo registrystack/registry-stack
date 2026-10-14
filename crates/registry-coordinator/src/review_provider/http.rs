@@ -120,6 +120,18 @@ async fn create(State(s): State<HttpState>, headers: HeaderMap, input: BoundedBo
                 "Review admissions are disabled during recovery",
             ));
         }
+        if let Some(accepted) = s
+            .store
+            .recover_review_owned(
+                &request,
+                &caller.actor,
+                binding(&caller, &headers)?,
+                key(&headers)?,
+            )
+            .await?
+        {
+            return Ok((StatusCode::CREATED, Json(accepted)).into_response());
+        }
         let package = s.workflows.get(&request.policy.id).ok_or_else(|| {
             CoordinatorError::new(
                 "workflow-absent",

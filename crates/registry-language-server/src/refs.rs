@@ -52,6 +52,10 @@ impl SymbolKind {
         match self {
             Self::Product(_, "authored file") => CompletionItemKind::FILE,
             Self::Product(_, _) => CompletionItemKind::REFERENCE,
+            Self::Evidence(EvidenceKind::Project | EvidenceKind::Target) => {
+                CompletionItemKind::MODULE
+            }
+            Self::Evidence(EvidenceKind::AuthorityFile) => CompletionItemKind::FILE,
             Self::Evidence(EvidenceKind::AssertionDefinition) => CompletionItemKind::FUNCTION,
             Self::Evidence(EvidenceKind::Output) => CompletionItemKind::FIELD,
             Self::Evidence(EvidenceKind::Source | EvidenceKind::Function) => {
@@ -105,6 +109,9 @@ impl From<EvidenceKind> for SymbolKind {
 /// Names declared by the normalized EvidenceProject and its named assets.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum EvidenceKind {
+    Project,
+    Target,
+    AuthorityFile,
     AssertionDefinition,
     Output,
     Source,
@@ -122,6 +129,9 @@ impl EvidenceKind {
     /// which is why these are the authoring form's own words rather than the variant names.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Project => "Evidence project",
+            Self::Target => "Evidence target",
+            Self::AuthorityFile => "target authority file",
             Self::AssertionDefinition => "assertion definition",
             Self::Output => "output",
             Self::Source => "source",
@@ -138,6 +148,8 @@ impl EvidenceKind {
     /// The nearest editor icon for each normalized authoring concept.
     pub fn lsp_kind(self) -> LspSymbolKind {
         match self {
+            Self::Project | Self::Target => LspSymbolKind::MODULE,
+            Self::AuthorityFile => LspSymbolKind::FILE,
             Self::AssertionDefinition => LspSymbolKind::FUNCTION,
             Self::Output => LspSymbolKind::FIELD,
             Self::Source => LspSymbolKind::MODULE,
@@ -154,6 +166,9 @@ impl EvidenceKind {
     /// sentences they accompany.
     pub(crate) fn slug(self) -> &'static str {
         match self {
+            Self::Project => "project",
+            Self::Target => "target",
+            Self::AuthorityFile => "authority-file",
             Self::AssertionDefinition => "assertion-definition",
             Self::Output => "output",
             Self::Source => "source",

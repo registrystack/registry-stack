@@ -78,6 +78,10 @@ pub(crate) struct EffectiveModel<'a> {
     pub registry_id: &'a str,
     pub version: &'a str,
     pub default_language: &'a str,
+    #[serde(skip_serializing_if = "crate::model::display_is_empty")]
+    pub display: &'a crate::contract::DisplaySource,
+    #[serde(skip_serializing_if = "<[crate::contract::ReviewAuthoritySource]>::is_empty")]
+    pub review_authorities: &'a [crate::contract::ReviewAuthoritySource],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_projection: Option<&'a CompiledManifestProjection>,
     pub module_order: &'a [String],
@@ -101,6 +105,8 @@ pub(crate) fn generate_artifacts(
     registry_id: &str,
     version: &str,
     default_language: &str,
+    display: &crate::contract::DisplaySource,
+    review_authorities: &[crate::contract::ReviewAuthoritySource],
     manifest_projection: Option<&CompiledManifestProjection>,
     module_order: &[String],
     module_closure: &[CompiledModuleIdentity],
@@ -121,6 +127,8 @@ pub(crate) fn generate_artifacts(
         registry_id,
         version,
         default_language,
+        display,
+        review_authorities,
         manifest_projection,
         module_order,
         module_closure,
@@ -464,7 +472,7 @@ fn application_reason_schema() -> Value {
     })
 }
 
-fn render_mutation_policy(entity: &CompiledEntity) -> Value {
+pub(crate) fn render_mutation_policy(entity: &CompiledEntity) -> Value {
     let mut policy = Map::new();
     if let Some(control) = &entity.change_control {
         for operation in &control.required_for {
@@ -477,17 +485,37 @@ fn render_mutation_policy(entity: &CompiledEntity) -> Value {
     Value::Object(policy)
 }
 
-/// The source-free definition inspector shared by tooling and caller metadata.
-/// Caller projections must additionally apply their disclosure authority.
+/// Author inspection of a normalized Action definition. Program bytes are never
+/// included; caller metadata separately selects only its permitted fields.
 pub fn inspect_action(action: &CompiledAction) -> Value {
+    let plan = match &action.handler {
+        Some(function) => json!({"type": "function", "function": inspect_plan_function(function)}),
+        None => json!({"type": "fixed", "effects": action.effects,
+            "order": action.effects.iter().map(|effect| &effect.id).collect::<Vec<_>>()}),
+    };
+    let guards = action
+        .requires
+        .iter()
+        .map(|guard| {
+            let mut value = serde_json::to_value(guard).expect("compiled guard serializes");
+            value
+                .as_object_mut()
+                .expect("guard is an object")
+                .retain(|key, value| {
+                    // A present equals:null is an authored comparison, not a placeholder.
+                    key == "equals" || !(value.is_null() || key == "field" && value == "")
+                });
+            value
+        })
+        .collect::<Vec<_>>();
     json!({
         "id": action.id, "apiName": action.api_name,
         "revision": action.definition_revision, "display": action.display,
         "execution": action.execution,
         "inputs": action.inputs.iter().map(|input| action_input_metadata(input, action.handler.is_some())).collect::<Vec<_>>(),
-        "plan": {"effects": action.effects, "function": action.handler,
-            "order": action.effects.iter().map(|effect| &effect.id).collect::<Vec<_>>()},
-        "commitGuards": action.requires,
+        "plan": plan,
+        "permissions": action.permissions,
+        "commitGuards": guards,
         "dependencies": {"evidence": action.evidence},
         "bounds": {"maximumTargets": action.maximum_targets,
             "maximumFieldMutations": action.maximum_field_mutations,
@@ -495,19 +523,128 @@ pub fn inspect_action(action: &CompiledAction) -> Value {
     })
 }
 
+fn inspect_plan_function(function: &crate::model::CompiledPlanFunction) -> Value {
+    let mut value = serde_json::to_value(function).expect("compiled function serializes");
+    value["source"] = json!(match function.kind {
+        crate::model::CompiledPlanFunctionKind::Rhai => &function.script_path,
+        crate::model::CompiledPlanFunctionKind::Wasm => &function.module_path,
+    });
+    value
+}
+
+fn compact_event_condition(value: &mut Value) {
+    if let Some(condition) = value.get_mut("when").and_then(Value::as_object_mut) {
+        condition.retain(|_, value| match value {
+            Value::Array(values) => !values.is_empty(),
+            Value::Object(values) => !values.is_empty(),
+            _ => true,
+        });
+    }
+}
+
+/// Inspect deliveries with the lifecycle selection owned by their definitions.
+/// Delivery inventories alone do not carry Proposal transitions or hook phases.
+pub fn inspect_events(registry: &crate::model::CompiledRegistry) -> Value {
+    let deliveries = registry
+        .event_deliveries()
+        .deliveries
+        .iter()
+        .map(|delivery| {
+            let mut value = serde_json::to_value(delivery).expect("compiled delivery serializes");
+            value["handlerType"] = json!(delivery.handler_kind().as_str());
+            match &delivery.owner {
+                crate::model::CompiledEventOwner::RecordType { record_type, .. } => {
+                    let hook = &registry.entities()[record_type].hooks[&delivery.event_id];
+                    value["phase"] = json!(hook.phase);
+                }
+                crate::model::CompiledEventOwner::ProposalAction { action } => {
+                    let action = registry
+                        .actions()
+                        .actions
+                        .iter()
+                        .find(|candidate| candidate.id == *action)
+                        .expect("compiled Proposal delivery owns an Action");
+                    let crate::model::CompiledActionExecution::Proposal { proposal } =
+                        &action.execution
+                    else {
+                        unreachable!("compiled Proposal delivery owns a Proposal Action")
+                    };
+                    let hook = proposal
+                        .hooks
+                        .iter()
+                        .find(|hook| hook.id == delivery.event_id)
+                        .expect("compiled Proposal delivery owns a hook");
+                    value["transitions"] = json!(crate::proposal_hooks::matching_transitions(
+                        &hook.transitions
+                    )
+                    .collect::<Vec<_>>());
+                    value["phase"] = json!(crate::contract::HookPhase::After);
+                    let schema = crate::proposal_hooks::proposal_event_schema();
+                    value["envelopeFields"] = json!(schema["properties"]
+                        .as_object()
+                        .expect("Proposal event schema defines its envelope properties")
+                        .keys()
+                        .collect::<Vec<_>>());
+                    value["includesRecordValues"] = json!(false);
+                }
+            }
+            compact_event_condition(&mut value);
+            value
+        })
+        .collect::<Vec<_>>();
+    json!({"deliveries": deliveries})
+}
+
 /// Author inspection uses exactly the normalized definitions used by execution.
 pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
     json!({"registryId": registry.registry_id(), "revision": registry.revision(),
-        "recordTypes": registry.entities().values().map(|record_type| json!({
-            "id": record_type.id, "apiName": record_type.api_name,
-            "revision": record_type.definition_revision, "display": record_type.display,
-            "relationships": record_type.relationships,
-            "fields": record_type.stored_fields.iter().map(|field| json!({
-                "id": field.logical.id, "apiName": field.logical.api_name,
-                "schema": field_value_schema(&field.logical.field_type, !field.required),
-                "required": field.required,
-            })).collect::<Vec<_>>()
-        })).collect::<Vec<_>>(),
+        "display": registry.display(), "reviewAuthorities": registry.review_authorities(),
+        "recordTypes": registry.entities().values().map(|record_type| {
+            let hooks = record_type.hooks.iter().map(|(id, hook)| {
+                let mut value = serde_json::to_value(hook).expect("compiled hook serializes");
+                compact_event_condition(&mut value);
+                (id, value)
+            }).collect::<BTreeMap<_, _>>();
+            json!({
+                "id": record_type.id, "apiName": record_type.api_name,
+                "revision": record_type.definition_revision, "display": record_type.display,
+                "sourceModule": record_type.source_module,
+                "primaryDataset": record_type.primary_dataset, "route": record_type.route,
+                "mutationMode": record_type.mutation_mode,
+                "mutationPolicy": render_mutation_policy(record_type),
+                "classification": record_type.classification,
+                "canonicalId": {"id": record_type.canonical_id.id,
+                    "apiName": record_type.canonical_id.api_name,
+                    "classification": record_type.canonical_id.classification,
+                    "schema": field_value_schema(&record_type.canonical_id.field_type, false)},
+                "tombstone": record_type.tombstone, "batch": record_type.batch,
+                "temporal": record_type.temporal, "geojson": record_type.geojson,
+                "accessLog": record_type.access_log,
+                "constraints": record_type.constraints, "indexes": record_type.indexes,
+                "selectorProfiles": record_type.selector_profiles,
+                "readPaths": record_type.read_paths, "hooks": hooks,
+                "relationships": record_type.relationships,
+                "derivedRelations": record_type.derived_relations.values().map(|relation| json!({
+                    "id": relation.id, "source": relation.sql_path,
+                    "sha256": relation.sql_sha256, "keyField": relation.key_field,
+                    "execution": relation.execution, "fields": relation.fields,
+                    "sourceRecordTypes": relation.source_entities,
+                    "usesEvaluationDate": relation.uses_evaluation_date,
+                })).collect::<Vec<_>>(),
+                "fields": record_type.stored_fields.iter().map(|field| json!({
+                    "id": field.logical.id, "apiName": field.logical.api_name,
+                    "schema": field_value_schema(&field.logical.field_type, !field.required),
+                    "classification": field.logical.classification,
+                    "required": field.required, "validTimeRole": field.valid_time_role,
+                })).chain(record_type.derived_fields.values().map(|field| json!({
+                    "id": field.logical.id, "apiName": field.logical.api_name,
+                    "schema": field_value_schema(&field.logical.field_type, true),
+                    "classification": field.logical.classification,
+                    "required": false, "derivation": field.derivation_id,
+                }))).collect::<Vec<_>>()
+            })
+        }).collect::<Vec<_>>(),
+        "statisticalDatasets": registry.statistical_datasets().values().collect::<Vec<_>>(),
         "actions": registry.actions().actions.iter().map(inspect_action).collect::<Vec<_>>()})
 }
 
@@ -842,13 +979,14 @@ fn action_contracts_schema() -> Value {
             "Display":{"type":"object","additionalProperties":false,"properties":{
                 "label":{"type":"string"},"description":{"type":"string"},"titleField":{"type":"string"}
             }},
-            "Policy":{"type":"object","additionalProperties":false,"required":["id","version","digest"],"properties":{
+            "PolicySelection":{"type":"object","additionalProperties":false,"required":["id"],
+                "dependentRequired":{"version":["digest"],"digest":["version"]},"properties":{
                 "id":{"type":"string"},"version":{"type":"string"},"digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}
             }},
             "Review":{"oneOf":[
                 {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"none"}}},
                 {"type":"object","additionalProperties":false,"required":["type","authority","source","policy"],"properties":{
-                    "type":{"const":"required"},"authority":{"type":"string"},"source":{"type":"string"},"policy":{"$ref":"#/$defs/Policy"}
+                    "type":{"const":"required"},"authority":{"type":"string"},"source":{"type":"string"},"policy":{"$ref":"#/$defs/PolicySelection"}
                 }}
             ]},
             "Application":{"oneOf":[

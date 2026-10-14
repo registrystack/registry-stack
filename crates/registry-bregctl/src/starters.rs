@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `init --template <ID>`: one of the shipped starter registry projects.
 //!
-//! Each starter under `products/breg/examples/refactor/` is an ordinary
+//! Each starter under `products/breg/examples/` is an ordinary
 //! authored BReg project checked in to the repository. This module embeds
 //! those files verbatim at compile time, so `init --template` writes an
 //! unmodified copy of the checked-in project without reading the source tree
@@ -19,7 +19,7 @@ use crate::{
 
 /// One starter's embedded files: the path it is written at, relative to the
 /// project root, paired with its contents exactly as checked in under
-/// `products/breg/examples/refactor/`.
+/// `products/breg/examples/`.
 struct Starter {
     id: &'static str,
     files: &'static [(&'static str, &'static [u8])],
@@ -31,31 +31,89 @@ const STARTERS: &[Starter] = &[
     Starter {
         id: DEFAULT_TEMPLATE,
         files: &[
-            ("README.md", include_bytes!("../../../products/breg/examples/refactor/minimal/README.md")),
-            ("registry.yaml", include_bytes!("../../../products/breg/examples/refactor/minimal/registry.yaml")),
-            ("runtime.example.yaml", include_bytes!("../../../products/breg/examples/refactor/minimal/runtime.example.yaml")),
-            ("dev-clients.yaml", include_bytes!("../../../products/breg/examples/refactor/minimal/dev-clients.yaml")),
-            ("tests/journeys.yaml", include_bytes!("../../../products/breg/examples/refactor/minimal/tests/journeys.yaml")),
-            ("examples/scenarios.json", include_bytes!("../../../products/breg/examples/refactor/minimal/examples/scenarios.json")),
-            ("examples/inputs/contact.json", include_bytes!("../../../products/breg/examples/refactor/minimal/examples/inputs/contact.json")),
+            (
+                "README.md",
+                include_bytes!("../../../products/breg/examples/minimal/README.md"),
+            ),
+            (
+                "registry.yaml",
+                include_bytes!("../../../products/breg/examples/minimal/registry.yaml"),
+            ),
+            (
+                "runtime.example.yaml",
+                include_bytes!("../../../products/breg/examples/minimal/runtime.example.yaml"),
+            ),
+            (
+                "dev-clients.yaml",
+                include_bytes!("../../../products/breg/examples/minimal/dev-clients.yaml"),
+            ),
+            (
+                "tests/journeys.yaml",
+                include_bytes!("../../../products/breg/examples/minimal/tests/journeys.yaml"),
+            ),
+            (
+                "examples/scenarios.json",
+                include_bytes!("../../../products/breg/examples/minimal/examples/scenarios.json"),
+            ),
+            (
+                "examples/inputs/contact.json",
+                include_bytes!(
+                    "../../../products/breg/examples/minimal/examples/inputs/contact.json"
+                ),
+            ),
         ],
     },
     Starter {
         id: "facility-registry",
         files: &[
-            ("README.md", include_bytes!("../../../products/breg/examples/refactor/facility/README.md")),
-            ("dev-clients.yaml", include_bytes!("../../../products/breg/examples/refactor/facility/dev-clients.yaml")),
-            ("tests/journeys.yaml", include_bytes!("../../../products/breg/examples/refactor/facility/tests/journeys.yaml")),
-            ("examples/scenarios.json", include_bytes!("../../../products/breg/examples/refactor/facility/examples/scenarios.json")),
-            ("examples/inputs/facility.json", include_bytes!("../../../products/breg/examples/refactor/facility/examples/inputs/facility.json")),
+            (
+                "README.md",
+                include_bytes!("../../../products/breg/examples/facility/README.md"),
+            ),
+            (
+                "dev-clients.yaml",
+                include_bytes!("../../../products/breg/examples/facility/dev-clients.yaml"),
+            ),
+            (
+                "tests/journeys.yaml",
+                include_bytes!("../../../products/breg/examples/facility/tests/journeys.yaml"),
+            ),
+            (
+                "examples/scenarios.json",
+                include_bytes!("../../../products/breg/examples/facility/examples/scenarios.json"),
+            ),
+            (
+                "examples/inputs/facility.json",
+                include_bytes!(
+                    "../../../products/breg/examples/facility/examples/inputs/facility.json"
+                ),
+            ),
+            (
+                "examples/inputs/deactivation.json",
+                include_bytes!(
+                    "../../../products/breg/examples/facility/examples/inputs/deactivation.json"
+                ),
+            ),
+            (
+                "examples/inputs/correction.json",
+                include_bytes!(
+                    "../../../products/breg/examples/facility/examples/inputs/correction.json"
+                ),
+            ),
+            (
+                "examples/inputs/empty.json",
+                include_bytes!(
+                    "../../../products/breg/examples/facility/examples/inputs/empty.json"
+                ),
+            ),
             (
                 "registry.yaml",
-                include_bytes!("../../../products/breg/examples/refactor/facility/registry.yaml"),
+                include_bytes!("../../../products/breg/examples/facility/registry.yaml"),
             ),
             (
                 "plans/correct-address.rhai",
                 include_bytes!(
-                    "../../../products/breg/examples/refactor/facility/plans/correct-address.rhai"
+                    "../../../products/breg/examples/facility/plans/correct-address.rhai"
                 ),
             ),
         ],
@@ -238,7 +296,7 @@ mod tests {
     /// Read the canonical authored inputs independently of their embedded bytes.
     fn read_core_directory(id: &str) -> BTreeMap<String, Vec<u8>> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/examples/refactor")
+            .join("../../products/breg/examples")
             .join(match id {
                 "minimal-directory" => "minimal",
                 "facility-registry" => "facility",

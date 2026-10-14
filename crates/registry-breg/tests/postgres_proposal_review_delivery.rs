@@ -196,10 +196,9 @@ async fn create_review(
 ) -> Response {
     authenticated(&headers);
     request.check().unwrap();
-    assert_eq!(
-        request.policy,
-        policy(),
-        "submit the complete frozen policy pin"
+    assert!(
+        request.policy.matches(&policy()),
+        "request selects the provider policy"
     );
     state.creates.lock().unwrap().push((
         headers["idempotency-key"].to_str().unwrap().into(),
@@ -319,6 +318,9 @@ fn claims() -> VerifiedRequestClaims {
     .unwrap()
 }
 fn registry() -> registry_breg::CompiledRegistry {
+    registry_with_policy(json!(policy()))
+}
+fn registry_with_policy(selection: Value) -> registry_breg::CompiledRegistry {
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
         "datasets":[{"id":"directory"}],
@@ -326,7 +328,7 @@ fn registry() -> registry_breg::CompiledRegistry {
         "recordTypes":[{"id":"target","primaryDataset":"directory","route":"targets","mutationMode":"mutable","mutationPolicy":{"patch":"proposal-required"},
             "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}],
-        "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{"review":{"type":"required","authority":AUTHORITY,"source":"proposal-test","policy":policy()},
+        "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{"review":{"type":"required","authority":AUTHORITY,"source":"proposal-test","policy":selection},
             "application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},
             "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
@@ -695,8 +697,8 @@ async fn native_submission_reclaims_exact_work_and_fences_late_success_and_failu
         {
             let creates = authority.state.creates.lock().unwrap();
             assert_eq!(creates.len(), 2);
-            assert_eq!(creates[0].1.policy, policy());
-            assert_eq!(creates[1].1.policy, policy());
+            assert_eq!(creates[0].1.policy, policy().into());
+            assert_eq!(creates[1].1.policy, policy().into());
             assert_eq!(
                 creates[0].0, creates[1].0,
                 "adoption reuses exact idempotency key"
@@ -974,6 +976,172 @@ async fn native_stale_result_lookup_preserves_replacement_claim_and_schedule() {
         assert_eq!(settled["binding"], replacement["binding"]);
         assert_eq!(result_count(&fixture).await, 0);
         assert_eq!(authority.state.requests.load(Ordering::SeqCst), 2);
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn current_policy_delivery_recovers_original_request_without_rewriting_frozen_identity() {
+    let authority = Authority::start(false, false).await;
+    let bindings = authority.registry.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry_with_policy(json!({"id":policy().id})),
+        claims(),
+        move |service| service.with_review_result_source(bindings),
+    )
+    .await;
+    let id = submitted(&fixture, "current-policy").await;
+    let before: Value = fixture.database.admin.query_one(
+        "SELECT jsonb_build_object('request',create_request,'digest',expected_submission_digest,'proposalDigest',proposal_digest,'policy',expected_policy) FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]
+    ).await.unwrap().get(0);
+    let client = fixture.pool.get_for_test().await.unwrap();
+    // The provider retains acceptance but returns an unavailable response.
+    assert!(run_one_submission(
+        &**client,
+        AUTHORITY,
+        &authority.client,
+        "producer",
+        &BearerToken::new(OUTGOING_TOKEN).unwrap(),
+        30
+    )
+    .await
+    .unwrap());
+    assert_ne!(job(&fixture, id).await["state"], "accepted");
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET next_attempt_at=transaction_timestamp()-interval '1 second' WHERE proposal_id=$1", &[&id]).await.unwrap();
+    assert!(run_one_submission(
+        &**client,
+        AUTHORITY,
+        &authority.client,
+        "producer",
+        &BearerToken::new(OUTGOING_TOKEN).unwrap(),
+        30
+    )
+    .await
+    .unwrap());
+    let accepted = job(&fixture, id).await;
+    assert_eq!(accepted["state"], "accepted");
+    assert_eq!(accepted["binding"]["policy"], json!(policy()));
+    let after: Value = fixture.database.admin.query_one(
+        "SELECT jsonb_build_object('request',create_request,'digest',expected_submission_digest,'proposalDigest',proposal_digest,'policy',expected_policy) FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]
+    ).await.unwrap().get(0);
+    assert_eq!(
+        before, after,
+        "acceptance must not repin the frozen request"
+    );
+    assert_eq!(after["policy"], json!({"id":policy().id}));
+    let creates = authority.state.creates.lock().unwrap().clone();
+    assert_eq!(creates.len(), 2);
+    assert_eq!(
+        creates[0], creates[1],
+        "unknown-response recovery sends the same key and selector"
+    );
+    drop(client);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn operator_resubmit_preserves_acceptance_and_refuses_replacement_after_provider_loss() {
+    use registry_breg::{
+        postgres::{ExpectedManagedCatalog, RegistryLockKey},
+        proposal_retention::ProposalRetentionOperatorService,
+        review_recovery::{ReviewRecoveryOperatorService, ReviewRecoveryScope},
+    };
+    for changed in ["none", "policy", "request"] {
+        let authority = Authority::start(false, true).await;
+        let bindings = authority.registry.clone();
+        let fixture = client_http::ClientFixture::start_with_mutations(
+            registry_with_policy(json!({"id":policy().id})),
+            claims(),
+            move |service| service.with_review_result_source(bindings),
+        )
+        .await;
+        let id = submitted(&fixture, changed).await;
+        let client = fixture.pool.get_for_test().await.unwrap();
+        let token = BearerToken::new(OUTGOING_TOKEN).unwrap();
+        assert!(run_one_submission(
+            &**client,
+            AUTHORITY,
+            &authority.client,
+            "producer",
+            &token,
+            30
+        )
+        .await
+        .unwrap());
+        let accepted = authority.state.accepted.lock().unwrap().clone().unwrap();
+        let frozen: Value = fixture.database.admin.query_one(
+            "SELECT jsonb_build_object('request',create_request,'digest',expected_submission_digest,'proposalDigest',proposal_digest,'policy',expected_policy) FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]
+        ).await.unwrap().get(0);
+        // A completed result poll reported that the provider no longer knew
+        // this request. Recover through the actual audited operator boundary.
+        fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET last_error_code='result-unknown-to-authority' WHERE proposal_id=$1", &[&id]).await.unwrap();
+        let operator = ReviewRecoveryOperatorService::over_retention_service_for_test(
+            ProposalRetentionOperatorService::new_for_test(
+                (*fixture.registry).clone(),
+                fixture.identity.clone(),
+                ExpectedManagedCatalog::compiled(&fixture.registry),
+                RegistryLockKey::derive(fixture.registry.registry_id()).unwrap(),
+                fixture.database.migration_config.clone(),
+                fixture.database.migration_role.clone(),
+                fixture.database.runtime_role.clone(),
+                fixture.database.activation_audit(),
+            ),
+        );
+        operator
+            .resubmit(ReviewRecoveryScope {
+                action_id: "correct-name",
+                proposal_id: id,
+                submission_version: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(job(&fixture, id).await["binding"], json!(accepted));
+        let mut response = accepted.clone();
+        match changed {
+            "policy" => {
+                response.policy = serde_json::from_value(json!({
+                    "id":policy().id,"version":"2","digest":format!("sha256:{}", "c".repeat(64))
+                }))
+                .unwrap()
+            }
+            "request" => response.request_id = Uuid::new_v4(),
+            _ => {}
+        }
+        *authority.state.accepted.lock().unwrap() = Some(response);
+        assert!(run_one_submission(
+            &**client,
+            AUTHORITY,
+            &authority.client,
+            "producer",
+            &token,
+            30
+        )
+        .await
+        .unwrap());
+        let recovered = job(&fixture, id).await;
+        assert_eq!(
+            recovered["binding"],
+            json!(accepted),
+            "a retry never replaces a concrete acceptance"
+        );
+        if changed == "none" {
+            assert_eq!(recovered["state"], "accepted");
+        } else {
+            assert_eq!(recovered["state"], "failed");
+            assert_eq!(recovered["error"], "review-acceptance-changed");
+        }
+        let after: Value = fixture.database.admin.query_one(
+            "SELECT jsonb_build_object('request',create_request,'digest',expected_submission_digest,'proposalDigest',proposal_digest,'policy',expected_policy) FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]
+        ).await.unwrap().get(0);
+        assert_eq!(
+            after, frozen,
+            "recovery does not repin the frozen selector or change its digest"
+        );
+        let creates = authority.state.creates.lock().unwrap().clone();
+        assert_eq!(creates.len(), 2);
+        assert_eq!(creates[0], creates[1]);
+        assert_eq!(result_count(&fixture).await, 0);
+        drop(client);
         fixture.finish().await;
     }
 }

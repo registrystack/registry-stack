@@ -1,0 +1,72 @@
+apiVersion: id.registrystack.org/formats/evidence/target/v1alpha1
+kind: EvidenceTarget
+id: local
+project: example-evidence
+package:
+  root: /tmp/registry-evidence-local/bundle
+authority: authority.yaml
+service:
+  providerId: urn:example:local:evidence
+  publicOrigin: http://127.0.0.1:8080
+  trustDomain: urn:example:local:trust-domain
+  issuer: urn:example:issuer:authority
+listener:
+  bind: 127.0.0.1:8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 16
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 10000
+authentication:
+  oidc:
+    issuer: http://127.0.0.1:8081
+    audience: evidence.local
+    tokenTypes:
+    - at+jwt
+    algorithms:
+    - ES256
+    jwksSource:
+      type: uri
+      uri: http://127.0.0.1:8081/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
+connections: {}
+secretProviders:
+  file:
+    root: /tmp/registry-evidence-local/secrets
+signer:
+  type: local-jwk
+  privateKeyRef: secret:file/evidence-signing
+  algorithm: ES256
+  publicJwkFile: public-keys/-RNgdUjduVCNV-y15KSAVZnF2gNjGb_02KQ2-MoMu4U.jwk.json
+subjectBinding:
+  secretRef: secret:file/evidence-subject-binding
+  keyVersion: 1
+audit:
+  hashKeyRef: secret:file/evidence-audit-hmac
+  hashKeyVersion: 1
+  path: /tmp/registry-evidence-local/audit/evidence.jsonl
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 16
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+assuranceProfile: local
+publication:
+  serviceId: urn:example:local:evidence-service
+  title: Local Evidence service
+  description: Local minimum-disclosure Evidence development service
+  endpointUrl: http://127.0.0.1:8080
+  jurisdictions:
+  - urn:example:jurisdiction:local
+responseFormats:
+- signed-jws
+- sd-jwt-vc
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}

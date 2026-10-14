@@ -10,7 +10,7 @@ pub fn source(hooks: Value) -> Value {
         "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
             "review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"},
             "hooks":hooks,"attachments":[{"id":"support","required":false,"maximumBytes":4096,"contentTypes":["text/plain"],"classification":"restricted"}],
-            "reviewContext":{"id":"observer-context","fields":{"value":{"fromInput":"value"}}}}},
+            "reviewContext":{"id":"observer-context","fields":{"value":{"type":"input","input":"value"}}}}},
             "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"restricted"},
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"restricted"}],
             "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},

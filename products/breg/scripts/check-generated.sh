@@ -42,9 +42,9 @@ mkdir "$runtime_candidate"
     -p registry-breg --features runtime,schema --example runtime-schema -- \
     --output "$runtime_candidate"
   cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
-    -p registry-breg --example refactor-artifacts -- --output "$temporary_root/refactor"
+    -p registry-breg --example example-artifacts -- --output "$temporary_root/facility"
   cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
-    -p registry-breg --example refactor-artifacts -- --output "$temporary_root/refactor-minimal" --project minimal
+    -p registry-breg --example example-artifacts -- --output "$temporary_root/minimal" --project minimal
   cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
     -p registry-breg --example proposal-event-schema -- \
     --output "$temporary_root/proposal-lifecycle.schema.json"
@@ -71,6 +71,6 @@ if ! cmp "$repository_root/products/breg/generated/event-schemas/proposal-lifecy
 fi
 
 python3 "$script_dir/compare-generated-tree.py" \
-  "$repository_root/products/breg/generated/refactor" "$temporary_root/refactor"
+  "$repository_root/products/breg/generated/facility" "$temporary_root/facility"
 python3 "$script_dir/compare-generated-tree.py" \
-  "$repository_root/products/breg/generated/refactor-minimal" "$temporary_root/refactor-minimal"
+  "$repository_root/products/breg/generated/minimal" "$temporary_root/minimal"

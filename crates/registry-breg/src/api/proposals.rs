@@ -965,21 +965,23 @@ async fn review_read(
         let Some(mapping) = &proposal.review_context else {
             return concealed();
         };
-        for source in mapping
-            .fields
-            .values()
-            .filter(|source| source.from_record.is_some())
-        {
-            let Some(input) = action
-                .inputs
-                .iter()
-                .find(|input| Some(&input.id) == source.from_record.as_ref())
-            else {
-                return concealed();
-            };
-            let crate::contract::FieldTypeSource::Reference { target, .. } = &input.field_type
-            else {
-                return concealed();
+        for source in mapping.fields.values() {
+            use crate::contract::ProposalContextValueSource;
+            let target = match source {
+                ProposalContextValueSource::Input { .. } => continue,
+                ProposalContextValueSource::Record { input, .. } => {
+                    let Some(input) = action.inputs.iter().find(|declared| declared.id == *input)
+                    else {
+                        return concealed();
+                    };
+                    let crate::contract::FieldTypeSource::Reference { target, .. } =
+                        &input.field_type
+                    else {
+                        return concealed();
+                    };
+                    target
+                }
+                ProposalContextValueSource::Changes { record_type, .. } => record_type,
             };
             let Some(entity) = service.registry.entities().get(target) else {
                 return concealed();

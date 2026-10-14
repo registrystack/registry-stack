@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 fn facility() -> Value {
     registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(
-            "../../../products/breg/examples/refactor/facility/registry.yaml"
+            "../../../products/breg/examples/facility/registry.yaml"
         ))
         .unwrap()
         .unwrap()
@@ -227,10 +227,10 @@ fn schema_and_reader_agree_on_bounds_native_tags_and_public_context_names() {
     }
     source = facility();
     source["actions"][1]["execution"]["proposal"]["reviewContext"]["fields"]["extraPublicName"] =
-        json!({"fromInput":"city"});
+        json!({"type":"input","input":"city"});
     assert!(schema.is_valid(&source));
     source["actions"][1]["execution"]["proposal"]["reviewContext"]["fields"]["bad-name"] =
-        json!({"fromInput":"city"});
+        json!({"type":"input","input":"city"});
     assert!(!schema.is_valid(&source));
     source = facility();
     source["actions"][1]["commitGuards"]["targets"] = json!([

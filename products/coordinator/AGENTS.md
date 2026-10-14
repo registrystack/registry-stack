@@ -42,9 +42,7 @@ receives the call, which decides it under its own authorization.
 - No product crate depends on a Coordinator crate. The only allowed dependents
   are `registry-stack-client`, on `registry-coordinator-client`, and
   `registry-cli-docs`, on `registry-coordinator` for the published CLI
-  reference. Casework adopter tests may reach `registry-coordinator-client`
-  through the unified client facade; `registry-caseworkctl` normal and build
-  dependencies may not. Adding a dependent, or a Coordinator crate, means naming its rule
+  reference. Adding a dependent, or a Coordinator crate, means naming its rule
   in the gate in the same change. The Casework, Scheduling, and Messaging
   gates also refuse the Coordinator from their side.
 - `registry-coordinator-client` reaches `registry-platform-*` and the explicitly

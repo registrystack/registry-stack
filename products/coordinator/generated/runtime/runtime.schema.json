@@ -1015,13 +1015,13 @@
       "$ref": "#/$defs/DeploymentConfig"
     },
     "eventSources": {
-      "additionalProperties": false,
+      "additionalProperties": {
+        "$ref": "#/$defs/EventSourceConfig"
+      },
       "description": "Optional trusted event producers keyed by the logical IDs used in Workflow triggers.",
       "maxProperties": 16,
-      "patternProperties": {
-        "^[a-z][a-z0-9_-]{0,63}$": {
-          "$ref": "#/$defs/EventSourceConfig"
-        }
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
       },
       "type": "object"
     },

@@ -138,8 +138,8 @@ directory:
 "#;
 
 pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
-    if template != "standalone-decision" {
-        bail!("unknown template; available templates: standalone-decision");
+    if !matches!(template, "standalone-decision" | "canonical-review") {
+        bail!("unknown template; available templates: standalone-decision, canonical-review");
     }
     if project.exists() {
         bail!("destination already exists; init never overwrites a project");
@@ -160,14 +160,34 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     }
     fs::create_dir_all(stage.path().join(".casework/schemas"))?;
     fs::create_dir_all(stage.path().join(".vscode"))?;
-    fs::write(stage.path().join("casework.yaml"), STANDALONE_YAML)?;
+    let canonical_review = template == "canonical-review";
+    fs::write(
+        stage.path().join("casework.yaml"),
+        if canonical_review {
+            include_str!("../../../products/casework/examples/canonical-review/casework.yaml")
+        } else {
+            STANDALONE_YAML
+        },
+    )?;
+    if canonical_review {
+        fs::create_dir_all(stage.path().join("schemas"))?;
+        fs::write(stage.path().join("schemas/correct-address.schema.json"), include_bytes!("../../../products/casework/examples/canonical-review/schemas/correct-address.schema.json"))?;
+        fs::write(
+            stage.path().join("README.md"),
+            include_bytes!("../../../products/casework/examples/canonical-review/README.md"),
+        )?;
+    }
     fs::write(
         stage.path().join("fixtures/standalone-decision.yaml"),
         STANDALONE_FIXTURE,
     )?;
     fs::write(
         stage.path().join("dev-clients.yaml"),
-        STANDALONE_DEV_CLIENTS,
+        if canonical_review {
+            include_str!("../../../products/casework/examples/canonical-review/dev-clients.yaml")
+        } else {
+            STANDALONE_DEV_CLIENTS
+        },
     )?;
     let absolute = std::path::absolute(project)?;
     let runtime = json!({"apiVersion":"id.registrystack.org/formats/casework/runtime/v1alpha1","kind":"CaseworkRuntimeConfig",
@@ -184,6 +204,17 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
             serde_norway::to_string(&runtime)?
         ),
     )?;
+    if canonical_review {
+        fs::write(
+            stage.path().join("runtime.example.yaml"),
+            format!(
+                "# yaml-language-server: $schema=.casework/schemas/runtime.schema.json\n{}",
+                include_str!(
+                    "../../../products/casework/examples/canonical-review/runtime.example.yaml"
+                )
+            ),
+        )?;
+    }
     for (name, content) in [
         (
             "project.schema.json",
@@ -215,7 +246,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     load_and_check_policy(stage.path())?;
     fs::rename(stage.path(), project)?;
     Ok(
-        json!({"ok":true,"command":"init","created":project,"template":template,"next":"Run caseworkctl check, test and types, then caseworkctl dev start."}),
+        json!({"ok":true,"command":"init","created":project,"template":template,"next":if canonical_review { "Run caseworkctl check, then pair the BReg provider and configure source transport before caseworkctl dev start." } else { "Run caseworkctl check, test and types, then caseworkctl dev start." }}),
     )
 }
 

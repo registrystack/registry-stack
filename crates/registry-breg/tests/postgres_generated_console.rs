@@ -34,7 +34,7 @@ fn claims(scope: &str) -> VerifiedRequestClaims {
 
 fn registry() -> registry_breg::CompiledRegistry {
     let mut source = parse_project_yaml(include_bytes!(
-        "../../../products/breg/examples/refactor/facility/registry.yaml"
+        "../../../products/breg/examples/facility/registry.yaml"
     ))
     .unwrap();
     source.access_profiles.push(serde_json::from_value(json!({"id":"fixture-seeder",
@@ -55,7 +55,7 @@ fn registry() -> registry_breg::CompiledRegistry {
             module: None,
             path: "plans/correct-address.rhai".into(),
             bytes: include_bytes!(
-                "../../../products/breg/examples/refactor/facility/plans/correct-address.rhai"
+                "../../../products/breg/examples/facility/plans/correct-address.rhai"
             )
             .to_vec(),
         }],
@@ -204,13 +204,13 @@ async fn generated_typescript_and_python_consoles_use_live_http_and_rls() {
         let applier = fixture
             .client_for(claims("registry:facility:correction:apply"))
             .await;
-        let script = root
-            .join("products/breg/examples/refactor/facility/console")
-            .join(if language == "node" {
-                "live.cjs"
-            } else {
-                "live.py"
-            });
+        let script =
+            root.join("products/breg/examples/facility/console")
+                .join(if language == "node" {
+                    "live.cjs"
+                } else {
+                    "live.py"
+                });
         let mut command = std::process::Command::new(language);
         command
             .arg(script)

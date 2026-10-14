@@ -50,11 +50,9 @@ impl BregContextProvider {
             .await
             .map_err(map_error)?
             .value;
-        // The exported schema is covered by this exact compiled Registry revision.
-        // A metadata change refuses before a business-value read.
-        if metadata.registry_revision() != self.export.registry_revision {
-            return Err(ReviewContextError::ContractChanged);
-        }
+        // Current caller-visible metadata selects only the exact purpose and action.
+        // The reply binds the exported context contract, independently of unrelated
+        // changes to the registry package.
         let binding = if display {
             metadata.select_proposal_review_context(profile, &self.export.action_id)
         } else {
@@ -86,16 +84,6 @@ impl BregContextProvider {
                 && contract.revision == self.export.contract.revision.as_str()
                 && contract.schema_digest == self.export.contract.schema_digest.as_str()
         }) {
-            return Err(ReviewContextError::ContractChanged);
-        }
-        if client
-            .registry_contract(Some(profile))
-            .await
-            .map_err(map_error)?
-            .value
-            .registry_revision()
-            != self.export.registry_revision
-        {
             return Err(ReviewContextError::ContractChanged);
         }
         Ok(document)

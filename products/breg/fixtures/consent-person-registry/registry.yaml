@@ -107,7 +107,7 @@ accessProfiles:
       - recordType: person-consent-decision
         rowBoundaries: unrestricted
         membershipBoundaries:
-        - {field: subject, membershipEntity: person-consent-link, membershipKeyField: subject, principalField: principal, activeField: active}
+        - {field: subject, membershipRecordType: person-consent-link, membershipKeyField: subject, principalField: principal, activeField: active}
         operations: [get, list]
         readableFields: [subject, notice, clause, recipient, purpose, scope, decision, effective-at, expires-at, channel]
       - recordType: person-consent-link

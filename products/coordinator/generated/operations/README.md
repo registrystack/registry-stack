@@ -639,7 +639,7 @@ Input ([`casework.submit-review-request.v1.input.schema.json`](casework.submit-r
 |---|---|---|
 | `context` | `ReviewContext` | yes |
 | `initiator` | `HumanIdentity` or null | no |
-| `policy` | `PolicyBinding` | yes |
+| `policy` | `PolicySelection` | yes |
 | `requesterReference` | string | yes |
 | `resultConstraints` | object | no |
 | `subject` | `SubjectBinding` | yes |

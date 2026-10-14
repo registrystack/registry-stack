@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! HTTP admissions reuse the wire schemas owned by Review and platform hooks.
 use super::{problem_responses, ProblemCode as P, AUTHENTICATED_PROBLEMS, BODY_PROBLEMS};
-use registry_review_protocol::{REVIEW_PROBLEM_TYPE_BASE, REVIEW_PROFILE_HEADER};
+use registry_review_protocol::REVIEW_PROFILE_HEADER;
 use serde_json::{json, Map, Value};
 
 pub(super) fn extend(paths: &mut Map<String, Value>, schemas: &mut Value) {
@@ -21,12 +21,6 @@ pub(super) fn extend(paths: &mut Map<String, Value>, schemas: &mut Value) {
         "description":"Exact Review policy binding when this workflow exposes the Review protocol; otherwise null.",
         "anyOf":[{"$ref":"#/components/schemas/PolicyBinding"},{"type":"null"}]
     });
-    let mut review_problem = schemas["Problem"].clone();
-    review_problem["properties"]["type"]["enum"] = json!(P::ALL
-        .iter()
-        .map(|p| { format!("{REVIEW_PROBLEM_TYPE_BASE}{}", p.code().replace('.', "/")) })
-        .collect::<Vec<_>>());
-    schemas["ReviewProblem"] = review_problem;
     review_paths(paths);
     event_path(paths);
 }
@@ -147,10 +141,6 @@ fn review_paths(paths: &mut Map<String, Value>) {
             problems.extend(BODY_PROBLEMS);
         }
         let mut responses = problem_responses(&problems);
-        for response in responses.values_mut() {
-            response["content"]["application/problem+json"]["schema"]["allOf"][0]["$ref"] =
-                json!("#/components/schemas/ReviewProblem");
-        }
         responses.insert(status.into(), response(reply, "Authorized Review result"));
         if id == "reviewResult" {
             responses.insert("202".into(), json!({"description":"The Review result is pending; no body.","headers":{"Retry-After":{"schema":{"type":"integer","const":30}}}}));

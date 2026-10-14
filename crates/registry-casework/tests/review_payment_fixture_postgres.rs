@@ -238,7 +238,7 @@ impl PaymentStore {
         }
         batch.state = PaymentBatchState::Submitted;
         Ok(ReviewCreateRequest {
-            policy,
+            policy: policy.into(),
             subject: SubjectBinding {
                 source: "payments".to_owned(),
                 subject_type: "payment_batch".to_owned(),

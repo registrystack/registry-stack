@@ -47,7 +47,7 @@ def run_wire(**overrides) -> dict:
         "runId": RUN_ID,
         "status": "open",
         "blockedReason": None,
-        "entityId": "people",
+        "recordType": "people",
         "operation": "create",
         "profileId": "importer.v1",
         "packageRevision": "revision-1",

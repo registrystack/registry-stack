@@ -14,7 +14,7 @@ use support::{
 fn fixture(name: &str) -> String {
     fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/examples/refactor")
+            .join("../../products/breg/examples")
             .join(name),
     )
     .unwrap()

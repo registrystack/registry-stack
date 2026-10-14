@@ -1647,6 +1647,163 @@ async fn proposal_inputs_require_an_explicit_selected_profile_allowlist() {
     fixture.finish().await;
 }
 
+// Pause only the first external observation, after its durable claim commits.
+// The successor observes the same approval without sharing the fixture barrier.
+struct PausedReview {
+    review: LocalReview,
+    entered: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
+    observations: std::sync::atomic::AtomicUsize,
+}
+#[async_trait::async_trait]
+impl registry_breg::review_store::ReviewResultSource for PausedReview {
+    async fn approved_evidence(
+        &self,
+        authority: &str,
+        accepted: &registry_review_client::ReviewRequestAccepted,
+    ) -> Result<
+        registry_breg::review_integration::AcceptedReviewEvidence,
+        registry_breg::mutation::MutationError,
+    > {
+        if self
+            .observations
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0
+        {
+            self.entered.notify_one();
+            self.resume.notified().await;
+        }
+        registry_breg::review_store::ReviewResultSource::approved_evidence(
+            &self.review,
+            authority,
+            accepted,
+        )
+        .await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replaced_automatic_worker_resumes_without_changing_successor_or_effects() {
+    use std::time::Duration;
+    let mut source = registry_source(true);
+    source["reviewAuthorities"] =
+        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+    let policy =
+        json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+    let review = std::sync::Arc::new(PausedReview {
+        review: LocalReview {
+            calls: 0.into(),
+            mode: 0.into(),
+            result_id: uuid::Uuid::new_v4(),
+        },
+        entered: Default::default(),
+        resume: Default::default(),
+        observations: 0.into(),
+    });
+    let injected = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("author", "zone-a"),
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+        },
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Reclaimed once", "replaced-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("replaced-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let id = uuid::Uuid::parse_str(submitted.id()).unwrap();
+    let row = fixture.database.admin.query_one("SELECT create_request,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id]).await.unwrap();
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(row.get(0)).unwrap();
+    let accepted = registry_review_client::ReviewRequestAccepted {
+        request_id: uuid::Uuid::new_v4(),
+        subject: create.subject,
+        policy: serde_json::from_value(policy).unwrap(),
+        submission_digest: serde_json::from_value(json!(row.get::<_, String>(1))).unwrap(),
+    };
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$2 WHERE proposal_id=$1", &[&id,&json!(accepted)]).await.unwrap();
+    let (mut migration, task) = fixture.database.connect_migration().await;
+    let tx = migration.transaction().await.unwrap();
+    registry_breg::review_store::reconcile_result(
+        &tx,
+        "local-review",
+        &accepted,
+        &review.review.result(&accepted),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    drop(migration);
+    task.abort();
+    let mutations = fixture.mutations.clone();
+    let original =
+        tokio::spawn(async move { mutations.run_automatic_proposal_once_for_test().await });
+    tokio::time::timeout(Duration::from_secs(5), review.entered.notified())
+        .await
+        .expect("original worker reached external observation after claiming");
+    let old_token: uuid::Uuid = fixture.database.admin.query_one("SELECT claim_token FROM registry_internal.registry_proposal_application_jobs WHERE proposal_id=$1", &[&id]).await.unwrap().get(0);
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_application_jobs SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE proposal_id=$1", &[&id]).await.unwrap();
+    assert!(fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
+    let job_sql = "SELECT to_jsonb(j) FROM registry_internal.registry_proposal_application_jobs j WHERE proposal_id=$1";
+    let successor: Value = fixture
+        .database
+        .admin
+        .query_one(job_sql, &[&id])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(successor["state"], "applied");
+    assert_eq!(successor["attempt_count"], 2);
+    assert!(successor["claim_token"].is_null());
+    assert_ne!(successor["claim_token"], json!(old_token));
+    let applied = client.read_proposal(&submitted).await.unwrap().value;
+    let receipt = serde_json::to_value(applied.application().unwrap()).unwrap();
+    review.resume.notify_one();
+    assert!(tokio::time::timeout(Duration::from_secs(5), original)
+        .await
+        .expect("replaced worker resumes")
+        .unwrap()
+        .unwrap());
+    let after: Value = fixture
+        .database
+        .admin
+        .query_one(job_sql, &[&id])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        after, successor,
+        "stale worker cannot overwrite any successor job state"
+    );
+    let recovered = client.read_proposal(&submitted).await.unwrap().value;
+    assert_eq!(
+        serde_json::to_value(recovered.application().unwrap()).unwrap(),
+        receipt
+    );
+    let counts = fixture.database.admin.query_one("SELECT (SELECT count(*) FROM registry_internal.registry_proposal_applications),(SELECT count(*) FROM registry_internal.registry_revisions)",&[]).await.unwrap();
+    assert_eq!(counts.get::<_, i64>(0), 1);
+    assert_eq!(
+        counts.get::<_, i64>(1),
+        2,
+        "one create and one applied revision"
+    );
+    assert!(!fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
+    fixture.finish().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn automatic_claim_pins_digest_grant_and_lease_before_any_effect() {
     let fixture =
@@ -2053,7 +2210,7 @@ async fn missing_review_binding_preserves_unrelated_builtin_work_and_fails_revie
     }
     let registry = compile(source);
     let runtime = registry_breg::runtime_config::parse_runtime_config(include_str!(
-        "../../../products/breg/examples/refactor/minimal/runtime.example.yaml"
+        "../../../products/breg/examples/minimal/runtime.example.yaml"
     ))
     .unwrap();
     assert!(

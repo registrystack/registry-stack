@@ -29,7 +29,7 @@ creates a facility and assignment together. `correct-address` uses a named Rhai
 Function and external review. `deactivate-facility` uses an explicit no-review,
 manual Proposal. Callers cannot select or change an Action's execution mode.
 
-{/* Evidence: products/breg/examples/refactor/facility/registry.yaml;
+{/* Evidence: products/breg/examples/facility/registry.yaml;
     crates/registry-bregctl/src/starters.rs. */}
 
 ## Choose a plan and guards
@@ -65,16 +65,15 @@ execution:
       source: facility-registry
       policy:
         id: facility-address-review
-        version: '1'
-        digest: 'sha256:<independently compiled policy digest>'
     retention:
       mode: retain
 ```
 
-Replace the policy specimen with the exact independently compiled binding from
-your review authority. BReg freezes inputs, effects, target revisions, Action
-revision, policy, and effect digest at submission. A later planner or policy change
-cannot silently reinterpret the approved work.
+Select a policy by ID. The review authority freezes its concrete version and digest
+when it accepts the submission. Add both `version` and `digest` to `policy` when you
+require an exact independently compiled binding. BReg freezes inputs, effects, target
+revisions, Action revision, and effect digest at submission. A later planner or policy
+change cannot silently reinterpret the approved work.
 
 Automatic application is the default. The built-in executor receives restricted
 system authority for that exact frozen submission. It uses no self-HTTP call,
@@ -101,7 +100,8 @@ explains that boundary.
 ## Pair Casework review context
 
 A BReg Proposal can require a ReviewPolicy from a separate Casework service.
-Use the actual compiled policy ID, version, and digest in the BReg review declaration.
+Use the Casework policy ID in the BReg review declaration. Add its actual compiled
+version and digest together when you require an exact pin.
 BReg owns the frozen Proposal, sends its bound review request as the trusted producer, and consumes
 only the exact correlated result before its own independently authorized application step.
 
@@ -124,7 +124,7 @@ correlate the retained result; it carries no decision payload or application aut
 {/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs;
     crates/registry-casework-breg/src/lib.rs;
     crates/registry-casework/tests/breg_review_journey.rs;
-    products/breg/examples/refactor/facility/registry.yaml. */}
+    products/breg/examples/facility/registry.yaml. */}
 
 ## Observe and recover an exact submission
 

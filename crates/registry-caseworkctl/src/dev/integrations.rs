@@ -295,9 +295,6 @@ impl Integrations {
     }
 
     pub(super) fn validate_session(&self, state: &State, policy: &CaseworkProject) -> Result<()> {
-        if state.issuer_project.is_some() {
-            config::require_stable_borrowed_principals(policy)?;
-        }
         let owner_instance = if policy.task_templates.is_empty() {
             None
         } else {

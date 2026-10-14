@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The closed words Casework writes for clocks, staffing, inbox views,
+//! The closed words Casework writes for clocks, staffing,
 //! paging, directory targets, and caseload moves are kebab-case, and the
 //! snake_case spelling of a multi-word value is not read.
 
 use std::fmt::Debug;
 
 use registry_casework_core::{
-    ClockRuntimeState, DirectoryTargetPurpose, DirectoryTargetsQuery, InboxView, PageStatus,
-    ReviewClockState, StaffingDiagnostic,
+    ClockRuntimeState, DirectoryTargetPurpose, DirectoryTargetsQuery, PageStatus, ReviewClockState,
+    StaffingDiagnostic,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::json;
@@ -67,23 +67,6 @@ fn every_page_status_is_kebab_case() {
         (PageStatus::BudgetExhausted, "budget-exhausted"),
         (PageStatus::SourceUnavailable, "source-unavailable"),
     ]);
-}
-
-#[test]
-fn every_inbox_view_is_kebab_case() {
-    assert_words(&[
-        (InboxView::Mine, "mine"),
-        (InboxView::MyTeams, "my-teams"),
-        (InboxView::TeamHoldings, "team-holdings"),
-        (InboxView::Overdue, "overdue"),
-        (InboxView::CompletedByMe, "completed-by-me"),
-    ]);
-    for previous in ["my_teams", "team_holdings", "completed_by_me"] {
-        assert!(
-            serde_json::from_value::<InboxView>(json!(previous)).is_err(),
-            "a list query naming {previous} is refused"
-        );
-    }
 }
 
 #[test]

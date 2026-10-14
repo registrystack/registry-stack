@@ -3,7 +3,7 @@
 Base Registry Engine compiles an authored registry project into a verified
 PostgreSQL package and serves its governed operations. Production code carries
 no fixture-specific domain types. Record types, Actions, and Proposals are the
-public model; canonical projects live under `examples/refactor/`, `acceptance/`,
+public model; canonical projects live under `examples/`, `acceptance/`,
 and `fixtures/`.
 
 | Surface | Owning source and guide |

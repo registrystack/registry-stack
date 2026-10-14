@@ -172,17 +172,20 @@ const BREG_REFERENCES: &[N] = &[
     N {
         scope: Scope::BregAction,
         ..N::global(
-            "actions/*/execution/proposal/reviewContext/fields/*/fromInput",
+            "actions/*/execution/proposal/reviewContext/fields/*/input",
             "BReg action input",
         )
     },
-    N {
-        scope: Scope::BregAction,
-        ..N::global(
-            "actions/*/execution/proposal/reviewContext/fields/*/fromRecord",
-            "BReg action input",
-        )
-    },
+    N::global(
+        "actions/*/execution/proposal/reviewContext/fields/*/recordType",
+        "BReg record type",
+    ),
+    N::scoped(
+        "actions/*/execution/proposal/reviewContext/fields/*/fields/*",
+        "BReg field",
+        0,
+        "recordType",
+    ),
     N {
         scope: Scope::BregAction,
         ..N::global(
@@ -202,7 +205,7 @@ const BREG_REFERENCES: &[N] = &[
         ..N::global("actions/*/commitGuards/targets/*/field", "BReg field")
     },
     N {
-        scope: Scope::BregInputTarget("fromRecord"),
+        scope: Scope::BregInputTarget("input"),
         ..N::global(
             "actions/*/execution/proposal/reviewContext/fields/*/field",
             "BReg field",

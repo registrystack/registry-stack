@@ -6,7 +6,7 @@
     - recordType: __SUBJECT__-consent-decision
       rowBoundaries: unrestricted
       membershipBoundaries:
-      - {field: subject, membershipEntity: __SUBJECT__-consent-link, membershipKeyField: subject, principalField: principal, activeField: active}
+      - {field: subject, membershipRecordType: __SUBJECT__-consent-link, membershipKeyField: subject, principalField: principal, activeField: active}
       operations: [get, list]
       readableFields: [subject, notice, clause, recipient, purpose, scope, decision, effective-at, expires-at, channel]
     - recordType: __SUBJECT__-consent-link

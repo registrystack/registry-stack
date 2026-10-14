@@ -1,6 +1,0 @@
-{
-  "include": ["console.py", "../../../../generated/refactor/generated/sdk/project.py"],
-  "extraPaths": ["../../../../generated/refactor/generated/sdk"],
-  "pythonVersion": "3.12",
-  "typeCheckingMode": "standard"
-}

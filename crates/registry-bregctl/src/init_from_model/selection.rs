@@ -12,7 +12,7 @@ use std::fmt;
 
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
 use registry_platform_yaml::{
-    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, Report, RetiredApiVersion,
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, RetiredApiVersion,
 };
 use serde::{Deserialize, Serialize};
 
@@ -27,10 +27,13 @@ pub(crate) const SELECTION_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(API_VERSION)],
         retired_api_versions: &[RetiredApiVersion {
             api_version: "registry.registrystack.org/breg-model-selection/v1alpha1",
-            replacement: "Write `apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1` and `kind: BRegModelSelection`; the members are unchanged.",
+            replacement: "Write `apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1` and `kind: BRegModelSelection`; use `recordTypes` for the selected concepts.",
         }],
     },
-    removed_keys: &[],
+    removed_keys: &[RemovedKey {
+        pointer: "/entities",
+        replacement: "Rename `entities` to `recordTypes`.",
+    }],
 };
 
 /// A reference model the command can derive a project from.
@@ -75,6 +78,7 @@ pub(crate) struct Selection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_revision: Option<String>,
     pub registry: RegistrySelection,
+    #[serde(rename = "recordTypes")]
     pub entities: Vec<EntitySelection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vocabularies: Vec<VocabularySelection>,
@@ -198,7 +202,7 @@ model: publicschema
 registry:
   id: example
   title: Example
-entities:
+recordTypes:
   - concept: Thing
     properties:
       - name: label
@@ -274,6 +278,27 @@ entities:
     }
 
     #[test]
+    fn the_previous_record_type_list_is_refused_at_its_key() {
+        for value in ["[]", "null"] {
+            let document = MINIMAL.replace(
+                "recordTypes:\n  - concept: Thing\n    properties:\n      - name: label",
+                &format!("entities: {value}"),
+            );
+            let report = Selection::parse("selection.yaml", document.as_bytes())
+                .expect_err("previous key is refused");
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == "config.removed-key")
+                .expect("migration guidance is present");
+            assert_eq!(diagnostic.path, "/entities");
+            assert!(diagnostic.suggested_action.contains("recordTypes"));
+            let source = diagnostic.source.as_ref().expect("positioned key");
+            assert_eq!((source.line, source.column), (Some(8), Some(1)));
+        }
+    }
+
+    #[test]
     fn every_unknown_key_is_refused_at_its_position() {
         let document = format!("{MINIMAL}  - concept: Other\n    colour: blue\n    shade: dark\n");
         let report = Selection::parse("test", document.as_bytes()).expect_err("refused");
@@ -289,8 +314,8 @@ entities:
         assert_eq!(
             places,
             [
-                ("/entities/1/colour", Some(13)),
-                ("/entities/1/shade", Some(14))
+                ("/recordTypes/1/colour", Some(13)),
+                ("/recordTypes/1/shade", Some(14))
             ]
         );
     }

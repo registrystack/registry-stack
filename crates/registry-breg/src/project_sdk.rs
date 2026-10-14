@@ -281,6 +281,10 @@ pub(super) fn generate(
         "text/typescript",
         ts.into_bytes(),
     );
+    // Keep generated Python files newline-terminated without an empty EOF line.
+    while py.ends_with("\n\n") {
+        py.pop();
+    }
     insert_bytes(
         artifacts,
         "generated/sdk/project.py",

@@ -10,9 +10,12 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("coordinator_native_journey", SCRIPTS / "test-real-services.py")
 native = importlib.util.module_from_spec(spec)
+review_spec = importlib.util.spec_from_file_location("coordinator_review_journey", SCRIPTS / "test-review-provider.py")
+review_native = importlib.util.module_from_spec(review_spec)
 sys.path.insert(0, str(SCRIPTS))
 try:
     spec.loader.exec_module(native)
+    review_spec.loader.exec_module(review_native)
 finally:
     sys.path.pop(0)
 
@@ -70,6 +73,41 @@ class NativeFixtureContracts(unittest.TestCase):
             if profile.get("actorKind") == "service":
                 for grant in profile["permissions"].get("proposals", []):
                     self.assertFalse({"apply", "retry"}.intersection(grant["operations"]))
+
+    def test_native_review_contexts_use_tagged_owner_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = review_native.write_source(native, Path(directory), {
+                "jwks": "http://127.0.0.1:1", "casework": "http://127.0.0.1:2",
+            })
+            project = json.loads((root / "registry.yaml").read_text())
+        contexts = {action["id"]: action["execution"]["proposal"].get("reviewContext")
+            for action in project["actions"]}
+        self.assertEqual(set(contexts["correct-email"]["fields"]),
+            {"tenant", "applicationId", "currentEmail", "proposedEmail", "reason"})
+        for action in review_native.VARIANTS:
+            self.assertEqual(set(contexts[action]["fields"]),
+                {"applicationId", "recordActive", "currentAmount", "proposedAmount"})
+        for context in filter(None, contexts.values()):
+            for source in context["fields"].values():
+                self.assertIn(source["type"], {"input", "record"})
+                self.assertIn("input", source)
+                self.assertNotIn("fromInput", source)
+                self.assertNotIn("fromRecord", source)
+
+    def test_native_review_automatic_selects_id_and_other_routes_pin_exact_policy(self):
+        bindings = {action: {"id": flow, "version": "1", "digest": "sha256:" + "a" * 64}
+            for action, (flow, _, _) in review_native.VARIANTS.items()}
+        with tempfile.TemporaryDirectory() as directory:
+            root = review_native.write_source(native, Path(directory), {
+                "jwks": "http://127.0.0.1:1", "casework": "http://127.0.0.1:2",
+                "coordinator": "http://127.0.0.1:3",
+            }, bindings)
+            project = json.loads((root / "registry.yaml").read_text())
+        policies = {action["id"]: action["execution"]["proposal"]["review"].get("policy")
+            for action in project["actions"]}
+        self.assertEqual(policies["correct-amount"], {"id": "review-provider"})
+        for action in list(review_native.VARIANTS)[1:]:
+            self.assertEqual(policies[action], bindings[action])
 
 
 if __name__ == "__main__":

@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const FIXTURES: &[(&str, &str)] = &[
-    ("minimal", "products/breg/examples/refactor/minimal"),
-    ("facility", "products/breg/examples/refactor/facility"),
+    ("minimal", "products/breg/examples/minimal"),
+    ("facility", "products/breg/examples/facility"),
     ("asset", "products/breg/acceptance/asset-site-placement"),
     (
         "membership",
@@ -27,11 +27,11 @@ const ACCESS_SCENARIOS: &[(&str, &str)] = &[
 fn envelope(contract: &str) -> (&'static str, &'static str) {
     match contract {
         "ModelExplanation" => (
-            "id.registrystack.org/formats/breg/model-explanation/v1alpha4",
+            "id.registrystack.org/formats/breg/model-explanation/v1alpha5",
             "BRegModelExplanation",
         ),
         "AccessExplanation" => (
-            "id.registrystack.org/formats/breg/access-explanation/v1alpha4",
+            "id.registrystack.org/formats/breg/access-explanation/v1alpha5",
             "BRegAccessExplanation",
         ),
         "AccessPreview" => (
@@ -39,23 +39,27 @@ fn envelope(contract: &str) -> (&'static str, &'static str) {
             "BRegAccessPreview",
         ),
         "RoutesExplanation" => (
-            "id.registrystack.org/formats/breg/routes-explanation/v1alpha4",
+            "id.registrystack.org/formats/breg/routes-explanation/v1alpha5",
             "BRegRoutesExplanation",
         ),
         "QueriesExplanation" => (
-            "id.registrystack.org/formats/breg/queries-explanation/v1alpha4",
+            "id.registrystack.org/formats/breg/queries-explanation/v1alpha5",
             "BRegQueriesExplanation",
         ),
         "ActionsExplanation" => (
-            "id.registrystack.org/formats/breg/actions-explanation/v1alpha4",
+            "id.registrystack.org/formats/breg/actions-explanation/v1alpha5",
             "BRegActionsExplanation",
         ),
+        "ProposalsExplanation" => (
+            "id.registrystack.org/formats/breg/proposals-explanation/v1alpha1",
+            "BRegProposalsExplanation",
+        ),
         "EventsExplanation" => (
-            "id.registrystack.org/formats/breg/events-explanation/v1alpha4",
+            "id.registrystack.org/formats/breg/events-explanation/v1alpha5",
             "BRegEventsExplanation",
         ),
         "LifecycleExplanation" => (
-            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4",
+            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha5",
             "BRegLifecycleExplanation",
         ),
         _ => panic!("unknown contract {contract}"),
@@ -446,7 +450,7 @@ fn explain_lifecycle_does_not_announce_a_compiled_inventory() {
 
 #[test]
 fn explain_lifecycle_refuses_a_project() {
-    let project = fixture_path("products/breg/examples/refactor/minimal");
+    let project = fixture_path("products/breg/examples/minimal");
     let output = bregctl(&[
         "--format",
         "json",
@@ -566,7 +570,7 @@ fn proposal_lifecycle_pin_rejects_state_event_order_and_enforcement_drift() {
 }
 #[test]
 fn native_proposal_inspection_pins_review_and_system_apply_scope_without_sources() {
-    let project = fixture_path("products/breg/examples/refactor/facility");
+    let project = fixture_path("products/breg/examples/facility");
     let inspection = explain("actions", &project);
     let actions = inspection["actions"].as_array().unwrap();
     let correction = actions
@@ -632,7 +636,7 @@ fn native_proposal_inspection_pins_review_and_system_apply_scope_without_sources
 }
 #[test]
 fn each_generic_contract_refuses_a_shared_or_unknown_header() {
-    let project = fixture_path("products/breg/examples/refactor/minimal");
+    let project = fixture_path("products/breg/examples/minimal");
     for (subject, contract) in [
         ("model", "ModelExplanation"),
         ("access", "AccessExplanation"),
@@ -640,6 +644,7 @@ fn each_generic_contract_refuses_a_shared_or_unknown_header() {
         ("queries", "QueriesExplanation"),
         ("events", "EventsExplanation"),
         ("actions", "ActionsExplanation"),
+        ("proposals", "ProposalsExplanation"),
     ] {
         let value = explain(subject, &project);
         let schema = load_schema(contract);
@@ -655,4 +660,149 @@ fn each_generic_contract_refuses_a_shared_or_unknown_header() {
             assert!(!schema.is_valid(&changed), "{contract} accepts {field}");
         }
     }
+}
+
+#[test]
+fn explain_proposals_matches_contract_and_filters_immediate_actions() {
+    for (label, relative) in FIXTURES {
+        let project = fixture_path(relative);
+        let proposals = explain("proposals", &project);
+        assert_matches_contract(label, "ProposalsExplanation", &proposals);
+        let actions = explain("actions", &project);
+        let expected = actions["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|action| action["execution"]["mode"] == "proposal")
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(proposals["actions"], json!(expected), "{label}");
+    }
+    let mut proposals = explain(
+        "proposals",
+        &fixture_path("products/breg/examples/facility"),
+    );
+    assert!(!proposals["actions"].as_array().unwrap().is_empty());
+    proposals["actions"][0]["execution"]["mode"] = json!("immediate");
+    assert!(!load_schema("ProposalsExplanation").is_valid(&proposals));
+}
+
+fn format_registry(root: &Path) -> Value {
+    let path = root.join("products/platform/config-formats.yaml");
+    registry_platform_yaml::Reader::new(path.display().to_string())
+        .scan(&std::fs::read(&path).unwrap())
+        .expect("format registry parses")
+        .expect("format registry is not empty")
+        .to_json_value()
+}
+
+#[test]
+fn registered_examples_match_current_formatter_bytes_and_schemas() {
+    let root = repo_root();
+    let registry = format_registry(&root);
+    let formats = registry["formats"].as_array().expect("registered formats");
+    let project = fixture_path("products/breg/examples/facility");
+    for (subject, contract, slug) in [
+        ("model", "ModelExplanation", "model-explanation"),
+        ("access", "AccessExplanation", "access-explanation"),
+        ("actions", "ActionsExplanation", "actions-explanation"),
+        ("proposals", "ProposalsExplanation", "proposals-explanation"),
+        ("routes", "RoutesExplanation", "routes-explanation"),
+        ("queries", "QueriesExplanation", "queries-explanation"),
+        ("events", "EventsExplanation", "events-explanation"),
+        ("access", "AccessPreview", "access-preview"),
+        ("lifecycle", "LifecycleExplanation", "lifecycle-explanation"),
+    ] {
+        let id = format!("breg/{slug}");
+        let registration = formats
+            .iter()
+            .find(|format| format["id"] == id)
+            .unwrap_or_else(|| panic!("{id} is registered"));
+        let path = root.join(registration["example"].as_str().expect("example path"));
+        let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
+        let example: Value = serde_json::from_slice(&bytes).expect("registered example parses");
+        assert_matches_contract(slug, contract, &example);
+        assert_eq!(example["apiVersion"], registration["current"]["apiVersion"]);
+        assert_eq!(example["kind"], registration["current"]["kind"]);
+        let schema = load_schema_document(contract);
+        assert_eq!(schema["$id"], registration["schema"]["id"]);
+        assert_eq!(
+            registration["schema"]["path"],
+            json!(format!(
+                "products/breg/contracts/explain/{contract}.schema.json"
+            ))
+        );
+        let current = match contract {
+            "LifecycleExplanation" => explain_lifecycle_report()["explanation"].clone(),
+            "AccessPreview" => explain_with_scenario(
+                &fixture_path(
+                    "crates/registry-bregctl/tests/fixtures/retained-native/access-review",
+                ),
+                &root.join(ACCESS_SCENARIOS[0].1),
+            ),
+            _ => explain(subject, &project),
+        };
+        assert_matches_contract(slug, contract, &current);
+        let mut expected = serde_json::to_vec_pretty(&current).unwrap();
+        expected.push(b'\n');
+        assert_eq!(
+            bytes, expected,
+            "{path:?} differs from current formatter bytes"
+        );
+    }
+}
+
+#[test]
+fn registered_ctl_report_example_matches_current_actions_report() {
+    let root = repo_root();
+    let registry = format_registry(&root);
+    let registration = registry["formats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|format| format["id"] == "breg/ctl-report")
+        .expect("ctl report is registered");
+    let path = root.join(registration["example"].as_str().unwrap());
+    let bytes = std::fs::read(&path).unwrap();
+    let example: Value = serde_json::from_slice(&bytes).expect("registered report parses");
+    assert_eq!(example["apiVersion"], registration["current"]["apiVersion"]);
+    assert_eq!(example["kind"], registration["current"]["kind"]);
+    assert_eq!(example["ok"], true);
+    assert_eq!(example["command"], "explain");
+    assert_matches_contract("ctl-report", "ActionsExplanation", &example["explanation"]);
+    let project = fixture_path("products/breg/examples/facility");
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "actions",
+        project.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let mut current = json_stdout(&output);
+    // Only the committed example uses repository-relative diagnostic filenames.
+    // CLI source addresses remain unchanged, including positions and related notes.
+    let normalize_file = |location: &mut Value| {
+        if let Some(file) = location["file"].as_str() {
+            if let Ok(relative) = Path::new(file).strip_prefix(&root) {
+                location["file"] = json!(relative.to_str().expect("source path is UTF-8"));
+            }
+        }
+    };
+    for finding in current["findings"].as_array_mut().unwrap() {
+        if let Some(source) = finding.get_mut("source") {
+            normalize_file(source);
+        }
+        if let Some(related) = finding.get_mut("related").and_then(Value::as_array_mut) {
+            for location in related {
+                normalize_file(location);
+            }
+        }
+    }
+    let mut expected = serde_json::to_vec_pretty(&current).unwrap();
+    expected.push(b'\n');
+    assert_eq!(
+        bytes, expected,
+        "{path:?} differs from current report bytes"
+    );
 }

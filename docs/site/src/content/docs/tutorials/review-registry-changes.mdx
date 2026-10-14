@@ -40,9 +40,10 @@ bregctl check tutorial-work/facility
 
 Open `tutorial-work/facility/registry.yaml`. Find `correct-address` under
 `actions`. Its execution mode is `proposal`, its plan calls `correct-address-plan`,
-and its review requirement names `casework` with an immutable policy binding.
-The policy digest is synthetic for a conforming test authority. Replace it with
-your own authority's compiled binding before deployment.
+and its review requirement names `casework` with the policy ID `facility-address-review`.
+The review authority resolves that ID and freezes the concrete policy version and
+digest when it accepts a submission. Add both `version` and `digest` if your registry
+requires an exact independently compiled policy binding.
 
 ## Inspect the compiled boundary
 
@@ -79,7 +80,7 @@ repair its named member and rerun `check` before adding service configuration.
 No cleanup command is needed because this exercise starts no services.
 
 {/* Evidence: crates/registry-bregctl/src/starters.rs;
-    products/breg/examples/refactor/facility/registry.yaml;
+    products/breg/examples/facility/registry.yaml;
     crates/registry-breg/src/compiler.rs. */}
 
 ## Next

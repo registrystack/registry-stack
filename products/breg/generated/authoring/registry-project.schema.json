@@ -3567,10 +3567,10 @@
         "field": {
           "type": "string"
         },
-        "membershipEntity": {
+        "membershipKeyField": {
           "type": "string"
         },
-        "membershipKeyField": {
+        "membershipRecordType": {
           "type": "string"
         },
         "principalField": {
@@ -3579,7 +3579,7 @@
       },
       "required": [
         "field",
-        "membershipEntity",
+        "membershipRecordType",
         "membershipKeyField",
         "principalField",
         "activeField"
@@ -3728,8 +3728,16 @@
       },
       "type": "object"
     },
-    "PolicyBindingSource": {
+    "PolicySelectionSource": {
       "additionalProperties": false,
+      "dependentRequired": {
+        "digest": [
+          "version"
+        ],
+        "version": [
+          "digest"
+        ]
+      },
       "properties": {
         "digest": {
           "$ref": "#/$defs/Digest"
@@ -3748,9 +3756,7 @@
         }
       },
       "required": [
-        "id",
-        "version",
-        "digest"
+        "id"
       ],
       "type": "object"
     },
@@ -3853,19 +3859,70 @@
       ]
     },
     "ProposalContextValueSource": {
-      "additionalProperties": false,
-      "properties": {
-        "field": {
-          "type": "string"
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ],
+          "type": "object"
         },
-        "fromInput": {
-          "type": "string"
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "input": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "record",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input",
+            "field"
+          ],
+          "type": "object"
         },
-        "fromRecord": {
-          "type": "string"
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "recordType": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "changes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "recordType",
+            "fields"
+          ],
+          "type": "object"
         }
-      },
-      "type": "object"
+      ]
     },
     "ProposalEventTransition": {
       "enum": [
@@ -4110,7 +4167,7 @@
               "type": "string"
             },
             "policy": {
-              "$ref": "#/$defs/PolicyBindingSource"
+              "$ref": "#/$defs/PolicySelectionSource"
             },
             "source": {
               "type": "string"
@@ -4514,6 +4571,7 @@
       "additionalProperties": false,
       "properties": {
         "dimensions": {
+          "description": "Unit Record fields used to group counts. Each field must be boolean or\nvocabulary-code, and each may appear once. `period`, `value`, and `status`\nare reserved output columns and cannot be dimension field names.",
           "items": {
             "type": "string"
           },
@@ -4581,6 +4639,7 @@
           "additionalProperties": false,
           "properties": {
             "field": {
+              "description": "Date field on the unit Record that places each row in a period.",
               "type": "string"
             },
             "firstPeriod": {
@@ -4639,9 +4698,11 @@
       "additionalProperties": false,
       "properties": {
         "from": {
+          "description": "Required date field on the unit Record marking the start of validity.",
           "type": "string"
         },
         "until": {
+          "description": "Optional date field marking the end of validity. A missing or null end\nleaves the row valid until a later bound is stored.",
           "type": "string"
         }
       },

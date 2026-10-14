@@ -26,8 +26,8 @@ export declare class CaseworkClient {
   ownReviewDecisions(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   supervisoryReviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewTaskContext(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  previewReviewTaskTemplates(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  listReviewTaskGrants(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  previewReviewTaskTemplates(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome>
+  listReviewTaskGrants(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome>
   approveReviewTaskGrant(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, approval: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   revokeReviewTaskGrant(token: string, profile: string, taskId: string, grantId: string): Promise<CaseworkOutcome>
   claimReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
@@ -79,6 +79,12 @@ export interface CaseworkOutcome {
   kind: string
   value: any
   traceId: string
+}
+
+/** Identify a human task grant read without positional string ambiguity. */
+export interface ReviewTaskGrantReadOptions {
+  taskId: string
+  sourceProfile?: string
 }
 
 /** Compute the canonical producer submission digest locally, without I/O. */

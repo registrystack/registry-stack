@@ -11,9 +11,9 @@ use registry_platform_httputil::{
 use registry_review_protocol::{
     review_cancel_path, review_request_path, review_result_path, ReviewCancelRequest,
     ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestView,
-    ReviewResult, ReviewResultFeedPage, SubmissionDigest, REVIEW_PROBLEM_TYPE_BASE,
-    REVIEW_PROFILE_HEADER, REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH,
-    REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
+    ReviewResult, ReviewResultFeedPage, SubmissionDigest, REVIEW_PROFILE_HEADER,
+    REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH, REVIEW_VALIDATION_PATH_HEADER,
+    REVIEW_VALIDATION_REASON_HEADER,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
@@ -454,14 +454,17 @@ impl ReviewClient {
             && document.code.bytes().all(|byte| {
                 byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
             });
-        let expected_type = format!(
-            "{REVIEW_PROBLEM_TYPE_BASE}{}",
-            document.code.replace('.', "/")
-        );
+        // Problem URIs are opaque provider identifiers and are never fetched.
+        let valid_type = document.type_uri.len() <= 2048
+            && !document
+                .type_uri
+                .chars()
+                .any(|c| c.is_control() || c.is_whitespace())
+            && Url::parse(&document.type_uri).is_ok();
         if document.status != status.as_u16()
             || trace_id.as_deref() != Some(document.trace_id.as_str())
             || !valid_code
-            || document.type_uri != expected_type
+            || !valid_type
         {
             return protocol(status, ReviewProtocolFailure::Problem, trace_id);
         }
@@ -499,7 +502,7 @@ impl ReviewClient {
 
 fn check_accepted(
     value: &ReviewRequestAccepted,
-    expected_policy: &registry_review_protocol::PolicyBinding,
+    expected_policy: &registry_review_protocol::PolicySelection,
     expected_subject: &registry_review_protocol::SubjectBinding,
     expected_submission_digest: &SubmissionDigest,
     trace_id: &str,
@@ -522,7 +525,7 @@ fn check_accepted(
     // A nil request identifier cannot anchor the later result polls,
     // cancellations, and completion correlations the binding is kept for.
     if value.request_id.is_nil()
-        || value.policy != *expected_policy
+        || !expected_policy.matches(&value.policy)
         || value.subject != *expected_subject
         || value.submission_digest != *expected_submission_digest
     {

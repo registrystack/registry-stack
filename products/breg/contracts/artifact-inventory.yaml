@@ -41,8 +41,8 @@ artifacts:
   - {path: generated/authoring/registry-project.schema.json, kind: generated-authoring-schema, state: authored}
   - {path: generated/runtime/runtime.schema.json, kind: generated-runtime-schema, state: authored}
   - {path: generated/event-schemas/proposal-lifecycle.schema.json, kind: generated-proposal-event-schema, state: authored}
-  - {path: generated/refactor, kind: generated-baseline, state: authored}
-  - {path: generated/refactor-minimal, kind: generated-baseline, state: authored}
+  - {path: generated/facility, kind: generated-baseline, state: authored}
+  - {path: generated/minimal, kind: generated-baseline, state: authored}
   - {path: scripts/check-generated.sh, kind: generated-artifact-gate, state: authored}
   - {path: scripts/compare-generated-tree.py, kind: generated-tree-comparator, state: authored}
   - {path: scripts/test-postgres.sh, kind: real-postgresql-entrypoint, state: authored}

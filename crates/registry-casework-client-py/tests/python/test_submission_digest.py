@@ -41,13 +41,19 @@ class SubmissionDigestTests(unittest.TestCase):
         self.assertNotEqual(submission_digest("another-producer", namespace, request), expected)
         self.assertNotEqual(submission_digest(producer, "another-namespace", request), expected)
 
-    def test_composes_with_exact_admission_and_response_loss_recovery(self):
-        request = FIXTURE["request"]
+    def test_composes_with_current_policy_admission_and_response_loss_recovery(self):
+        self.assert_admission_recovery(False)
+
+    def test_composes_with_pinned_policy_admission_and_response_loss_recovery(self):
+        self.assert_admission_recovery(True)
+
+    def assert_admission_recovery(self, pinned):
+        request = {**FIXTURE["request"], "policy": FIXTURE["request"]["policy"] if pinned else {"id": FIXTURE["request"]["policy"]["id"]}}
         digest = submission_digest(FIXTURE["producer"], FIXTURE["sourceNamespace"], request)
         accepted = {
             "requestId": "00000000-0000-4000-8000-000000000001",
             "subject": request["subject"],
-            "policy": request["policy"],
+            "policy": FIXTURE["request"]["policy"],
             "submissionDigest": digest,
         }
         seen = []
@@ -108,6 +114,8 @@ class SubmissionDigestTests(unittest.TestCase):
             ("", namespace, request),
             (producer, "", request),
             (producer, namespace, invalid_policy),
+            (producer, namespace, {**request, "policy": {"id": request["policy"]["id"], "version": request["policy"]["version"]}}),
+            (producer, namespace, {**request, "policy": {"id": request["policy"]["id"], "digest": request["policy"]["digest"]}}),
             (producer, namespace, {**request, "unknown": "private-value"}),
             (producer, namespace, unsafe_context),
             (producer, namespace, cyclic),

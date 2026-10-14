@@ -74,7 +74,7 @@ fn membership_source() -> Value {
     grant["writableFields"] = json!([]);
     grant["rowBoundaries"] = json!("unrestricted");
     grant["membershipBoundaries"] = json!([{
-        "field":"organization", "membershipEntity":"membership",
+        "field":"organization", "membershipRecordType":"membership",
         "membershipKeyField":"organization", "principalField":"principal", "activeField":"active"
     }]);
     source
@@ -86,6 +86,14 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
     let explanation =
         serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
     assert_eq!(explanation["rowReach"][0]["rows"], "claim_bound");
+    assert_eq!(
+        explanation["recordTypes"][0]["profiles"][0]["allowCount"],
+        false
+    );
+    assert_eq!(
+        explanation["recordTypes"][0]["profiles"][0]["rowBoundaries"],
+        source()["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"]
+    );
     // A project without consent configuration states no consent block.
     assert_eq!(explanation["consent"], serde_json::Value::Null);
     assert!(explanation.as_object().unwrap().contains_key("consent"));
@@ -123,9 +131,53 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
         serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
     assert_eq!(explanation["rowReach"][0]["rows"], "all");
     assert_eq!(
+        explanation["recordTypes"][0]["profiles"][0]["rowBoundaries"],
+        "unrestricted"
+    );
+    assert_eq!(
         explanation["recordTypes"][0]["profiles"][0]["operations"],
         json!(["get", "patch"])
     );
+}
+
+#[test]
+fn inspection_reports_count_defaults_without_changing_compiled_profile_serialization() {
+    for allow_count in [false, true] {
+        let mut source = source();
+        let grant = &mut source["accessProfiles"][0]["permissions"]["records"][0];
+        grant["operations"] = json!(["get", "list"]);
+        grant["writableFields"] = json!([]);
+        grant["rowBoundaries"] = json!("unrestricted");
+        grant["allowCount"] = json!(allow_count);
+        let registry = compile(&source);
+        let compiled = &registry.entities()["entry"].access_profiles["clerk"];
+        let before = serde_json::to_value(compiled).unwrap();
+        let inspection =
+            serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
+        let profile = &inspection["recordTypes"][0]["profiles"][0];
+        assert_eq!(profile["allowCount"], allow_count);
+        assert_eq!(profile["rowBoundaries"], "unrestricted");
+        assert_eq!(before["rowBoundaries"], json!([]));
+        assert_eq!(
+            before.get("allowCount").cloned(),
+            allow_count.then_some(json!(true))
+        );
+        assert_eq!(serde_json::to_value(compiled).unwrap(), before);
+        let warning = registry
+            .findings()
+            .iter()
+            .find(|finding| finding.code == "breg.access.profile-unrestricted-collection")
+            .unwrap();
+        assert!(warning
+            .message
+            .contains("restrict the profile to intended callers"));
+        assert!(warning
+            .message
+            .contains("publishers require unrestricted reads"));
+        assert!(!warning
+            .message
+            .contains("Add a claim-bound row restriction"));
+    }
 }
 
 #[test]
@@ -178,9 +230,19 @@ fn membership_row_reach_is_explicit_and_uses_the_selected_principal() {
         ),
     ] {
         let mut source = membership_source();
-        source["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] = boundaries;
+        source["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
+            boundaries.clone();
         let registry = compile(&source);
         let explanation = registry_breg::access::explain_access(&registry);
+        let inspected = serde_json::to_value(&explanation).unwrap();
+        let grant = &inspected["recordTypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["recordType"] == "entry")
+            .unwrap()["profiles"][0];
+        assert_eq!(grant["rowBoundaries"], boundaries);
+        assert_eq!(grant["membershipBoundaries"].as_array().unwrap().len(), 1);
         let reach = explanation
             .row_reach
             .iter()

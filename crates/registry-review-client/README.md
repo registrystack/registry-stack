@@ -6,12 +6,14 @@ requests, reads their bindings, retrieves terminal results, pages the
 requester result feed, and cancels unfinished requests.
 
 The producer selects an explicitly granted provider profile with
-`Registry-Review-Profile`. Failures use the shared Review problem namespace and
+`Registry-Review-Profile`. Failures accept bounded, well-formed opaque provider problem URIs and
 bounded Review validation headers. Provider task APIs and policy evaluators
 remain outside this client.
 
-Creation requires the producer's full expected policy binding and submission
-digest, and checks both against the accepted response. Result lookup
+Creation requires a policy selector and submission digest. A selector with only
+`id` accepts the trusted provider's concrete current policy; adding both `version`
+and `digest` requires an exact pin. The accepted response must match that selector,
+subject and original submission digest. Result lookup
 requires the accepted request binding and refuses a response unless its
 request, subject, policy, and submission digest all match exactly. A producer
 must persist that accepted binding before consuming a terminal result.

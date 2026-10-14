@@ -492,6 +492,7 @@ export default defineConfig({
               label: 'Source examples',
               collapsed: true,
               items: [
+                { label: 'Compose a BReg lookup', slug: 'tutorials/evidence-from-breg' },
                 { label: 'FHIR R4: patient coverage', slug: 'tutorials/issue-fhir-evidence-as-vcs' },
               ],
             },

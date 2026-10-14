@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha4.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha5.schema.json",
   "title": "ModelExplanation",
   "description": "Wire shape of the native compiled model inspector and module closure.",
   "type": "object",
@@ -14,11 +14,14 @@
     "moduleClosure",
     "revision",
     "recordTypes",
-    "actions"
+    "actions",
+    "statisticalDatasets",
+    "display",
+    "reviewAuthorities"
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha5"
     },
     "kind": {
       "const": "BRegModelExplanation"
@@ -71,7 +74,25 @@
           "revision",
           "display",
           "fields",
-          "relationships"
+          "relationships",
+          "sourceModule",
+          "primaryDataset",
+          "route",
+          "mutationMode",
+          "mutationPolicy",
+          "classification",
+          "canonicalId",
+          "tombstone",
+          "batch",
+          "temporal",
+          "geojson",
+          "accessLog",
+          "constraints",
+          "indexes",
+          "selectorProfiles",
+          "readPaths",
+          "hooks",
+          "derivedRelations"
         ],
         "properties": {
           "id": {
@@ -79,6 +100,50 @@
           },
           "revision": {
             "$ref": "#/$defs/Digest"
+          },
+          "mutationMode": {
+            "enum": [
+              "mutable",
+              "create-only"
+            ]
+          },
+          "mutationPolicy": {
+            "type": "object",
+            "additionalProperties": {
+              "const": "proposal-required"
+            },
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            }
+          },
+          "classification": {
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "apiName",
+                "schema",
+                "required",
+                "classification"
+              ],
+              "x-registry-passthrough": "Normalized logical field schema and effective classification; compiler-owned metadata."
+            }
+          },
+          "readPaths": {
+            "type": "object",
+            "x-registry-passthrough": "Compiler-resolved read paths, separate from relationship edges."
+          },
+          "hooks": {
+            "type": "object",
+            "x-registry-passthrough": "Compiled hook declarations, with empty condition tests omitted."
           }
         },
         "x-registry-passthrough": "Source-free normalized definition owned by the compiler; identity and revision are pinned here."
@@ -106,6 +171,47 @@
         },
         "x-registry-passthrough": "Source-free normalized definition owned by the compiler; identity and revision are pinned here."
       }
+    },
+    "statisticalDatasets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "unitEntityId",
+          "population",
+          "period",
+          "dimensions",
+          "disclosure"
+        ],
+        "x-registry-passthrough": "Normalized compiled statistical dataset inventory, including authority requirements; no source bytes."
+      }
+    },
+    "display": {
+      "$ref": "#/$defs/Display"
+    },
+    "reviewAuthorities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "protocol",
+          "display"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "protocol": {
+            "const": "id.registrystack.org/protocols/review/v1"
+          },
+          "display": {
+            "$ref": "#/$defs/Display"
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -118,6 +224,21 @@
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
+    },
+    "Display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "titleField": {
+          "type": "string"
+        }
+      }
     }
   }
 }

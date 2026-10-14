@@ -31,7 +31,7 @@ fn acceptance_project(relative: &str) -> PathBuf {
 
 #[tokio::test]
 async fn a_breg_project_root_is_claimed_by_its_own_family() {
-    let root = acceptance_project("breg/examples/refactor/minimal");
+    let root = acceptance_project("breg/examples/minimal");
     let registry = root.join("registry.yaml");
     let document = fs::read_to_string(&registry).expect("registry.yaml reads");
     let mut session = LspSession::start();

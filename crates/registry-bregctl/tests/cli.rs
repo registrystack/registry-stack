@@ -124,7 +124,7 @@ fn explain_access_names_membership_constraints_instead_of_unrestricted_rows() {
     let aligned = member.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(aligned.contains("row restrictions (all) governed membership required"));
     assert!(aligned.contains("membership restrictions (all)"));
-    assert!(aligned.contains("membershipEntity"));
+    assert!(aligned.contains("membershipRecordType"));
     assert!(!aligned.contains("row restrictions (all) unrestricted"));
 }
 
@@ -1646,7 +1646,7 @@ fn every_json_report_names_the_ctl_report_format() {
 /// The committed minimal example: a project and the runtime file that runs it.
 fn minimal_example() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/examples/refactor/minimal")
+        .join("../../products/breg/examples/minimal")
         .canonicalize()
         .expect("the minimal example exists")
 }
@@ -2496,7 +2496,7 @@ model: publicschema
 registry:
   id: places
   title: Places
-entities:
+recordTypes:
   - concept: Location
     properties:
       - name: location_name
@@ -2534,7 +2534,7 @@ model: publicschema
 registry:
   id: places
   title: Places
-entities:
+recordTypes:
   - concept: Location
     properties:
       - name: altitude
@@ -2582,7 +2582,7 @@ model: publicschema
 project:
   id: places
   title: Places
-entities:
+recordTypes:
   - concept: Location
 ",
     )
@@ -3810,7 +3810,7 @@ fn explain_actions_reports_wasm_handler_server_compatibility() {
 #[test]
 fn explain_proposals_reports_fixed_mode_review_and_bounded_target_scope() {
     let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/examples/refactor/facility")
+        .join("../../products/breg/examples/facility")
         .canonicalize()
         .unwrap();
     let output = bregctl(&["--format", "json", "explain", "proposals", path(&project)]);

@@ -30,11 +30,14 @@ class GeneratedContractTests(unittest.TestCase):
     def operation(self,path,method="get"):
         return self.document["paths"][path][method]
 
-    def test_wire_model_has_exact_policy_binding_and_no_legacy_workflow(self):
+    def test_wire_model_has_policy_selection_and_no_dead_or_legacy_contracts(self):
         create=self.schemas["ReviewCreateRequest"]
         self.assertIn("policy",create["required"])
         self.assertNotIn("kind",create["properties"])
-        for removed in ["WorkItem","ReviewerTask","ReviewKindPolicy","SourceBinding","TaskProposalIdentity"]:
+        selection=self.schemas["InputPolicySelection"]
+        self.assertEqual(selection["required"],["id"])
+        self.assertEqual(selection["dependentRequired"],{"version":["digest"],"digest":["version"]})
+        for removed in ["WorkItem","ReviewerTask","ReviewKindPolicy","SourceBinding","TaskProposalIdentity","ReviewPageQuery","InboxView","InboxSort"]:
             self.assertNotIn(removed,self.schemas)
         GEN.verify_source(GEN.ROOT,self.document)
 
@@ -93,13 +96,13 @@ class GeneratedContractTests(unittest.TestCase):
         self.assertIn("policy-not-allowed",self.schemas["ReviewValidationReason"]["enum"])
         self.assertNotIn("kind-not-allowed",self.schemas["ReviewValidationReason"]["enum"])
 
-    def test_only_shared_review_routes_use_provider_neutral_problems(self):
+    def test_all_routes_preserve_casework_native_problem_uris(self):
         for endpoint in GEN.ENDPOINTS:
             operation=self.operation(endpoint.path,endpoint.method.lower())
             schema=operation["responses"]["400"]["content"]["application/problem+json"]["schema"]
             component=self.document["components"]["schemas"][schema["$ref"].rsplit("/",1)[1]]
             uri=component["allOf"][1]["properties"]["type"]["const"]
-            expected=GEN.REVIEW_PROBLEM_BASE if endpoint.review else "https://id.registrystack.org/problems/registry-casework/"
+            expected="https://id.registrystack.org/problems/registry-casework/"
             self.assertEqual(uri,expected+"request/invalid",endpoint.path)
 
     def test_result_lookup_keeps_pending_concealed_and_expired_bodyless(self):

@@ -38,8 +38,11 @@ coordinatorctl test --project products/coordinator/examples/review-provider
 The six offline scenarios cover automatic approval, inactive-record refusal,
 human approval and rejection, human timeout withdrawal, and assessment authority
 refusal. The checked-in context and Casework pins are synthetic fixture values.
-Before deploying, import exact owner exports and use the resulting Workflow
-revision as the producer's expected Review policy. `runtime.yaml` illustrates
+Before deploying, import exact owner exports. A producer normally selects the
+Review policy by ID; the provider binds its current version and revision on
+first acceptance and preserves that concrete policy for recovery and results.
+Include both version and digest only when the producer requires an exact pin.
+`runtime.yaml` illustrates
 separate producer, operator, read-only assessment and Casework credentials.
 
 ## Run the real product journey
@@ -63,7 +66,10 @@ remove owned resources and retain synthetic proof and logs in the private work
 directory; a failure retains diagnostic dev state for inspection.
 
 The runner obtains the context schemas and Casework policy bindings from their
-owning compilers, then instantiates this project with those exact pins. It
+owning compilers, then instantiates this project with those exact context and
+downstream policy pins. The automatic source Action selects Coordinator's policy
+by ID and verifies the accepted concrete binding; the manual and expiry Actions
+exercise explicit version and digest pins. It
 proves automatic BReg application, independent service apply refusal, human
 review through Casework, lost-response recovery under original keys, and a
 Coordinator process restart with an unknown command and a durable wait.

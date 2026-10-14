@@ -1,36 +1,36 @@
 {
-  "apiVersion": "id.registrystack.org/formats/breg/queries-explanation/v1alpha4",
+  "apiVersion": "id.registrystack.org/formats/breg/queries-explanation/v1alpha5",
   "kind": "BRegQueriesExplanation",
   "operations": [
     {
       "allowCount": false,
       "apiFields": [
         {
-          "apiName": "code",
-          "field": "code",
+          "apiName": "email",
+          "field": "email",
           "fieldType": {
-            "maximumLength": 32,
-            "minimumLength": 0,
+            "maximumLength": 254,
+            "minimumLength": 1,
             "type": "string"
           },
           "sourceKind": "stored"
         },
         {
-          "apiName": "district",
-          "field": "district",
+          "apiName": "jurisdiction",
+          "field": "jurisdiction",
           "fieldType": {
-            "maximumLength": 32,
-            "minimumLength": 0,
+            "maximumLength": 40,
+            "minimumLength": 1,
             "type": "string"
           },
           "sourceKind": "stored"
         },
         {
-          "apiName": "label",
-          "field": "label",
+          "apiName": "name",
+          "field": "name",
           "fieldType": {
-            "maximumLength": 100,
-            "minimumLength": 0,
+            "maximumLength": 160,
+            "minimumLength": 1,
             "type": "string"
           },
           "sourceKind": "stored"
@@ -46,82 +46,442 @@
         "maximumSelectedFields": 128,
         "maximumTop": 100
       },
-      "entity": "record",
+      "filterable": [],
+      "id": "records.directory-entry.directory-editor.list",
+      "kind": "list",
+      "profile": "directory-editor",
+      "readPath": null,
+      "recordType": "directory-entry",
+      "routeId": "records.directory-entry.list",
+      "selectors": [],
+      "sortable": [],
+      "wire": {
+        "accessProfile": "accessProfile",
+        "asOf": "asOf",
+        "count": "$count",
+        "cursor": "$skiptoken",
+        "filter": "$filter",
+        "orderBy": "$orderby",
+        "pageSize": "$top",
+        "select": "$select"
+      }
+    },
+    {
+      "allowCount": false,
+      "apiFields": [
+        {
+          "apiName": "facility",
+          "field": "facility",
+          "fieldType": {
+            "onDelete": "restrict",
+            "target": "facility",
+            "type": "reference"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "jurisdiction",
+          "field": "jurisdiction",
+          "fieldType": {
+            "maximumLength": 40,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "operator",
+          "field": "operator",
+          "fieldType": {
+            "onDelete": "restrict",
+            "target": "operator",
+            "type": "reference"
+          },
+          "sourceKind": "stored"
+        }
+      ],
+      "bounds": {
+        "maximumFilterDepth": 16,
+        "maximumFilterNodes": 128,
+        "maximumFilterPayloadBytes": 16384,
+        "maximumFilterPredicates": 32,
+        "maximumInValues": 100,
+        "maximumPageSize": 100,
+        "maximumSelectedFields": 128,
+        "maximumTop": 100
+      },
       "filterable": [
         {
-          "apiName": "code",
+          "apiName": "facility",
           "examples": [
-            "$filter=code eq 'example'",
-            "$filter=code in ('example','sample')",
-            "$filter=code eq null",
-            "$filter=code ne null",
-            "$filter=startswith(code,'example')",
-            "$filter=contains(code,'example')"
+            "$filter=facility eq '00000000-0000-4000-8000-000000000000'",
+            "$filter=facility in ('00000000-0000-4000-8000-000000000000','00000000-0000-4000-8000-000000000001')",
+            "$filter=facility eq null",
+            "$filter=facility ne null"
           ],
-          "field": "code",
+          "field": "facility",
           "fieldType": {
-            "maximumLength": 32,
-            "minimumLength": 0,
-            "type": "string"
+            "onDelete": "restrict",
+            "target": "facility",
+            "type": "reference"
           },
           "operators": [
             "equals",
             "in",
             "is-null",
-            "is-not-null",
-            "prefix",
-            "contains"
+            "is-not-null"
           ],
           "wireOperators": [
-            "contains",
             "eq",
             "eq null",
             "in",
             "ne",
-            "ne null",
-            "startswith"
+            "ne null"
           ]
         },
         {
-          "apiName": "district",
+          "apiName": "operator",
           "examples": [
-            "$filter=district eq 'example'",
-            "$filter=district in ('example','sample')",
-            "$filter=district eq null",
-            "$filter=district ne null",
-            "$filter=startswith(district,'example')",
-            "$filter=contains(district,'example')"
+            "$filter=operator eq '00000000-0000-4000-8000-000000000000'",
+            "$filter=operator in ('00000000-0000-4000-8000-000000000000','00000000-0000-4000-8000-000000000001')",
+            "$filter=operator eq null",
+            "$filter=operator ne null"
           ],
-          "field": "district",
+          "field": "operator",
           "fieldType": {
-            "maximumLength": 32,
-            "minimumLength": 0,
-            "type": "string"
+            "onDelete": "restrict",
+            "target": "operator",
+            "type": "reference"
           },
           "operators": [
             "equals",
             "in",
             "is-null",
-            "is-not-null",
-            "prefix",
-            "contains"
+            "is-not-null"
           ],
           "wireOperators": [
-            "contains",
             "eq",
             "eq null",
             "in",
             "ne",
-            "ne null",
-            "startswith"
+            "ne null"
           ]
         }
       ],
-      "id": "records.record.district-reader.list",
+      "id": "records.facility-assignment.facility-reader.list",
       "kind": "list",
-      "profile": "district-reader",
+      "profile": "facility-reader",
       "readPath": null,
-      "routeId": "records.record.list",
+      "recordType": "facility-assignment",
+      "routeId": "records.facility-assignment.list",
+      "selectors": [],
+      "sortable": [],
+      "wire": {
+        "accessProfile": "accessProfile",
+        "asOf": "asOf",
+        "count": "$count",
+        "cursor": "$skiptoken",
+        "filter": "$filter",
+        "orderBy": "$orderby",
+        "pageSize": "$top",
+        "select": "$select"
+      }
+    },
+    {
+      "allowCount": false,
+      "apiFields": [
+        {
+          "apiName": "addressLine",
+          "field": "address-line",
+          "fieldType": {
+            "maximumLength": 240,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "city",
+          "field": "city",
+          "fieldType": {
+            "maximumLength": 120,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "facilityCode",
+          "field": "facility-code",
+          "fieldType": {
+            "maximumLength": 64,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "jurisdiction",
+          "field": "jurisdiction",
+          "fieldType": {
+            "maximumLength": 40,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "name",
+          "field": "name",
+          "fieldType": {
+            "maximumLength": 200,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "postalCode",
+          "field": "postal-code",
+          "fieldType": {
+            "maximumLength": 24,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "status",
+          "field": "status",
+          "fieldType": {
+            "type": "vocabulary-code",
+            "values": [
+              "active",
+              "inactive"
+            ],
+            "vocabulary": "facility-status"
+          },
+          "sourceKind": "stored"
+        }
+      ],
+      "bounds": {
+        "maximumFilterDepth": 16,
+        "maximumFilterNodes": 128,
+        "maximumFilterPayloadBytes": 16384,
+        "maximumFilterPredicates": 32,
+        "maximumInValues": 100,
+        "maximumPageSize": 100,
+        "maximumSelectedFields": 128,
+        "maximumTop": 100
+      },
+      "filterable": [],
+      "id": "records.facility.facility-reader.list",
+      "kind": "list",
+      "profile": "facility-reader",
+      "readPath": null,
+      "recordType": "facility",
+      "routeId": "records.facility.list",
+      "selectors": [],
+      "sortable": [],
+      "wire": {
+        "accessProfile": "accessProfile",
+        "asOf": "asOf",
+        "count": "$count",
+        "cursor": "$skiptoken",
+        "filter": "$filter",
+        "orderBy": "$orderby",
+        "pageSize": "$top",
+        "select": "$select"
+      }
+    },
+    {
+      "allowCount": false,
+      "apiFields": [
+        {
+          "apiName": "jurisdiction",
+          "field": "jurisdiction",
+          "fieldType": {
+            "maximumLength": 40,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "operatorCode",
+          "field": "operator-code",
+          "fieldType": {
+            "maximumLength": 64,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "status",
+          "field": "status",
+          "fieldType": {
+            "type": "vocabulary-code",
+            "values": [
+              "active",
+              "inactive"
+            ],
+            "vocabulary": "operator-status"
+          },
+          "sourceKind": "stored"
+        }
+      ],
+      "bounds": {
+        "maximumFilterDepth": 16,
+        "maximumFilterNodes": 128,
+        "maximumFilterPayloadBytes": 16384,
+        "maximumFilterPredicates": 32,
+        "maximumInValues": 100,
+        "maximumPageSize": 100,
+        "maximumSelectedFields": 128,
+        "maximumTop": 100
+      },
+      "filterable": [],
+      "id": "records.facility.facility-reader.path.operators",
+      "kind": "list",
+      "profile": "facility-reader",
+      "readPath": "operators",
+      "recordType": "operator",
+      "routeId": "records.facility.path.operators",
+      "selectors": [],
+      "sortable": [],
+      "wire": {
+        "accessProfile": "accessProfile",
+        "asOf": "asOf",
+        "count": "$count",
+        "cursor": "$skiptoken",
+        "filter": "$filter",
+        "orderBy": "$orderby",
+        "pageSize": "$top",
+        "select": "$select"
+      }
+    },
+    {
+      "allowCount": false,
+      "apiFields": [
+        {
+          "apiName": "jurisdiction",
+          "field": "jurisdiction",
+          "fieldType": {
+            "maximumLength": 40,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "operatorCode",
+          "field": "operator-code",
+          "fieldType": {
+            "maximumLength": 64,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "status",
+          "field": "status",
+          "fieldType": {
+            "type": "vocabulary-code",
+            "values": [
+              "active",
+              "inactive"
+            ],
+            "vocabulary": "operator-status"
+          },
+          "sourceKind": "stored"
+        }
+      ],
+      "bounds": {
+        "maximumFilterDepth": 16,
+        "maximumFilterNodes": 128,
+        "maximumFilterPayloadBytes": 16384,
+        "maximumFilterPredicates": 32,
+        "maximumInValues": 100,
+        "maximumPageSize": 100,
+        "maximumSelectedFields": 128,
+        "maximumTop": 100
+      },
+      "filterable": [],
+      "id": "records.operator.facility-reader.list",
+      "kind": "list",
+      "profile": "facility-reader",
+      "readPath": null,
+      "recordType": "operator",
+      "routeId": "records.operator.list",
+      "selectors": [],
+      "sortable": [],
+      "wire": {
+        "accessProfile": "accessProfile",
+        "asOf": "asOf",
+        "count": "$count",
+        "cursor": "$skiptoken",
+        "filter": "$filter",
+        "orderBy": "$orderby",
+        "pageSize": "$top",
+        "select": "$select"
+      }
+    },
+    {
+      "allowCount": false,
+      "apiFields": [
+        {
+          "apiName": "jurisdiction",
+          "field": "jurisdiction",
+          "fieldType": {
+            "maximumLength": 40,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "operatorCode",
+          "field": "operator-code",
+          "fieldType": {
+            "maximumLength": 64,
+            "minimumLength": 1,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "status",
+          "field": "status",
+          "fieldType": {
+            "type": "vocabulary-code",
+            "values": [
+              "active",
+              "inactive"
+            ],
+            "vocabulary": "operator-status"
+          },
+          "sourceKind": "stored"
+        }
+      ],
+      "bounds": {
+        "maximumFilterDepth": 16,
+        "maximumFilterNodes": 128,
+        "maximumFilterPayloadBytes": 16384,
+        "maximumFilterPredicates": 32,
+        "maximumInValues": 100,
+        "maximumPageSize": 100,
+        "maximumSelectedFields": 128,
+        "maximumTop": 100
+      },
+      "filterable": [],
+      "id": "records.operator.operator-editor.list",
+      "kind": "list",
+      "profile": "operator-editor",
+      "readPath": null,
+      "recordType": "operator",
+      "routeId": "records.operator.list",
       "selectors": [],
       "sortable": [],
       "wire": {

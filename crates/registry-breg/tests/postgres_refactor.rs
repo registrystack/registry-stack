@@ -20,12 +20,10 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-const MINIMAL: &[u8] =
-    include_bytes!("../../../products/breg/examples/refactor/minimal/registry.yaml");
-const FACILITY: &[u8] =
-    include_bytes!("../../../products/breg/examples/refactor/facility/registry.yaml");
+const MINIMAL: &[u8] = include_bytes!("../../../products/breg/examples/minimal/registry.yaml");
+const FACILITY: &[u8] = include_bytes!("../../../products/breg/examples/facility/registry.yaml");
 const FUNCTION: &[u8] =
-    include_bytes!("../../../products/breg/examples/refactor/facility/plans/correct-address.rhai");
+    include_bytes!("../../../products/breg/examples/facility/plans/correct-address.rhai");
 
 fn compile(source: &[u8]) -> registry_breg::CompiledRegistry {
     let project = parse_project_yaml(source).expect("canonical project reads");

@@ -167,6 +167,7 @@ impl Store {
                 None,
             )
             .await
+            .map(|admission| admission.run_id)
         })
         .await
     }
@@ -199,6 +200,7 @@ impl Store {
                 Some((event_binding, trigger)),
             )
             .await
+            .map(|admission| admission.run_id)
         })
         .await
     }

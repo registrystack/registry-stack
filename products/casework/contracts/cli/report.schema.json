@@ -614,12 +614,16 @@
         },
         "role": {
           "$ref": "#/$defs/CaseworkRole"
+        },
+        "subject": {
+          "type": "string"
         }
       },
       "required": [
         "id",
         "profile",
         "role",
+        "subject",
         "clientIdFile",
         "assertionKeyFile"
       ],

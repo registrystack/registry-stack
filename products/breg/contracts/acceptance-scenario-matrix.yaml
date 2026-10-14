@@ -96,7 +96,7 @@ scenarios:
   - id: BREG-J20
     state: enforced
     domain: native-proposal-attachments
-    fixture: examples/refactor/facility
+    fixture: examples/facility
     doneWhen: "A native Proposal uploads and removes declared draft slots, refuses unauthorized or stale downloads, freezes submitted attachments, applies exactly once, erases scoped retained detail, and quarantines content under its exact verification policy."
     evidence: [{path: crates/registry-breg/tests/refactor_contract.rs, name: proposal_attachments_require_explicit_bounded_slot_grants}, {path: crates/registry-breg/tests/postgres_proposal.rs, name: attachment_binding_integrity_and_detail_erasure_preserve_record_history}, {path: crates/registry-breg/tests/postgres_proposal_s3.rs, name: s3_integrity_binding_quarantine_and_authority_refusals_precede_transport}]
   - id: BREG-J21

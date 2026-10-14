@@ -19,12 +19,11 @@ pub use model::{
 };
 pub use registry_platform_httputil::client::BearerToken;
 pub use registry_review_protocol::{
-    submission_digest, ContentDigest, HumanIdentity, PolicyBinding, ProtocolError,
+    submission_digest, ContentDigest, HumanIdentity, PolicyBinding, PolicySelection, ProtocolError,
     ReviewCancelRequest, ReviewCancelResponse, ReviewCompletion, ReviewCompletionType,
     ReviewContext, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestLifecycle,
     ReviewRequestView, ReviewResult, ReviewResultFeedEntry, ReviewResultFeedPage,
     ReviewResultLookup, ReviewResultStatus, SourceContextBinding, SubjectBinding, SubmissionDigest,
-    REVIEW_PROBLEM_TYPE_BASE, REVIEW_PROFILE_HEADER, REVIEW_VALIDATION_PATH_HEADER,
-    REVIEW_VALIDATION_REASON_HEADER,
+    REVIEW_PROFILE_HEADER, REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
 };
 pub use uuid::Uuid;

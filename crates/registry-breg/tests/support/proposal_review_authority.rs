@@ -150,9 +150,9 @@ async fn create(
     assert!(authenticated(&headers));
     assert!(headers.contains_key("idempotency-key"));
     request.check().unwrap();
-    assert_eq!(
-        request.policy, state.policy,
-        "submit the exact configured policy"
+    assert!(
+        request.policy.matches(&state.policy),
+        "select the configured policy"
     );
     state.creates.fetch_add(1, Ordering::SeqCst);
     let digest = registry_review_client::submission_digest(

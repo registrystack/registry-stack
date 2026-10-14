@@ -15,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[3]
 OUTPUT = ROOT / "products/casework/generated/registry-casework.openapi.json"
 PROFILE = "registry-casework-profile"
 REVIEW_PROFILE = "registry-review-profile"
-REVIEW_PROBLEM_BASE = "https://id.registrystack.org/problems/registry-review/"
 SOURCE_PROFILE = "registry-source-profile"
 
 @dataclass(frozen=True)
@@ -141,25 +140,25 @@ def response(schema_name: str | None = None, description="Success") -> dict:
     if schema_name: value["content"]={"application/json":{"schema":ref(schema_name)}}
     return value
 
-def problem_component_name(code: str, review: bool = False) -> str:
-    return ("ReviewProblem" if review else "Problem") + "".join(part.title() for part in re.split(r"[.-]",code))
+def problem_component_name(code: str) -> str:
+    return "Problem" + "".join(part.title() for part in re.split(r"[.-]",code))
 
-def problem_schemas(entries: list[dict], review: bool = False) -> dict:
+def problem_schemas(entries: list[dict]) -> dict:
     text={"type":"string"}
     base=object_schema({"type":text,"title":text,"status":{"type":"integer"},"detail":text,"code":text,"traceId":text},["type","title","status","detail","code","traceId"])
     result={"Problem":base}
     for entry in entries:
-        uri=REVIEW_PROBLEM_BASE+entry["code"].replace(".","/") if review else entry["uri"]
-        result[problem_component_name(entry["code"],review)]={"allOf":[ref("Problem"),{"properties":{"type":{"const":uri},"title":{"const":entry["title"]},"status":{"const":entry["httpStatuses"][0]},"detail":{"const":entry["description"]},"code":{"const":entry["code"]}}}]}
+        uri=entry["uri"]
+        result[problem_component_name(entry["code"])]={"allOf":[ref("Problem"),{"properties":{"type":{"const":uri},"title":{"const":entry["title"]},"status":{"const":entry["httpStatuses"][0]},"detail":{"const":entry["description"]},"code":{"const":entry["code"]}}}]}
     return result
 
-def problem_responses(codes: set[str], catalog: dict, review: bool = False) -> dict:
+def problem_responses(codes: set[str], catalog: dict) -> dict:
     by_status={}
     for code in sorted(codes):
         entry=catalog[code];by_status.setdefault(entry["httpStatuses"][0],[]).append(entry)
     result={}
     for status,entries in sorted(by_status.items()):
-        variants=[ref(problem_component_name(entry["code"],review)) for entry in entries]
+        variants=[ref(problem_component_name(entry["code"])) for entry in entries]
         value=response(description="Problem: "+", ".join(entry["code"] for entry in entries))
         value["content"]={"application/problem+json":{"schema":variants[0] if len(variants)==1 else {"oneOf":variants}}}
         if status==401:value["headers"]["WWW-Authenticate"]={"schema":{"const":"Bearer"}}
@@ -194,10 +193,6 @@ def document(contract: dict, wire: dict) -> dict:
     rust={(op["method"],op["path"]):op for op in contract["operations"]}
     endpoints={(endpoint.method,endpoint.path):endpoint for endpoint in ENDPOINTS}
     if endpoints.keys()!=rust.keys():raise ValueError(f"Rust/OpenAPI operation inventory drifted: {sorted(endpoints.keys() ^ rust.keys())}")
-    review_codes=set(contract["frameworkProblems"])
-    for key,endpoint in endpoints.items():
-        if endpoint.review:review_codes.update(rust[key]["problems"])
-    schemas.update(problem_schemas([catalog[code] for code in sorted(review_codes)],review=True))
     paths={}
     for key,endpoint in endpoints.items():
         op=rust[key]
@@ -215,7 +210,7 @@ def document(contract: dict, wire: dict) -> dict:
         if endpoint.idempotency:parameters.append(parameter("Idempotency-Key","header",{"type":"string","minLength":1,"maxLength":128,"pattern":"^[!-~]+$"},True,"Retain this exact key and request bytes for explicit recovery."))
         responses={str(status):response(endpoint.response if status in (200,201) else None) for status in op["successStatuses"]}
         codes=set(op["problems"])|set(contract["frameworkProblems"])
-        for status,value in problem_responses(codes,catalog,endpoint.review).items():
+        for status,value in problem_responses(codes,catalog).items():
             if status not in responses:responses[status]=value
         operation={"operationId":endpoint.operation_id,"summary":re.sub(r"([a-z])([A-Z])",r"\1 \2",endpoint.operation_id).capitalize(),"security":[] if endpoint.public else [{"bearerAuth":[]}],"parameters":parameters,"responses":responses}
         if endpoint.body:

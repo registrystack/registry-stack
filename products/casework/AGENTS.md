@@ -12,9 +12,8 @@ canonical examples, and product-local verification scripts. Read the workspace
 - Preserve the source-neutral boundary: the core and generic client do not
   depend on a source product, and BReg packages do not depend on Casework. Run
   `scripts/check_dependency_direction.py` after dependency changes.
-  Only `registry-caseworkctl` adopter tests may reach the Coordinator client
-  through the unified client facade. Normal and build dependencies retain the
-  independent product boundary; this exception permits no Coordinator runtime.
+  Rust adopter tests use the focused Casework client. Installed Node.js and
+  Python journeys exercise the unified language packages as separate consumers.
 - Use explicitly disposable PostgreSQL databases. Current review, activation,
   and assignment suites accept `CASEWORK_REVIEW_TEST_DATABASE_URL`,
   `CASEWORK_ACTIVATION_TEST_DATABASE_URL`, and

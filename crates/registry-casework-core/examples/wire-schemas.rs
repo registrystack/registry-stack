@@ -72,8 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ReviewClockRecomputeApplyRequest,
         ReviewStaffingQuery,
         DirectoryTargetsQuery,
-        AbsencesQuery,
-        ReviewPageQuery
+        AbsencesQuery
     );
     output!(
         ReviewRequestAccepted,

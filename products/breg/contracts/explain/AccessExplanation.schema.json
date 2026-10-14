@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha5.schema.json",
   "title": "AccessExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. The evaluation-rule strings are hand-authored constants and are pinned; `routes`, `recordTypes`, `actions`, and `rowReach` are passthroughs of compiled-model values and are declared opaque, except `routes.entries[].recordType`, which is pinned because consumers read it today. `claimContract` remains opaque except for its pinned `principalClaims`, and its success/error relationship with `claimContractError` is pinned. `consent` and `statisticalDatasets` are pinned in full: their structure exists only to be this payload.",
+  "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. Evaluation-rule strings are pinned. Record grants retain compiled authority with inspection-only explicit row boundaries and allowCount. Routes, actions and rowReach follow the compiled model, except pinned routes.entries[].recordType. claimContract remains opaque except principalClaims and its success/error relationship with claimContractError. Consent and statisticalDatasets are pinned in full.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -26,22 +26,38 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha5"
     },
     "kind": {
       "const": "BRegAccessExplanation"
     },
-    "scopeMatching": { "type": "string" },
-    "purposeMatching": { "type": "string" },
-    "rowMatching": { "type": "string" },
-    "profileSelection": { "type": "string" },
-    "relationshipMatching": { "type": "string" },
-    "missingClaims": { "type": "string" },
-    "evaluation": { "type": "string" },
+    "scopeMatching": {
+      "type": "string"
+    },
+    "purposeMatching": {
+      "type": "string"
+    },
+    "rowMatching": {
+      "type": "string"
+    },
+    "profileSelection": {
+      "type": "string"
+    },
+    "relationshipMatching": {
+      "type": "string"
+    },
+    "missingClaims": {
+      "type": "string"
+    },
+    "evaluation": {
+      "type": "string"
+    },
     "routes": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["entries"],
+      "required": [
+        "entries"
+      ],
       "properties": {
         "entries": {
           "type": "array",
@@ -50,9 +66,13 @@
             "description": "Passthrough of the compiled access-route inventory; only `recordType` is pinned. Other fields follow CompiledAccessEntry and are outside this contract version.",
             "x-registry-passthrough": "bregctl writes each compiled access-route entry as the engine holds it; only recordType is pinned, and its other members follow CompiledAccessEntry and are outside this contract version.",
             "additionalProperties": true,
-            "required": ["recordType"],
+            "required": [
+              "recordType"
+            ],
             "properties": {
-              "recordType": { "type": "string" }
+              "recordType": {
+                "type": "string"
+              }
             }
           }
         }
@@ -60,24 +80,95 @@
     },
     "recordTypes": {
       "type": "array",
-      "description": "Passthrough of the compiled model's per-entity access explanation; shape follows EntityAccessExplanation and is outside this contract version.",
-      "items": { "type": "object", "x-registry-passthrough": "bregctl writes each per-entity access explanation as the engine holds it; its shape follows EntityAccessExplanation and is outside this contract version." }
+      "description": "Per-Record type author inspection. Record grants explicitly report allowCount and render an empty compiled claim-bound row list as unrestricted. Other profile members follow the compiled AccessProfileSource.",
+      "items": {
+        "type": "object",
+        "x-registry-passthrough": "EntityAccessExplanation retains compiled authority with inspection-only explicit defaults on its profiles.",
+        "required": [
+          "profiles"
+        ],
+        "properties": {
+          "profiles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "rowBoundaries",
+                "allowCount"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "rowBoundaries": {
+                  "description": "Unrestricted means no claim-bound row restriction. Membership and consent boundaries, when present, still apply.",
+                  "oneOf": [
+                    {
+                      "const": "unrestricted"
+                    },
+                    {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "field",
+                          "claim",
+                          "operator"
+                        ],
+                        "properties": {
+                          "field": {
+                            "type": "string"
+                          },
+                          "claim": {
+                            "type": "string"
+                          },
+                          "operator": {
+                            "enum": [
+                              "equals",
+                              "in"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "allowCount": {
+                  "type": "boolean"
+                }
+              },
+              "x-registry-passthrough": "The inspector retains the compiled AccessProfileSource members unchanged except rowBoundaries and allowCount. Only those explicit defaults and the profile id are pinned here; other members follow the compiled contract."
+            }
+          }
+        }
+      }
     },
     "actions": {
       "type": "object",
-      "description": "Passthrough of the compiled action inventory; shape follows CompiledActionInventory and is outside this contract version.",
-      "x-registry-passthrough": "bregctl writes the compiled action inventory as the engine holds it; its shape follows CompiledActionInventory and is outside this contract version."
+      "description": "Action inventory with canonical author inspection definitions, routes and access entries.",
+      "x-registry-passthrough": "Actions use the same author inspector as ActionsExplanation, with exact fixed plans or function ceilings; routes and access follow the compiler."
     },
     "rowReach": {
       "type": "array",
       "description": "Passthrough of the compiled model's row-reach explanation; shape follows RowReachExplanation and is outside this contract version.",
-      "items": { "type": "object", "x-registry-passthrough": "bregctl writes each row-reach explanation as the engine holds it; its shape follows RowReachExplanation and is outside this contract version." }
+      "items": {
+        "type": "object",
+        "x-registry-passthrough": "bregctl writes each row-reach explanation as the engine holds it; its shape follows RowReachExplanation and is outside this contract version."
+      }
     },
     "claimContract": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Passthrough of the compiled authority inventory, or null when that inventory failed. `principalClaims` is pinned for exact contract inspection; every other member follows AuthorityInventory and remains outside this contract version. Casework provider pairing verifies a sealed purpose-bound context export and grants no BReg authority.",
       "x-registry-passthrough": "bregctl writes the compiled authority inventory as the engine holds it; only principalClaims is pinned, and its other members follow AuthorityInventory outside this contract version.",
-      "required": ["principalClaims"],
+      "required": [
+        "principalClaims"
+      ],
       "properties": {
         "principalClaims": {
           "type": "array",
@@ -90,7 +181,10 @@
       }
     },
     "claimContractError": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "The compiled authority inventory's failure, or null when the inventory was built. AuthorityInventoryError is a value-free enum serialized as one of these kebab-case strings; the vocabulary is pinned and grows only with an apiVersion bump.",
       "enum": [
         "principal-claim-missing",
@@ -387,7 +481,8 @@
           "dataset",
           "readLive",
           "publish",
-          "readReleases"
+          "readReleases",
+          "accessProfiles"
         ],
         "properties": {
           "dataset": {
@@ -411,6 +506,21 @@
             "items": {
               "type": "string"
             }
+          },
+          "accessProfiles": {
+            "type": "array",
+            "description": "Full authentication requirements for dataset grants, including profiles with no Record type grant.",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "default",
+                "principalClaim",
+                "requiredScopes",
+                "requiredPurposes"
+              ],
+              "x-registry-passthrough": "Dataset profile authority retained by the compiler; shape follows AccessProfileSource."
+            }
           }
         }
       }
@@ -420,18 +530,26 @@
     {
       "if": {
         "properties": {
-          "claimContract": { "type": "null" }
+          "claimContract": {
+            "type": "null"
+          }
         },
-        "required": ["claimContract"]
+        "required": [
+          "claimContract"
+        ]
       },
       "then": {
         "properties": {
-          "claimContractError": { "type": "string" }
+          "claimContractError": {
+            "type": "string"
+          }
         }
       },
       "else": {
         "properties": {
-          "claimContractError": { "type": "null" }
+          "claimContractError": {
+            "type": "null"
+          }
         }
       }
     }

@@ -67,7 +67,7 @@ fn invocation_and_mandatory_requirements_do_not_invent_row_grants() {
 #[test]
 fn membership_preserves_explicit_row_declarations_and_round_trips() {
     let boundaries = json!([{
-        "field":"organization", "membershipEntity":"membership",
+        "field":"organization", "membershipRecordType":"membership",
         "membershipKeyField":"organization", "principalField":"principal",
         "activeField":"active"
     }]);

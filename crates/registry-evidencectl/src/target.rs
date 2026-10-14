@@ -196,6 +196,9 @@ pub(crate) fn create_local_target(
     let project_root =
         fs::canonicalize(project_root).context("resolving local Evidence project")?;
     let project = read_project(&project_root)?;
+    // Identity claim names and task-grant trust are operator-owned, not ceilings.
+    // Refuse before creating directories or disposable signing material.
+    let authority_value = local_authority(&project, "local")?;
     let parent = if directory.exists() {
         let metadata = fs::symlink_metadata(directory)?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -248,7 +251,6 @@ pub(crate) fn create_local_target(
         authored::to_indented_yaml(&target_value)?.as_bytes(),
     )?
     .value;
-    let authority_value = local_authority(&project, &target)?;
     let authority_yaml = authored::to_indented_yaml(&authority_value)?;
     target::read_authority("authority.yaml", authority_yaml.as_bytes(), &project)?;
     let target_yaml = render_target(&target)?;
@@ -283,7 +285,7 @@ pub(crate) fn create_local_target(
     publish(staging, directory)
 }
 
-fn local_authority(project: &EvidenceProject, target: &EvidenceTarget) -> Result<Value> {
+fn local_authority(project: &EvidenceProject, target_id: &str) -> Result<Value> {
     let grants = project
         .assertion_definitions
         .iter()
@@ -303,6 +305,16 @@ fn local_authority(project: &EvidenceProject, target: &EvidenceTarget) -> Result
                 .value_origins
                 .first()
                 .context("a local grant needs a value-origin ceiling")?;
+            if *origin != project::ValueOrigin::Request {
+                let bindings = match origin {
+                    project::ValueOrigin::AuthenticatedContext => "valueClaims",
+                    project::ValueOrigin::AuthenticatedGrant => {
+                        "valueClaims, requesterClients and grantSourceIssuer"
+                    }
+                    project::ValueOrigin::Request => unreachable!(),
+                };
+                bail!("AssertionDefinition {id} selects {} values; its ceilings do not supply {bindings}. Author a target.yaml referencing an EvidenceTargetAuthority with those explicit bindings and use `evidencectl target new <directory> --settings <target.yaml>`", origin.as_str());
+            }
             let representation = definition
                 .representations
                 .first()
@@ -338,7 +350,7 @@ fn local_authority(project: &EvidenceProject, target: &EvidenceTarget) -> Result
     Ok(json!({
         "apiVersion": target::AUTHORITY_API_VERSION,
         "kind": target::AUTHORITY_KIND,
-        "target": target.id,
+        "target": target_id,
         "project": project.id,
         "accessProfiles": profiles
     }))
@@ -529,6 +541,157 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_targets_require_explicit_authenticated_value_bindings_before_writing() {
+        for (origin, bindings) in [
+            ("authenticated-context", "valueClaims"),
+            (
+                "authenticated-grant",
+                "requesterClients and grantSourceIssuer",
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let source =
+                include_str!("../../../products/evidence/examples/standalone/evidence.yaml");
+            let decoded = project::read_project("evidence.yaml", source.as_bytes()).unwrap();
+            let mut value = serde_json::to_value(decoded.value).unwrap();
+            value["apiVersion"] = json!(project::PROJECT_API_VERSION);
+            value["kind"] = json!(project::PROJECT_KIND);
+            for definition in value["assertionDefinitions"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+            {
+                // A later request origin must never silently downgrade the chosen origin.
+                definition["grantCeiling"]["valueOrigins"] = json!([origin, "request"]);
+            }
+            fs::write(
+                root.path().join("evidence.yaml"),
+                authored::to_indented_yaml(&value).unwrap(),
+            )
+            .unwrap();
+            let error =
+                create_local_target(root.path(), &root.path().join("targets/local"), json!({}))
+                    .unwrap_err()
+                    .to_string();
+            assert!(error.contains(origin), "{error}");
+            assert!(error.contains(bindings), "{error}");
+            assert!(error.contains("--settings <target.yaml>"), "{error}");
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn explicit_targets_preserve_complete_authenticated_origin_authority() {
+        let mut project = project::read_project(
+            "evidence.yaml",
+            include_bytes!("../../../products/evidence/examples/standalone/evidence.yaml"),
+        )
+        .unwrap()
+        .value;
+        let request_authority = local_authority(&project, "local").unwrap();
+        for origin in [
+            project::ValueOrigin::AuthenticatedContext,
+            project::ValueOrigin::AuthenticatedGrant,
+        ] {
+            for definition in project.assertion_definitions.values_mut() {
+                definition.grant_ceiling.value_origins =
+                    serde_json::from_value(json!([origin])).unwrap();
+            }
+            let mut authority = request_authority.clone();
+            for profile in authority["accessProfiles"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+            {
+                if origin == project::ValueOrigin::AuthenticatedGrant {
+                    profile["requesterClients"] = json!(["local-consumer"]);
+                    profile["grantSourceIssuer"] = json!("http://127.0.0.1:8081");
+                }
+                for grant in profile["grants"].as_array_mut().unwrap() {
+                    for subject in grant["subjects"].as_array_mut().unwrap() {
+                        subject["valueOrigin"] = json!(origin);
+                        let selector_id = subject["selectorProfile"]
+                            .as_str()
+                            .unwrap()
+                            .parse::<registry_platform_yaml::LocalId>()
+                            .unwrap();
+                        let selector = project.selector_profiles.get(&selector_id).unwrap();
+                        subject["valueClaims"] = json!(selector
+                            .fields
+                            .keys()
+                            .map(|field| (
+                                field.to_string(),
+                                json!(format!(
+                                    "subjects.{}.{}",
+                                    subject["role"].as_str().unwrap(),
+                                    field
+                                ))
+                            ))
+                            .collect::<serde_json::Map<String, Value>>());
+                    }
+                }
+            }
+            let root = tempfile::tempdir().unwrap();
+            let root_path = root.path().canonicalize().unwrap();
+            let input = root_path.join("input");
+            fs::create_dir(&input).unwrap();
+            let target_source =
+                include_bytes!("../../../products/evidence/examples/standalone/local-target.yaml");
+            fs::write(input.join("target.yaml"), target_source).unwrap();
+            let target = target::read_target("target.yaml", target_source)
+                .unwrap()
+                .value;
+            let authority_yaml = authored::to_indented_yaml(&authority).unwrap();
+            fs::write(input.join(&target.authority), &authority_yaml).unwrap();
+            let key = input.join(target.signer.public_jwk_file());
+            fs::create_dir_all(key.parent().unwrap()).unwrap();
+            let (_, public_key) =
+                crate::authoring::ensure_local_signing_public_jwk(&input).unwrap();
+            fs::write(key, &public_key).unwrap();
+            let output = root_path.join("copied");
+            copy_explicit_target(&input, &output).unwrap();
+            assert_eq!(
+                fs::read(output.join(target.signer.public_jwk_file())).unwrap(),
+                public_key
+            );
+            assert!(!output
+                .join(".generated/secrets/signing-p256-private-jwk")
+                .exists());
+            let copied = fs::read(output.join(&target.authority)).unwrap();
+            assert_eq!(copied, authority_yaml.as_bytes());
+            let decoded = target::read_authority("authority.yaml", &copied, &project).unwrap();
+            target::compile_authority(&decoded.value, &project).unwrap();
+        }
+    }
+
+    #[test]
+    fn local_request_grants_pass_the_owning_authority_reader() {
+        let project = project::read_project(
+            "evidence.yaml",
+            include_bytes!("../../../products/evidence/examples/standalone/evidence.yaml"),
+        )
+        .unwrap()
+        .value;
+        let authority = local_authority(&project, "local").unwrap();
+        let yaml = authored::to_indented_yaml(&authority).unwrap();
+        let decoded = target::read_authority("authority.yaml", yaml.as_bytes(), &project).unwrap();
+        target::compile_authority(&decoded.value, &project).unwrap();
+    }
+
+    #[test]
+    fn maintained_deployment_targets_use_the_normalized_reader() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/reference/deployment-targets/environments");
+        for environment in ["local", "staging", "production"] {
+            let path = root.join(environment).join("evidence/target.yaml");
+            let target = read_target(&path).unwrap();
+            assert_eq!(target.id.as_str(), environment);
+            assert_eq!(target.authority, "authority.yaml");
+            assert_eq!(target.project.as_str(), "example-evidence");
+        }
+    }
 
     #[test]
     fn target_relative_paths_reject_traversal() {

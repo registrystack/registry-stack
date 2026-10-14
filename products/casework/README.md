@@ -51,8 +51,12 @@ separate from the human Staff or Supervisor profile. Bootstrap a team serving
 the policy's queue through the authenticated Directory API before expecting
 reviewers to see work.
 
-The producer must submit the **exact compiled** `{id, version, digest}` policy
-binding. Read `data.policyBindings[]` from the checked project:
+The producer normally submits `policy: {"id":"decision"}`. Casework selects
+and freezes its current compiled policy at first acceptance. This delegates
+policy-version governance to the trusted Casework administrator. A producer
+that must approve every policy change instead submits the exact
+`{id, version, digest}` binding. Both pin fields are required together.
+For strict mode, read `data.policyBindings[]` from the checked project:
 
 ```sh
 caseworkctl --format json check ./casework
@@ -60,14 +64,18 @@ caseworkctl --format json check ./casework
 
 For a deployed service, the authenticated
 `GET /v1/review-policies/decision` returns a policy closure whose `identity`
-is the binding. The producer should use that identity, or the generated typed
+is the exact binding for strict mode. Use that identity, or the generated typed
 client, rather than inventing a digest. A request to
 `POST /v1/review-requests` carries `policy`, an immutable `subject` with
 `source`, `type`, `id`, `version`, and a real content `digest`, an opaque
 `requesterReference`, and `context: {"mode":"submitted","snapshot":{...}}`
 that validates against the pinned display schema. An optional qualified
 `initiator` supports reviewer exclusion. Send `Idempotency-Key`; a retry with
-the same key and body recovers the accepted request. The admitted producer
+the same key and original body recovers the accepted request before consulting
+current policy, even after policy updates. Acceptance, polling and results retain
+the concrete accepted policy; never fill that binding into the original selector
+or change its submission digest. New review work requires a new submission.
+Current producer authority and context compatibility remain required. The admitted producer
 identity, namespace, policy, subject binding, and submission digest govern
 later cancellation and result access.
 
@@ -110,8 +118,9 @@ caseworkctl check products/casework/examples/canonical-review \
   --against-breg-package /absolute/path/to/breg-package
 ```
 
-The offline check compares the export's contract, registry revision, and
-schema bytes with the Casework package. Set
+The offline check compares the export's exact source, action, context contract,
+and schema bytes with the Casework package. The registry revision is diagnostic
+metadata; unrelated package changes do not alter the accepted context binding. Set
 `runtime.yaml` `contextProviders.facility-registry` to the BReg URL,
 `statusProfile`, token endpoint, exact audience/resource/scopes, and status
 reader secret references. The status reader needs only the BReg

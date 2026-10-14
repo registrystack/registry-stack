@@ -5,7 +5,7 @@ Generated CRUD serves ordinary record maintenance; an Action groups configured
 writes without adding domain-specific server code. A Proposal Action uses the
 same plan model when application must happen later.
 
-The [facility project](examples/refactor/facility/README.md) is the complete
+The [facility project](examples/facility/README.md) is the complete
 multi-record example. `register-facility` creates a facility and its initial
 assignment in one transaction. Its `operator` reference is checked for current
 active status and jurisdiction. The authored `operator-editor` profile supplies
@@ -97,4 +97,4 @@ again. Refresh stale conditions only after reviewing current input and targets.
 
 See [Proposal configuration](proposals.md) for durable work,
 [metadata](metadata.md) for client selection, and the
-[standalone examples](examples/refactor/README.md) for focused runtime proofs.
+[standalone examples](examples/README.md) for focused runtime proofs.

@@ -146,7 +146,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 && profile.membership_boundaries.is_empty()
             {
                 findings.push(Diagnostic::finding("breg.access.profile-unrestricted-collection", format!("{path}.rowBoundaries"),
-                    "this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access"));
+                    "this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies"));
             }
             if entity.classification != Classification::Public
                 && profile.row_boundaries.is_empty()
@@ -523,7 +523,7 @@ pub struct AccessExplanation {
     pub routes: crate::model::CompiledAccessInventory,
     #[serde(rename = "recordTypes")]
     pub entities: Vec<EntityAccessExplanation>,
-    pub actions: CompiledActionInventory,
+    pub actions: serde_json::Value,
     pub row_reach: Vec<RowReachExplanation>,
     pub claim_contract: Option<crate::authority::AuthorityInventory>,
     pub claim_contract_error: Option<crate::authority::AuthorityInventoryError>,
@@ -540,6 +540,8 @@ pub struct AccessExplanation {
 #[serde(rename_all = "camelCase")]
 pub struct StatisticalDatasetAccessExplanation {
     pub dataset: String,
+    /// Authentication requirements for every dataset profile, including dataset-only readers.
+    pub access_profiles: Vec<AccessProfileSource>,
     /// Profiles that read live counts.
     pub read_live: Vec<String>,
     /// The profile that publishes releases; empty when the dataset has none.
@@ -647,8 +649,21 @@ pub struct EntityAccessExplanation {
     #[serde(rename = "recordType")]
     pub entity: String,
     pub classification: Classification,
+    /// Direct grants remain constrained by the Record type mutation policy.
+    pub mutation_policy: serde_json::Value,
     pub requirements: Option<AccessRequirementsSource>,
-    pub profiles: Vec<AccessProfileSource>,
+    pub profiles: Vec<serde_json::Value>,
+}
+
+/// Make effective defaults explicit only in author inspection. The compiled
+/// profile's serialization remains the package and runtime authority contract.
+fn inspect_record_profile(profile: &AccessProfileSource) -> serde_json::Value {
+    let mut value = serde_json::to_value(profile).expect("compiled access profile serializes");
+    if profile.row_boundaries.is_empty() {
+        value["rowBoundaries"] = serde_json::json!("unrestricted");
+    }
+    value["allowCount"] = serde_json::json!(profile.allow_count);
+    value
 }
 
 /// Configuration locations identify compiled permissions, not original file line numbers.
@@ -770,11 +785,16 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
             .map(|entity| EntityAccessExplanation {
                 entity: entity.id.clone(),
                 classification: entity.classification,
+                mutation_policy: crate::artifacts::render_mutation_policy(entity),
                 requirements: entity.access_requirements.clone(),
-                profiles: entity.access_profiles.values().cloned().collect(),
+                profiles: entity.access_profiles.values().map(inspect_record_profile).collect(),
             })
             .collect(),
-        actions: registry.actions().clone(),
+        actions: serde_json::json!({
+            "actions": registry.actions().actions.iter().map(crate::artifacts::inspect_action).collect::<Vec<_>>(),
+            "routes": registry.actions().routes,
+            "access": registry.actions().access,
+        }),
         row_reach: row_reach(registry.entities(), registry.actions()),
         claim_contract,
         claim_contract_error,
@@ -786,6 +806,7 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
                 let releases = dataset.releases.as_ref();
                 StatisticalDatasetAccessExplanation {
                     dataset: dataset.id.clone(),
+                    access_profiles: dataset.access_profiles.values().cloned().collect(),
                     read_live: dataset.live_profiles.iter().cloned().collect(),
                     publish: releases
                         .map(|releases| releases.publisher.clone())

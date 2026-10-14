@@ -337,6 +337,46 @@ fn compile_project(
     }
 }
 
+/// Compile the same authoring source as `check`, retaining its positioned
+/// diagnostics. Inspection does not validate unrelated dev clients or journeys.
+pub(super) fn compile_for_inspection(
+    project: &Path,
+    profile: ProfileArg,
+) -> Result<(CompiledRegistry, Vec<Diagnostic>), super::Refusal> {
+    let selected = canonicalize_project_path(project).map_err(|diagnostic| {
+        super::source_failure(
+            "explain",
+            diagnostic,
+            super::DiagnosticArtifact::RegistryProject,
+            super::SuggestedAction::CorrectAuthoringSource,
+        )
+    })?;
+    let mut outcome = Outcome::default();
+    match compile_project(&selected, profile, &mut outcome) {
+        Some(compiled) => Ok((compiled, outcome.report.into_diagnostics())),
+        None => Err(super::Refusal::Document(super::DocumentRefusal {
+            command: "explain",
+            subject: "the project",
+            report: outcome.report,
+        })),
+    }
+}
+
+/// Compiler findings from a command without source documents still use the
+/// shared diagnostic contract. `compile_for_inspection` additionally places them.
+pub(super) fn compiler_diagnostic(diagnostic: registry_breg::Diagnostic) -> Diagnostic {
+    let severity = severity_of(diagnostic.severity);
+    let mut result = Diagnostic::error(
+        diagnostic.code.clone(),
+        diagnostic.path,
+        diagnostic.message,
+        action_for(&diagnostic.code, severity),
+    );
+    result.severity = severity;
+    result.artifact = Some(PROJECT_ARTIFACT.to_owned());
+    result
+}
+
 /// A native pattern is checked offline for its structure and bounds only.
 fn unverified_patterns(compiled: &CompiledRegistry) -> Vec<registry_breg::Diagnostic> {
     compiled
@@ -1078,7 +1118,7 @@ fn resolve(root: &Node, steps: &[Step]) -> Resolved {
 fn names(item: &Node, key: Option<&str>, value: &str) -> bool {
     let text = |node: &Node| matches!(&node.value, NodeValue::String(text) if text.text == value);
     match (&item.value, key) {
-        (NodeValue::String(_), None | Some("value")) => text(item),
+        (NodeValue::String(_), None | Some("value" | "field")) => text(item),
         (NodeValue::Mapping(_), Some(key)) => item.get(key).is_some_and(|entry| text(&entry.value)),
         (NodeValue::Mapping(_), None) => NAMING_MEMBERS
             .iter()
@@ -1095,6 +1135,26 @@ mod tests {
         read_project_yaml("registry.yaml", text.as_bytes())
             .expect("the test project reads")
             .document
+    }
+
+    #[test]
+    fn named_filter_and_sort_fields_resolve_to_distinct_scalar_elements() {
+        let source = document(
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: test\n  version: 1.0.0\n  canonicalBaseIri: https://example.test\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: principal\n    requiredScopes: unrestricted\n    permissions:\n      records:\n        - recordType: record\n          operations: [list]\n          rowBoundaries: unrestricted\n          filterableFields: [name, category]\n          sortableFields: [name, category]\n",
+        );
+        for member in ["filterableFields", "sortableFields"] {
+            for (index, field) in ["name", "category"].iter().enumerate() {
+                let path = format!(
+                    "accessProfiles[id=reader].permissions.records[recordType=record].{member}[field={field}]"
+                );
+                let resolved = resolve(source.root(), &parse_steps(&path));
+                assert!(resolved.complete, "{path}");
+                assert_eq!(
+                    resolved.pointer,
+                    format!("/accessProfiles/0/permissions/records/0/{member}/{index}")
+                );
+            }
+        }
     }
 
     #[test]

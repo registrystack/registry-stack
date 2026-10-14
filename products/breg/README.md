@@ -5,7 +5,7 @@ REST surface are compiled from governed configuration. It is intended for
 institutional registries that need reliable writes, history, access control,
 and a safe way to evolve their schema without building a bespoke service.
 
-Start with the [standalone examples](examples/refactor/README.md) for the current
+Start with the [standalone examples](examples/README.md) for the current
 Record type, Action, and Proposal model and its runnable PostgreSQL journeys.
 The canonical projects include their local clients, journeys, and resumable scenarios.
 
@@ -87,8 +87,8 @@ For a retained local loop that needs no checkout, Python launcher, or shell
 script, [Native local BReg lifecycle](DEV.md) documents `bregctl dev` against
 installed binaries and Docker PostgreSQL.
 
-`bregctl init <destination>` writes the complete [minimal directory](examples/refactor/minimal/README.md).
-Use `--template facility-registry` for the complete [facility project](examples/refactor/facility/README.md).
+`bregctl init <destination>` writes the complete [minimal directory](examples/minimal/README.md).
+Use `--template facility-registry` for the complete [facility project](examples/facility/README.md).
 Both are ordinary authored projects with fixed scenarios. `bregctl examples list` describes a starter's scenarios without
 starting services or creating credentials, and `bregctl examples run
 <scenario> <project>` runs or resumes one against the project's ready local
@@ -321,7 +321,7 @@ it must add one resolving negative executable test in the same patch.
 The projects under `acceptance/` are authored configuration inputs for the same
 compiler and binary. The five baseline fixtures cover asset/site placement,
 business establishments, facility inspections, environmental facilities, and
-legal-entity registrations. The canonical [native projects](examples/refactor/README.md) exercise generated
+legal-entity registrations. The canonical [native projects](examples/README.md) exercise generated
 CRUD, immediate multi-record Actions, and reviewed or no-review Proposals. These are not generated output or implicit
 runtime models. The real-PostgreSQL pilot test executes the baseline fixtures,
 while the public-binary adopter workflow proves activation, authenticated

@@ -13,7 +13,7 @@ publish = false
 workspace = true
 
 [features]
-schema = ["dep:schemars", "registry-record/schema"]
+schema = ["dep:schemars", "registry-record/schema", "registry-review-protocol/schema"]
 
 [dependencies]
 async-trait.workspace = true
@@ -24,6 +24,7 @@ registry-platform-crypto.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
 registry-record.workspace = true
+registry-review-protocol.workspace = true
 reqwest.workspace = true
 schemars = { workspace = true, optional = true, features = ["uuid1"] }
 serde.workspace = true

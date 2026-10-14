@@ -6,6 +6,41 @@
         {
           "additionalProperties": false,
           "properties": {
+            "etagCapture": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "idempotencyKey": {
+              "type": "string"
+            },
+            "input": {
+              "default": {},
+              "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+              "type": "object",
+              "x-registry-foreign": "breg-http-api"
+            },
+            "proposalCapture": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "submissionCapture": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "transition": {
+              "$ref": "#/$defs/ProposalJourneyOperation"
+            },
+            "type": {
+              "const": "proposal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "transition"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "items": {
               "items": {
                 "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
@@ -482,6 +517,22 @@
     "LocalId": {
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "ProposalJourneyOperation": {
+      "enum": [
+        "start",
+        "get",
+        "edit",
+        "submit",
+        "revise",
+        "rebase",
+        "retry",
+        "cancel",
+        "apply",
+        "get-review-context",
+        "get-review-status"
+      ],
       "type": "string"
     },
     "StepSource": {

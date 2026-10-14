@@ -390,6 +390,7 @@ payload!(DevClient {
     id: String,
     profile: String,
     role: CaseworkRole,
+    subject: String,
     client_id_file: PathBuf,
     assertion_key_file: PathBuf
 });

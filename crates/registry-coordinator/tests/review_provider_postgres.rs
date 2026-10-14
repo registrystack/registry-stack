@@ -96,7 +96,8 @@ impl Harness {
         ReviewCreateRequest {
             policy: policy_binding(&self.definition.workflow, &self.definition.digest)
                 .unwrap()
-                .unwrap(),
+                .unwrap()
+                .into(),
             subject: SubjectBinding {
                 source: "registry-proposals".into(),
                 subject_type: "proposal".into(),
@@ -158,6 +159,20 @@ impl Harness {
             .unwrap();
         drop(client);
         task.await.unwrap();
+    }
+    async fn database_now(&self) -> chrono::DateTime<chrono::Utc> {
+        let (client, connection) = tokio_postgres::connect(&self.url, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        let task = tokio::spawn(async move { connection.await.unwrap() });
+        let now = client
+            .query_one("SELECT clock_timestamp()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        drop(client);
+        task.await.unwrap();
+        now
     }
     async fn cleanup(&self) {
         self.sql("DROP SCHEMA {schema} CASCADE").await;
@@ -341,7 +356,7 @@ async fn result_expiry_erases_payload_but_preserves_spent_admission_identity() {
     };
     assert_eq!(
         h.store
-            .retain_terminal(chrono::Utc::now(), 100, &operator)
+            .retain_terminal(h.database_now().await, 100, &operator)
             .await
             .unwrap(),
         0
@@ -357,12 +372,28 @@ async fn result_expiry_erases_payload_but_preserves_spent_admission_identity() {
     ));
     assert_eq!(
         h.store
-            .retain_terminal(chrono::Utc::now(), 100, &operator)
+            .retain_terminal(h.database_now().await, 100, &operator)
             .await
             .unwrap(),
         1
     );
-    assert_eq!(h.admit(request, "expiring").await, accepted);
+    // Erasure keeps the spent key, not enough content to reconstruct an
+    // acceptance from today's active policy. The old key cannot create work.
+    let erased = h
+        .store
+        .admit_review_owned(
+            &h.definition,
+            request,
+            &h.actor,
+            &h.producer,
+            "expiring",
+            &h.binding,
+            &h.runtime,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(erased.code, "payload-erased");
+    h.sql("DO $$ BEGIN IF (SELECT count(*) FROM {schema}.runs) <> 1 THEN RAISE EXCEPTION 'erased admission was recreated'; END IF; END $$").await;
     h.cancel_expired_after_restart(&accepted).await;
     assert!(matches!(
         h.store
@@ -533,7 +564,7 @@ async fn unexpired_review_custody_does_not_starve_later_eligible_retention() {
     assert_eq!(h.store.doctor().await.unwrap().terminal_payloads, 1);
     assert_eq!(
         h.store
-            .retain_terminal(chrono::Utc::now(), 1, &operator)
+            .retain_terminal(h.database_now().await, 1, &operator)
             .await
             .unwrap(),
         1
@@ -934,7 +965,7 @@ async fn erased_cancel_is_expired_on_the_real_router_without_parsing_foreign_bod
     assert_eq!(
         h.store
             .retain_terminal(
-                chrono::Utc::now(),
+                h.database_now().await,
                 100,
                 &Actor {
                     operator: true,
@@ -1042,7 +1073,7 @@ async fn erased_cancel_is_expired_on_the_real_router_without_parsing_foreign_bod
         assert!(problem["type"]
             .as_str()
             .unwrap()
-            .starts_with(registry_review_protocol::REVIEW_PROBLEM_TYPE_BASE));
+            .starts_with(registry_coordinator::problem::PROBLEM_TYPE_BASE));
         assert!(!problem.to_string().contains("malformed-private-canary"));
     }
     let response = client
@@ -1056,7 +1087,7 @@ async fn erased_cancel_is_expired_on_the_real_router_without_parsing_foreign_bod
         problem["type"],
         format!(
             "{}request/method-not-allowed",
-            registry_review_protocol::REVIEW_PROBLEM_TYPE_BASE
+            registry_coordinator::problem::PROBLEM_TYPE_BASE
         )
     );
     let response = client
@@ -1072,10 +1103,365 @@ async fn erased_cancel_is_expired_on_the_real_router_without_parsing_foreign_bod
         problem["type"],
         format!(
             "{}request/body-too-large",
-            registry_review_protocol::REVIEW_PROBLEM_TYPE_BASE
+            registry_coordinator::problem::PROBLEM_TYPE_BASE
         )
     );
     server.abort();
     let _ = server.await;
+    h.cleanup().await;
+}
+
+fn revised_policy(definition: &Definition, version: &str) -> Definition {
+    let mut snapshot: serde_json::Value =
+        serde_json::from_str(&definition.snapshot().unwrap()).unwrap();
+    snapshot["workflow"]["version"] = json!(version);
+    Definition::from_snapshot(&serde_json::to_string(&snapshot).unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn router_recovers_removed_policy_only_under_current_authority_and_exact_input() {
+    use registry_coordinator::{
+        access::{Action, Authenticator, ClientPolicy},
+        deployment,
+        http::{self, HttpState},
+        project,
+    };
+    use registry_platform_config::PackageConfig;
+    use registry_platform_httputil::FetchUrlPolicy;
+    use registry_platform_oidc::{
+        access_token_typ_set, JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
+    };
+    use registry_platform_testing::{TestAuthorizationServerBuilder, TestClient};
+    let issuer = TestAuthorizationServerBuilder::default()
+        .client(TestClient::new("breg-client"))
+        .start()
+        .await;
+    let mut h = Harness::new(86400).await;
+    h.actor.issuer = issuer.issuer();
+    let mut request = h.request();
+    request.policy = registry_review_protocol::PolicySelection::current(&h.definition.workflow.id);
+    // Seed the acceptance as the previous process did before its response was lost.
+    let accepted = h.admit(request.clone(), "removed-policy").await;
+    let root = tempfile::tempdir().unwrap();
+    let authored = root.path().join("other-workflow");
+    project::init(&authored, Some("other-workflow")).unwrap();
+    let package = root.path().join("package");
+    let digest = deployment::package(&authored, &package).unwrap();
+    let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/coordinator/examples/single-flow-runtime.yaml")
+        .canonicalize()
+        .unwrap();
+    let mut runtime = RuntimeConfig::load(&template).unwrap();
+    runtime.deployment.as_mut().unwrap().packages = vec![PackageConfig {
+        root: package,
+        expected_digest: Some(digest),
+    }];
+    let workflows =
+        Arc::new(deployment::load_workflows(runtime.deployment.as_ref().unwrap()).unwrap());
+    assert!(workflows.get(&request.policy.id).is_none());
+    let other_workflow = workflows.iter().next().unwrap().0.clone();
+    let verifier = TokenVerifierConfig::access_token_profile(
+        issuer.issuer(),
+        vec!["urn:coordinator:review-test".into()],
+        vec![jsonwebtoken::Algorithm::EdDSA],
+        access_token_typ_set("at+jwt"),
+    )
+    .with_scope_claim("scope")
+    .with_allowed_clients(vec!["breg-client".into()]);
+    let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+        issuer.jwks_uri(),
+        JwksFetcherConfig::defaults(),
+        FetchUrlPolicy::dev(),
+    ));
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let token = issuer.issue_access_token(
+        "breg-client",
+        "breg-client",
+        "urn:coordinator:review-test",
+        "review:request",
+        chrono::Utc::now().timestamp() + 300,
+    );
+    for mode in [
+        "current",
+        "workflow-revoked",
+        "source-revoked",
+        "profile-revoked",
+        "action-revoked",
+        "recovery-only",
+    ] {
+        let mut policy = ClientPolicy {
+            review_producer: Some(h.producer.clone()),
+            required_scopes: vec!["review:request".into()],
+            workflows: vec![request.policy.id.clone(), other_workflow.clone()],
+            actions: vec![Action::ReviewCreate],
+            operator: false,
+        };
+        match mode {
+            "workflow-revoked" => policy.workflows = vec![other_workflow.clone()],
+            "source-revoked" => {
+                policy.review_producer.as_mut().unwrap().sources = vec!["other-source".into()]
+            }
+            "profile-revoked" => {
+                policy.review_producer.as_mut().unwrap().profile = "other-profile".into()
+            }
+            "action-revoked" => policy.actions = vec![Action::ReviewRead],
+            _ => {}
+        }
+        let state = HttpState {
+            store: h.store.clone(),
+            runtime: Arc::new(runtime.clone()),
+            workflows: workflows.clone(),
+            authenticator: Arc::new(Authenticator::new(
+                verifier.clone(),
+                keys.clone(),
+                [("breg-client".into(), policy)].into(),
+                false,
+            )),
+            adapters: Arc::new(Pure(h.binding.clone())),
+            recovery_only: mode == "recovery-only",
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/v1/review-requests",
+            listener.local_addr().unwrap()
+        );
+        let server =
+            tokio::spawn(async move { axum::serve(listener, http::router(state)).await.unwrap() });
+        let response = client
+            .post(&url)
+            .bearer_auth(&token)
+            .header(
+                registry_review_protocol::REVIEW_PROFILE_HEADER,
+                &h.producer.profile,
+            )
+            .header("idempotency-key", "removed-policy")
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        if mode == "current" {
+            assert_eq!(response.status(), 201);
+            let recovered: registry_review_protocol::ReviewRequestAccepted =
+                response.json().await.unwrap();
+            assert_eq!(recovered, accepted);
+            let mut changed = request.clone();
+            changed.requester_reference = "different-request".into();
+            let mut fresh = request.clone();
+            fresh.subject.id = Uuid::new_v4().to_string();
+            let mut served = fresh.clone();
+            served.policy = registry_review_protocol::PolicySelection::current(&other_workflow);
+            for (input, key, status, code) in [
+                (changed, "removed-policy", 409, "idempotency.key-reused"),
+                (fresh, "fresh-removed-policy", 404, "workflow.not-served"),
+                (served, "fresh-served-policy", 409, "deployment.refused"),
+            ] {
+                let response = client
+                    .post(&url)
+                    .bearer_auth(&token)
+                    .header(
+                        registry_review_protocol::REVIEW_PROFILE_HEADER,
+                        &h.producer.profile,
+                    )
+                    .header("idempotency-key", key)
+                    .json(&input)
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), status, "{key}");
+                let problem: serde_json::Value = response.json().await.unwrap();
+                assert_eq!(problem["code"], code, "{key}");
+            }
+        } else {
+            assert_eq!(
+                response.status(),
+                if mode == "recovery-only" { 409 } else { 403 },
+                "{mode}"
+            );
+            let problem: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(
+                problem["code"],
+                if mode == "recovery-only" {
+                    "admission.recovery-only"
+                } else {
+                    "operation.not-authorized"
+                },
+                "{mode}"
+            );
+        }
+        server.abort();
+        let _ = server.await;
+    }
+    let (db, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let connection = tokio::spawn(async move { connection.await.unwrap() });
+    let count: i64 = db
+        .query_one(&format!("SELECT count(*) FROM {}.runs", h.namespace), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1, "recovery and refused work create no Run");
+    drop(db);
+    connection.await.unwrap();
+    h.cleanup().await;
+}
+
+#[tokio::test]
+async fn current_selection_recovers_original_acceptance_after_policy_change_and_restart() {
+    use registry_review_protocol::PolicySelection;
+    let h = Harness::new(86400).await;
+    let mut request = h.request();
+    request.policy = PolicySelection::current(&h.definition.workflow.id);
+    let accepted = h.admit(request.clone(), "current-selection").await;
+    let changed = revised_policy(&h.definition, "2");
+    let restarted = Store::connect(&h.url, &h.namespace).await.unwrap();
+    // The caller could have lost the first response. It still sends the original selector.
+    let recovered = restarted
+        .admit_review_owned(
+            &changed,
+            request.clone(),
+            &h.actor,
+            &h.producer,
+            "current-selection",
+            &h.binding,
+            &h.runtime,
+        )
+        .await
+        .unwrap();
+    assert_eq!(recovered, accepted);
+    assert_eq!(accepted.policy.version, "1");
+    let view = restarted
+        .review_request_owned(accepted.request_id, &h.actor, &h.producer, &h.workflows())
+        .await
+        .unwrap();
+    assert_eq!(view.policy, accepted.policy);
+    let mut repinned = request.clone();
+    repinned.policy = accepted.policy.clone().into();
+    assert_eq!(
+        restarted
+            .admit_review_owned(
+                &changed,
+                repinned.clone(),
+                &h.actor,
+                &h.producer,
+                "current-selection",
+                &h.binding,
+                &h.runtime
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "start-conflict",
+        "an accepted binding cannot replace the original selector in recovery"
+    );
+    assert_eq!(
+        restarted
+            .admit_review_owned(
+                &changed,
+                repinned,
+                &h.actor,
+                &h.producer,
+                "strict-new-selection",
+                &h.binding,
+                &h.runtime
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "workflow-revision-mismatch"
+    );
+    let mut next_request = request.clone();
+    next_request.subject.id = Uuid::new_v4().to_string();
+    let next = restarted
+        .admit_review_owned(
+            &changed,
+            next_request,
+            &h.actor,
+            &h.producer,
+            "next-selection",
+            &h.binding,
+            &h.runtime,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        next.policy,
+        policy_binding(&changed.workflow, &changed.digest)
+            .unwrap()
+            .unwrap()
+    );
+    let revoked = ReviewProducer {
+        sources: vec!["different-source".into()],
+        ..h.producer.clone()
+    };
+    assert_eq!(
+        restarted
+            .admit_review_owned(
+                &changed,
+                request.clone(),
+                &h.actor,
+                &revoked,
+                "current-selection",
+                &h.binding,
+                &h.runtime
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "access.denied"
+    );
+    // Accepted work executes its retained definition even when future admissions select v2.
+    while h.worker().tick().await.unwrap() {}
+    let result = h.result(accepted.request_id).await;
+    assert_eq!(result.policy, accepted.policy);
+    assert_eq!(result.submission_digest, accepted.submission_digest);
+    h.cleanup().await;
+}
+
+#[tokio::test]
+async fn concurrent_current_selection_keeps_one_concrete_policy_and_run() {
+    use registry_review_protocol::PolicySelection;
+    let h = Harness::new(86400).await;
+    let mut request = h.request();
+    request.policy = PolicySelection::current(&h.definition.workflow.id);
+    let changed = revised_policy(&h.definition, "2");
+    let (first, second) = tokio::join!(
+        h.store.admit_review_owned(
+            &h.definition,
+            request.clone(),
+            &h.actor,
+            &h.producer,
+            "policy-race",
+            &h.binding,
+            &h.runtime
+        ),
+        h.store.admit_review_owned(
+            &changed,
+            request.clone(),
+            &h.actor,
+            &h.producer,
+            "policy-race",
+            &h.binding,
+            &h.runtime
+        ),
+    );
+    let first = first.unwrap();
+    assert_eq!(first, second.unwrap());
+    assert!(request.policy.matches(&first.policy));
+    assert!(["1", "2"].contains(&first.policy.version.as_str()));
+    let (db, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let connection = tokio::spawn(async move { connection.await.unwrap() });
+    let count: i64 = db
+        .query_one(&format!("SELECT count(*) FROM {}.runs", h.namespace), &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1);
+    drop(db);
+    connection.await.unwrap();
+    h.worker().tick().await.unwrap();
+    assert_eq!(h.result(first.request_id).await.policy, first.policy);
     h.cleanup().await;
 }

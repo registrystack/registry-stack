@@ -320,7 +320,10 @@ for (const page of [
 ]) {
   test(`${page} mentions the citizen services only inside DocsetProduct regions`, () => {
     const source = readFileSync(resolve(docsRoot, page), 'utf8');
-    assert.match(source, /<DocsetProduct product="registry-breg-services">/);
+    // Native authoring no longer describes the separately deployed citizen services.
+    if (page !== 'configure/breg.mdx') {
+      assert.match(source, /<DocsetProduct product="registry-breg-services">/);
+    }
     const resolved = resolveDocsetProductRegions(source, withoutBregServices);
     assert.doesNotMatch(resolved, /DocsetProduct/, 'every region must be closed and unnested');
     assert.doesNotMatch(resolved, /breg-mcp|breg-review|first-citizen-mcp|citizen chat assistant|citizen gateway|review page/i);

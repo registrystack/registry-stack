@@ -68,6 +68,8 @@ async fn ingestion_run_journey_commits_resumes_and_replays_without_duplicates() 
         .await;
     assert_eq!(created.status(), StatusCode::CREATED);
     let run = body_json(created).await["run"].clone();
+    assert_eq!(run["recordType"], "widget");
+    assert!(run.get("entityId").is_none());
     assert_eq!(run["status"], "open");
     assert_eq!(run["complete"], false);
     assert_eq!(run["nextChunkIndex"], 0);

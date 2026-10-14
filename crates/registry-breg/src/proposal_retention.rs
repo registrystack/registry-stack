@@ -640,7 +640,7 @@ impl ProposalRetentionOperatorService {
             serde_json::json!({
                 "kind":"attachmentCleanup", "phase":phase, "outcome":outcome,
                 "packageRevision":self.expected.activation_id,
-                "actor":"breg:request-retention-operator", "correlation":correlation,
+                "actor":"breg:proposal-retention-operator", "correlation":correlation,
             })
         };
         // A cleanup that ends before its response writes the unfinished
@@ -1514,7 +1514,7 @@ fn retention_request_entry(
             "phase": "attempt",
             "method": "DELETE",
             "operationId": RETENTION_OPERATION_ID,
-            "entityId": scope.action_id,
+            "actionId": scope.action_id,
             "requestId": correlation.request_id().to_string(),
             "traceId": correlation.trace_id().as_str(),
             "packageRevision": expected.activation_id,
@@ -1563,8 +1563,8 @@ fn retention_terminal_entry(
             outcome: TerminalAuditOutcome::Committed,
             method: HttpMethod::Delete,
             operation_id: RETENTION_OPERATION_ID.to_owned(),
-            entity_id: Some(scope.action_id.to_owned()),
-            action_id: None,
+            entity_id: None,
+            action_id: Some(scope.action_id.to_owned()),
             package_revision: expected.activation_id.clone(),
             selected_access_profile: "operator".to_owned(),
             purpose_present: false,

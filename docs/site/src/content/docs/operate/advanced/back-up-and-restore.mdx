@@ -223,9 +223,9 @@ A logical restore returns review requests, task holdings, private drafts, decisi
 1. Stop the original Casework service and preserve the surviving database when available. Restore the dump into a separately provisioned database with the matching schema ownership and runtime grants. Keep the exact package, `identity.databaseId`, runtime configuration, and audit key the backup used. Use your PostgreSQL client's protected connection configuration, with no password in the command line. A custom-format backup and logical restore use:
 
    ```sh
-   pg_dump --format=custom --file=casework.dump <source-database>
+   pg_dump --format=custom --file=casework.dump '<source-database>'
    pg_restore --exit-on-error --single-transaction \
-     --dbname=<fresh-database> casework.dump
+     --dbname='<fresh-database>' casework.dump
    ```
 
    Protect the dump as review data. Restore only into the new isolated database; never target the surviving operator database to test the procedure. A failed restore is a failed recovery, not permission to continue serving a partial copy.

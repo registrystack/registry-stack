@@ -26,7 +26,6 @@ pub const REVIEW_COMPLETIONS_PATH: &str = "/v1/review-completions";
 pub const REVIEW_PROFILE_HEADER: &str = "registry-review-profile";
 pub const REVIEW_VALIDATION_PATH_HEADER: &str = "registry-review-validation-path";
 pub const REVIEW_VALIDATION_REASON_HEADER: &str = "registry-review-validation-reason";
-pub const REVIEW_PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-review/";
 
 #[must_use]
 pub fn review_request_path(request_id: Uuid) -> String {
@@ -152,6 +151,81 @@ pub struct PolicyBinding {
     pub digest: ContentDigest,
 }
 
+/// Select the trusted provider's current policy, or require one exact binding.
+/// The selector stays in the submission identity; acceptance records the concrete binding.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", schemars(extend("dependentRequired" = {"version": ["digest"], "digest": ["version"]})))]
+pub struct PolicySelection {
+    pub id: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_pin",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    pub version: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_pin",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "ContentDigest"))]
+    pub digest: Option<ContentDigest>,
+}
+
+fn deserialize_present_pin<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+impl PolicySelection {
+    pub fn current(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            version: None,
+            digest: None,
+        }
+    }
+
+    pub fn check(&self) -> Result<(), ProtocolError> {
+        check_bounded_text(&self.id, MAXIMUM_IDENTIFIER_BYTES)?;
+        match (&self.version, &self.digest) {
+            (None, None) => Ok(()),
+            (Some(version), Some(_)) => check_bounded_text(version, MAXIMUM_IDENTIFIER_BYTES),
+            _ => Err(ProtocolError::PolicySelection),
+        }
+    }
+
+    /// An omitted pin delegates version selection, never policy identity or authority.
+    pub fn matches(&self, binding: &PolicyBinding) -> bool {
+        self.check().is_ok()
+            && binding.check().is_ok()
+            && self.id == binding.id
+            && match (&self.version, &self.digest) {
+                (None, None) => true,
+                (Some(version), Some(digest)) => {
+                    version == &binding.version && digest == &binding.digest
+                }
+                _ => false,
+            }
+    }
+}
+
+impl From<PolicyBinding> for PolicySelection {
+    fn from(binding: PolicyBinding) -> Self {
+        Self {
+            id: binding.id,
+            version: Some(binding.version),
+            digest: Some(binding.digest),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -226,7 +300,7 @@ impl ReviewContext {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCreateRequest {
-    pub policy: PolicyBinding,
+    pub policy: PolicySelection,
     pub subject: SubjectBinding,
     pub requester_reference: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -550,6 +624,8 @@ fn check_bounded_text(value: &str, maximum: usize) -> Result<(), ProtocolError> 
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum ProtocolError {
+    #[error("a policy pin requires both version and digest")]
+    PolicySelection,
     #[error("digest must be a lowercase sha256 digest")]
     Digest,
     #[error("a required text value is empty, unbounded, or contains controls")]
@@ -593,7 +669,8 @@ mod tests {
                 id: "registry-correction".to_owned(),
                 version: "1".to_owned(),
                 digest: ContentDigest::for_bytes(b"policy"),
-            },
+            }
+            .into(),
             subject: SubjectBinding {
                 source: "registry".to_owned(),
                 subject_type: "change-request".to_owned(),
@@ -612,6 +689,50 @@ mod tests {
                 },
             },
             result_constraints: None,
+        }
+    }
+
+    #[test]
+    fn policy_selection_freezes_the_original_selector_in_submission_identity() {
+        let strict = request();
+        let binding = PolicyBinding {
+            id: strict.policy.id.clone(),
+            version: "1".into(),
+            digest: ContentDigest::for_bytes(b"policy"),
+        };
+        let mut current = strict.clone();
+        current.policy = PolicySelection::current(&binding.id);
+        assert_eq!(
+            serde_json::to_value(&current.policy).unwrap(),
+            json!({"id": binding.id})
+        );
+        assert!(current.check().is_ok());
+        assert!(current.policy.matches(&binding));
+        assert_ne!(
+            submission_digest("producer", "registry", &current).unwrap(),
+            submission_digest("producer", "registry", &strict).unwrap()
+        );
+        let mut changed = binding.clone();
+        changed.version = "2".into();
+        changed.digest = ContentDigest::for_bytes(b"next policy");
+        assert!(current.policy.matches(&changed));
+        assert!(!strict.policy.matches(&changed));
+        changed.id = "another-policy".into();
+        assert!(!current.policy.matches(&changed));
+        for partial in [
+            json!({"id": "review", "version": "1"}),
+            json!({"id": "review", "digest": binding.digest}),
+        ] {
+            let partial: PolicySelection = serde_json::from_value(partial).unwrap();
+            assert_eq!(partial.check(), Err(ProtocolError::PolicySelection));
+            assert!(!partial.matches(&binding));
+        }
+        for invalid in [
+            json!({"id":"review","version":null}),
+            json!({"id":"review","digest":null}),
+            json!({"id":"review","pin":{}}),
+        ] {
+            assert!(serde_json::from_value::<PolicySelection>(invalid).is_err());
         }
     }
 
@@ -1012,7 +1133,7 @@ mod policy_binding_tests {
         assert!(serde_json::from_value::<ReviewCreateRequest>(retired).is_err());
         let original = submission_digest("producer", "source", &request).unwrap();
         let mut changed = request;
-        changed.policy.version = "2".into();
+        changed.policy.version = Some("2".into());
         assert_ne!(
             original,
             submission_digest("producer", "source", &changed).unwrap()

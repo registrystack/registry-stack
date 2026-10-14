@@ -58,7 +58,7 @@ const SOURCE: &str = "facility-registry";
 )]
 fn canonical_source() -> Value {
     serde_norway::from_str(include_str!(
-        "../../../products/breg/examples/refactor/facility/registry.yaml"
+        "../../../products/breg/examples/facility/registry.yaml"
     ))
     .unwrap()
 }
@@ -81,7 +81,7 @@ fn compile(source: &Value) -> registry_breg::CompiledRegistry {
             module: None,
             path: "plans/correct-address.rhai".into(),
             bytes: include_bytes!(
-                "../../../products/breg/examples/refactor/facility/plans/correct-address.rhai"
+                "../../../products/breg/examples/facility/plans/correct-address.rhai"
             )
             .to_vec(),
         }],
@@ -106,7 +106,6 @@ fn export(registry: &registry_breg::CompiledRegistry) -> BregContextExport {
         api_version: DESCRIPTION_API_VERSION.into(),
         kind: DESCRIPTION_KIND.into(),
         source_namespace: SOURCE.into(),
-        registry_revision: registry.revision().into(),
         action_id: "correct-address".into(),
         context_id: schema["x-registry-review-context"]["contextId"]
             .as_str()

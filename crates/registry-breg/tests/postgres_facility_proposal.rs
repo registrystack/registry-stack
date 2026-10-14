@@ -50,7 +50,7 @@ fn key(value: &str) -> BRegIdempotencyKey {
 }
 
 fn registry() -> registry_breg::CompiledRegistry {
-    let yaml = include_str!("../../../products/breg/examples/refactor/facility/registry.yaml");
+    let yaml = include_str!("../../../products/breg/examples/facility/registry.yaml");
     let correction = yaml
         .split("  - id: correct-address\n")
         .nth(1)
@@ -72,7 +72,7 @@ fn registry() -> registry_breg::CompiledRegistry {
             module: None,
             path: "plans/correct-address.rhai".into(),
             bytes: include_bytes!(
-                "../../../products/breg/examples/refactor/facility/plans/correct-address.rhai"
+                "../../../products/breg/examples/facility/plans/correct-address.rhai"
             )
             .to_vec(),
         }],
@@ -328,10 +328,20 @@ async fn approve(
         unreachable!()
     };
     assert_eq!(create.policy, *policy);
+    // This conforming substitute selects a concrete current policy at admission.
+    // The frozen create request still contains the author's original selector.
+    let selected_policy = registry_review_client::PolicyBinding {
+        id: policy.id.clone(),
+        version: policy.version.clone().unwrap_or_else(|| "1".into()),
+        digest: policy.digest.clone().unwrap_or_else(|| {
+            registry_review_client::ContentDigest::for_bytes(b"synthetic-facility-policy-v1")
+        }),
+    };
+    assert!(policy.matches(&selected_policy));
     let accepted = registry_review_client::ReviewRequestAccepted {
         request_id: Uuid::new_v4(),
         subject: create.subject,
-        policy: serde_json::from_value(serde_json::to_value(policy).unwrap()).unwrap(),
+        policy: selected_policy,
         submission_digest: expected,
     };
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$3
@@ -533,7 +543,9 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
     assert_eq!(
         context["context"]["fields"],
         json!({"facilityId":facility,"currentAddressLine":"1 Main Road",
-        "proposedAddressLine":"3 Civic Road","proposedCity":"Chiang Mai","proposedPostalCode":"50000"})
+        "changes":[{"recordId":facility,"operation":"patch",
+            "before":{"address-line":"1 Main Road","city":"Bangkok","postal-code":"10200"},
+            "after":{"address-line":"3 Civic Road","city":"Chiang Mai","postal-code":"50000"}}]})
     );
     let metadata = reviewer
         .client

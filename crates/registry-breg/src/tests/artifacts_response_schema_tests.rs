@@ -428,7 +428,7 @@ fn route_path<'a>(
 
 fn compiled_registry() -> CompiledRegistry {
     let project = crate::contract::parse_project_yaml(include_bytes!(
-        "../../../../products/breg/examples/refactor/minimal/registry.yaml"
+        "../../../../products/breg/examples/minimal/registry.yaml"
     ))
     .unwrap();
     compile_project(&project, &[], CompileProfile::Authoring).unwrap()

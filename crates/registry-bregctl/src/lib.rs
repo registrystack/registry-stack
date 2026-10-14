@@ -47,6 +47,7 @@ mod consent_module;
 mod data_lifecycle;
 mod dev;
 mod doctor;
+mod explain_report;
 mod field_encryption;
 mod field_encryption_lifecycle;
 mod file_check;
@@ -1461,8 +1462,7 @@ struct SuccessReport {
     /// Named only by `check --package`: the digest of the package it verified.
     #[serde(skip_serializing_if = "Option::is_none")]
     package_digest: Option<String>,
-    #[serde(serialize_with = "serialize_findings")]
-    findings: Vec<ToolDiagnostic>,
+    findings: Vec<registry_platform_yaml::Diagnostic>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     artifacts: Vec<ArtifactReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2443,12 +2443,17 @@ where
             }
         },
         Command::Generate(args) => generate_requested(&args),
-        Command::Explain(args) => explain(
-            args.subject,
-            args.project.as_deref(),
-            profile(args.production),
-            args.scenario.as_deref(),
-        ),
+        Command::Explain(args) => {
+            return match explain(
+                args.subject,
+                args.project.as_deref(),
+                profile(args.production),
+                args.scenario.as_deref(),
+            ) {
+                Ok(report) => write_success(&report, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
+            };
+        }
         Command::Diff(args) => {
             return match diff(&args) {
                 Ok(report) => write_diff_success(&report, format, stdout, stderr),
@@ -5585,7 +5590,7 @@ fn schema_test_runtime_setup_failure(
         SchemaTestRuntimeSetupError::ReviewAuthorities => (
             "test.review-authorities.activation-failed",
             "reviewAuthorities",
-            "bind every review authority the candidate's change requests name, and check the referenced credentials, before retrying",
+            "bind every review authority the candidate's Proposal Actions name, and check the referenced credentials, before retrying",
         ),
         SchemaTestRuntimeSetupError::WasmExecution => (
             "test.wasm-execution.setup-failed",
@@ -7430,11 +7435,11 @@ struct ExplainFormat {
 }
 
 const MODEL_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/model-explanation/v1alpha4",
+    api_version: "id.registrystack.org/formats/breg/model-explanation/v1alpha5",
     kind: "BRegModelExplanation",
 };
 const ACCESS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha4",
+    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha5",
     kind: "BRegAccessExplanation",
 };
 const ACCESS_PREVIEW: ExplainFormat = ExplainFormat {
@@ -7442,15 +7447,15 @@ const ACCESS_PREVIEW: ExplainFormat = ExplainFormat {
     kind: "BRegAccessPreview",
 };
 const ROUTES_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/routes-explanation/v1alpha4",
+    api_version: "id.registrystack.org/formats/breg/routes-explanation/v1alpha5",
     kind: "BRegRoutesExplanation",
 };
 const QUERIES_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/queries-explanation/v1alpha4",
+    api_version: "id.registrystack.org/formats/breg/queries-explanation/v1alpha5",
     kind: "BRegQueriesExplanation",
 };
 const ACTIONS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/actions-explanation/v1alpha4",
+    api_version: "id.registrystack.org/formats/breg/actions-explanation/v1alpha5",
     kind: "BRegActionsExplanation",
 };
 const PROPOSALS_EXPLANATION: ExplainFormat = ExplainFormat {
@@ -7458,11 +7463,11 @@ const PROPOSALS_EXPLANATION: ExplainFormat = ExplainFormat {
     kind: "BRegProposalsExplanation",
 };
 const EVENTS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/events-explanation/v1alpha4",
+    api_version: "id.registrystack.org/formats/breg/events-explanation/v1alpha5",
     kind: "BRegEventsExplanation",
 };
 const LIFECYCLE_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4",
+    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha5",
     kind: "BRegLifecycleExplanation",
 };
 
@@ -7483,7 +7488,7 @@ fn explain_format(subject: ExplainSubject, scenario_present: bool) -> &'static E
 }
 
 /// Insert the envelope's `apiVersion` and `kind` into an already-serialized explanation,
-/// the same post-serialization technique `explain_routes` uses for its `kind` discriminator
+/// the same post-serialization technique `explain_routes` uses for its `type` discriminator
 /// (see the comment there for why). The envelope cannot live on `SuccessReport` itself:
 /// `explanation` is a slot `project lock` and `generate` also populate, and it cannot live
 /// on a `registry-breg` type either: `AccessExplanation` and `AccessPreview` are runtime
@@ -7599,9 +7604,9 @@ fn explain(
     project_path: Option<&Path>,
     profile: ProfileArg,
     scenario_path: Option<&Path>,
-) -> Result<SuccessReport, FailureReport> {
+) -> Result<SuccessReport, Refusal> {
     if matches!(subject, ExplainSubject::Lifecycle) {
-        return explain_lifecycle(profile, project_path, scenario_path);
+        return explain_lifecycle(profile, project_path, scenario_path).map_err(Into::into);
     }
     let project_path = project_path.ok_or_else(|| {
         explain_usage_error(diagnostic(
@@ -7610,14 +7615,15 @@ fn explain(
             "name the registry project directory to explain; only explain lifecycle runs without one",
         ))
     })?;
-    let compiled = compile(project_path, profile, "explain")?;
+    let (compiled, findings) = check::compile_for_inspection(project_path, profile)?;
     let scenario = if let Some(path) = scenario_path {
         if !matches!(subject, ExplainSubject::Access) {
             return Err(explain_usage_error(diagnostic(
                 "access.scenario.subject",
                 "scenario",
                 "--scenario is available only for explain access",
-            )));
+            ))
+            .into());
         }
         let bytes =
             read_bounded_source_file(path, "access.scenario.unavailable", "scenario", 65_536)
@@ -7648,7 +7654,7 @@ fn explain(
         ExplainSubject::Queries => explain_queries(&compiled),
         ExplainSubject::Actions => explain_actions(&compiled),
         ExplainSubject::Proposals => explain_proposals(&compiled),
-        ExplainSubject::Events => serde_json::to_value(compiled.event_deliveries()),
+        ExplainSubject::Events => Ok(registry_breg::artifacts::inspect_events(&compiled)),
         ExplainSubject::Lifecycle => unreachable!("lifecycle returns before the project compiles"),
     }
     .map_err(|_| explain_render_error())?;
@@ -7660,7 +7666,7 @@ fn explain(
         revision: Some(compiled.revision().to_owned()),
         registry_revision: None,
         package_digest: None,
-        findings: compiler_findings(&compiled),
+        findings,
         artifacts: Vec::new(),
         explanation: Some(explanation),
         next_steps: Vec::new(),
@@ -7729,18 +7735,12 @@ fn compile_captured_project(
     )
 }
 
-fn compiler_findings(compiled: &CompiledRegistry) -> Vec<ToolDiagnostic> {
+fn compiler_findings(compiled: &CompiledRegistry) -> Vec<registry_platform_yaml::Diagnostic> {
     compiled
         .findings()
         .iter()
         .cloned()
-        .map(|diagnostic| {
-            tool_diagnostic(
-                diagnostic,
-                DiagnosticArtifact::RegistryProject,
-                SuggestedAction::ReviewAuthoringFinding,
-            )
-        })
+        .map(check::compiler_diagnostic)
         .collect()
 }
 
@@ -8897,8 +8897,8 @@ fn explain_proposals(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
 }
 
 fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
-    // The explain payload mixes two record shapes in one array (record routes and
-    // action routes, which share no field), so every record needs an explicit `type`
+    // The explain payload mixes independently owned route shapes in one array,
+    // so every route needs an explicit `type`
     // discriminator. It is distinct from `actionRouteKind`, which says which action
     // route a record is rather than which shape it has. The field lives here, not on
     // `CompiledRoute` or `CompiledActionRoute`: both are `deny_unknown_fields` types
@@ -8920,15 +8920,59 @@ fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
             "type": "action",
             "id": route.id,
             "actionId": route.action_id,
-            "actionRouteKind": action_route_kind_wire_name(route.kind),
+            "actionRouteKind": if route.operation == registry_breg::contract::Operation::Start { "start" } else { action_route_kind_wire_name(route.kind) },
             "method": route.method,
             "path": route.path,
             "operation": operation_wire_name(route.operation),
             "accessProfiles": route.access_profiles,
             "defaultAccessProfile": route.default_access_profile,
-            "requiresIdempotencyKey": route.kind == registry_breg::model::ActionRouteKind::Invoke,
+            "requiresIdempotencyKey": matches!(route.kind, registry_breg::model::ActionRouteKind::Invoke),
         })
     }));
+    // Proposal instance and statistics operations already have one owning
+    // contract in the generated OpenAPI. Project that inventory instead of
+    // maintaining another route table here.
+    let openapi: Value = serde_json::from_slice(
+        &compiled
+            .artifacts()
+            .get("generated/openapi.json")
+            .expect("the compiler emits its OpenAPI contract")
+            .bytes,
+    )?;
+    for (path, item) in openapi["paths"]
+        .as_object()
+        .expect("OpenAPI paths are an object")
+    {
+        for (method, operation) in item.as_object().expect("OpenAPI path items are objects") {
+            let Some(id) = operation.get("operationId").and_then(Value::as_str) else {
+                continue;
+            };
+            let route_type = if id.starts_with("proposals.") {
+                "proposal"
+            } else if id.starts_with("statistics.") {
+                "statistics"
+            } else {
+                continue;
+            };
+            let parameters = operation["parameters"]
+                .as_array()
+                .expect("governed operations carry parameters");
+            let requires_header = |name: &str| {
+                parameters.iter().any(|parameter| {
+                    parameter["in"] == "header"
+                        && parameter["name"] == name
+                        && parameter["required"] == true
+                })
+            };
+            routes.push(json!({
+                "type": route_type, "id": id, "method": method.to_uppercase(), "path": path,
+                "accessProfiles": operation["x-registry-accessProfiles"],
+                "defaultAccessProfile": operation["x-registry-defaultAccessProfile"],
+                "requiresIdempotencyKey": requires_header("Idempotency-Key"),
+                "requiresIfMatch": requires_header("If-Match"),
+            }));
+        }
+    }
     Ok(value)
 }
 
@@ -10016,11 +10060,14 @@ fn render_success(report: &SuccessReport, stdout: &mut dyn Write) -> io::Result<
         }
     }
 
-    lines.findings(&report_findings(&report.findings));
+    if !report.findings.is_empty() {
+        let diagnostics = registry_platform_yaml::Report::new(report.findings.clone());
+        lines.blank();
+        lines.raw(diagnostics.render_human().trim_end_matches('\n').to_owned());
+    }
 
-    // An access explanation and a consent module explanation are each folded
-    // into the report. Any other explanation is a document this renderer has
-    // no shape for, so it keeps its own JSON rendering below the report.
+    // Known explanation documents share the report renderer; unknown extensions
+    // retain their complete JSON representation.
     let mut document = None;
     if let Some(explanation) = &report.explanation {
         if explanation.get("scopeMatching").is_some()
@@ -10029,7 +10076,7 @@ fn render_success(report: &SuccessReport, stdout: &mut dyn Write) -> io::Result<
             push_access_explanation(explanation, &mut lines);
         } else if explanation.get("requireConsent").is_some() {
             push_consent_module_explanation(explanation, &mut lines);
-        } else {
+        } else if !explain_report::render(explanation, &mut lines) {
             document = Some(serde_json::to_string_pretty(explanation).map_err(io::Error::other)?);
         }
     }
@@ -10230,6 +10277,7 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
                     entity["classification"].as_str().unwrap_or("")
                 ),
             );
+            explain_report::mutation_policy(&entity["mutationPolicy"], 2, lines);
             if !entity["requirements"].is_null() {
                 lines.pairs_at(
                     2,
@@ -10244,6 +10292,8 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
             }
         }
     }
+    explain_report::actions(&explanation["actions"]["actions"], lines);
+    explain_report::datasets(&explanation["statisticalDatasets"], lines);
     if explanation["consent"].is_object() {
         lines.blank();
         push_consent_explanation(&explanation["consent"], lines);

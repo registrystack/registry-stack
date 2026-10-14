@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Symbols and references over the normalized EvidenceProject and its named assets.
 use crate::{
-    evidence::diagnostics::reader_diagnostics,
+    evidence::{
+        diagnostics::reader_diagnostics,
+        layout::{document_role, DocumentRole},
+    },
     refs::{
         bounded_message, EvidenceKind, IndexedDiagnostic, IndexedLocation, IndexedProject,
         IndexedReference, IndexedSymbol, SymbolKey, SymbolQuery, DOCUMENT_START,
@@ -57,6 +60,13 @@ pub(crate) fn build_index(
         return builder.index;
     }
     let value = &document.value;
+    if let Some(id) = value.get_scalar("id") {
+        builder.define(
+            SymbolKey::global(EvidenceKind::Project, &id.value),
+            &path,
+            id,
+        );
+    }
     for profile in mapping(value.get("selectorProfiles")) {
         builder.define(
             SymbolKey::global(EvidenceKind::SelectorProfile, &profile.key.value),
@@ -169,17 +179,61 @@ pub(crate) fn build_index(
         }
     }
     for (authority_path, authority_document) in parsed {
-        if authority_path == &path {
+        let Some(role @ (DocumentRole::Target | DocumentRole::Authority)) = authority_path
+            .strip_prefix(root)
+            .ok()
+            .and_then(document_role)
+        else {
+            continue;
+        };
+        let Some(authority_source) = documents.get(authority_path) else {
+            continue;
+        };
+        if role == DocumentRole::Target {
+            match target::read_target(
+                &authority_path.to_string_lossy(),
+                authority_source.as_bytes(),
+            ) {
+                Ok(decoded) => builder.index.diagnostics.extend(reader_diagnostics(
+                    authority_path,
+                    authority_source,
+                    authority_document,
+                    decoded.document.warnings().diagnostics(),
+                )),
+                Err(report) => builder.index.diagnostics.extend(reader_diagnostics(
+                    authority_path,
+                    authority_source,
+                    authority_document,
+                    report.diagnostics(),
+                )),
+            }
+            if authority_document
+                .value
+                .get_scalar("kind")
+                .is_some_and(|kind| kind.value == target::TARGET_KIND)
+            {
+                if let Some(id) = authority_document.value.get_scalar("id") {
+                    builder.define(
+                        SymbolKey::global(EvidenceKind::Target, &id.value),
+                        authority_path,
+                        id,
+                    );
+                }
+                if let Some(at) = authority_document.value.get_scalar("authority") {
+                    builder.authority_file(authority_path, at);
+                }
+                if let Some(at) = authority_document.value.get_scalar("project") {
+                    builder.reference(
+                        SymbolQuery::global(EvidenceKind::Project, &at.value),
+                        authority_path,
+                        at,
+                        None,
+                    );
+                }
+            }
             continue;
         }
-        if authority_document
-            .value
-            .get_scalar("kind")
-            .is_none_or(|kind| kind.value != target::AUTHORITY_KIND)
-        {
-            continue;
-        }
-        if let (Ok(project), Some(authority_source)) = (&read, documents.get(authority_path)) {
+        if let Ok(project) = &read {
             match target::read_authority(
                 &authority_path.to_string_lossy(),
                 authority_source.as_bytes(),
@@ -197,6 +251,26 @@ pub(crate) fn build_index(
                     authority_document,
                     report.diagnostics(),
                 )),
+            }
+        }
+        if authority_document
+            .value
+            .get_scalar("kind")
+            .is_none_or(|kind| kind.value != target::AUTHORITY_KIND)
+        {
+            continue;
+        }
+        for (field, kind) in [
+            ("target", EvidenceKind::Target),
+            ("project", EvidenceKind::Project),
+        ] {
+            if let Some(at) = authority_document.value.get_scalar(field) {
+                builder.reference(
+                    SymbolQuery::global(kind, &at.value),
+                    authority_path,
+                    at,
+                    None,
+                );
             }
         }
         for profile in mapping(authority_document.value.get("accessProfiles")) {
@@ -468,6 +542,48 @@ impl Builder<'_> {
             }
             _ => {}
         }
+    }
+    fn authority_file(&mut self, path: &Path, at: &YamlScalar) {
+        if !project::valid_asset(&at.value, "yaml") {
+            return;
+        }
+        let Some(parent) = path.parent() else {
+            return;
+        };
+        let target = parent.join(&at.value);
+        let Ok(relative) = target.strip_prefix(self.root) else {
+            return;
+        };
+        let name = relative.to_string_lossy().into_owned();
+        let key = SymbolKey::global(EvidenceKind::AuthorityFile, &name);
+        if crate::safety::is_safe_authored_file(self.root, &target) {
+            if self.files.insert(key.clone()) {
+                self.define(
+                    key,
+                    &target,
+                    &YamlScalar {
+                        value: name.clone(),
+                        range: DOCUMENT_START,
+                        style: ScalarStyle::Plain,
+                    },
+                );
+            }
+        } else {
+            self.index.diagnostics.push(IndexedDiagnostic {
+                path: path.to_path_buf(),
+                range: at.range,
+                severity: DiagnosticSeverity::ERROR,
+                code: Some("evidence.project.missing-authority-file".to_owned()),
+                message: "The named target authority must be a readable regular project file"
+                    .to_owned(),
+            });
+        }
+        self.reference(
+            SymbolQuery::global(EvidenceKind::AuthorityFile, name),
+            path,
+            at,
+            None,
+        );
     }
     fn file(&mut self, path: &Path, at: &YamlScalar, kind: EvidenceKind, extension: &str) {
         let valid_asset = project::valid_asset(&at.value, extension)

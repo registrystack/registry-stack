@@ -5,9 +5,9 @@ work before application. BReg owns its draft, frozen plan, target authorization,
 guards, local application, receipt, audit, and retention. An external review
 authority owns review policy and decisions.
 
-The [facility project](examples/refactor/facility/README.md) declares generated
+The [facility project](examples/facility/README.md) declares generated
 CRUD for its directory, immediate registration of a facility and assignment,
-and two Proposal Actions. The [smaller reviewed change](examples/refactor/reviewed-change/registry.yaml)
+and two Proposal Actions. The [smaller reviewed change](examples/reviewed-change/registry.yaml)
 uses a fixed plan when a named function is unnecessary.
 
 ## Declare review and application
@@ -25,17 +25,25 @@ execution:
       source: facility-registry
       policy:
         id: facility-address-review
-        version: '1'
-        digest: 'sha256:<independently compiled policy digest>'
     retention:
       mode: retain
 ```
 
-Supply the exact immutable policy binding from your authority. The canonical
-example uses a synthetic pin for a conforming test authority, not a deployment
-policy. Omitting `application` selects automatic application by the built-in
-executor. It receives only the compiled system grant for the exact frozen
-submission, never an author or reviewer identity or a general record grant.
+An ID-only policy delegates selection to the configured authority. The provider
+atomically records its current concrete policy with the first acceptance. Later
+retries use the original request and recover that acceptance, even if the active
+policy has changed. BReg keeps the original selection in the frozen Proposal;
+it stores the accepted policy separately and requires results to match it exactly.
+
+This default lets the provider administrator evolve review policy for future
+submissions, including choosing human review or automatic assessment. When the
+registry owner must separately approve policy changes, supply both `version`
+and `digest` alongside `id` from the provider's exported policy binding. Partial
+pins are refused. An unavailable or mismatched policy never grants approval.
+
+Omitting `application` selects automatic application by the built-in executor.
+It receives only the compiled system grant for the exact frozen submission,
+never an author or reviewer identity or a general record grant.
 
 For explicit application by a separately authorized caller:
 
@@ -65,7 +73,7 @@ result. The facility function uses `registry.action-plan/v1` and `ctx.inputs`.
 
 `commitGuards` checks frozen input and current target requirements at commit.
 Submission freezes exact inputs, effects, target revisions, Action revision,
-review binding, and effect digest. Apply never reruns a changed planner to alter
+review selection, and effect digest. Apply never reruns a changed planner to alter
 approved work. Any required Evidence is resolved under explicit operator trust
 and the Action's declared capability; commit-time Evidence cannot change effects.
 
@@ -118,6 +126,37 @@ recovery hint, and currently authorized links. Observation cannot establish
 whether an earlier uncertain Start or Submit executed; recover that command
 with its original prepared request and idempotency key.
 
+### Show the frozen changes
+
+Declare the fields a reviewer may inspect in the Action's `reviewContext`:
+
+```yaml
+reviewContext:
+  id: facility-address-context
+  fields:
+    changes:
+      type: changes
+      recordType: facility
+      fields: [address-line, city, postal-code]
+```
+
+Each matching frozen effect exposes its record ID, operation, and selected
+`before` and `after` values. A create has `before: null`. These values come from
+the stored submission, including computed changes. Inspection does not run the
+planner or apply the change. A `type: record` mapping selects a current field
+through a reference input; a `type: input` mapping selects one frozen input.
+
+The reviewer needs `get-review-context` with the named `readableContextFields`.
+Record and changes projections also require an ordinary Record Get grant for
+the selected fields. Current row boundaries, membership, and consent govern
+those values, including subjects named by frozen before and after snapshots.
+Use a separate profile for lifecycle operations when Record reads require consent.
+
+Input projections disclose only the selected caller-supplied frozen inputs under
+the context grant. They do not infer Record permissions or consent from an input's
+meaning. Use a record or changes projection when displaying authoritative Record
+values that must follow those current disclosure rules.
+
 ## Retain or erase detail
 
 `retain` keeps detail. `operator-erase` makes eligible terminal detail removable
@@ -134,6 +173,6 @@ dry-run result before running `proposal-retention erase` with the same binding.
 History, Proposal detail, Evidence uses, attachments, and idempotency responses
 have separate retention scopes. Expired or erased receipts cannot execute again.
 
-The [standalone examples](examples/refactor/README.md) identify the focused
+The [standalone examples](examples/README.md) identify the focused
 PostgreSQL proofs. The [metadata contract](metadata.md) owns client discovery
 and promoted-link validation.

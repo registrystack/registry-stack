@@ -145,6 +145,7 @@ fn review_wire_examples() -> Result<BTreeMap<&'static str, Vec<Value>>, serde_js
         (
             "ReviewCreateRequest",
             typed_examples::<ReviewCreateRequest>(vec![
+                json!({"policy":{"id":"address-review"},"subject":subject,"requesterReference":"case-current-policy","context":{"mode":"submitted","snapshot":{"field":"value"}}}),
                 json!({"policy":policy,"subject":subject,"requesterReference":"case-1","context":{"mode":"submitted","snapshot":{"field":"value"}},"resultConstraints":{"type":"object"}}),
                 json!({"policy":policy,"subject":subject,"requesterReference":"case-1","initiator":{"issuer":"https://issuer.example","subject":"person-1"},"context":{"mode":"current-source","binding":{"reference":"source-ref"}}}),
             ])?,

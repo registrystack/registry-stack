@@ -1,4 +1,4 @@
-from typing import NotRequired, Generic, Literal, TypeAlias, TypedDict, TypeVar
+from typing import Never, NotRequired, Generic, Literal, TypeAlias, TypedDict, TypeVar
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
@@ -425,6 +425,12 @@ class PolicyBinding(TypedDict):
     id: str
     version: str
     digest: ContentDigest
+class PolicyIdSelection(TypedDict):
+    id: str
+    version: NotRequired[Never]
+    digest: NotRequired[Never]
+# A strict selector supplies the complete version/digest pair.
+PolicySelection: TypeAlias = PolicyIdSelection | PolicyBinding
 class HumanIdentity(TypedDict):
     issuer: str
     subject: str
@@ -442,7 +448,7 @@ class _ReviewCreateRequestOptional(TypedDict, total=False):
     resultConstraints: JsonObject | None
 
 class ReviewCreateRequest(_ReviewCreateRequestOptional):
-    policy: PolicyBinding
+    policy: PolicySelection
     subject: SubjectBinding
     requesterReference: str
     context: ReviewContext
@@ -797,8 +803,8 @@ class CaseworkClient:
     def own_review_decisions(self, token: str, profile: str, query: OwnReviewDecisionQuery | None = None, source_profile: str | None = None) -> Complete[OwnReviewDecisionPage]: ...
     def review_task(self, token: str, profile: str, task_id: Uuid, source_profile: str | None = None) -> Complete[ReviewTask]: ...
     def review_task_context(self, token: str, profile: str, task_id: Uuid, source_profile: str | None = None) -> Complete[ReviewTaskContext]: ...
-    def preview_review_task_templates(self, token: str, profile: str, task_id: Uuid, source_profile: str | None = None) -> Complete[TaskTemplatePreviews]: ...
-    def list_review_task_grants(self, token: str, profile: str, task_id: Uuid, source_profile: str | None = None) -> Complete[TaskGrantList]: ...
+    def preview_review_task_templates(self, token: str, profile: str, task_id: Uuid, *, source_profile: str | None = None) -> Complete[TaskTemplatePreviews]: ...
+    def list_review_task_grants(self, token: str, profile: str, task_id: Uuid, *, source_profile: str | None = None) -> Complete[TaskGrantList]: ...
     def approve_review_task_grant(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, approval: TaskApprovalRequest, source_profile: str | None = None) -> Complete[TaskGrantView]: ...
     def revoke_review_task_grant(self, token: str, profile: str, task_id: Uuid, grant_id: str) -> Complete[TaskGrantRevocation]: ...
     def claim_review_task(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, source_profile: str | None = None) -> Complete[ReviewTask]: ...

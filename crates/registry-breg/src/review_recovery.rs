@@ -7,7 +7,8 @@
 //! result poller names such a review `result-unknown-to-authority`, and the
 //! poll budget eventually fails it. These operations give the operator two
 //! supported answers: resubmit the exact retained review request, or close a
-//! review that will never be answered. A built-in automatic application may
+//! review that will never be answered. An existing acceptance is immutable; a
+//! provider that lost it requires a new Proposal submission. A built-in automatic application may
 //! retry a transient dependency failure within its original attempt budget,
 //! preserving its frozen submission and idempotency key.
 //! Each runs in one verified migration transaction under the Registry lock,
@@ -165,7 +166,8 @@ impl ReviewRecoveryOperatorService {
     /// Accepted only for a review the authority answered as unknown, or one
     /// BReg failed for waiting too long, while its proposal still awaits
     /// review. The authority that still holds the request replays its
-    /// original acceptance; one that lost it accepts the request anew.
+    /// original acceptance. If a previously accepted request was lost, a new
+    /// acceptance is refused and the author must submit a new Proposal version.
     pub async fn resubmit(&self, scope: ReviewRecoveryScope<'_>) -> Result<ReviewRecovery> {
         self.recover(scope, Operation::Resubmit).await
     }
@@ -220,7 +222,7 @@ impl ReviewRecoveryOperatorService {
             "packageRevision":package_revision,
             "actor":"breg:review-recovery-operator",
             "correlation":correlation,
-            "entityId":scope.action_id, "recordReference":record_reference,
+            "actionId":scope.action_id, "recordReference":record_reference,
             "submissionVersion":scope.submission_version,
         });
         let mut attempt = audit
@@ -354,13 +356,14 @@ impl ReviewRecoveryOperatorService {
         let (next_state, next_code) = match operation {
             Operation::RetryApplication => unreachable!("application recovery handled above"),
             Operation::Resubmit => {
-                // The binding and every budget return to a fresh submission;
-                // the idempotency key and request stay exactly as retained, and
-                // the recovery window restarts at its configured length.
+                // Retry the original request and key while preserving any concrete
+                // acceptance. A different acceptance cannot replace it even
+                // when the original selector delegated policy selection.
+                // Only the delivery budgets and recovery window restart.
                 transaction
                     .execute(
                         "UPDATE registry_internal.registry_proposal_review_submissions
-                            SET state='pending',accepted_binding=NULL,attempt_count=0,
+                            SET state='pending',attempt_count=0,
                                 result_poll_attempts=0,lease_until=NULL,last_error_code=NULL,
                                 next_attempt_at=transaction_timestamp(),
                                 next_result_poll_at=transaction_timestamp(),

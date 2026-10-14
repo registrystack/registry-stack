@@ -2387,3 +2387,115 @@ async fn ambiguous_route_without_default_requires_explicit_selection_without_gue
         .await;
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+fn dataset_only_claim_source() -> Value {
+    json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"dataset-auth", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://statistics.example.test"},
+        "datasets":[{"id":"records"}],
+        "recordTypes":[{"id":"record", "primaryDataset":"records", "route":"records", "mutationMode":"mutable",
+            "fields":[{"id":"active", "type":"boolean", "required":true, "classification":"internal"},
+                {"id":"occurred-on", "type":"date", "required":true, "classification":"internal"}]}],
+        "accessProfiles":[
+            {"id":"publisher", "principalClaim":"registry_principal", "requiredScopes":"unrestricted", "permissions":{
+                "records":[{"recordType":"record", "operations":["list"], "rowBoundaries":"unrestricted", "allowCount":true,
+                    "readableFields":["active","occurred-on"], "filterableFields":["active","occurred-on"]}],
+                "datasets":[{"dataset":"counts", "operations":["publish","read-releases"]}]}},
+            {"id":"reader", "principalClaim":"registry_principal", "requiredScopes":["statistics:read"], "requiredPurposes":[PURPOSE],
+                "permissions":{"datasets":[{"dataset":"counts", "operations":["read-releases"]}]}}
+        ],
+        "statisticalDatasets":[{"id":"counts", "unit":"record", "population":"active eq true",
+            "period":{"type":"flow", "field":"occurred-on", "granularity":"month", "firstPeriod":"2025-01"},
+            "dimensions":["active"], "disclosure":{"minimumCount":5,"roundingBase":5}}]
+    })
+}
+
+#[tokio::test]
+async fn dataset_only_principal_and_purpose_mapping_are_checked_at_construction() {
+    let idp = MockIdp::start().await;
+    let source = dataset_only_claim_source();
+    let registry = compile_action_claim_source(&source);
+    assert!(!registry.entities()["record"]
+        .access_profiles
+        .contains_key("reader"));
+    let inventory = registry_breg::authority::authority_inventory(&registry).unwrap();
+    assert!(inventory.purpose_required);
+    assert_eq!(
+        inventory.principal_claims,
+        BTreeSet::from(["registry_principal".to_owned()])
+    );
+    assert_eq!(
+        authenticator(
+            &registry,
+            &idp,
+            AuthorityClaimConfig::new("registry_principal", None)
+        )
+        .unwrap_err(),
+        AuthenticationConfigError::PurposeClaimMismatch
+    );
+    authenticator(&registry, &idp, authority_claims())
+        .expect("a purpose used only by the dataset reader is mapped");
+
+    let mut mismatched = source.clone();
+    mismatched["accessProfiles"][1]["principalClaim"] = json!("dataset_principal");
+    let mismatched = compile_action_claim_source(&mismatched);
+    assert_eq!(
+        authenticator(&mismatched, &idp, authority_claims()).unwrap_err(),
+        AuthenticationConfigError::PrincipalClaimMismatch
+    );
+
+    let mut without_purpose = source;
+    without_purpose["accessProfiles"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredPurposes");
+    let without_purpose = compile_action_claim_source(&without_purpose);
+    authenticator(
+        &without_purpose,
+        &idp,
+        AuthorityClaimConfig::new("registry_principal", None),
+    )
+    .expect("no purpose mapping is required when no grant requires one");
+    assert_eq!(
+        authenticator(&without_purpose, &idp, authority_claims()).unwrap_err(),
+        AuthenticationConfigError::PurposeClaimMismatch
+    );
+    assert!(
+        registry.statistical_datasets()["counts"].access_profiles["reader"]
+            .operations
+            .is_empty(),
+        "authority inventory creates no Record type operations for a dataset-only reader"
+    );
+}
+
+#[tokio::test]
+async fn dataset_only_client_and_standing_actor_mapping_are_checked_at_construction() {
+    let idp = MockIdp::start().await;
+    let mut source = dataset_only_claim_source();
+    source["accessProfiles"][1]["actorKind"] = json!("service");
+    source["accessProfiles"][1]["requesterClients"] = json!(["statistics-reader-client"]);
+    let registry = compile_action_claim_source(&source);
+    let mut verifier = verifier_config(&idp);
+    verifier.allowed_clients = vec!["another-client".into()];
+    assert_eq!(
+        authenticator_with_verifier(&registry, &idp, verifier.clone(), authority_claims())
+            .unwrap_err(),
+        AuthenticationConfigError::NamedClientNotListed
+    );
+    verifier.allowed_clients = vec!["statistics-reader-client".into()];
+    authenticator_with_verifier(&registry, &idp, verifier.clone(), authority_claims())
+        .expect("the dataset-only service client is explicitly admitted");
+
+    source["accessProfiles"][1]["actorKind"] = json!("agent");
+    let registry = compile_action_claim_source(&source);
+    assert_eq!(
+        authenticator_with_verifier(&registry, &idp, verifier.clone(), authority_claims())
+            .unwrap_err(),
+        AuthenticationConfigError::InvalidClaimMapping
+    );
+    let claims = authority_claims().with_contextual_claims(
+        ClaimNames::default(),
+        BTreeMap::from([("statistics-reader-client".into(), ACTOR_ID.into())]),
+    );
+    authenticator_with_verifier(&registry, &idp, verifier, claims)
+        .expect("the dataset-only standing agent has an exact trusted actor mapping");
+}

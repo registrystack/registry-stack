@@ -13,7 +13,7 @@ fn root() -> PathBuf {
         .unwrap()
 }
 fn fixture() -> PathBuf {
-    root().join("products/breg/examples/refactor/facility")
+    root().join("products/breg/examples/facility")
 }
 fn run(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
@@ -41,7 +41,7 @@ fn explain(subject: &str) -> Value {
 }
 fn compiled() -> registry_breg::CompiledRegistry {
     let source = parse_project_yaml(include_bytes!(
-        "../../../products/breg/examples/refactor/facility/registry.yaml"
+        "../../../products/breg/examples/facility/registry.yaml"
     ))
     .unwrap();
     compile_project_with_assets(
@@ -51,7 +51,7 @@ fn compiled() -> registry_breg::CompiledRegistry {
             module: None,
             path: "plans/correct-address.rhai".into(),
             bytes: include_bytes!(
-                "../../../products/breg/examples/refactor/facility/plans/correct-address.rhai"
+                "../../../products/breg/examples/facility/plans/correct-address.rhai"
             )
             .to_vec(),
         }],
@@ -259,4 +259,205 @@ fn record_schema_and_openapi_use_breg_terms_without_respelling_registry_record_v
     let problem = &openapi["components"]["schemas"]["Problem"]["properties"];
     assert!(problem["recordType"].is_object());
     assert!(problem.get("entityId").is_none());
+}
+
+#[test]
+fn explain_findings_share_checks_source_locations_and_json_pointers() {
+    let project = fixture();
+    let output = run(&["--format", "json", "check", project.to_str().unwrap()]);
+    assert!(output.status.success(), "{output:?}");
+    let checked: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let expected = checked["diagnostics"].as_array().unwrap();
+    assert!(
+        !expected.is_empty(),
+        "facility must exercise a real compiler finding"
+    );
+    for subject in [
+        "model",
+        "access",
+        "routes",
+        "queries",
+        "actions",
+        "proposals",
+        "events",
+    ] {
+        let report = explain(subject);
+        assert_eq!(report["findings"], checked["diagnostics"], "{subject}");
+        for finding in report["findings"].as_array().unwrap() {
+            assert!(finding["path"].as_str().unwrap().starts_with('/'));
+            assert!(finding["source"]["file"]
+                .as_str()
+                .unwrap()
+                .ends_with("registry.yaml"));
+            assert!(finding["source"]["line"].as_u64().unwrap() > 0);
+            assert!(finding["source"]["column"].as_u64().unwrap() > 0);
+            assert_eq!(finding["severity"], "warning");
+        }
+    }
+}
+
+fn assert_service_routes_match_openapi(project: &Path, registry: &registry_breg::CompiledRegistry) {
+    let output = run(&[
+        "--format",
+        "json",
+        "explain",
+        "routes",
+        project.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let openapi: Value = serde_json::from_slice(
+        &registry
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let mut expected = std::collections::BTreeMap::new();
+    for (path, item) in openapi["paths"].as_object().unwrap() {
+        for (method, operation) in item.as_object().unwrap() {
+            let Some(id) = operation["operationId"].as_str() else {
+                continue;
+            };
+            if id.starts_with("proposals.") || id.starts_with("statistics.") {
+                expected.insert(id.to_owned(), (method.to_uppercase(), path.clone()));
+            }
+        }
+    }
+    assert!(!expected.is_empty());
+    let mut actual = std::collections::BTreeMap::new();
+    for route in report["explanation"]["routes"].as_array().unwrap() {
+        if matches!(route["type"].as_str(), Some("proposal" | "statistics")) {
+            let path = route["path"].as_str().unwrap();
+            let method = route["method"].as_str().unwrap();
+            let operation = &openapi["paths"][path][method.to_lowercase()];
+            assert_eq!(
+                route["accessProfiles"],
+                operation["x-registry-accessProfiles"]
+            );
+            for (header, member) in [
+                ("Idempotency-Key", "requiresIdempotencyKey"),
+                ("If-Match", "requiresIfMatch"),
+            ] {
+                let required =
+                    operation["parameters"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|parameter| {
+                            parameter["in"] == "header"
+                                && parameter["name"] == header
+                                && parameter["required"] == true
+                        });
+                assert_eq!(route[member], required, "{route}");
+            }
+            assert!(actual
+                .insert(
+                    route["id"].as_str().unwrap().to_owned(),
+                    (method.to_owned(), path.to_owned())
+                )
+                .is_none());
+        }
+        if route["type"] == "action" && route["actionRouteKind"] == "start" {
+            assert_eq!(route["requiresIdempotencyKey"], true);
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn proposal_instance_route_inspection_matches_generated_client_contract() {
+    assert_service_routes_match_openapi(&fixture(), &compiled());
+}
+
+#[test]
+fn statistical_route_inspection_matches_generated_client_contract() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    source["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"id":"active","type":"boolean","required":true,"classification":"internal"}),
+            json!({"id":"event-date","type":"date","required":true,"classification":"internal"}),
+        ]);
+    source["accessProfiles"].as_array_mut().unwrap().push(json!({
+        "id":"analyst","principalClaim":"principal","requiredScopes":["statistics:read"],
+        "permissions":{
+            "records":[{"recordType":"contact","operations":["list"],"readableFields":["active","event-date"],
+                "filterableFields":["active","event-date"],"rowBoundaries":"unrestricted","allowCount":true}],
+            "datasets":[{"dataset":"contacts-by-active","operations":["read-live"]}]
+        }
+    }));
+    source["statisticalDatasets"] = json!([{
+        "id":"contacts-by-active","unit":"contact","population":"active eq true",
+        "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
+        "dimensions":["active"],"disclosure":{"minimumCount":5,"roundingBase":5}
+    }]);
+    let bytes = serde_norway::to_string(&source).unwrap();
+    let authored = parse_project_yaml(bytes.as_bytes()).unwrap();
+    let registry =
+        registry_breg::compiler::compile_project(&authored, &[], CompileProfile::Authoring)
+            .unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    std::fs::write(temporary.path().join("registry.yaml"), bytes).unwrap();
+    assert_service_routes_match_openapi(temporary.path(), &registry);
+}
+
+#[test]
+fn human_inspection_summarizes_governed_behavior_without_dumping_documents() {
+    let project = fixture();
+    for (subject, expected) in [
+        ("model", "proposal-required"),
+        ("access", "facility-correction-author"),
+        ("actions", "write ceiling: patch facility"),
+        ("proposals", "plans/correct-address.rhai"),
+        ("routes", "/v1/proposals/"),
+        ("queries", "readable fields"),
+        ("events", "No event deliveries declared."),
+        ("lifecycle", "submit: draft -> submitted"),
+    ] {
+        let mut args = vec!["explain", subject];
+        if subject != "lifecycle" {
+            args.push(project.to_str().unwrap());
+        }
+        let output = run(&args);
+        assert!(output.status.success(), "{subject}: {output:?}");
+        let human = String::from_utf8(output.stdout).unwrap();
+        assert!(human.contains(expected), "{subject}: {human}");
+        if matches!(subject, "actions" | "access") {
+            assert!(
+                human.contains("commit guard operator.jurisdiction: equals input jurisdiction"),
+                "{subject}: {human}"
+            );
+        }
+        assert!(
+            !human.contains("\"apiVersion\":"),
+            "raw JSON document in {subject}"
+        );
+        assert!(!human.contains("\"scriptBytes\":"));
+        assert!(!human.contains("\"sqlBytes\":"));
+    }
+}
+
+#[test]
+fn proposal_start_route_kind_and_required_key_match_its_operation() {
+    let value = explain("routes");
+    let starts = value["explanation"]["routes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|route| route["type"] == "action" && route["operation"] == "start")
+        .collect::<Vec<_>>();
+    assert_eq!(starts.len(), 2);
+    for route in starts {
+        assert_eq!(route["actionRouteKind"], "start");
+        assert_eq!(route["requiresIdempotencyKey"], true);
+    }
 }

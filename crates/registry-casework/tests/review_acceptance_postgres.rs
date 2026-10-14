@@ -251,7 +251,8 @@ impl Fixture {
                 .project
                 .compile_policy("notice-review")
                 .unwrap()
-                .binding(),
+                .binding()
+                .into(),
             subject: SubjectBinding {
                 source: "notice-source".into(),
                 subject_type: "notice".into(),
@@ -321,7 +322,7 @@ impl Fixture {
 async fn exact_policy_admission_and_independent_producer_authority() {
     let f = Fixture::new(project_value(false, false)).await;
     let mut request = f.request("notice");
-    request.policy.digest = ContentDigest::for_bytes(b"wrong-policy");
+    request.policy.digest = Some(ContentDigest::for_bytes(b"wrong-policy"));
     assert!(matches!(
         f.service
             .create_review_request(
@@ -350,7 +351,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
         Err(ReviewRuntimeError::Forbidden)
     ));
     let accepted = f.create("notice").await;
-    assert_eq!(accepted.policy, f.request("notice").policy);
+    assert!(f.request("notice").policy.matches(&accepted.policy));
     let recovered = f
         .service
         .create_review_request(
@@ -385,6 +386,201 @@ async fn exact_policy_admission_and_independent_producer_authority() {
         Err(ReviewRuntimeError::Forbidden)
     ));
 }
+#[tokio::test]
+async fn current_policy_selection_recovers_before_updates_and_requires_live_authority() {
+    let f = Fixture::new(project_value(false, false)).await;
+    let producer = actor("notice-service", CaseworkRole::Requester);
+    let mut request = f.request("current-policy");
+    request.policy = PolicySelection::current("notice-review");
+    let digest = submission_digest("notice-service", "notice-source", &request).unwrap();
+    let accepted = f
+        .service
+        .create_review_request(&producer, request.clone(), "current-policy")
+        .await
+        .unwrap()
+        .accepted;
+    assert_eq!(
+        accepted.policy,
+        f.project.compile_policy("notice-review").unwrap().binding()
+    );
+    assert_eq!(accepted.submission_digest, digest);
+
+    let mut value = project_value(false, false);
+    value["reviewPolicies"][0]["version"] = json!("2");
+    // New work now requires different context, while the original acceptance stays usable.
+    value["reviewPolicies"][0]["displaySchema"]["required"] = json!(["title", "region", "reason"]);
+    value["reviewPolicies"][0]["displaySchema"]["properties"]["reason"] = json!({"type":"string"});
+    let changed = CaseworkService::new(
+        f.store.clone(),
+        decode(&value),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
+    )
+    .unwrap();
+    for key in ["current-policy", "recovered-by-original-submission"] {
+        let recovered = changed
+            .create_review_request(&producer, request.clone(), key)
+            .await
+            .unwrap();
+        assert!(recovered.recovered);
+        assert_eq!(recovered.accepted, accepted);
+    }
+    let view = changed
+        .review_request(&producer, accepted.request_id)
+        .await
+        .unwrap();
+    assert_eq!(view.policy, accepted.policy);
+    assert_eq!(view.submission_digest, digest);
+    let mut rewritten_selector = request.clone();
+    rewritten_selector.policy = accepted.policy.clone().into();
+    assert!(matches!(
+        changed
+            .create_review_request(&producer, rewritten_selector.clone(), "current-policy")
+            .await,
+        Err(ReviewRuntimeError::IdempotencyConflict)
+    ));
+    assert!(matches!(
+        changed
+            .create_review_request(&producer, rewritten_selector, "rewritten-selector")
+            .await,
+        Err(ReviewRuntimeError::SubmissionConflict)
+    ));
+    let task = f.task(accepted.request_id).await;
+    let held = f.claim(task, "a").await;
+    changed
+        .decide_review_task(
+            &actor("a", CaseworkRole::Staff),
+            task,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Approve,
+            },
+            None,
+            "",
+            held.revision,
+            "current-policy-approve",
+        )
+        .await
+        .unwrap();
+    let ReviewResultRead::Available(result) = changed
+        .review_result(&producer, accepted.request_id)
+        .await
+        .unwrap()
+    else {
+        panic!("terminal result")
+    };
+    assert_eq!(result.policy, accepted.policy);
+    assert_eq!(result.submission_digest, digest);
+    let mut fresh = f.request("new-current-policy");
+    fresh.policy = PolicySelection::current("notice-review");
+    assert!(matches!(
+        changed
+            .create_review_request(&producer, fresh.clone(), "new-current-policy")
+            .await,
+        Err(ReviewRuntimeError::Validation(_))
+    ));
+    fresh.policy = f
+        .project
+        .compile_policy("notice-review")
+        .unwrap()
+        .binding()
+        .into();
+    assert!(matches!(
+        changed
+            .create_review_request(&producer, fresh, "strict-old-policy")
+            .await,
+        Err(ReviewRuntimeError::PolicyMismatch)
+    ));
+
+    let mut compatible = f.request("compatible-current-policy");
+    compatible.policy = PolicySelection::current("notice-review");
+    if let ReviewContext::Submitted { snapshot } = &mut compatible.context {
+        snapshot["reason"] = json!("Required by the new policy");
+    }
+    let next = changed
+        .create_review_request(&producer, compatible, "compatible-current-policy")
+        .await
+        .unwrap()
+        .accepted;
+    assert_eq!(next.policy.version, "2");
+    assert_ne!(next.policy.digest, accepted.policy.digest);
+
+    let mut revoked = f.project.clone();
+    revoked.trusted_producers[0].subject = "replacement-producer".into();
+    let revoked = CaseworkService::new(
+        f.store.clone(),
+        revoked,
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
+    )
+    .unwrap();
+    assert!(matches!(
+        revoked
+            .create_review_request(&producer, request, "current-policy")
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+    assert_eq!(
+        f.db.query_one("SELECT count(*) FROM casework_review_requests", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        2
+    );
+}
+
+#[tokio::test]
+async fn concurrent_current_policy_acceptance_freezes_one_binding_and_refuses_incompatible_context()
+{
+    let f = Fixture::new(project_value(false, false)).await;
+    let mut value = project_value(false, false);
+    value["reviewPolicies"][0]["version"] = json!("2");
+    let next = CaseworkService::new(
+        f.store.clone(),
+        decode(&value),
+        Vec::<Arc<dyn ReviewContextProvider>>::new(),
+    )
+    .unwrap();
+    let producer = actor("notice-service", CaseworkRole::Requester);
+    let mut request = f.request("concurrent-current");
+    request.policy = PolicySelection::current("notice-review");
+    let (first, second) = tokio::join!(
+        f.service
+            .create_review_request(&producer, request.clone(), "concurrent-current"),
+        next.create_review_request(&producer, request.clone(), "concurrent-current")
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(first.accepted, second.accepted);
+    assert_ne!(first.recovered, second.recovered);
+    assert_eq!(
+        f.db.query_one("SELECT count(*) FROM casework_review_requests", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        1
+    );
+    let mut incompatible = f.request("incompatible-context");
+    incompatible.policy = PolicySelection::current("notice-review");
+    incompatible.context = ReviewContext::CurrentSource {
+        binding: SourceContextBinding {
+            reference: "other-source".into(),
+        },
+    };
+    assert!(matches!(
+        f.service
+            .create_review_request(&producer, incompatible, "incompatible-context")
+            .await,
+        Err(ReviewRuntimeError::Invalid)
+    ));
+    let mut wrong_subject = f.request("incompatible-subject");
+    wrong_subject.policy = PolicySelection::current("notice-review");
+    wrong_subject.subject.source = "untrusted-source".into();
+    assert!(matches!(
+        f.service
+            .create_review_request(&producer, wrong_subject, "incompatible-subject")
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+}
+
 #[tokio::test]
 async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
     let mut value = project_value(false, false);
@@ -793,7 +989,11 @@ async fn provider_failure_refuses_affected_work_while_submitted_review_remains_u
     )
     .unwrap();
     let mut request = f.request("standalone");
-    request.policy = submitted.compile_policy("notice-review").unwrap().binding();
+    request.policy = submitted
+        .compile_policy("notice-review")
+        .unwrap()
+        .binding()
+        .into();
     request.context = ReviewContext::Submitted {
         snapshot: json!({"title":"Private notice","region":"north"}),
     };

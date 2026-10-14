@@ -1899,3 +1899,26 @@ fn stricter_observation_spacing_is_bounded_and_part_of_the_binding() {
         assert_eq!(error.code, "config.out-of-range");
     }
 }
+
+#[cfg(feature = "schema")]
+#[test]
+fn generated_runtime_schema_keeps_event_source_identifier_bounds() {
+    let schema: Value =
+        serde_json::from_str(&registry_coordinator::runtime::runtime_schema().unwrap()).unwrap();
+    let mut fragment = json!({"$defs":schema["$defs"],"$ref":"#/$defs/EventSourcesUnderTest"});
+    fragment["$defs"]["EventSourcesUnderTest"] = schema["properties"]["eventSources"].clone();
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&fragment)
+        .unwrap();
+    let source = json!({"source":"urn:test:producer", "signingKeyRef":"secret:file/event-key"});
+    assert!(validator.is_valid(&json!({"registry":source})));
+    for key in ["Invalid", "../registry", "", "123"] {
+        let invalid = json!({(key):source});
+        assert!(!validator.is_valid(&invalid), "invalid source key {key:?}");
+    }
+    let too_many = (0..17)
+        .map(|i| (format!("source-{i}"), source.clone()))
+        .collect::<serde_json::Map<_, _>>();
+    assert!(!validator.is_valid(&Value::Object(too_many)));
+}

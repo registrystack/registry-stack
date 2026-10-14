@@ -3492,6 +3492,17 @@ fn export_client_reports_the_registered_external_resource() {
     assert_eq!(report["resource"], resource);
     assert_eq!(report["audience"], resource);
     assert_eq!(report["clientAssertionAudience"], state.issuer_origin());
+    assert_eq!(report["issuer"], state.issuer_origin());
+    assert_eq!(
+        report["subject"],
+        registry_thunderid_tooling::local::agent_id(&state.instance_id, "source")
+    );
+    let issuer_agent: Value =
+        serde_norway::from_slice(&fs::read(source_agent_path(&state)).unwrap()).unwrap();
+    assert_eq!(
+        report["subject"], issuer_agent["id"],
+        "the export names the actual issuer-provisioned subject"
+    );
     assert_ne!(report["resource"], state.audience());
     assert!(!report.to_string().contains("\"d\""));
 }

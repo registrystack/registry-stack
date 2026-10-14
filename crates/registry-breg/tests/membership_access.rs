@@ -34,10 +34,57 @@ fn membership_boundaries_compile_for_distinct_registry_models() {
         let explained =
             serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
         assert!(explained.to_string().contains("membershipBoundaries"));
+        assert!(explained.to_string().contains("membershipRecordType"));
+        assert!(!explained.to_string().contains("membershipEntity"));
+        let compiled =
+            serde_json::to_value(&registry.entities()[root].membership_boundaries["member"][0])
+                .unwrap();
+        assert_eq!(compiled["membershipRecordType"], "membership");
+        assert!(compiled.get("membershipEntity").is_none());
         assert!(!registry
             .findings()
             .iter()
             .any(|finding| finding.code == "breg.access.profile-unrestricted-collection"));
+    }
+}
+
+#[test]
+fn membership_reference_uses_one_positioned_spelling() {
+    let source = source("facility");
+    let bytes = serde_json::to_vec(&source).unwrap();
+    let decoded = registry_breg::contract::read_project_yaml("registry.yaml", &bytes).unwrap();
+    let wire = serde_json::to_value(&decoded.value).unwrap();
+    assert_eq!(
+        wire.pointer(
+            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/membershipRecordType"
+        ),
+        Some(&json!("membership"))
+    );
+    for value in [json!("membership"), json!(""), serde_json::Value::Null] {
+        let mut previous = source.clone();
+        let boundary = previous
+            .pointer_mut("/accessProfiles/0/permissions/records/0/membershipBoundaries/0")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        boundary.remove("membershipRecordType");
+        boundary.insert("membershipEntity".to_owned(), value);
+        let report = registry_breg::contract::read_project_yaml(
+            "registry.yaml",
+            &serde_json::to_vec_pretty(&previous).unwrap(),
+        )
+        .expect_err("previous reference is refused");
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .expect("migration guidance is present");
+        assert_eq!(
+            diagnostic.path,
+            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/membershipEntity"
+        );
+        assert!(diagnostic.suggested_action.contains("membershipRecordType"));
+        assert!(diagnostic.source.as_ref().unwrap().line.is_some());
     }
 }
 
@@ -70,7 +117,7 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
             "breg.access.membership-active-type",
         ),
         (
-            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/membershipEntity",
+            "/accessProfiles/0/permissions/records/0/membershipBoundaries/0/membershipRecordType",
             json!("facility"),
             "breg.access.membership-source-recursive",
         ),

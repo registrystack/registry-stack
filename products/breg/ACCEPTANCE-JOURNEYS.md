@@ -1,7 +1,7 @@
 # Acceptance journeys
 
 The maintained BReg projects live in `acceptance/`, `fixtures/`, and
-`examples/refactor/`. They are ordinary governed configuration, not production
+`examples/`. They are ordinary governed configuration, not production
 Rust domain types. Tests load the canonical project files directly; no second
 native-model mirror is maintained under the test tree.
 
@@ -9,11 +9,11 @@ native-model mirror is maintained under the test tree.
 
 | Project | Purpose |
 | --- | --- |
-| `examples/refactor/minimal` | Generated contact CRUD, claim-bound row authority, local clients, journeys, and a resumable scenario |
-| `examples/refactor/reviewed-change` | One fixed-plan reviewed name correction and default automatic application |
-| `examples/refactor/facility` | Reusable value types and a named function, immediate multi-record registration, reviewed automatic correction, explicit manual no-review work, and typed application clients |
+| `examples/minimal` | Generated contact CRUD, claim-bound row authority, local clients, journeys, and a resumable scenario |
+| `examples/reviewed-change` | One fixed-plan reviewed name correction and default automatic application |
+| `examples/facility` | Reusable value types and a named function, immediate multi-record registration, reviewed automatic correction, explicit manual no-review work, and typed application clients |
 
-[Standalone examples](examples/refactor/README.md) owns their focused PostgreSQL
+[Standalone examples](examples/README.md) owns their focused PostgreSQL
 commands and verification boundaries. The built-in executor applies an exact
 frozen submission under its compiled system grant. External review remains an
 optional authenticated dependency; its absence disables dependent operations.

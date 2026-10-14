@@ -372,7 +372,7 @@ pub enum ProposalReviewSource {
     Required {
         authority: String,
         source: String,
-        policy: PolicyBindingSource,
+        policy: PolicySelectionSource,
     },
 }
 registry_platform_yaml::tagged_union!(ProposalReviewSource);
@@ -380,12 +380,17 @@ serialize_tagged_union!(ProposalReviewSource, tag = "type");
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct PolicyBindingSource {
+#[cfg_attr(feature = "schema", schemars(extend("dependentRequired" = {"version": ["digest"], "digest": ["version"]})))]
+pub struct PolicySelectionSource {
     #[serde(deserialize_with = "review_policy_id")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "review_policy_id_schema"))]
     pub id: String,
-    pub version: String,
-    pub digest: Digest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Digest"))]
+    pub digest: Option<Digest>,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -447,15 +452,37 @@ pub struct ProposalReviewContextSource {
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ProposalContextValueSource {
-    #[serde(default)]
-    pub from_input: Option<String>,
-    #[serde(default)]
-    pub from_record: Option<String>,
-    #[serde(default)]
-    pub field: Option<String>,
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum ProposalContextValueSource {
+    Input {
+        #[serde(deserialize_with = "local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+        input: String,
+    },
+    Record {
+        #[serde(deserialize_with = "local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+        input: String,
+        #[serde(deserialize_with = "local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+        field: String,
+    },
+    Changes {
+        #[serde(deserialize_with = "local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+        record_type: String,
+        fields: Vec<String>,
+    },
 }
+registry_platform_yaml::tagged_union!(ProposalContextValueSource);
+serialize_tagged_union!(ProposalContextValueSource, tag = "type");
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -595,6 +622,9 @@ pub struct StatisticalDatasetSource {
     pub unit: String,
     pub population: String,
     pub period: StatisticalPeriodSource,
+    /// Unit Record fields used to group counts. Each field must be boolean or
+    /// vocabulary-code, and each may appear once. `period`, `value`, and `status`
+    /// are reserved output columns and cannot be dimension field names.
     pub dimensions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disclosure: Option<StatisticalDisclosureSource>,
@@ -611,6 +641,7 @@ pub struct StatisticalDatasetSource {
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum StatisticalPeriodSource {
     Flow {
+        /// Date field on the unit Record that places each row in a period.
         field: String,
         granularity: StatisticalPeriodGranularitySource,
         first_period: String,
@@ -667,7 +698,10 @@ pub enum StatisticalTemporalValiditySource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalValidityFieldsSource {
+    /// Required date field on the unit Record marking the start of validity.
     pub from: String,
+    /// Optional date field marking the end of validity. A missing or null end
+    /// leaves the row valid until a later bound is stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<String>,
 }
@@ -3634,6 +3668,7 @@ pub struct RowBoundarySource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MembershipBoundarySource {
     pub field: String,
+    #[serde(rename = "membershipRecordType")]
     pub membership_entity: String,
     pub membership_key_field: String,
     pub principal_field: String,
@@ -4235,6 +4270,34 @@ const HANDLER_TYPE_REPLACEMENT: &str =
 /// replaced it.
 const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
     RemovedKey {
+        pointer: "/recordTypes/*/accessProfiles/*/membershipBoundaries/*/membershipEntity",
+        replacement: "Rename `membershipEntity` to `membershipRecordType`.",
+    },
+    RemovedKey {
+        pointer: "/accessProfiles/*/permissions/records/*/membershipBoundaries/*/membershipEntity",
+        replacement: "Rename `membershipEntity` to `membershipRecordType`.",
+    },
+    RemovedKey {
+        pointer: "/entities",
+        replacement: "Rename the top-level `entities` list to `recordTypes`.",
+    },
+    RemovedKey {
+        pointer: "/accessProfiles/*/permissions/entities",
+        replacement: "Use `permissions.records`, with `recordType` naming each governed Record type.",
+    },
+    RemovedKey {
+        pointer: "/actions/*/requires",
+        replacement: "Use `commitGuards` for conditions checked when the Action commits. Declare target revision guards under `commitGuards.targets`.",
+    },
+    RemovedKey {
+        pointer: "/actions/*/effects",
+        replacement: "Put effects under `plan: {type: fixed, effects: [...]}` and declare `execution.mode` as `immediate` or `proposal`.",
+    },
+    RemovedKey {
+        pointer: "/recordTypes/*/changeRequest",
+        replacement: "Declare one Action with `execution.mode: proposal` and its `execution.proposal` review, application and retention policy. Proposal state is owned by the Action, not a Record type.",
+    },
+    RemovedKey {
         pointer: "/registry",
         replacement: "Rename the top-level `registry` block to `project`, keeping its members.",
     },
@@ -4314,6 +4377,14 @@ const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
 
 /// Members a module no longer accepts, each with the member that replaced it.
 const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
+    RemovedKey {
+        pointer: "/recordTypes/*/accessProfiles/*/membershipBoundaries/*/membershipEntity",
+        replacement: "Rename `membershipEntity` to `membershipRecordType`.",
+    },
+    RemovedKey {
+        pointer: "/extendRecordTypes/*/accessProfiles/*/membershipBoundaries/*/membershipEntity",
+        replacement: "Rename `membershipEntity` to `membershipRecordType`.",
+    },
     RemovedKey {
         pointer: "/recordTypes/*/hooks/*/handler/kind",
         replacement: HANDLER_TYPE_REPLACEMENT,

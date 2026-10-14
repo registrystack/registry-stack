@@ -240,7 +240,7 @@ fn membership_project() -> Value {
             {"id":"other-active","type":"boolean","classification":"internal"}]}),
     ]);
     source["accessProfiles"][0]["permissions"]["records"][0]["membershipBoundaries"] = json!([{
-        "field":"organization","membershipEntity":"membership","membershipKeyField":"organization",
+        "field":"organization","membershipRecordType":"membership","membershipKeyField":"organization",
         "principalField":"principal","activeField":"active"
     }]);
     source

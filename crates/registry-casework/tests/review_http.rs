@@ -264,7 +264,8 @@ fn review_request_for_subject(
         policy: project(issuer)
             .compile_policy("registry-correction")
             .unwrap()
-            .binding(),
+            .binding()
+            .into(),
         subject: SubjectBinding {
             source: "registry".to_owned(),
             subject_type: "record".to_owned(),
@@ -507,7 +508,8 @@ async fn create_answer_task(
     body.policy = project(&idp.issuer())
         .compile_policy("registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     body.context = ReviewContext::Submitted {
         snapshot: json!({}),
     };
@@ -541,7 +543,8 @@ async fn create_task(
         .iter()
         .find(|policy| policy.identity.id == body.policy.id)
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let mut request = create_http_request(&body, Some(&token(idp)));
     request.headers_mut().insert(
         "idempotency-key",
@@ -643,7 +646,8 @@ fn review_note_http_request(
 async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
     let idp = MockIdp::start().await;
     let (app, _, source_revoked, source_changed, source_failure, source_state) = app(&idp).await;
-    let request = review_request("producer-ref-1", &idp.issuer());
+    let mut request = review_request("producer-ref-1", &idp.issuer());
+    request.policy = registry_casework_core::PolicySelection::current("registry-correction");
 
     let obsolete_hosted_route = app
         .clone()
@@ -1649,7 +1653,8 @@ async fn mixed_context_inbox_lists_submitted_and_source_tasks_together() {
     answer_request.policy = project(&idp.issuer())
         .compile_policy("registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     answer_request.subject.id = "answer-record-1".to_owned();
     answer_request.subject.digest = ContentDigest::for_bytes(b"answer-record-1");
     answer_request.context = ReviewContext::Submitted {
@@ -1751,7 +1756,8 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
     request.policy = project(&idp.issuer())
         .compile_policy("registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     request.subject.id = "answer-record-1".to_owned();
     request.subject.digest = ContentDigest::for_bytes(b"answer-record-1");
     request.context = ReviewContext::Submitted {
@@ -2394,7 +2400,8 @@ async fn a_reviewer_confirms_from_the_task_read_whether_they_decided_it_over_htt
     request.policy = project(&idp.issuer())
         .compile_policy("registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     request.subject.id = "decided-by-caller-record".to_owned();
     request.subject.digest = ContentDigest::for_bytes(b"decided-by-caller-record");
     request.context = ReviewContext::Submitted {
@@ -3525,7 +3532,8 @@ async fn an_excluded_initiator_and_a_missing_initiator_get_their_own_problem_cod
     request.policy = project(&idp.issuer())
         .compile_policy("registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     request.subject.id = "initiator-codes-record".to_owned();
     request.subject.digest = ContentDigest::for_bytes(b"initiator-codes-record");
     request.context = ReviewContext::Submitted {
@@ -4290,7 +4298,7 @@ async fn a_statically_source_only_inbox_requires_a_source_profile() {
         .binding();
     let (app, ..) = app_with_project(&idp, policy).await;
     let mut request = review_request("source-only-ref", &idp.issuer());
-    request.policy = expected;
+    request.policy = expected.into();
     let created = app
         .clone()
         .oneshot(create_http_request(&request, Some(&token(&idp))))
@@ -4385,7 +4393,8 @@ async fn submitted_tasks_remain_discoverable_without_spending_human_source_read_
     answer_request.policy = project(&idp.issuer())
         .compile_policy("registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     answer_request.context = ReviewContext::Submitted {
         snapshot: json!({}),
     };

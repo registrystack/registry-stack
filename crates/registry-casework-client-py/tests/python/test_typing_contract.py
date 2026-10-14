@@ -12,6 +12,30 @@ STUB = (
 
 
 class TypingContractTests(unittest.TestCase):
+    def test_admission_selects_a_policy_and_acceptance_keeps_the_exact_binding(self) -> None:
+        module = ast.parse(STUB.read_text(encoding="utf-8"))
+        classes = {node.name: node for node in module.body if isinstance(node, ast.ClassDef)}
+        for name, expected in (("ReviewCreateRequest", "PolicySelection"), ("ReviewRequestAccepted", "PolicyBinding")):
+            policy = next(node.annotation for node in classes[name].body if isinstance(node, ast.AnnAssign) and node.target.id == "policy")
+            self.assertEqual(ast.unparse(policy), expected)
+        self.assertIn("ReviewRequestAccepted", [ast.unparse(base) for base in classes["ReviewResult"].bases])
+        selector = next(node.value for node in module.body if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "PolicySelection")
+        self.assertEqual(ast.unparse(selector), "PolicyIdSelection | PolicyBinding")
+        fields = {node.target.id: ast.unparse(node.annotation) for node in classes["PolicyIdSelection"].body if isinstance(node, ast.AnnAssign)}
+        self.assertEqual(fields, {"id": "str", "version": "NotRequired[Never]", "digest": "NotRequired[Never]"})
+
+    def test_task_grant_reads_name_the_optional_source_profile(self) -> None:
+        module = ast.parse(STUB.read_text(encoding="utf-8"))
+        client = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "CaseworkClient")
+        methods = {node.name: node for node in client.body if isinstance(node, ast.FunctionDef)}
+        for name in ("preview_review_task_templates", "list_review_task_grants"):
+            with self.subTest(method=name):
+                arguments = methods[name].args
+                self.assertEqual([arg.arg for arg in arguments.args], ["self", "token", "profile", "task_id"])
+                self.assertEqual([arg.arg for arg in arguments.kwonlyargs], ["source_profile"])
+                self.assertEqual(ast.unparse(arguments.kwonlyargs[0].annotation), "str | None")
+                self.assertEqual(ast.unparse(arguments.kw_defaults[0]), "None")
+
     def test_submission_digest_has_the_canonical_typed_signature(self) -> None:
         module = ast.parse(STUB.read_text(encoding="utf-8"))
         helper = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "submission_digest")

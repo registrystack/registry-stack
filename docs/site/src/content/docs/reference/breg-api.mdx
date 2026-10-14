@@ -385,7 +385,7 @@ Every run response is one document:
 | `runId` | The run identifier. |
 | `status` | `open`, `complete`, `cancelled`, or `blocked`. |
 | `blockedReason` | Present when the run is `blocked`: `activePackageChanged` or `importAuthorityClosed`. |
-| `entityId`, `operation`, `profileId` | The bound entity, its create-or-patch operation, and the selected profile. |
+| `recordType`, `operation`, `profileId` | The bound Record type, its create-or-patch operation, and the selected profile. |
 | `packageRevision`, `schemaFingerprint` | The binding the run was created under. |
 | `inputDigest`, `inputLength`, `itemCount`, `chunkCount` | The announced source: digest, byte length, item count, and chunk count. |
 | `chunkAlgorithmVersion` | The chunking contract the chunks follow. |
@@ -582,7 +582,7 @@ Retention and external deletion are independent from record-history erasure.
 {/* Evidence: crates/registry-breg/src/api/proposals.rs;
     crates/registry-breg/src/proposal_prepare.rs; crates/registry-breg/src/proposal_store.rs;
     crates/registry-breg/src/proposal_artifacts.rs; crates/registry-breg-client/src/proposal.rs;
-    products/breg/examples/refactor/facility/registry.yaml. */}
+    products/breg/examples/facility/registry.yaml. */}
 
 ## Immediate actions
 
@@ -602,7 +602,7 @@ Use the original prepared command and idempotency key for uncertain execution.
 {/* Evidence: crates/registry-breg/src/api/actions.rs;
     crates/registry-breg-client/src/metadata.rs; crates/registry-breg-client/src/actions.rs;
     crates/registry-breg-mcp/src/contract.rs;
-    products/breg/examples/refactor/facility/registry.yaml. */}
+    products/breg/examples/facility/registry.yaml. */}
 
 ## Problem documents
 

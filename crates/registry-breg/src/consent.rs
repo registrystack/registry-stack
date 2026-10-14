@@ -1000,15 +1000,26 @@ pub(crate) fn validate_proposal_permission(
     entities: &BTreeMap<String, CompiledEntity>,
     errors: &mut Vec<Diagnostic>,
 ) {
-    if grant.targets.iter().any(|target| {
-        entities
-            .get(&target.record_type)
-            .is_some_and(|entity| !requirements(entity, &profile.id).is_empty())
-    }) {
+    // Review display grants explicitly select context fields. Record/Changes
+    // projections use current ordinary disclosure and consent for each snapshot;
+    // Input projections expose only the separately selected frozen input. Other
+    // Proposal operations can expose broader input or mutate lifecycle state,
+    // so they still need separate authority.
+    let display_only = grant
+        .operations
+        .iter()
+        .all(|operation| *operation == crate::contract::ProposalOperation::GetReviewContext);
+    if !display_only
+        && grant.targets.iter().any(|target| {
+            entities
+                .get(&target.record_type)
+                .is_some_and(|entity| !requirements(entity, &profile.id).is_empty())
+        })
+    {
         errors.push(Diagnostic::error(
             "breg.consent.require-read-only",
             "accessProfiles[].permissions.proposals",
-            "a consent-checked Record profile is read-only; use separate Proposal authority",
+            "a consent-checked Record profile permits only get-review-context; use separate authority for other Proposal operations",
         ));
     }
     if grant.targets.iter().any(|target| {

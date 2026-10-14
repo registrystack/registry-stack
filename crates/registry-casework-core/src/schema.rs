@@ -363,3 +363,34 @@ mod tests {
         assert!(!compiled(&document).is_valid(&control));
     }
 }
+
+#[cfg(test)]
+mod policy_selection_tests {
+    use crate::{ContentDigest, PolicySelection};
+    use serde_json::json;
+
+    #[test]
+    fn policy_selection_schema_requires_the_complete_optional_pin() {
+        let schema = serde_json::to_value(schemars::schema_for!(PolicySelection)).unwrap();
+        let compiled = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        let digest = ContentDigest::for_bytes(b"policy");
+        for value in [
+            json!({"id":"review"}),
+            json!({"id":"review", "version":"1", "digest":digest}),
+        ] {
+            assert!(compiled.is_valid(&value));
+        }
+        for value in [
+            json!({"id":"review", "version":"1"}),
+            json!({"id":"review", "digest":digest}),
+            json!({"id":"review", "version":null}),
+            json!({"id":"review", "version":"1", "digest":null}),
+            json!({"id":"review", "other":true}),
+        ] {
+            assert!(!compiled.is_valid(&value), "invalid selector {value}");
+        }
+    }
+}

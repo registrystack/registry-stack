@@ -124,31 +124,23 @@ start from the maintained deployment-target templates.
 
 ## Configure the governed key and runtime signer
 
-Reference the Evidence Gateway public JWK from `governance.yaml`:
-
-```yaml
-signing:
-  format: flattened-jws-json
-  algorithm: ES256
-  activePublicJwkFile: public-keys/<evidence-thumbprint>.jwk.json
-  publishedPublicJwkFiles: []
-  revokedKeyIds: []
-  jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 300
-  verifierClockSkewSeconds: 30
-```
-
-Bind the matching provider key and version in `runtime.yaml`:
+Set the public key and matching provider binding together in `target.yaml`:
 
 ```yaml
 signer:
   type: transit
+  algorithm: ES256
+  publicJwkFile: public-keys/<evidence-thumbprint>.jwk.json
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: <nonzero-version>
   attemptTimeoutMilliseconds: 2000
 ```
+
+`evidencectl package` compiles the public key into the immutable bundle and emits the process-local
+signer binding in the candidate's separate `runtime.yaml`. Install that bundle, provision its
+referenced secrets, and activate its `compiled-authority.yaml` before the target-host check.
 
 Do not put a provider token, auto-auth credential, or private JWK in this configuration.
 
@@ -234,7 +226,7 @@ Start the proxy before checking Evidence Gateway. Run the checks from the final 
 the commands see the same socket, public keys, paths, ownership, and secret roots as the service:
 
 ```sh
-evidence check --runtime-config "<deployment-target>/runtime.yaml" --require-runtime-dependencies
+evidence check --runtime-config "<candidate>/runtime.yaml" --require-runtime-dependencies
 ```
 
 Without `--require-runtime-dependencies` the check stays offline and never contacts the provider.

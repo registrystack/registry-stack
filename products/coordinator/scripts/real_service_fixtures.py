@@ -142,11 +142,11 @@ def write_breg(root, urls, review_policy=None, *, borrower=False):
     ]
     actions[0]["execution"]["proposal"]["reviewContext"] = {
         "id": "application-email-context", "fields": {
-            "tenant": {"fromRecord": "application", "field": "tenant"},
-            "applicationId": {"fromInput": "application"},
-            "currentEmail": {"fromRecord": "application", "field": "email"},
-            "proposedEmail": {"fromInput": "proposed-email"},
-            "reason": {"fromInput": "reason"},
+            "tenant": {"type": "record", "input": "application", "field": "tenant"},
+            "applicationId": {"type": "input", "input": "application"},
+            "currentEmail": {"type": "record", "input": "application", "field": "email"},
+            "proposedEmail": {"type": "input", "input": "proposed-email"},
+            "reason": {"type": "input", "input": "reason"},
         },
     }
     if review_policy is not None:

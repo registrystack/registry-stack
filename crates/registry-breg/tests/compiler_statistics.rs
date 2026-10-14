@@ -270,9 +270,23 @@ fn dataset_permissions_compile_to_the_dataset_grants() {
 fn access_explanation_states_who_holds_each_dataset_operation() {
     let audience = |value: &Value| {
         let compiled = compile(value).expect("the project compiles");
-        serde_json::to_value(registry_breg::access::explain_access(&compiled))
+        let mut datasets = serde_json::to_value(registry_breg::access::explain_access(&compiled))
             .expect("the explanation serializes")["statisticalDatasets"]
-            .clone()
+            .clone();
+        for dataset in datasets
+            .as_array_mut()
+            .expect("dataset inventory is an array")
+        {
+            let profiles = dataset
+                .as_object_mut()
+                .unwrap()
+                .remove("accessProfiles")
+                .unwrap();
+            for profile in profiles.as_array().unwrap() {
+                assert_eq!(profile["principalClaim"], "principal");
+            }
+        }
+        datasets
     };
     assert_eq!(
         audience(&source()),
@@ -789,7 +803,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
             ]);
             value["accessProfiles"][1]["requiredScopes"] = json!(["membership:use"]);
             value["accessProfiles"][1]["permissions"]["records"][0]["membershipBoundaries"] = json!([{
-                "field":"organization","membershipEntity":"membership",
+                "field":"organization","membershipRecordType":"membership",
                 "membershipKeyField":"organization","principalField":"principal","activeField":"active"
             }]);
         },

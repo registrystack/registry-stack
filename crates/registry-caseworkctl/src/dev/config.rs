@@ -758,21 +758,49 @@ pub(super) fn principal(client_id: &str) -> String {
     registry_thunderid_tooling::local::agent_id("casework-local", client_id)
 }
 
-pub(super) fn require_stable_borrowed_principals(policy: &CaseworkProject) -> Result<()> {
-    if policy
-        .access_profiles
-        .iter()
-        .any(|profile| profile.principal_claim == "sub")
-    {
-        return Err(super::DevFailure::BorrowedPrincipalConfiguration {
-            source: anyhow::anyhow!(
-                "principalClaim sub resolves to the owner's subject, not the Casework local subject"
-            )
-            .into(),
+/// Resolve OIDC subjects under the exact retained issuer owner. Custom principal
+/// claims keep their authored meaning; only `sub` follows the borrowed issuer.
+pub(super) fn borrowed_subjects(
+    state: &State,
+    policy: &CaseworkProject,
+) -> Result<BTreeMap<String, String>> {
+    let Some(root) = super::borrowed_issuer(state)? else {
+        return Ok(BTreeMap::new());
+    };
+    let owner: Value =
+        serde_json::from_slice(&private::read(&root.join("state.json"), super::MAX_BYTES)?)?;
+    let namespace = owner["instanceId"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .context("the shared issuer owner has no subject namespace")?;
+    let registered: Value = serde_json::from_slice(&private::read(
+        &root.join("clients.json"),
+        super::MAX_BYTES,
+    )?)?;
+    let mut subjects = BTreeMap::new();
+    for client in &state.clients {
+        if !policy
+            .access_profiles
+            .iter()
+            .any(|profile| profile.id == client.profile && profile.principal_claim == "sub")
+        {
+            continue;
         }
-        .into());
+        if !registered["clients"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().any(|entry| entry["id"] == client.id))
+        {
+            return Err(super::DevFailure::registration(anyhow::anyhow!(
+                "shared issuer owner has no client for the requested OIDC subject"
+            ))
+            .into());
+        }
+        subjects.insert(
+            client.id.clone(),
+            registry_thunderid_tooling::local::agent_id(namespace, &client.id),
+        );
     }
-    Ok(())
+    Ok(subjects)
 }
 
 pub(super) fn hex_lower(bytes: &[u8]) -> String {

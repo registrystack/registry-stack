@@ -51,13 +51,6 @@ impl HttpContract {
         }
     }
 
-    fn problem_base(self) -> &'static str {
-        match self {
-            Self::Casework => CASEWORK_PROBLEM_TYPE_BASE,
-            Self::Review => REVIEW_PROBLEM_TYPE_BASE,
-        }
-    }
-
     fn validation_headers(self) -> (&'static str, &'static str) {
         match self {
             Self::Casework => (VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER),
@@ -1625,7 +1618,7 @@ fn problem_response(
     let body = ProblemBody {
         type_uri: format!(
             "{}{}",
-            HttpContract::current().problem_base(),
+            CASEWORK_PROBLEM_TYPE_BASE,
             problem.code().replace('.', "/")
         ),
         title: problem.title(),
@@ -1756,7 +1749,7 @@ mod tests {
                 "/review",
                 REVIEW_PROFILE_HEADER,
                 CASEWORK_PROFILE_HEADER,
-                REVIEW_PROBLEM_TYPE_BASE,
+                CASEWORK_PROBLEM_TYPE_BASE,
             ),
             (
                 "/staff",
@@ -1868,7 +1861,7 @@ mod tests {
             assert_eq!(
                 problem["type"],
                 format!(
-                    "{REVIEW_PROBLEM_TYPE_BASE}{}",
+                    "{CASEWORK_PROBLEM_TYPE_BASE}{}",
                     expected.code().replace('.', "/")
                 )
             );

@@ -192,7 +192,7 @@ class DependencyDirectionTests(unittest.TestCase):
         )
         self.assertEqual(MODULE.violations(graph), [])
 
-    def test_only_tooling_tests_may_use_the_coordinator_client(self):
+    def test_tooling_dependencies_never_reach_the_coordinator_client(self):
         for kinds in (["dev"], [None], ["build"], ["dev", None]):
             with self.subTest(kinds=kinds):
                 graph = metadata({
@@ -204,15 +204,12 @@ class DependencyDirectionTests(unittest.TestCase):
                     {"kind": kind} for kind in kinds
                 ]
                 failures = MODULE.violations(graph)
-                if kinds == ["dev"]:
-                    self.assertEqual(failures, [])
-                else:
-                    self.assertIn(
-                        "registry-caseworkctl transitively depends on Coordinator",
-                        "\n".join(failures),
-                    )
+                self.assertIn(
+                    "registry-caseworkctl transitively depends on Coordinator",
+                    "\n".join(failures),
+                )
 
-    def test_tooling_test_exception_never_allows_the_coordinator_runtime(self):
+    def test_tooling_tests_never_reach_the_coordinator_runtime(self):
         graph = metadata({"ctl": ["coordinator"], "coordinator": []})
         graph["resolve"]["nodes"][0]["deps"][0]["dep_kinds"] = [{"kind": "dev"}]
         self.assertIn(

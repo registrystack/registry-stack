@@ -598,7 +598,7 @@ export interface BRegIngestionRun {
   readonly runId: string
   readonly status: BRegIngestionRunStatus
   readonly blockedReason: string | null
-  readonly entityId: string
+  readonly recordType: string
   readonly operation: BRegIngestionOperation
   readonly profileId: string
   readonly packageRevision: string

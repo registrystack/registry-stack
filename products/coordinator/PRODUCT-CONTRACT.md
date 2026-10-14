@@ -236,9 +236,11 @@ use an RFC 9457 problem document whose `code` comes from one closed
 `family.reason` vocabulary with one status each. A refusal names no submitted
 value, a missing run and a run the caller may not see are the same
 `run.not-visible`, and the operator fixes that `coordinatorctl` diagnostics
-carry are not part of a problem. Shared Review producer routes use the neutral Review problem
-namespace and profile header. The shared result lookup protocol instead specifies bodyless
-202 pending, 404 concealed and 410 expired responses.
+carry are not part of a problem. Shared Review producer routes use the same
+Coordinator problem vocabulary and require the Review profile header. The shared
+client accepts bounded provider-specific RFC 9457 problems without translating
+them into a second problem namespace. Result lookup uses the protocol's bodyless
+202 pending, 404 concealed, and 410 expired responses.
 
 ## Recovery and limits
 

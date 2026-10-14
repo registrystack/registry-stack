@@ -2933,10 +2933,10 @@
         "field": {
           "type": "string"
         },
-        "membershipEntity": {
+        "membershipKeyField": {
           "type": "string"
         },
-        "membershipKeyField": {
+        "membershipRecordType": {
           "type": "string"
         },
         "principalField": {
@@ -2945,7 +2945,7 @@
       },
       "required": [
         "field",
-        "membershipEntity",
+        "membershipRecordType",
         "membershipKeyField",
         "principalField",
         "activeField"
@@ -3025,8 +3025,16 @@
         }
       ]
     },
-    "PolicyBindingSource": {
+    "PolicySelectionSource": {
       "additionalProperties": false,
+      "dependentRequired": {
+        "digest": [
+          "version"
+        ],
+        "version": [
+          "digest"
+        ]
+      },
       "properties": {
         "digest": {
           "$ref": "#/$defs/Digest"
@@ -3045,9 +3053,7 @@
         }
       },
       "required": [
-        "id",
-        "version",
-        "digest"
+        "id"
       ],
       "type": "object"
     },
@@ -3089,19 +3095,70 @@
       ]
     },
     "ProposalContextValueSource": {
-      "additionalProperties": false,
-      "properties": {
-        "field": {
-          "type": "string"
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ],
+          "type": "object"
         },
-        "fromInput": {
-          "type": "string"
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "input": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "record",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input",
+            "field"
+          ],
+          "type": "object"
         },
-        "fromRecord": {
-          "type": "string"
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "recordType": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "changes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "recordType",
+            "fields"
+          ],
+          "type": "object"
         }
-      },
-      "type": "object"
+      ]
     },
     "ProposalEventTransition": {
       "enum": [
@@ -3259,7 +3316,7 @@
               "type": "string"
             },
             "policy": {
-              "$ref": "#/$defs/PolicyBindingSource"
+              "$ref": "#/$defs/PolicySelectionSource"
             },
             "source": {
               "type": "string"

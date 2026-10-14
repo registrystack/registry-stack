@@ -34,7 +34,7 @@ fn source(membership: bool) -> Value {
     let mut reader = json!({"recordType":"target","operations":["get","list"],"readableFields":["name"],
         "rowBoundaries":[{"field":"jurisdiction","claim":"recordJurisdiction","operator":"equals"}]});
     if membership {
-        reader["membershipBoundaries"] = json!([{"field":"organization","membershipEntity":"membership",
+        reader["membershipBoundaries"] = json!([{"field":"organization","membershipRecordType":"membership",
             "membershipKeyField":"organization","principalField":"principal","activeField":"active"}]);
     }
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
@@ -52,7 +52,7 @@ fn source(membership: bool) -> Value {
                     {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"},
                     {"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"}]}],
         "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{"review":{"type":"none"},
-            "reviewContext":{"id":"review-name","fields":{"currentName":{"fromRecord":"target","field":"name"},"proposedName":{"fromInput":"value"}}},
+            "reviewContext":{"id":"review-name","fields":{"currentName":{"type":"record","input":"target","field":"name"},"proposedName":{"type":"input","input":"value"}}},
             "application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}},
             "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
                 {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
@@ -387,6 +387,12 @@ async fn review_context_requires_record_grant_and_current_membership() {
     });
     let checker = status.clone();
     let mut source = source(true);
+    source["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"]["changes"] =
+        json!({"type":"changes","recordType":"target","fields":["name"]});
+    source["accessProfiles"][1]["permissions"]["proposals"][0]["readableContextFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("changes"));
     source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] =
         json!(["get", "list", "edit", "submit", "cancel"]);
     let fixture = client_http::ClientFixture::start_with_mutations(
@@ -509,6 +515,12 @@ async fn review_context_requires_record_grant_and_current_membership() {
         "current-name-canary"
     );
     assert_review_contract(&fixture.registry, &value);
+    assert_eq!(
+        value["context"]["fields"]["changes"],
+        json!([{
+            "recordId":target,"operation":"patch","before":{"name":"current-name-canary"},"after":{"name":"Proposed"}
+        }])
+    );
     let (code, concealed, _) = send(
         &reader,
         Method::GET,
@@ -1231,4 +1243,133 @@ fn assert_review_contract(registry: &registry_breg::CompiledRegistry, value: &Va
         value["context"]["contract"],
         json!({"id":exported.id,"revision":exported.revision,"schemaDigest":exported.digest})
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn frozen_changes_inspection_covers_patch_and_create_without_applying_or_rerunning_plan() {
+    let mut project = source(false);
+    project["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    project["recordTypes"].as_array_mut().unwrap().push(json!({
+        "id":"notice","primaryDataset":"directory","route":"notices","mutationMode":"mutable",
+        "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
+            {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"}]
+    }));
+    project["actions"][0]["execution"]["proposal"]["reviewContext"]["fields"] = json!({
+        "changes":{"type":"changes","recordType":"target","fields":["name"]},
+        "notices":{"type":"changes","recordType":"notice","fields":["name"]}
+    });
+    project["actions"][0]["plan"]["effects"][0]["set"]["name"] =
+        json!({"value":"Computed frozen patch"});
+    project["actions"][0]["plan"]["effects"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"notice","target":{"recordType":"notice"},"operation":"create",
+            "set":{"name":{"value":"Computed frozen notice"},"jurisdiction":{"value":"zone-a"}}
+        }));
+    let permissions = &mut project["accessProfiles"][0]["permissions"];
+    permissions["records"].as_array_mut().unwrap().push(json!({"recordType":"notice","operations":["get"],
+        "readableFields":["name"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}));
+    let target = json!({"recordType":"notice","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]});
+    permissions["actions"][0]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(target.clone());
+    permissions["proposals"][0]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(target);
+    permissions["proposals"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("get-review-context"));
+    permissions["proposals"][0]["readableContextFields"] = json!(["changes", "notices"]);
+    let fixture = client_http::ClientFixture::start(compile(project), clerk()).await;
+    let (_, target) = seed(&fixture).await;
+    let (code, draft, etag) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/correct-name/proposals?accessProfile=clerk",
+        json!({"input":{"target":target,"value":"Unprocessed input"}}),
+        Some("inspect-start"),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::CREATED, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+    let (code, submitted, _) = send(
+        &fixture.http,
+        Method::POST,
+        &format!("/v1/proposals/{id}/submit?accessProfile=clerk"),
+        json!({}),
+        Some("inspect-submit"),
+        etag.as_deref(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{submitted}");
+    let path = format!("/v1/proposals/{id}/review-context?accessProfile=clerk");
+    let (code, context, _) = send(&fixture.http, Method::GET, &path, Value::Null, None, None).await;
+    assert_eq!(code, StatusCode::OK, "{context}");
+    assert_eq!(context["effectDigest"], submitted["effectDigest"]);
+    assert_eq!(context["submissionVersion"], submitted["submissionVersion"]);
+    assert_review_contract(&fixture.registry, &context);
+    assert_eq!(
+        context["context"]["fields"]["changes"],
+        json!([{
+            "recordId":target,"operation":"patch","before":{"name":"current-name-canary"},"after":{"name":"Computed frozen patch"}
+        }])
+    );
+    let notice = &context["context"]["fields"]["notices"][0];
+    assert!(uuid::Uuid::parse_str(notice["recordId"].as_str().unwrap()).is_ok());
+    assert_eq!(notice["operation"], "create");
+    assert!(notice["before"].is_null());
+    assert_eq!(notice["after"], json!({"name":"Computed frozen notice"}));
+    for hidden in ["Unprocessed input", "jurisdiction", "organization"] {
+        assert!(!context["context"]["fields"].to_string().contains(hidden));
+    }
+    let notice_record = &fixture.registry.entities()["notice"];
+    let count: i64 = fixture
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT count(*) FROM registry_data.\"{}\"",
+                notice_record.physical_table
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 0, "inspection does not apply the proposed create");
+    let (_, replay, _) = send(&fixture.http, Method::GET, &path, Value::Null, None, None).await;
+    assert_eq!(
+        replay, context,
+        "inspection reads the stored submission unchanged"
+    );
+    let record = &fixture.registry.entities()["target"];
+    fixture
+        .database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.\"{}\" SET \"{}\"='zone-b' WHERE record_id=$1::text::uuid",
+                record.physical_table, record.fields["jurisdiction"].physical_name
+            ),
+            &[&target],
+        )
+        .await
+        .unwrap();
+    let (code, concealed, _) =
+        send(&fixture.http, Method::GET, &path, Value::Null, None, None).await;
+    assert_eq!(
+        code,
+        StatusCode::NOT_FOUND,
+        "current row disclosure still governs the frozen projection: {concealed}"
+    );
+    assert!(!concealed.to_string().contains("Computed frozen"));
+    fixture.finish().await;
 }

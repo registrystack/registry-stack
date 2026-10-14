@@ -138,6 +138,62 @@ fn runtime_products_resolve_scoped_names_files_and_completion_candidates() {
     }
 }
 
+#[test]
+fn review_context_navigation_resolves_current_and_frozen_fields_to_their_record_type() {
+    let project = Project::new(&[file(
+        "registry.yaml",
+        r#"
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: directory}
+recordTypes:
+  - id: <|record-definition|>person
+    fields: [{id: <|field-definition|>name, type: string}]
+  - id: other
+    fields: [{id: secret, type: string}]
+actions:
+  - id: rename
+    inputs: [{id: <|input-definition|>person, type: reference, target: person}]
+    execution:
+      mode: proposal
+      proposal:
+        reviewContext:
+          id: rename-context
+          fields:
+            subject: {type: input, input: <|input-use|>person}
+            current: {type: record, input: <|record-input-use|>person, field: <|current-field-use|>name}
+            changes: {type: changes, recordType: <|record-use|>person, fields: [<|frozen-field-use|>name]}
+"#,
+    )]);
+    let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    let path = project.path("registry.yaml");
+    for (reference, definition) in [
+        ("input-use", "input-definition"),
+        ("record-input-use", "input-definition"),
+        ("record-use", "record-definition"),
+        ("current-field-use", "field-definition"),
+        ("frozen-field-use", "field-definition"),
+    ] {
+        let position = project.cursor("registry.yaml", reference);
+        let definitions = index.definitions_at(&path, position);
+        assert_eq!(definitions.len(), 1, "{reference}");
+        assert_eq!(
+            definitions[0].range.start,
+            project.cursor("registry.yaml", definition),
+            "{reference}"
+        );
+    }
+    let completions =
+        index.completions_at(&path, project.cursor("registry.yaml", "frozen-field-use"));
+    assert!(completions
+        .iter()
+        .any(|candidate| candidate.label == "name"));
+    assert!(!completions
+        .iter()
+        .any(|candidate| candidate.label == "secret"));
+}
+
 #[tokio::test]
 async fn every_runtime_product_reports_unsaved_refs_through_the_real_protocol() {
     for (kind, document, project, name) in projects() {
@@ -200,7 +256,7 @@ fn fixture(path: &str) -> String {
 #[test]
 fn maintained_runtime_product_examples_have_no_invented_missing_references() {
     for (kind,document,relative,extras) in [
-        (ProductKind::Breg,"registry.yaml","products/breg/examples/refactor/facility/registry.yaml",vec![("plans/correct-address.rhai","products/breg/examples/refactor/facility/plans/correct-address.rhai")]),
+        (ProductKind::Breg,"registry.yaml","products/breg/examples/facility/registry.yaml",vec![("plans/correct-address.rhai","products/breg/examples/facility/plans/correct-address.rhai")]),
         (ProductKind::Casework,"casework.yaml","products/casework/examples/standalone-decision/casework.yaml",vec![]),
         (ProductKind::Scheduling,"scheduling.yaml","products/scheduling/examples/standalone-exact-time/scheduling.yaml",vec![("records.yaml","products/scheduling/examples/standalone-exact-time/records.yaml"),("fixtures/counter-stations.yaml","products/scheduling/examples/standalone-exact-time/fixtures/counter-stations.yaml")]),
 
@@ -222,11 +278,7 @@ fn all_maintained_authoring_examples_resolve_supported_edges() {
     let mut failures = Vec::new();
     let mut count = 0;
     for (kind, base, marker) in [
-        (
-            ProductKind::Breg,
-            "products/breg/examples/refactor",
-            "registry.yaml",
-        ),
+        (ProductKind::Breg, "products/breg/examples", "registry.yaml"),
         (
             ProductKind::Casework,
             "products/casework/examples",
@@ -355,8 +407,8 @@ fn module_assets_named_constraints_and_action_results_keep_their_own_scope() {
         .start,
         project.cursor("modules/core/module.yaml", "effect")
     );
-    let maintained = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/examples/refactor/minimal");
+    let maintained =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
     assert!(ProjectIndex::load_product(&maintained, ProductKind::Breg)
         .unwrap()
         .diagnostics()

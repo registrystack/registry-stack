@@ -24,8 +24,7 @@ pub use config::CaseworkClientConfig;
 pub use error::{CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure};
 pub use model::{
     CaseworkAuth, CaseworkComplete, OwnReviewDecisionQuery, ReviewPageQuery,
-    ReviewResultObservation, ReviewResultResponse, ReviewTaskDecisionRequest,
-    SupervisoryReviewTaskQuery,
+    ReviewResultObservation, ReviewResultResponse, SupervisoryReviewTaskQuery,
 };
 pub use registry_casework_core::{
     submission_digest, AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery,
@@ -36,9 +35,9 @@ pub use registry_casework_core::{
     DirectoryTargetPage, DirectoryTargetPurpose, DirectoryTargetsQuery, DirectoryTeamUpdateRequest,
     EqualsPredicate, HolidaySetDocument, HolidaySetRevisionInput, HumanIdentity, IssuerPrincipal,
     OneOfPredicate, OwnReviewDecision, OwnReviewDecisionPage, Page, PageStatus, PolicyBinding,
-    QueueRecord, ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse,
-    ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest, ReviewCaseloadPreview,
-    ReviewCaseloadResult, ReviewCaseloadTask, ReviewClockOccurrence,
+    PolicySelection, QueueRecord, ReviewAccountabilityRecord, ReviewCancelRequest,
+    ReviewCancelResponse, ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest,
+    ReviewCaseloadPreview, ReviewCaseloadResult, ReviewCaseloadTask, ReviewClockOccurrence,
     ReviewClockRecomputeApplyRequest, ReviewClockRecomputePreview, ReviewClockRecomputeRequest,
     ReviewClockRecomputeResult, ReviewClockRecomputeTask, ReviewCompletion, ReviewCompletionType,
     ReviewContext, ReviewContextCapability, ReviewContextContract, ReviewContextPolicy,
@@ -47,16 +46,16 @@ pub use registry_casework_core::{
     ReviewPolicyClosure, ReviewPolicyDependencies, ReviewPurpose, ReviewRequestAccepted,
     ReviewRequestLifecycle, ReviewRequestView, ReviewResult, ReviewResultFeedEntry,
     ReviewResultFeedPage, ReviewResultStatus, ReviewSourceBindingStatus, ReviewSourceProjection,
-    ReviewStaffingQuery, ReviewTask, ReviewTaskContext, ReviewTaskContextData, ReviewTaskDraft,
-    ReviewTaskDraftInput, ReviewTaskOwnership, ReviewTaskPage, ReviewTaskSort, ReviewTaskState,
-    ReviewValidationError, ReviewValidationReason, RoutingActivity, RoutingCondition,
-    RoutingPredicate, RoutingRule, SchedulingTaskPermission, SourceContextBinding,
-    StaffingDiagnostic, SubjectBinding, SubjectClockAnchor, SubjectClockCompletion,
-    SubmissionDigest, SupervisoryReviewTask, SupervisoryReviewTaskPage, SupervisoryReviewTaskState,
-    TaskApprovalRequest, TaskAssertionResponse, TaskAuthorizationMode, TaskGrantBounds,
-    TaskGrantList, TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView,
-    TaskPermission, TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, WorkingDaysAfter,
-    WorkingDaysBefore, WorkingWeekday,
+    ReviewStaffingQuery, ReviewTask, ReviewTaskContext, ReviewTaskContextData,
+    ReviewTaskDecisionRequest, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskOwnership,
+    ReviewTaskPage, ReviewTaskSort, ReviewTaskState, ReviewValidationError, ReviewValidationReason,
+    RoutingActivity, RoutingCondition, RoutingPredicate, RoutingRule, SchedulingTaskPermission,
+    SourceContextBinding, StaffingDiagnostic, SubjectBinding, SubjectClockAnchor,
+    SubjectClockCompletion, SubmissionDigest, SupervisoryReviewTask, SupervisoryReviewTaskPage,
+    SupervisoryReviewTaskState, TaskApprovalRequest, TaskAssertionResponse, TaskAuthorizationMode,
+    TaskGrantBounds, TaskGrantList, TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails,
+    TaskGrantView, TaskPermission, TaskTemplatePreview, TaskTemplatePreviews, TeamRecord,
+    WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
 };
 pub use registry_platform_httputil::client::BearerToken;
 pub use registry_review_client::ReviewMutationErrorClass;

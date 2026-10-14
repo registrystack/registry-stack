@@ -637,6 +637,32 @@ class MessagingUpgradeTest(unittest.TestCase):
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
 @unittest.mock.patch.object(MODULE, "load_yaml", load_json)
 class EvidencePackageTest(unittest.TestCase):
+    def test_authoring_reuses_the_target_public_key_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = MODULE.Evidence.__new__(MODULE.Evidence)
+            evidence.project = root / "project"
+            evidence.target = root / "target"
+            evidence.candidate = root / "candidate"
+            evidence.issuer = "https://issuer.example.test"
+            evidence.signing_jwk = {"kid": "synthetic-transit"}
+            public_keys = evidence.target / "public-keys"
+            public_keys.mkdir(parents=True)
+            existing = public_keys / "existing.jwk.json"
+            existing.write_text("existing public key")
+            dump_json(evidence.target / "target.yaml", {})
+            dump_json(evidence.target / "authority.yaml", {"accessProfiles": {}})
+            evidence.deployment_target = lambda document: document
+            evidence.package = unittest.mock.Mock()
+            side = unittest.mock.Mock()
+            with unittest.mock.patch.object(MODULE, "evidence_production_target",
+                                            return_value={"authority": "authority.yaml"}):
+                evidence.author(side)
+            self.assertEqual(existing.read_text(), "existing public key")
+            self.assertEqual(load_json(public_keys / "synthetic-transit.jwk.json"),
+                             evidence.signing_jwk)
+            evidence.package.assert_called_once_with(side, evidence.candidate)
+
     def test_a_sealed_installed_package_is_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -646,7 +672,6 @@ class EvidencePackageTest(unittest.TestCase):
             evidence.installed = root / "installed"
             evidence.runtime = root / "runtime.yaml"
             evidence.target.mkdir()
-            dump_json(evidence.target / "runtime.yaml", {"package": {"root": "x"}})
             # evidencectl seals every published package directory at 0o500.
             sealed = evidence.installed / "sources"
             sealed.mkdir(parents=True)
@@ -656,57 +681,101 @@ class EvidencePackageTest(unittest.TestCase):
             evidence.installed.chmod(0o500)
             candidate = root / "candidate"
 
-            def publish(*_args: str) -> None:
+            def publish(binary: str, *_args: str) -> None:
+                if binary != "evidencectl":
+                    return
                 candidate.mkdir()
-                (candidate / "SHA256SUMS").write_text("")
+                (candidate / "bundle").mkdir()
+                (candidate / "bundle" / "SHA256SUMS").write_text("")
+                dump_json(candidate / "runtime.yaml", {"package": {"root": str(evidence.installed / "bundle")}})
+                (candidate / "compiled-authority.yaml").write_text("complete authority")
 
             side = unittest.mock.Mock()
             side.run.side_effect = publish
             evidence.package(side, candidate)
             self.assertEqual(sorted(p.name for p in evidence.installed.iterdir()),
-                             ["SHA256SUMS"])
+                             ["bundle", "compiled-authority.yaml", "runtime.yaml"])
+            self.assertEqual(load_json(evidence.runtime)["package"]["root"], str(evidence.installed / "bundle"))
+            side.run.assert_called_with("evidence", "authority", "activate", "--runtime-config",
+                                        str(evidence.runtime), "--document",
+                                        str(evidence.installed / "compiled-authority.yaml"))
             self.assertFalse(candidate.exists())
 
 
 class EvidenceGrammarTest(unittest.TestCase):
+    def test_tls_trust_input_is_immutable_before_packaging(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work = root / "evidence"
+            work.mkdir()
+            (work / "transit-signing.pem").write_text("synthetic placeholder")
+            ca_file = root / "ca.pem"
+            ca_file.write_text("synthetic certificate placeholder")
+            ca_file.chmod(0o644)
+            with unittest.mock.patch.object(MODULE, "JwksServer"), \
+                    unittest.mock.patch.object(MODULE, "TransitServer"), \
+                    unittest.mock.patch.object(MODULE, "run"), \
+                    unittest.mock.patch.object(MODULE, "ec_public_jwk"):
+                MODULE.Evidence(work, unittest.mock.Mock(), root)
+            self.assertEqual(ca_file.stat().st_mode & 0o222, 0)
+
+    def test_project_authoring_uses_the_current_init_command(self) -> None:
+        evidence = MODULE.Evidence.__new__(MODULE.Evidence)
+        evidence.project = Path("/srv/project")
+        side = unittest.mock.Mock()
+        side.run.side_effect = Error("stop after project creation")
+        with self.assertRaisesRegex(Error, "stop after project creation"):
+            evidence.author(side)
+        side.run.assert_called_once_with(
+            "evidencectl", "init", "--transport", "sqlite-extract", "--profile", "local",
+            "/srv/project")
+
     def test_the_runtime_file_is_named_the_way_each_binary_reads_it(self) -> None:
         runtime = Path("/srv/runtime.yaml")
         self.assertEqual(MODULE.evidence_arguments(runtime, "check"),
                          ["check", "--runtime-config", "/srv/runtime.yaml"])
 
-    def test_a_local_target_becomes_a_production_target(self) -> None:
+    def test_a_normalized_local_target_becomes_a_production_target(self) -> None:
         local = {
-            "assuranceProfile": "local",
-            "service": {"providerId": "urn:registrystack:evidence:local:provider",
+            "apiVersion": "id.registrystack.org/formats/evidence/target/v1alpha1",
+            "kind": "EvidenceTarget", "id": "local", "project": "local-evidence",
+            "authority": "authority.yaml", "assuranceProfile": "local",
+            "service": {"providerId": "urn:example:provider:local-evidence",
                         "publicOrigin": "http://127.0.0.1:8080"},
-            "publication": {"endpointUrl": "http://127.0.0.1:8080"},
-            "responseFormats": [],
-            "signing": {"activePublicJwkFile": "public-keys/local.jwk.json"},
-            "authorityProfiles": {"local-caller": {"grants": [], "kind": "explicit-request"}},
-            "authentication": {"oidc": {"issuer": "http://127.0.0.1:8081"}},
+            "signer": {"type": "local-jwk", "publicJwkFile": ".generated/secrets/key.json"},
+            "authentication": {"oidc": {"issuer": "http://127.0.0.1:8081", "algorithms": ["ES256"]}},
         }
-        production = MODULE.evidence_production_governance(
+        production = MODULE.evidence_production_target(
             local, "https://127.0.0.1:9443", "public-keys/transit.jwk.json")
+        self.assertEqual(production["kind"], "EvidenceTarget")
+        self.assertEqual(production["authority"], "authority.yaml")
         self.assertEqual(production["assuranceProfile"], "production")
-        self.assertEqual(production["service"], {
-            "providerId": "urn:example:upgrade-rehearsal:provider",
-            "publicOrigin": "https://evidence.example.test"})
-        self.assertEqual(production["publication"],
-                         {"endpointUrl": "https://evidence.example.test"})
+        self.assertEqual(production["service"]["publicOrigin"], MODULE.EVIDENCE_PUBLIC_ORIGIN)
         self.assertEqual(production["responseFormats"], ["signed-jws"])
-        self.assertEqual(production["authorityProfiles"]["local-caller"]["grants"], [{
-            "requirement": MODULE.EVIDENCE_REQUIREMENT,
-            "purpose": MODULE.EVIDENCE_PURPOSE,
-            "audienceFrom": "authenticated-requester",
-            "responseFormats": ["signed-jws"],
-            "subjects": [{"role": "subject", "selectorProfile": "record-reference-v1",
-                          "valueOrigin": "request"}]}])
-        self.assertEqual(production["signing"],
-                         {"activePublicJwkFile": "public-keys/transit.jwk.json"})
-        self.assertEqual(production["authentication"], {"oidc": {
-            "issuer": "https://127.0.0.1:9443",
-            "jwksSource": {"type": "uri", "uri": "https://127.0.0.1:9443/oauth2/jwks"}}})
+        self.assertEqual(production["signer"], {"type": "transit", "algorithm": "ES256",
+                         "publicJwkFile": "public-keys/transit.jwk.json"})
+        self.assertEqual(production["authentication"]["oidc"]["algorithms"], ["RS256"])
+        self.assertEqual(production["authentication"]["oidc"]["jwksSource"], {
+            "type": "uri", "uri": "https://127.0.0.1:9443/oauth2/jwks"})
         self.assertEqual(local["assuranceProfile"], "local")
+
+    @unittest.mock.patch.object(MODULE, "http", return_value=(200, {}, {"answer": True}))
+    def test_request_uses_the_normalized_selector_and_declared_audience(self, request) -> None:
+        evidence = MODULE.Evidence.__new__(MODULE.Evidence)
+        evidence.keys = unittest.mock.Mock()
+        evidence.keys.mint.return_value = "synthetic-token"
+        evidence.issuer = "https://issuer.example.test"
+        evidence.port = 8080
+        evidence.target_document = {"authentication": {"oidc": {
+            "audience": "urn:example:audience:local-evidence", "requiredScopes": ["evidence:request"],
+            "requesterTagsClaim": "evidence_tags", "evidenceAudienceClaim": "evidence_audience"}}}
+        evidence.authority = {"accessProfiles": {"local-service-1": {"requesterTags": ["local-service"]}}}
+        self.assertEqual(evidence.request(), (200, {"answer": True}))
+        claims = evidence.keys.mint.call_args.args[2]
+        self.assertEqual(claims["evidence_audience"], "urn:example:audience:local-evidence")
+        self.assertEqual(claims["evidence_tags"], ["local-service"])
+        self.assertEqual(request.call_args.kwargs["body"]["subjects"], [{"role": "subject",
+                         "selector": {"profile": "record-reference", "values": {"record-reference": "REC-0001"}}}])
 
 
 class TransitStubTest(unittest.TestCase):

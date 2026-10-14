@@ -1,0 +1,76 @@
+apiVersion: id.registrystack.org/formats/evidence/target/v1alpha1
+kind: EvidenceTarget
+id: production
+project: example-evidence
+package:
+  root: /srv/registry-evidence/production/bundle
+authority: authority.yaml
+service:
+  providerId: https://evidence.example.org
+  publicOrigin: https://evidence.example.org
+  trustDomain: https://trust.example.org
+  issuer: https://authority.example.org
+listener:
+  bind: 127.0.0.1:8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+authentication:
+  oidc:
+    issuer: https://issuer.example.org
+    audience: evidence.example.org
+    tokenTypes:
+    - at+jwt
+    algorithms:
+    - ES256
+    jwksSource:
+      type: uri
+      uri: https://issuer.example.org/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
+connections: {}
+secretProviders:
+  file:
+    root: /run/registry-evidence/secrets
+signer:
+  type: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 12
+  attemptTimeoutMilliseconds: 2000
+  algorithm: ES256
+  publicJwkFile: public-keys/PSmhXYjoKCBO6gCOMNHqMvnnsAC3m0aaLfXZDWJLmd4.jwk.json
+subjectBinding:
+  secretRef: secret:file/evidence-subject-binding
+  keyVersion: 1
+audit:
+  hashKeyRef: secret:file/evidence-audit-hmac
+  hashKeyVersion: 1
+  path: /var/lib/registry-evidence/production/evidence.jsonl
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 16
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+assuranceProfile: evidence-grade
+publication:
+  serviceId: urn:example:production:evidence-service
+  title: Production Evidence service
+  description: Production minimum-disclosure Evidence service
+  endpointUrl: https://evidence.example.org
+  jurisdictions:
+  - urn:example:jurisdiction:production
+responseFormats:
+- signed-jws
+- sd-jwt-vc
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}

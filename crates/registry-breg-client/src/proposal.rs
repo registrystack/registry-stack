@@ -200,7 +200,7 @@ pub struct BRegProposalReviewDocument {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy: Option<BRegProposalReviewPolicy>,
+    pub policy: Option<registry_review_protocol::PolicySelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<BRegProposalReviewResult>,
 }
@@ -232,14 +232,6 @@ pub struct BRegProposalReviewContextContract {
     pub id: String,
     pub revision: String,
     pub schema_digest: String,
-}
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BRegProposalReviewPolicy {
-    pub id: String,
-    pub version: String,
-    pub digest: String,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
@@ -843,9 +835,10 @@ impl BaseRegistryClient {
                     || !digest(&contract.schema_digest)
             })
             || document.authority.is_some() != document.policy.is_some()
-            || document.policy.as_ref().is_some_and(|policy| {
-                !digest(&policy.digest) || policy.id.is_empty() || policy.version.is_empty()
-            })
+            || document
+                .policy
+                .as_ref()
+                .is_some_and(|policy| policy.check().is_err())
             || document.result.as_ref().is_some_and(|result| {
                 !matches!(
                     result.state.as_str(),
@@ -976,9 +969,10 @@ impl BaseRegistryClient {
                     || !digest(&contract.schema_digest)
             })
             || document.authority.is_some() != document.policy.is_some()
-            || document.policy.as_ref().is_some_and(|policy| {
-                !digest(&policy.digest) || policy.id.is_empty() || policy.version.is_empty()
-            })
+            || document
+                .policy
+                .as_ref()
+                .is_some_and(|policy| policy.check().is_err())
             || document.result.as_ref().is_some_and(|result| {
                 !matches!(
                     result.state.as_str(),

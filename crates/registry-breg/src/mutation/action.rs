@@ -3538,7 +3538,7 @@ mod tests {
     #[test]
     fn internal_action_admission_keeps_null_specific_to_functions() {
         let mut project = crate::contract::parse_project_yaml(include_bytes!(
-            "../../../../products/breg/examples/refactor/facility/registry.yaml"
+            "../../../../products/breg/examples/facility/registry.yaml"
         ))
         .unwrap();
         project
@@ -3551,10 +3551,20 @@ mod tests {
             .find(|input| input.id == "city")
             .unwrap()
             .required = false;
-        let registry = crate::compiler::compile_project_with_assets(&project, &[],
-            &[crate::contract::ModuleAssetSource {module:None,path:"plans/correct-address.rhai".into(),
-                bytes:include_bytes!("../../../../products/breg/examples/refactor/facility/plans/correct-address.rhai").to_vec()}],
-            crate::compiler::CompileProfile::Authoring).unwrap();
+        let registry = crate::compiler::compile_project_with_assets(
+            &project,
+            &[],
+            &[crate::contract::ModuleAssetSource {
+                module: None,
+                path: "plans/correct-address.rhai".into(),
+                bytes: include_bytes!(
+                    "../../../../products/breg/examples/facility/plans/correct-address.rhai"
+                )
+                .to_vec(),
+            }],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
         let mut action = registry
             .actions()
             .actions

@@ -25,8 +25,8 @@ fn verify(package: &Path, bregctl: &Path) -> Result<(Value, VerifiedPackage)> {
         bail!("bregctl refused the native package; run bregctl check --package to inspect its diagnostics");
     }
     let report: Value = serde_json::from_slice(&output.stdout)?;
-    if report["ok"] != true || report["registryRevision"].as_str().is_none() {
-        bail!("native package check supplied no compiled registry revision");
+    if report["ok"] != true {
+        bail!("native package check did not confirm a valid package");
     }
     // The checked producer package may be a mutable directory. Capture its
     // envelope and compare every imported byte to that exact verified digest.
@@ -53,7 +53,6 @@ fn native_export(
     package: &Path,
     action: &str,
     namespace: &str,
-    report: &Value,
     verified: &VerifiedPackage,
 ) -> Result<BregContextExport> {
     if registry_platform_yaml::LocalId::new(action).is_err() {
@@ -74,7 +73,6 @@ fn native_export(
         api_version: DESCRIPTION_API_VERSION.into(),
         kind: DESCRIPTION_KIND.into(),
         source_namespace: namespace.into(),
-        registry_revision: report["registryRevision"].as_str().unwrap().into(),
         action_id: action.into(),
         context_id: schema["x-registry-review-context"]["contextId"]
             .as_str()
@@ -128,13 +126,9 @@ pub(super) fn compare(
             package,
             &export.action_id,
             &provider.source_namespace,
-            &report,
             &verified,
         )?;
-        if native.contract != export.contract
-            || native.registry_revision != export.registry_revision
-            || native.schema_bytes != export.schema_bytes
-        {
+        if native.contract != export.contract || native.schema_bytes != export.schema_bytes {
             bail!("native producer contract differs from the imported provider export; regenerate and recompile the review policy");
         }
         for review in &policy.review_policies {
@@ -148,7 +142,7 @@ pub(super) fn compare(
                 }
             }
         }
-        compared.push(json!({"providerId":provider.id,"contextContract":native.contract,"registryRevision":native.registry_revision,"schemaDigest":sha256_uri(native.schema_bytes.as_bytes())}));
+        compared.push(json!({"providerId":provider.id,"contextContract":native.contract,"registryRevision":report["registryRevision"],"schemaDigest":sha256_uri(native.schema_bytes.as_bytes())}));
     }
     if compared.is_empty() {
         bail!("no matching context provider is declared");
@@ -172,13 +166,7 @@ pub(super) fn pair(
         .find(|p| p.id == id)
         .context("context provider ID is not declared")?;
     let (report, verified) = verify(package, bregctl)?;
-    let export = native_export(
-        package,
-        action,
-        &provider.source_namespace,
-        &report,
-        &verified,
-    )?;
+    let export = native_export(package, action, &provider.source_namespace, &verified)?;
     for review in &policy.review_policies {
         if let ReviewContextPolicy::CurrentSource {
             provider: id,
@@ -228,13 +216,67 @@ pub(super) fn pair(
         staged.persist(project.join("casework.yaml"))?;
     }
     Ok(
-        json!({"ok":true,"command":"provider pair","applied":apply,"providerId":id,"description":relative,"contract":export.contract,"registryRevision":export.registry_revision,"readerAuthority":{"profile":provider.service_profiles.get(&registry_casework_core::ReviewContextCapability::ServiceStatus),"operation":"get-review-status","sourceWrites":false},"next":"Bind the provider endpoint and status-reader secret references in runtime.yaml."}),
+        json!({"ok":true,"command":"provider pair","applied":apply,"providerId":id,"description":relative,"contract":export.contract,"registryRevision":report["registryRevision"],"readerAuthority":{"profile":provider.service_profiles.get(&registry_casework_core::ReviewContextCapability::ServiceStatus),"operation":"get-review-status","sourceWrites":false},"next":"Bind the provider endpoint and status-reader secret references in runtime.yaml."}),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_export_binds_the_context_source_without_a_registry_revision_pin() {
+        let temporary = crate::canonical_tempdir();
+        let relative = "generated/review-context-schemas/context.schema.json";
+        let schema_path = temporary.path().join(relative);
+        fs::create_dir_all(schema_path.parent().unwrap()).unwrap();
+        let mut schema = json!({"$schema":"https://json-schema.org/draft/2020-12/schema",
+            "$id":"urn:registry:breg:review-context:registry:correct-address:address",
+            "type":"object","additionalProperties":false,"properties":{},
+            "x-registry-review-context":{"registryId":"registry","sourceNamespace":"review-source",
+                "actionId":"correct-address","contextId":"address"}});
+        let revision = sha256_uri(&serde_json::to_vec(&schema).unwrap());
+        schema["x-registry-definition-revision"] = json!(revision);
+        let bytes = serde_json::to_vec(&schema).unwrap();
+        fs::write(&schema_path, &bytes).unwrap();
+        fs::write(
+            temporary
+                .path()
+                .join("generated/review-context-schemas/index.json"),
+            serde_json::to_vec(
+                &json!({"correct-address":{"id":schema["$id"],"revision":revision,
+                "digest":sha256_uri(&bytes),"path":relative}}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let verified = registry_platform_config::write_sum_file(
+            temporary.path(),
+            None,
+            &PackageLimits::default(),
+            "bregctl package",
+        )
+        .unwrap();
+        let export = native_export(
+            temporary.path(),
+            "correct-address",
+            "review-source",
+            &verified,
+        )
+        .unwrap();
+        assert_eq!(export.source_namespace, "review-source");
+        assert!(serde_json::to_value(export)
+            .unwrap()
+            .get("registryRevision")
+            .is_none());
+        assert!(native_export(
+            temporary.path(),
+            "correct-address",
+            "other-source",
+            &verified
+        )
+        .is_err());
+    }
+
     #[test]
     fn producer_file_changed_after_package_check_is_refused() {
         let temporary = crate::canonical_tempdir();

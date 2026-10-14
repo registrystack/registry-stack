@@ -6,7 +6,7 @@ modelRevision: "e5cfbbc0161e4d2c802d1acd752ec193253f7820"
 registry:
   id: organization-registry
   title: Synthetic organization registry
-entities:
+recordTypes:
   - concept: Organization
     id: record
     identifierField: code

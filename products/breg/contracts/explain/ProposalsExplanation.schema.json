@@ -1,0 +1,307 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha1.schema.json",
+  "title": "ProposalsExplanation",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "LocalId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    }
+  },
+  "description": "Author inspection of normalized Action definitions. Reviewed asset paths and module identities are included; program bytes are absent.",
+  "required": [
+    "apiVersion",
+    "kind",
+    "actions"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/breg/proposals-explanation/v1alpha1"
+    },
+    "kind": {
+      "const": "BRegProposalsExplanation"
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "apiName",
+          "revision",
+          "display",
+          "execution",
+          "inputs",
+          "plan",
+          "commitGuards",
+          "dependencies",
+          "bounds",
+          "permissions"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "apiName": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "display": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "execution": {
+            "type": "object",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "const": "proposal"
+              }
+            },
+            "x-registry-passthrough": "The fixed mode and complete typed Proposal policy are owned by the compiled engine contract."
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "apiName",
+                "label",
+                "schema",
+                "required",
+                "nullable"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "apiName": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "schema": {
+                  "type": "object",
+                  "x-registry-foreign": "json-schema-2020-12"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "nullable": {
+                  "type": "boolean"
+                }
+              },
+              "x-registry-passthrough": "Normalized compiled logical field metadata; its field type and schema are owned by the engine."
+            }
+          },
+          "plan": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "effects",
+                  "order"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "fixed"
+                  },
+                  "effects": {
+                    "type": "array"
+                  },
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "type",
+                  "function"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "function"
+                  },
+                  "function": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "sourceModule",
+                      "abi",
+                      "writes",
+                      "refusals",
+                      "id",
+                      "entrypoint",
+                      "capabilities",
+                      "boundInputs",
+                      "source"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "rhai",
+                          "wasm"
+                        ]
+                      },
+                      "sourceModule": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "abi": {
+                        "const": "registry.action-plan/v1"
+                      },
+                      "rhaiVersion": {
+                        "type": "string"
+                      },
+                      "scriptSha256": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      },
+                      "moduleSha256": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      },
+                      "limits": {
+                        "type": "object",
+                        "x-registry-passthrough": "Compiled function resource ceilings, owned and bounded by the engine."
+                      },
+                      "writes": {
+                        "type": "array"
+                      },
+                      "refusals": {
+                        "type": "object",
+                        "propertyNames": {
+                          "$ref": "#/$defs/LocalId"
+                        },
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      "id": {
+                        "$ref": "#/$defs/LocalId"
+                      },
+                      "entrypoint": {
+                        "type": "string"
+                      },
+                      "capabilities": {
+                        "type": "array",
+                        "items": {
+                          "enum": [
+                            "evidence"
+                          ]
+                        },
+                        "uniqueItems": true
+                      },
+                      "boundInputs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                        }
+                      },
+                      "source": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Reviewed asset path relative to the project root or sourceModule; program bytes are absent."
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "description": "Fixed plans expose exact authored mutations and execution order. Function plans expose reviewed source identity and write ceilings, never placeholder mutations."
+          },
+          "commitGuards": {
+            "type": "array"
+          },
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "evidence"
+            ],
+            "properties": {
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "x-registry-passthrough": "Exact provider-published Evidence contract and bindings, compiled by the engine."
+                },
+                "x-registry-passthrough": "The exact compiled Evidence relying-party closure is owned by the engine."
+              }
+            }
+          },
+          "bounds": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "maximumTargets",
+              "maximumFieldMutations",
+              "maximumSnapshotBytes"
+            ],
+            "properties": {
+              "maximumTargets": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "maximumFieldMutations": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 128
+              },
+              "maximumSnapshotBytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2097152
+              }
+            }
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-registry-passthrough": "Compiled Action grants retained in author inspection and owned by the engine."
+            }
+          }
+        }
+      }
+    }
+  }
+}

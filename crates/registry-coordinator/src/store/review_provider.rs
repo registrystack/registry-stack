@@ -2,8 +2,7 @@
 //! Review bindings live in their ordinary Run and share its admission fence.
 use super::*;
 use crate::review_provider::{
-    policy_binding, RetainedReview, ReviewAdmission, ReviewCancellation, ReviewOutcome,
-    ReviewProducer,
+    RetainedReview, ReviewAdmission, ReviewCancellation, ReviewOutcome, ReviewProducer,
 };
 use registry_review_protocol::{
     ReviewCancelRequest, ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted,
@@ -38,6 +37,80 @@ impl Store {
         ))
     }
 
+    fn review_admission_input(
+        &self,
+        request: &ReviewCreateRequest,
+        actor: &Actor,
+        producer: &ReviewProducer,
+    ) -> Result<(Value, String)> {
+        request
+            .check()
+            .map_err(|_| refused("request.invalid", "supply a bounded Review request"))?;
+        if !producer.sources.contains(&request.subject.source) {
+            return Err(refused(
+                "access.denied",
+                "the admitted producer and exact Review policy must match",
+            ));
+        }
+        let owner = self.review_owner(actor, producer)?;
+        let input = serde_json::to_value(request)
+            .map_err(|_| refused("input-invalid", "cannot encode the Review input"))?;
+        Ok((input, owner))
+    }
+
+    pub(super) async fn recover_review_admission(
+        &self,
+        tx: &Transaction<'_>,
+        identity: &str,
+        input_digest: &str,
+    ) -> Result<Option<ReviewRequestAccepted>> {
+        let Some(row) = tx.query_opt(
+            &format!("SELECT run_id,input_digest,event_binding,review FROM {}.runs WHERE start_identity=$1", self.namespace),
+            &[&identity],
+        ).await.map_err(unavailable)? else {
+            return Ok(None);
+        };
+        if row.get::<_, String>(1) != input_digest || row.get::<_, Option<String>>(2).is_some() {
+            return Err(refused(
+                "start-conflict",
+                "this producer, workflow and idempotency key already names different admitted work",
+            ));
+        }
+        // Return the original concrete acceptance without consulting an active
+        // package. Erasure never recreates acceptance from current configuration.
+        let run_id = row.get(0);
+        let sealed = row
+            .get::<_, Option<Value>>(3)
+            .ok_or_else(|| refused("payload-erased", "the Review request payload was erased"))?;
+        let retained: RetainedReview = self.open_value(run_id, "review", "", &sealed)?;
+        Ok(Some(retained.accepted))
+    }
+
+    /// Caller workflow authorization is checked by the HTTP boundary; current
+    /// producer ownership and source authorization also apply before replay.
+    pub(crate) async fn recover_review_owned(
+        &self,
+        request: &ReviewCreateRequest,
+        actor: &Actor,
+        producer: &ReviewProducer,
+        key: &str,
+    ) -> Result<Option<ReviewRequestAccepted>> {
+        self.audited("review-admit", actor, None, None, async {
+            let (input, owner) = self.review_admission_input(request, actor, producer)?;
+            let (identity, input_digest) =
+                self.admission_identity(&request.policy.id, &owner, key, &input)?;
+            let mut client = self.client().await.map_err(unavailable)?;
+            let tx = client.transaction().await.map_err(unavailable)?;
+            self.lock_admission(&tx).await?;
+            let accepted = self
+                .recover_review_admission(&tx, &identity, &input_digest)
+                .await?;
+            tx.commit().await.map_err(unavailable)?;
+            Ok(accepted)
+        })
+        .await
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "Review admission binds caller, producer, exact policy and runtime independently"
@@ -53,43 +126,27 @@ impl Store {
         runtime: &crate::runtime::RuntimeConfig,
     ) -> Result<ReviewRequestAccepted> {
         self.audited("review-admit", actor, None, None, async {
-            request
-                .check()
-                .map_err(|_| refused("request.invalid", "supply a bounded Review request"))?;
-            policy_binding(&definition.workflow, &definition.digest)?.ok_or_else(|| {
-                refused("workflow-absent", "this Workflow does not provide Review")
-            })?;
-            if !producer.sources.contains(&request.subject.source) {
-                return Err(refused(
-                    "access.denied",
-                    "the admitted producer and exact Review policy must match",
-                ));
-            }
+            let (input, owner) = self.review_admission_input(&request, actor, producer)?;
             let admission = ReviewAdmission {
                 request: request.clone(),
                 producer: producer.clone(),
-                policy: definition
-                    .workflow
-                    .review
-                    .clone()
-                    .expect("checked Review policy"),
             };
-            let input = serde_json::to_value(&request)
-                .map_err(|_| refused("input-invalid", "cannot encode the Review input"))?;
-            let run = self
+            let admission = self
                 .admit_bound(
                     definition,
                     input,
-                    &self.review_owner(actor, producer)?,
+                    &owner,
                     key,
                     binding,
                     Some(runtime),
-                    request.policy.digest.as_str(),
+                    &definition.digest,
                     Some(&admission),
                     None,
                 )
                 .await?;
-            Ok(admission.retain(run)?.accepted)
+            admission
+                .accepted_review
+                .ok_or_else(|| unavailable("Review admission did not retain its accepted binding"))
         })
         .await
     }

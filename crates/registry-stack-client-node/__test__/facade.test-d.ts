@@ -129,3 +129,10 @@ const unresolvedMessage: messaging.MessagingProblemCode = 'receipt.unresolved'
 const unresolvedAppointment: scheduling.SchedulingProblemCode = 'receipt.unresolved'
 void unresolvedMessage
 void unresolvedAppointment
+
+void caseworkClient.previewReviewTaskTemplates('token', 'staff', { taskId: 'task-1', sourceProfile: 'source-reviewer' })
+void caseworkClient.listReviewTaskGrants('token', 'staff', { taskId: 'task-1' })
+// @ts-expect-error the unified facade rejects the old positional source profile/task ID read
+void caseworkClient.previewReviewTaskTemplates('token', 'staff', 'source-reviewer', 'task-1')
+// @ts-expect-error the unified facade rejects the old positional source profile/task ID read
+void caseworkClient.listReviewTaskGrants('token', 'staff', 'source-reviewer', 'task-1')

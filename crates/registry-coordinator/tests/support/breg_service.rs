@@ -2,6 +2,8 @@
 //! A separately built BReg service, activated through public operator commands.
 //! Only fixture-owned databases and roles are provisioned or removed here.
 
+#![allow(dead_code)]
+
 use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -55,6 +57,33 @@ pub struct Breg {
 
 impl Breg {
     pub async fn start(issuer: &TestAuthorizationServer) -> Self {
+        Self::start_with(issuer, None, None).await
+    }
+
+    pub async fn start_citizen(
+        issuer: &TestAuthorizationServer,
+        project: Value,
+        task_status: Value,
+        status_key: &[u8],
+    ) -> Self {
+        Self::start_with(
+            issuer,
+            Some((project, task_status, status_key.to_vec())),
+            None,
+        )
+        .await
+    }
+
+    pub async fn start_events(issuer: &TestAuthorizationServer, origin: &str) -> Self {
+        Self::start_with(issuer, None, Some(origin)).await
+    }
+
+    async fn start_with(
+        issuer: &TestAuthorizationServer,
+        citizen_project: Option<(Value, Value, Vec<u8>)>,
+        event_origin: Option<&str>,
+    ) -> Self {
+        let citizen = citizen_project.is_some();
         let ctl = binary("COORDINATOR_BREGCTL_BIN");
         let runtime_binary = binary("COORDINATOR_BREG_BIN");
         let admin_url = std::env::var("COORDINATOR_TEST_DATABASE_URL")
@@ -184,6 +213,18 @@ impl Breg {
             {"action":"propose-item","operations":["get","submit","cancel"],"ownership":"caller","targets":[{"recordType":"item","rowBoundaries":[{"field":"owner","claim":"sub","operator":"equals"}]}]},
             {"action":"manual-item","operations":["get","submit","cancel","apply"],"ownership":"caller","targets":[{"recordType":"item","rowBoundaries":[{"field":"owner","claim":"sub","operator":"equals"}]}]}
         ]);
+        let mut task_status = None;
+        if let Some((citizen_project, status, status_key)) = citizen_project {
+            registry = citizen_project;
+            task_status = Some(status);
+            crate::support::private_file(&service.root.join("status-key"), &status_key);
+        }
+        if event_origin.is_some() {
+            registry["actions"][2]["execution"]["proposal"]["hooks"] = json!([
+                {"id":"notify-submitted","transitions":["submitted"],"handler":{"type":"url","destinationId":"coordinator"}}
+            ]);
+            crate::support::private_file(&service.root.join("event-key"), &[0x5a; 32]);
+        }
         document(&project.join("registry.yaml"), registry);
         operator(
             &ctl,
@@ -200,8 +241,8 @@ impl Breg {
             &project.join("tests/journeys.yaml"),
             json!({
                 "apiVersion":"id.registrystack.org/formats/breg/journeys/v1", "kind":"BRegJourneys",
-                "journeys":[{"id":"fixture-empty", "steps":[{"id":"list", "recordType":"item", "accessProfile":"writer",
-                    "claims":{"principal":"coordinator-reader", "scopes":["applications:read"], "actorKind":"service", "requesterClient":"application-reader", "directClaims":{"sub":"coordinator-reader"}},
+                "journeys":[{"id":"fixture-empty", "steps":[{"id":"list", "recordType":if citizen {"person-address"} else {"item"}, "accessProfile":"writer",
+                    "claims":{"principal":"coordinator-reader", "scopes":["applications:read"], "actorKind":"service", "requesterClient":"application-reader", "directClaims":if citizen {json!({})} else {json!({"sub":"coordinator-reader"})}},
                     "request":{"type":"list"}, "expect":{"outcome":"success", "status":200, "count":0}}]}]
             }),
         );
@@ -239,7 +280,7 @@ impl Breg {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let runtime = |database: usize, package: &Path| {
-            json!({
+            let mut config = json!({
                 "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1", "kind":"BRegRuntimeConfig",
             "listener":{"bind":address.to_string()},
                 "identity":{"environment":"test", "instanceId":"coordinator-action-proof", "databaseId":"coordinator-action-proof", "databaseInitializationEnvironment":"test"},
@@ -251,7 +292,29 @@ impl Breg {
                     "maximumTokenLifetimeSeconds":3600, "leewayMilliseconds":0, "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}}, "authorityClaims":{"principal":"sub"}},
                 "audit":{"hashKeyRef":"secret:file/audit-key", "path":service.root.join("audit/breg.jsonl")},
                 "cursor":{"secretRef":"secret:file/cursor-key"}
-            })
+            });
+            if citizen {
+                config["authentication"]["authorityClaims"]["purpose"] = json!("registry_purpose");
+                config["authentication"]["oidc"]["allowedClients"] = json!([
+                    "application-reader",
+                    "citizen-gateway",
+                    "citizen-review-page"
+                ]);
+                config["authentication"]["authorityClaims"]["trustedActors"] =
+                    json!({"citizen-gateway":"6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34"});
+            }
+            if let Some(status) = &task_status {
+                config["taskGrantStatus"] = status.clone();
+            }
+            if let Some(origin) = event_origin {
+                config["eventDestinations"] = json!({"coordinator":{
+                    "origin":format!("{origin}/"),"path":"/v1/events/proposal-event-proof/submitted",
+                    "networkProfile":"loopback-development-http","dnsFamily":"dual-stack-strict",
+                    "allowedPrivateCidrs":[],"hmacSha256KeyRef":"secret:file/event-key",
+                    "classificationCeiling":"internal","deliveryCeilings":{"attemptTimeoutMilliseconds":1000,"maximumAttempts":3}
+                }});
+            }
+            config
         };
         let rehearsal = service.root.join("rehearsal.yaml");
         document(&rehearsal, runtime(0, &service.root.join("empty-package")));
@@ -352,6 +415,9 @@ impl Breg {
         self.client_at(issuer, &self.base_url)
     }
 
+    // This independent test observer authenticates directly. The gateway process
+    // still exchanges its verified inbound token for every outbound call.
+    #[allow(clippy::disallowed_methods)]
     pub fn client_at(
         &self,
         issuer: &TestAuthorizationServer,

@@ -67,14 +67,13 @@ fn runtime(
     let key_path = root.path().join("observer-key");
     std::fs::write(&key_path, [7u8; 32]).unwrap();
     std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let mut config =
-        include_str!("../../../products/breg/examples/refactor/minimal/runtime.example.yaml")
-            .replace("/var/lib/breg/secrets", root.path().to_str().unwrap())
-            .replace("environment: example", "environment: local")
-            .replace(
-                "databaseInitializationEnvironment: example",
-                "databaseInitializationEnvironment: local",
-            );
+    let mut config = include_str!("../../../products/breg/examples/minimal/runtime.example.yaml")
+        .replace("/var/lib/breg/secrets", root.path().to_str().unwrap())
+        .replace("environment: example", "environment: local")
+        .replace(
+            "databaseInitializationEnvironment: example",
+            "databaseInitializationEnvironment: local",
+        );
     if let Some(port) = port {
         config.push_str(&format!("\neventDestinations:\n  observer:\n    origin: http://127.0.0.1:{port}/\n    path: /events\n    networkProfile: loopback-development-http\n    dnsFamily: dual-stack-strict\n    allowedPrivateCidrs: []\n    hmacSha256KeyRef: secret:file/observer-key\n    classificationCeiling: internal\n    deliveryCeilings:\n      attemptTimeoutMilliseconds: 1000\n      maximumAttempts: 2\n"));
     }

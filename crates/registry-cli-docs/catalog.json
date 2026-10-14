@@ -1754,6 +1754,89 @@
                 }
               ],
               "subcommands": []
+            },
+            {
+              "name": "review",
+              "invocation": "bregctl examples review",
+              "about": "Create and connect fresh facility and canonical Casework development projects",
+              "long_about": null,
+              "usage": "bregctl examples review [OPTIONS] <DIRECTORY>",
+              "arguments": [
+                {
+                  "display": "<DIRECTORY>",
+                  "description": "Fresh destination for the facility and canonical Casework projects. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--approve",
+                  "description": "Explicitly record approval as the local synthetic Casework staff fixture. The decision uses Casework's ordinary claim, context and decision APIs",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--caseworkctl-bin <CASEWORKCTL_BIN>",
+                  "description": "Casework authoring CLI from the same installation",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "caseworkctl"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--casework-bin <CASEWORK_BIN>",
+                  "description": "Casework runtime executable; otherwise resolve casework on PATH",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--breg-bin <BREG_BIN>",
+                  "description": "Base Registry Engine (BReg) runtime executable; otherwise resolve breg on PATH",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
             }
           ]
         },
@@ -5101,7 +5184,7 @@
         {
           "name": "init",
           "invocation": "caseworkctl init",
-          "about": "Create a complete standalone ReviewPolicy project",
+          "about": "Create a standalone or source-backed ReviewPolicy project",
           "long_about": null,
           "usage": "caseworkctl init [OPTIONS] <DIRECTORY>",
           "arguments": [
@@ -5118,13 +5201,16 @@
           "options": [
             {
               "display": "--template <TEMPLATE>",
-              "description": "Starter to create (standalone-decision)",
+              "description": "Starter to create",
               "always_required": false,
               "repeatable": false,
               "default_values": [
                 "standalone-decision"
               ],
-              "possible_values": [],
+              "possible_values": [
+                "standalone-decision",
+                "canonical-review"
+              ],
               "environment": null
             },
             {
@@ -5192,7 +5278,7 @@
             },
             {
               "display": "--against-breg-package <DIRECTORY>",
-              "description": "Compare imported provider contracts with this sealed native BReg package",
+              "description": "Compare imported provider contracts with this sealed native Base Registry Engine (BReg) package",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5495,7 +5581,7 @@
                 },
                 {
                   "display": "--breg-package <DIRECTORY>",
-                  "description": "Sealed native BReg package directory containing the action's context export",
+                  "description": "Sealed native Base Registry Engine (BReg) package containing the action's context export",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5504,7 +5590,7 @@
                 },
                 {
                   "display": "--action-id <ACTION_ID>",
-                  "description": "BReg action that declares the required review context",
+                  "description": "Base Registry Engine (BReg) action that declares the required review context",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5973,7 +6059,7 @@
               "name": "start",
               "invocation": "caseworkctl dev start",
               "about": "Start or reuse the project's retained local database and services",
-              "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL container and Casework child. Standalone sessions also own a pinned issuer container; --issuer-project borrows a separately running BReg session's registered issuer. The database runs the pinned image public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, the Docker Official Images mirror of postgres:17.11 at that digest, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .casework/dev/logs directory.",
+              "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL container and Casework child. Standalone sessions also own a pinned issuer container; --issuer-project borrows a separately running Base Registry Engine (BReg) session's registered issuer. The database runs the pinned image public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, the Docker Official Images mirror of postgres:17.11 at that digest, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .casework/dev/logs directory.",
               "usage": "caseworkctl dev start [OPTIONS] [PROJECT]",
               "arguments": [
                 {
@@ -6297,7 +6383,7 @@
             {
               "name": "identity",
               "invocation": "caseworkctl dev identity",
-              "about": "Show a stable native subject before authoring local directory or task templates",
+              "about": "Show a standalone issuer subject before authoring local directory or task templates",
               "long_about": null,
               "usage": "caseworkctl dev identity [OPTIONS] <CLIENT>",
               "arguments": [

@@ -282,6 +282,7 @@ pub struct BRegIngestionRun {
     run_id: Uuid,
     status: BRegIngestionRunStatus,
     blocked_reason: Option<BRegIngestionBlockedReason>,
+    #[serde(rename = "recordType")]
     entity_id: String,
     operation: BRegBatchOperation,
     profile_id: String,
@@ -320,7 +321,7 @@ impl BRegIngestionRun {
     }
 
     #[must_use]
-    pub fn entity_id(&self) -> &str {
+    pub fn record_type(&self) -> &str {
         &self.entity_id
     }
 
@@ -420,7 +421,7 @@ impl BRegIngestionRun {
             "runId",
             "status",
             "blockedReason",
-            "entityId",
+            "recordType",
             "operation",
             "profileId",
             "packageRevision",
@@ -463,7 +464,7 @@ impl BRegIngestionRun {
                     .ok_or(refuse)?,
             ),
         };
-        let entity_id = text_member(object, "entityId")?;
+        let entity_id = text_member(object, "recordType")?;
         if !valid_breg_identifier(entity_id) {
             return Err(refuse);
         }
@@ -1670,7 +1671,7 @@ mod tests {
             "runId": RUN_ID,
             "status": "open",
             "blockedReason": null,
-            "entityId": "facility",
+            "recordType": "facility",
             "operation": "create",
             "profileId": "importer.v1",
             "packageRevision": "revision-1",
@@ -1740,7 +1741,7 @@ mod tests {
         assert_eq!(run.status(), BRegIngestionRunStatus::Open);
         assert_eq!(run.blocked_reason(), None);
         assert_eq!(run.operation(), BRegBatchOperation::Create);
-        assert_eq!(run.entity_id(), "facility");
+        assert_eq!(run.record_type(), "facility");
         assert_eq!(run.input_digest(), INPUT_DIGEST);
         assert_eq!(run.input_length(), 4321);
         assert_eq!(run.item_count(), 10);
@@ -1800,7 +1801,13 @@ mod tests {
             |wire: &mut Value| wire["extra"] = json!("member"),
             |wire: &mut Value| wire["inputDigest"] = json!("AAAA"),
             |wire: &mut Value| wire["runId"] = json!("not-a-uuid"),
-            |wire: &mut Value| wire["entityId"] = json!("Facility"),
+            |wire: &mut Value| wire["recordType"] = json!("Facility"),
+            |wire: &mut Value| wire["recordType"] = json!(""),
+            |wire: &mut Value| wire["recordType"] = Value::Null,
+            |wire: &mut Value| {
+                let record_type = wire.as_object_mut().unwrap().remove("recordType").unwrap();
+                wire["entityId"] = record_type;
+            },
             |wire: &mut Value| wire["itemCount"] = json!(0),
             |wire: &mut Value| wire["chunkCount"] = json!(0),
             |wire: &mut Value| wire["maximumItems"] = json!(0),

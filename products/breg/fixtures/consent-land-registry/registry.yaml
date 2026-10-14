@@ -246,7 +246,7 @@
             "membershipBoundaries": [
               {
                 "field": "subject",
-                "membershipEntity": "tenure-right-consent-link",
+                "membershipRecordType": "tenure-right-consent-link",
                 "membershipKeyField": "subject",
                 "principalField": "principal",
                 "activeField": "active"

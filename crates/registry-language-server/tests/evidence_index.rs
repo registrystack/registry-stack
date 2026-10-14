@@ -196,3 +196,88 @@ fn a_shared_named_derivation_resolves_each_calling_definition_output() {
     assert_eq!(index.definitions_at(&p.path(DERIVE), release).len(), 2);
     assert_eq!(labels(&index, &p.path(DERIVE), release), vec!["active"]);
 }
+
+#[test]
+fn canonical_and_flat_targets_navigate_to_their_own_authority_and_project() {
+    for (file, authority) in [
+        ("targets/local/target.yaml", "targets/local/authority.yaml"),
+        ("local-target.yaml", "local-authority.yaml"),
+        ("target.yaml", "authority.yaml"),
+    ] {
+        let p = Project::new(SOURCE);
+        let authority_name = std::path::Path::new(authority)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let source =
+            include_str!("../../../products/evidence/examples/standalone/local-target.yaml")
+                .replace("project: standalone-evidence", "project: synthetic")
+                .replace(
+                    "authority: dev-authority.yaml",
+                    &format!("authority: {authority_name}"),
+                );
+        p.write(file, &source);
+        p.write(authority, AUTHORITY);
+        let index = p.index();
+        assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+        assert_eq!(
+            index.definitions_at(&p.path(file), after(&source, "authority: "))[0].path,
+            p.path(authority)
+        );
+        assert_eq!(
+            index.definitions_at(&p.path(file), after(&source, "project: "))[0].path,
+            p.path(PROJECT)
+        );
+        assert_eq!(
+            index.definitions_at(&p.path(authority), after(AUTHORITY, "target: "))[0].path,
+            p.path(file)
+        );
+    }
+}
+
+#[test]
+fn target_authority_paths_never_navigate_through_links_or_traversal() {
+    for authority in ["../authority.yaml", "/authority.yaml"] {
+        let p = Project::new(SOURCE);
+        let source =
+            include_str!("../../../products/evidence/examples/standalone/local-target.yaml")
+                .replace(
+                    "authority: dev-authority.yaml",
+                    &format!("authority: {authority}"),
+                );
+        p.write("targets/local/target.yaml", &source);
+        assert!(p
+            .index()
+            .definitions_at(
+                &p.path("targets/local/target.yaml"),
+                after(&source, "authority: ")
+            )
+            .is_empty());
+    }
+    #[cfg(unix)]
+    {
+        let p = Project::new(SOURCE);
+        p.write(
+            "target.yaml",
+            include_str!("../../../products/evidence/examples/standalone/local-target.yaml"),
+        );
+        p.write("private/authority.yaml", AUTHORITY);
+        std::os::unix::fs::symlink(
+            p.path("private/authority.yaml"),
+            p.path("dev-authority.yaml"),
+        )
+        .unwrap();
+        let index = p.index();
+        assert!(index
+            .definitions_at(
+                &p.path("target.yaml"),
+                p.at("target.yaml", "dev-authority.yaml")
+            )
+            .is_empty());
+        assert!(index
+            .diagnostics()
+            .iter()
+            .any(|x| x.code.as_deref() == Some("evidence.project.missing-authority-file")));
+    }
+}

@@ -25,19 +25,25 @@ shared/
   evidence-project/
 environments/
   local/
-    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    evidence/{target.yaml,authority.yaml,public-keys/}
   staging/
-    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    evidence/{target.yaml,authority.yaml,public-keys/}
     transit/{proxy-configs/,policies/}
   production/
-    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    evidence/{target.yaml,authority.yaml,public-keys/}
     transit/{proxy-configs/,policies/}
 ```
 
 For staging or production, copy the reviewed shared project at one source
 revision, select `environments/<name>/evidence/` as the `evidencectl package`
-target, and create a new candidate. `evidencectl package` resolves governed
-service public keys from that target's `public-keys/` directory. Build staging
+target, and create a new candidate. `target.yaml` is a normalized `EvidenceTarget` and references the complete
+`EvidenceTargetAuthority` in `authority.yaml`. Set both `project` fields to the
+shared EvidenceProject ID and review each definition, purpose, role, selector,
+representation and binding against its ceiling. The example grant names
+`record-status` and `record-reference-v1`; replace these with your project's
+identifiers. Add the connections or extract bindings required by its Sources.
+`evidencectl package` resolves the signer's public key from the target, then
+emits `bundle/`, `runtime.yaml` and `compiled-authority.yaml` in one candidate. Build staging
 and production separately from the same source revision. Do not promote a
 staging candidate by editing its bytes.
 
@@ -65,12 +71,17 @@ affected consumers.
 
 Local private JWKs and audit masters are disposable files created outside Git.
 `evidencectl init` and `evidencectl dev` remain the normal application-developer
-path; the local target documents the generated bindings and is not passed to
-the strict deployment compiler.
+path; the local target documents disposable bindings and cannot be packaged
+as a production candidate.
 
-Before routing an environment, run `evidencectl doctor`, all Evidence fixtures,
-`evidence check --require-runtime-dependencies`, then confirm the Evidence
-`/ready` endpoint. A
+Install the candidate's `bundle/` at the emitted runtime's `package.root`,
+provision its referenced secrets and signer transport, and activate
+`compiled-authority.yaml` with `evidence authority activate --runtime-config
+<candidate>/runtime.yaml --document <candidate>/compiled-authority.yaml`.
+Before routing an environment, run `evidencectl doctor --runtime-config
+<candidate>/runtime.yaml`, all Evidence fixtures, and
+`evidence check --runtime-config <candidate>/runtime.yaml
+--require-runtime-dependencies`, then confirm the Evidence `/ready` endpoint. A
 signer whose controls, pinned version, or public key differ from these governed
 files must fail the handoff.
 

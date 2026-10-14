@@ -1038,6 +1038,9 @@ pub fn runtime_schema() -> Result<String> {
     schema["properties"]["connections"] = json!({"type":"object", "minProperties":1, "maxProperties":16,
         "description":"Named deployment bindings with one explicit type per connection.",
         "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/ConnectionConfig"}});
+    schema["properties"]["eventSources"] = json!({"type":"object", "maxProperties":16,
+        "description":"Optional trusted event producers keyed by the logical IDs used in Workflow triggers.",
+        "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/EventSourceConfig"}});
     schema["properties"]["database"] = json!({"allOf":[
         {"$ref":"#/$defs/DatabaseConfig"},
         {"properties":{"testOnlyPlaintext":{"const":false}}}

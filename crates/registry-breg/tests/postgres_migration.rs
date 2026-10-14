@@ -66,7 +66,7 @@ journeys:
   - id: asset-list
     steps:
       - id: list-assets
-        entity: asset
+        recordType: asset
         accessProfile: reader
         claims: {principal: package-reader}
         request: {type: list}

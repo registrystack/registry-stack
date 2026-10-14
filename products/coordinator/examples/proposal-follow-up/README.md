@@ -14,7 +14,7 @@ coordinatorctl test --project products/coordinator/examples/proposal-follow-up
 The `facilities` contract import is the owning BReg-generated Action export. `start-correction`
 selects `correct-address` through that import and pins its revision, Proposal mode, review policy,
 application policy, input, and output. The owning public fixture is
-`products/breg/examples/refactor/facility`; regenerate and review its Action export when its
+`products/breg/examples/facility`; regenerate and review its Action export when its
 contract changes rather than copying a schema into the workflow.
 
 The workflow performs these separate stages:

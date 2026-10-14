@@ -30,8 +30,7 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 fn prepare() -> registry_breg::package::PreparedPackage {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/examples/refactor/facility");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/facility");
     let project_bytes = fs::read(root.join("registry.yaml")).unwrap();
     let project = parse_project_yaml(&project_bytes).unwrap();
     let asset = PackageSourceFile {

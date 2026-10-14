@@ -505,7 +505,7 @@ fn validate_ingestion_run(
         .map_err(|_| DataLifecycleError::Data(DataError::InvalidBinding))?;
     let (committed_items, committed_prefix_digest) =
         expected_ingestion_commitment(plan, input, run.next_chunk_index())?;
-    if run.entity_id() != plan.entity_id()
+    if run.record_type() != plan.entity_id()
         || run.profile_id() != plan.profile_id()
         || run.package_revision() != inspected.package_revision
         || run.schema_fingerprint() != inspected.schema_fingerprint
@@ -1930,7 +1930,7 @@ mod tests {
             } else {
                 Value::Null
             },
-            "entityId": ENTITY,
+            "recordType": ENTITY,
             "operation": "create",
             "profileId": PROFILE,
             "packageRevision": PACKAGE,

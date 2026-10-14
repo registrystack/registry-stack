@@ -80,7 +80,7 @@ fn problem(status: u16, code: &str, title: &str, detail: &str) -> ResponseTempla
         .set_body_raw(
             json!({
                 "type": format!(
-                    "https://id.registrystack.org/problems/registry-review/{}",
+                    "https://id.registrystack.org/problems/registry-casework/{}",
                     code.replace('.', "/")
                 ),
                 "title": title,

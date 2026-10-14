@@ -40,7 +40,7 @@ ACCEPTANCE_FIXTURES = {
     "BREG-J06": ("business", "acceptance/business"),
     "BREG-J18": ("asset-registration-actions", "fixtures/asset-registration-actions"),
     "BREG-J19": ("household-contact-actions", "fixtures/household-contact-actions"),
-    "BREG-J20": ("native-proposal-attachments", "examples/refactor/facility"),
+    "BREG-J20": ("native-proposal-attachments", "examples/facility"),
     "BREG-J22": ("consent-person-registry", "fixtures/consent-person-registry"),
     "BREG-J23": ("consent-land-registry", "fixtures/consent-land-registry"),
     "BREG-J24": ("facility", "acceptance/facility"),

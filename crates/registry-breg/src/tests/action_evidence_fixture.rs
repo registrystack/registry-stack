@@ -8,7 +8,7 @@ pub(crate) fn registry(evidence: bool) -> crate::CompiledRegistry {
     use serde_json::{json, Value};
     let mut source: Value = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(
-            "../../../../products/breg/examples/refactor/facility/registry.yaml"
+            "../../../../products/breg/examples/facility/registry.yaml"
         ))
         .unwrap()
         .expect("canonical fixture is nonempty")
@@ -17,7 +17,7 @@ pub(crate) fn registry(evidence: bool) -> crate::CompiledRegistry {
         module: None,
         path: "plans/correct-address.rhai".into(),
         bytes: include_bytes!(
-            "../../../../products/breg/examples/refactor/facility/plans/correct-address.rhai"
+            "../../../../products/breg/examples/facility/plans/correct-address.rhai"
         )
         .to_vec(),
     }];

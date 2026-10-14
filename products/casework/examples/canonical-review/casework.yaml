@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=.casework/schemas/project.schema.json
 apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
 project:
@@ -70,8 +71,8 @@ reviewPolicies:
       provider: facility-proposal-context
       contract:
         id: urn:registry:breg:review-context:facility-registry:correct-address:facility-address-context
-        revision: sha256:42b934f993209f3de5fe4dba63d0f477e13cb80ec1316edee962e4058aeba272
-        schemaDigest: sha256:31f7e5c78cbdaf988450abcc92e1f1fcdbe2f5b0402bcbe08ad62a5e95828c60
+        revision: sha256:b7f0f2255d4839227b1b0dded88db230d0eef8b7a9a02f26665118c1ed857a25
+        schemaDigest: sha256:255f3ea2814ff5e5a255888fa5d63efb39b863a75cca6b5444cf0429565ee4f0
     stages:
       - id: address-review
         queue: facility-addresses

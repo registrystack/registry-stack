@@ -69,7 +69,7 @@ def proxy(origin, mutation_path, observe_only):
         instance.close()
 
 
-def run(env_file):
+def run(env_file, citizen=False):
     environment = dict(os.environ)
     if env_file:
         # Read only named prerequisites, never execute the file or dump it.
@@ -100,6 +100,9 @@ def run(env_file):
             "--features", "registry-breg/runtime,registry-breg/postgres-test,registry-messaging/postgres-test",
             "--bin", "breg", "--bin", "bregctl", "--bin", "messaging", "--bin", "messagingctl",
             "--message-format", "json-render-diagnostics"]
+        if citizen:
+            command.extend(["-p", "registry-breg-mcp", "-p", "registry-breg-review",
+                            "--bin", "breg-mcp", "--bin", "breg-review"])
         messages = module.cargo_build(command, log_path, environment)
         if sys.platform == "darwin":
             environment["DYLD_FALLBACK_LIBRARY_PATH"] = str(module.exact_fips_library(messages).parent)
@@ -108,13 +111,21 @@ def run(env_file):
         environment["COORDINATOR_MESSAGING_BIN"] = str(Path(target) / "debug/messaging")
         environment["COORDINATOR_MESSAGINGCTL_BIN"] = str(Path(target) / "debug/messagingctl")
         result = subprocess.run(["cargo", "test", "--locked", "-p", "registry-coordinator", "--features", "postgres-test",
-            "--test", "breg_action_native", "--", "--ignored", "--nocapture"], cwd=REPO, env=environment)
+            "--test", "breg_action_native", "--test", "breg_event_native",
+            "--", "--ignored", "--nocapture"], cwd=REPO, env=environment)
+        if result.returncode or not citizen:
+            raise SystemExit(result.returncode)
+        environment["BREG_REVIEW_NATIVE_BIN"] = str(Path(target) / "debug/breg-review")
+        result = subprocess.run(["cargo", "test", "--locked", "-p", "registry-breg-mcp",
+            "--test", "native_citizen", "--", "--ignored", "--nocapture"], cwd=REPO, env=environment)
         raise SystemExit(result.returncode)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env", type=Path)
+    parser.add_argument("--citizen", action="store_true",
+                        help="also compose the built citizen MCP gateway and review page with native BReg")
     parser.add_argument("--proxy-origin", help=argparse.SUPPRESS)
     parser.add_argument("--mutation-path", default="/v1/actions/update-item?accessProfile=writer", help=argparse.SUPPRESS)
     parser.add_argument("--observe-only", action="store_true", help=argparse.SUPPRESS)
@@ -122,4 +133,4 @@ if __name__ == "__main__":
     if arguments.proxy_origin:
         proxy(arguments.proxy_origin, arguments.mutation_path, arguments.observe_only)
     else:
-        run(arguments.env)
+        run(arguments.env, arguments.citizen)

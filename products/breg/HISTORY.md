@@ -204,7 +204,7 @@ Prepare an absolute, owner-only JSON file, using permissions `0600` on Unix:
 
 ```json
 {
-  "entityId": "membership-record",
+  "recordType": "membership-record",
   "recordId": "00000000-0000-4000-8000-000000000001",
   "eraseThroughRevision": 2,
   "operatorReference": "approved-maintenance-001",

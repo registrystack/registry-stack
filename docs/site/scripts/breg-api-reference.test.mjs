@@ -66,7 +66,7 @@ test('breg-api.json is the generated output of breg-api.yaml', () => {
 });
 
 test('native Action and Proposal route families agree with the canonical generated OpenAPI', () => {
-  const openapi = JSON.parse(read('../../../products/breg/generated/refactor/generated/openapi.json'));
+  const openapi = JSON.parse(read('../../../products/breg/generated/facility/generated/openapi.json'));
   const documented = new Set(table('routes').rows.map((row) => row[0]));
   for (const [path, item] of Object.entries(openapi.paths)) {
     if (!path.startsWith('/v1/actions/') && !path.startsWith('/v1/proposals')) continue;

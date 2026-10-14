@@ -31,6 +31,7 @@ release manifests, and docs.
 | Serve governed record APIs from PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |
 | Build a writable registry backed by PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |
 | Publish an index of registry providers | [Publish and consume a Registry Discovery index](https://docs.registrystack.org/dev/tutorials/publish-and-consume-discovery-index/) |
+| Explore separate and combined product projects | [Individual and combined examples](#explore-individual-and-combined-examples) |
 | Install VS Code or Zed integration | [Editor integrations](editors/README.md) |
 | Work on the monorepo | See [Development](#development) |
 | Review the public roadmap | [ROADMAP.md](ROADMAP.md) |
@@ -42,13 +43,13 @@ Registry Stack ships seven installable products on one release train. Each has
 its own deployment contract and adopter tooling, and each one is optional.
 
 - **Base Registry Engine:** a configuration-defined writable registry backed by
-  PostgreSQL. A registry project declares the entities, relationships,
-  constraints, access profiles, and events; the compiler turns it into a
+  PostgreSQL. A registry project declares Record Types, relationships,
+  constraints, access profiles, Actions, Proposals, and events; the compiler turns it into a
   PostgreSQL schema, a REST API, per-profile permissions, revision history, and
   an audit journal.
   Docs: [Base Registry Engine overview](https://docs.registrystack.org/dev/start/breg-quickstart/).
   Two supporting services run beside it: `breg-mcp`, an MCP gateway a chat
-  host uses to read one verified citizen's own data and draft a change request,
+  host uses to read one verified citizen's own data and draft a Proposal,
   and `breg-review`, the page where that citizen reviews and submits the draft.
   Docs: [Run a citizen chat assistant locally](https://docs.registrystack.org/dev/tutorials/first-citizen-mcp/).
 - **Evidence Gateway:** signed, minimum-disclosure assertions from fixed
@@ -84,6 +85,31 @@ includes Registry Platform shared primitives, the `bregctl`, `caseworkctl`,
 `schedulingctl`, `messagingctl`, `evidencectl`, and `discoveryctl`
 adopter tools, unified Node.js and Python clients, and release tooling for validating the
 public source model.
+
+### Explore individual and combined examples
+
+Use the product-owned projects to inspect each component separately:
+
+| Product | Example entry point |
+|---|---|
+| Base Registry Engine | [Minimal directory, reviewed change, and facility registry](products/breg/examples/README.md) |
+| Evidence Gateway | [Standalone HTTP assertions](products/evidence/examples/standalone/README.md) |
+| Registry Casework | [Standalone snapshot review](products/casework/examples/standalone-decision/casework.yaml) and [current-source review](products/casework/examples/canonical-review/README.md) |
+| Registry Coordinator | [Maintained flows](products/coordinator/README.md#start-from-a-maintained-project), including external directory and job examples |
+| Registry Scheduling | [Exact-time project](products/scheduling/examples/standalone-exact-time/) and [arrival-window project](products/scheduling/examples/standalone-arrival-window/), with [setup instructions](products/scheduling/README.md#start-from-an-authored-project) |
+| Registry Messaging | [Starter project](products/messaging/examples/starter/) and [local development instructions](products/messaging/README.md) |
+| Registry Discovery | [Offline catalog project](products/discovery/fixtures/project/README.md) |
+| Registry Manifest | [Static publication examples](products/manifest/examples/README.md) |
+| Registry Render | [Receipt, certificate, and card bundles](products/render/bundles/), with [compile instructions](products/render/README.md#the-10-minute-path) |
+
+For combined projects, start with [BReg and Evidence](products/breg/evidence/README.md),
+[BReg and Casework review](products/casework/examples/canonical-review/README.md),
+or [BReg events and Coordinator](products/coordinator/examples/product-events/README.md).
+The [reviewed notice](products/coordinator/examples/reviewed-notice/README.md) combines
+BReg, Coordinator, Casework, and Messaging; the
+[deferred appointment](products/coordinator/examples/deferred-appointment/README.md)
+combines BReg, Coordinator, Casework, Scheduling, and Messaging. Each project keeps product authority and deployment
+configuration separate.
 
 ### Install a released build
 

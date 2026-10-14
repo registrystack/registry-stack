@@ -22,8 +22,10 @@ test(`${mode ?? 'immediate'} task grants preserve preview, approval revision/key
  await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
  const client=new CaseworkClient({baseUrl:`http://127.0.0.1:${server.address().port}/`});
  assert.equal(client.taskAssertionEndpoint(grant),`http://127.0.0.1:${server.address().port}/v1/task-grants/${grant}/assertion`);
- assert.deepEqual((await client.previewReviewTaskTemplates('human-token','staff',item,'source-reviewer')).value.templates,[shownPreview]);
- assert.deepEqual((await client.listReviewTaskGrants('human-token','staff',item,'source-reviewer')).value.grants,[shownView]);
+ assert.deepEqual((await client.previewReviewTaskTemplates('human-token','staff',{taskId:item,sourceProfile:'source-reviewer'})).value.templates,[shownPreview]);
+ assert.deepEqual((await client.listReviewTaskGrants('human-token','staff',{taskId:item,sourceProfile:'source-reviewer'})).value.grants,[shownView]);
+ assert.equal(requests[0].path,`/v1/review-tasks/${item}/task-templates`);
+ assert.equal(requests[1].path,`/v1/review-tasks/${item}/task-grants`);
  const approval={templateId:'verify-status',templateVersion:'1'};
  assert.deepEqual((await client.approveReviewTaskGrant('human-token','staff',item,7,'caller-attempt-key',approval,'source-reviewer')).value,shownView);
  assert.deepEqual(JSON.parse(requests[2].body),approval);assert.equal(requests[2].headers['if-match'],'"7"');assert.equal(requests[2].headers['idempotency-key'],'caller-attempt-key');
@@ -33,15 +35,17 @@ test(`${mode ?? 'immediate'} task grants preserve preview, approval revision/key
  assert.deepEqual((await client.taskGrantStatus('resource-token',grant)).value,{active:false});
  for(const request of requests.slice(0,3)){assert.equal(request.headers['registry-casework-profile'],'staff');assert.equal(request.headers['registry-source-profile'],'source-reviewer');}
  for(const request of requests.slice(4)){assert.equal(request.headers['registry-casework-profile'],undefined);assert.equal(request.headers['registry-source-profile'],undefined);}
- assert.deepEqual((await client.previewReviewTaskTemplates('human-token','staff',item)).value.templates,[shownPreview]);
+ assert.deepEqual((await client.previewReviewTaskTemplates('human-token','staff',{taskId:item})).value.templates,[shownPreview]);
  assert.equal(requests.at(-1).headers['registry-source-profile'],undefined);
  const before=requests.length;
+ await assert.rejects(async()=>client.previewReviewTaskTemplates('human-token','staff','source-reviewer',item),e=>e.kind==='invalid-request');
+ await assert.rejects(async()=>client.listReviewTaskGrants('human-token','staff','source-reviewer',item),e=>e.kind==='invalid-request');
  await assert.rejects(client.approveReviewTaskGrant('human-token','staff',item,7,'caller-attempt-key',{...approval,resource:'urn:other'},'source-reviewer'),e=>e.kind==='invalid-request');
  await assert.rejects(client.approveReviewTaskGrant('human-token','staff',item,7,'caller-attempt-key',{...approval,authorizationMode:'deferred'},'source-reviewer'),e=>e.kind==='invalid-request');
  await assert.rejects(client.taskAssertion('bootstrap-token','not-a-grant-id'),e=>e.kind==='invalid-request');
  assert.throws(()=>client.taskAssertionEndpoint('not-a-grant-id'),e=>e.kind==='invalid-request');
  assert.equal(requests.length,before);
  shownPreview.authorizationMode='unbounded';
- await assert.rejects(client.previewReviewTaskTemplates('human-token','staff',item,'source-reviewer'),e=>e.kind==='protocol');
+ await assert.rejects(client.previewReviewTaskTemplates('human-token','staff',{taskId:item,sourceProfile:'source-reviewer'}),e=>e.kind==='protocol');
 });
 }

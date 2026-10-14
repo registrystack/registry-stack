@@ -29,7 +29,8 @@ fn create_request() -> ReviewCreateRequest {
             id: "registry-correction".to_owned(),
             version: "1".to_owned(),
             digest: ContentDigest::parse(DIGEST).expect("policy digest fixture"),
-        },
+        }
+        .into(),
         subject: subject(),
         requester_reference: "proposal-7".to_owned(),
         initiator: None,
@@ -181,6 +182,42 @@ async fn capture_create(
     assert_eq!(sent["policy"], json!(create_request().policy));
     assert!(sent.get("kind").is_none());
     json_response(StatusCode::OK, accepted_json(Uuid::from_u128(7)))
+}
+
+#[tokio::test]
+async fn current_policy_create_accepts_a_concrete_binding_and_refuses_partial_pins_before_io() {
+    let app = Router::new().route(
+        "/v1/review-requests",
+        post(|| async { json_response(StatusCode::CREATED, accepted_json(Uuid::from_u128(7))) }),
+    );
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").unwrap();
+    let mut request = create_request();
+    request.policy = registry_review_client::PolicySelection::current("registry-correction");
+    let accepted = client
+        .create_or_recover_request(
+            ReviewAuth::new(&token, "producer"),
+            "current-policy",
+            &request,
+            &expected_submission_digest(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.value.policy.version, "1");
+    assert_eq!(request.policy.version, None);
+    request.policy.version = Some("1".into());
+    assert!(matches!(
+        client
+            .create_or_recover_request(
+                ReviewAuth::new(&token, "producer"),
+                "partial-pin",
+                &request,
+                &expected_submission_digest()
+            )
+            .await,
+        Err(ReviewClientError::InvalidRequest { .. })
+    ));
+    server.abort();
 }
 
 #[tokio::test]
@@ -715,9 +752,13 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         .route("/unpaired/v1/review-requests/{id}", get(unpaired_problem))
         .route(
             "/provider-namespace/v1/review-requests/{id}",
-            get(wrong_problem_namespace),
+            get(provider_specific_problem),
         )
         .route("/valid-problem/v1/review-requests/{id}", get(valid_problem))
+        .route(
+            "/invalid-uri/v1/review-requests/{id}",
+            get(invalid_problem_uri),
+        )
         .route(
             "/server-problem/v1/review-requests/{id}",
             get(server_problem),
@@ -739,7 +780,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         ("media", ReviewProtocolFailure::MediaType),
         ("problem", ReviewProtocolFailure::Problem),
         ("unpaired", ReviewProtocolFailure::Problem),
-        ("provider-namespace", ReviewProtocolFailure::Problem),
+        ("invalid-uri", ReviewProtocolFailure::Problem),
     ] {
         let client = ReviewClient::new(ReviewClientConfig::new(
             Url::parse(&format!("http://{address}/{prefix}/")).expect("fixture URL"),
@@ -754,6 +795,23 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
             ReviewClientError::Protocol { failure: actual, .. } if actual == failure
         ));
     }
+
+    let provider_client = ReviewClient::new(ReviewClientConfig::new(
+        Url::parse(&format!("http://{address}/provider-namespace/")).unwrap(),
+    ))
+    .unwrap();
+    let provider_error = provider_client
+        .request(ReviewAuth::new(&token, "producer"), Uuid::nil())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        provider_error,
+        ReviewClientError::Problem { status: 400, .. }
+    ));
+    assert_eq!(
+        provider_error.mutation_class(),
+        ReviewMutationErrorClass::Deterministic
+    );
 
     let client = ReviewClient::new(ReviewClientConfig::new(
         Url::parse(&format!("http://{address}/valid-problem/")).expect("fixture URL"),
@@ -853,11 +911,23 @@ async fn malformed_problem() -> Response<Body> {
     problem_response(true)
 }
 
-async fn wrong_problem_namespace() -> Response<Body> {
+async fn invalid_problem_uri() -> Response<Body> {
+    let value = json!({"type":"provider problem without a URI scheme", "title":"Refused",
+        "status":400, "detail":"Refused", "code":"provider.refused",
+        "traceId":"0123456789abcdef0123456789abcdef"});
+    Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .header("content-type", "application/problem+json")
+        .header("traceparent", TRACEPARENT)
+        .body(Body::from(value.to_string()))
+        .unwrap()
+}
+
+async fn provider_specific_problem() -> Response<Body> {
     let value = json!({
-        "type":"https://id.registrystack.org/problems/provider-private/request/invalid",
+        "type":"https://review-provider.example.test/problems/provider/refused",
         "title":"Invalid request", "status":400, "detail":"The request is invalid.",
-        "code":"request.invalid", "traceId":"0123456789abcdef0123456789abcdef"
+        "code":"provider.refused", "traceId":"0123456789abcdef0123456789abcdef"
     });
     Response::builder()
         .status(StatusCode::BAD_REQUEST)
@@ -891,7 +961,7 @@ async fn valid_problem() -> Response<Body> {
 
 async fn server_problem() -> Response<Body> {
     let value = json!({
-        "type": "https://id.registrystack.org/problems/registry-review/runtime/failure",
+        "type": "https://id.registrystack.org/problems/registry-casework/runtime/failure",
         "title": "Casework runtime failure",
         "status": 503,
         "detail": "Casework could not complete the request.",
@@ -908,7 +978,7 @@ async fn server_problem() -> Response<Body> {
 
 fn problem_response(extra_member: bool) -> Response<Body> {
     let mut value = json!({
-        "type": "https://id.registrystack.org/problems/registry-review/request/invalid",
+        "type": "https://id.registrystack.org/problems/registry-casework/request/invalid",
         "title": "Invalid request",
         "status": 400,
         "detail": "The review request is invalid.",

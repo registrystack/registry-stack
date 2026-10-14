@@ -2362,7 +2362,7 @@ fn ingestion_run_wire(status: &str) -> Value {
         "runId": RECORD_ID,
         "status": status,
         "blockedReason": null,
-        "entityId": "company",
+        "recordType": "company",
         "operation": "create",
         "profileId": INGESTION_PROFILE,
         "packageRevision": "revision-1",

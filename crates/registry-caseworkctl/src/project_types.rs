@@ -139,7 +139,7 @@ pub(super) fn generate(project: &Path, output: &Path) -> Result<Value> {
         let closure = policy.compile(&project)?;
         let policy_name = name(&policy.id);
         let binding = json!({"id":closure.identity.id,"version":closure.identity.version,"digest":closure.identity.digest});
-        typescript.push_str(&format!("export const {policy_name}Policy = {} as const satisfies casework.PolicyBinding;\nexport type {policy_name}Context = {};\nexport type {policy_name}Request = Omit<casework.ReviewCreateRequest, 'policy' | 'context'> & {{readonly policy: typeof {policy_name}Policy; readonly context: {{readonly mode: 'submitted'; readonly snapshot: {policy_name}Context}} | {{readonly mode: 'current-source'; readonly binding: {{readonly reference: string}}}} }};\nexport type {policy_name}Task = casework.ReviewTask;\nexport type {policy_name}Result = casework.ReviewResult;\n",binding,ts(&policy.display_schema,0)?));
+        typescript.push_str(&format!("export const {policy_name}Policy = {} as const satisfies casework.PolicyBinding;\nexport type {policy_name}Context = {};\nexport type {policy_name}Request = Omit<casework.ReviewCreateRequest, 'policy' | 'context'> & {{readonly policy: casework.PolicySelection & {{readonly id: typeof {policy_name}Policy.id}}; readonly context: {{readonly mode: 'submitted'; readonly snapshot: {policy_name}Context}} | {{readonly mode: 'current-source'; readonly binding: {{readonly reference: string}}}} }};\nexport type {policy_name}Task = casework.ReviewTask;\nexport type {policy_name}Result = casework.ReviewResult;\n",binding,ts(&policy.display_schema,0)?));
         python.push_str(&format!(
             "{policy_name}Policy = {}\n{policy_name}Context = TypedDict({:?}, {{",
             python_literal(&binding),

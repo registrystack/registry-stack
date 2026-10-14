@@ -419,7 +419,7 @@ pub enum CompiledProposalReview {
     Required {
         authority: String,
         source: String,
-        policy: registry_review_protocol::PolicyBinding,
+        policy: registry_review_protocol::PolicySelection,
     },
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -820,6 +820,7 @@ impl CompiledRecipients {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledMembershipBoundary {
     pub field: String,
+    #[serde(rename = "membershipRecordType")]
     pub membership_entity: String,
     pub membership_table: String,
     pub membership_key_column: String,
@@ -1471,6 +1472,10 @@ pub struct CompiledRegistry {
     registry_id: String,
     version: String,
     default_language: String,
+    #[serde(default, skip_serializing_if = "display_is_empty")]
+    display: crate::contract::DisplaySource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    review_authorities: Vec<crate::contract::ReviewAuthoritySource>,
     package: Option<PackageIdentitySource>,
     manifest_projection: Option<CompiledManifestProjection>,
     module_order: Vec<String>,
@@ -1499,6 +1504,8 @@ impl CompiledRegistry {
         registry_id: String,
         version: String,
         default_language: String,
+        display: crate::contract::DisplaySource,
+        review_authorities: Vec<crate::contract::ReviewAuthoritySource>,
         package: Option<PackageIdentitySource>,
         manifest_projection: Option<CompiledManifestProjection>,
         module_order: Vec<String>,
@@ -1522,6 +1529,8 @@ impl CompiledRegistry {
             registry_id,
             version,
             default_language,
+            display,
+            review_authorities,
             package,
             manifest_projection,
             module_order,
@@ -1573,6 +1582,14 @@ impl CompiledRegistry {
 
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    pub fn display(&self) -> &crate::contract::DisplaySource {
+        &self.display
+    }
+
+    pub fn review_authorities(&self) -> &[crate::contract::ReviewAuthoritySource] {
+        &self.review_authorities
     }
 
     pub fn package(&self) -> Option<&PackageIdentitySource> {
@@ -1646,4 +1663,8 @@ impl CompiledRegistry {
     pub fn revision(&self) -> &str {
         &self.revision
     }
+}
+
+pub(crate) fn display_is_empty(display: &crate::contract::DisplaySource) -> bool {
+    display.label.is_none() && display.description.is_none() && display.title_field.is_none()
 }

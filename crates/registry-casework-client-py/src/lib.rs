@@ -749,7 +749,7 @@ impl CaseworkClient {
         )
     }
 
-    #[pyo3(signature = (token, profile, task_id, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, *, source_profile=None))]
     fn preview_review_task_templates<'py>(
         &self,
         py: Python<'py>,
@@ -773,7 +773,7 @@ impl CaseworkClient {
         )
     }
 
-    #[pyo3(signature = (token, profile, task_id, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, *, source_profile=None))]
     fn list_review_task_grants<'py>(
         &self,
         py: Python<'py>,

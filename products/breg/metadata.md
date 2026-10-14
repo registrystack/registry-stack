@@ -105,5 +105,5 @@ Owning implementation: `crates/registry-breg/src/api/mod.rs`,
 `crates/registry-breg-client/src/metadata.rs`,
 `crates/registry-breg-client/src/actions.rs`, and
 `crates/registry-breg-client/src/proposal.rs`. The canonical generated examples
-live under `products/breg/generated/refactor*/`; change their source and generator,
+live under `products/breg/generated/facility*/`; change their source and generator,
 never the generated copy.

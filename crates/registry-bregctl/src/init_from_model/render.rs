@@ -2124,7 +2124,7 @@ mod tests {
     fn the_readme_names_what_no_field_links_and_the_concepts_that_would() {
         let document = "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
              kind: BRegModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
-             entities:\n  - concept: Household\n    properties:\n      - name: name\n\
+             recordTypes:\n  - concept: Household\n    properties:\n      - name: name\n\
              \x20 - concept: Person\n    properties:\n      - name: given_name\n\
              \x20 - concept: School\n    properties:\n      - name: name\n";
         let selection = Selection::parse("test", document.as_bytes()).expect("parses");
@@ -2163,7 +2163,7 @@ mod tests {
 
         let document = "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
              kind: BRegModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
-             entities:\n  - concept: Household\n    properties:\n      - name: name\n\
+             recordTypes:\n  - concept: Household\n    properties:\n      - name: name\n\
              \x20 - concept: Person\n    properties:\n      - name: given_name\n\
              \x20 - concept: GroupMembership\n    properties:\n      - name: person\n      - name: group\n\
              \x20 - concept: School\n    properties:\n      - name: name\n";

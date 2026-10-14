@@ -1418,7 +1418,7 @@ fn ingestion_run_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "runId", "status", "blockedReason", "entityId", "operation", "profileId",
+            "runId", "status", "blockedReason", "recordType", "operation", "profileId",
             "packageRevision", "schemaFingerprint", "inputDigest", "inputLength", "itemCount",
             "chunkCount", "chunkAlgorithmVersion", "maximumItems", "maximumBytes",
             "nextChunkIndex", "committedItems", "committedPrefixDigest", "lastAttempt",
@@ -1433,7 +1433,7 @@ fn ingestion_run_schema() -> Value {
                     {"type": "string", "enum": ["activePackageChanged", "importAuthorityClosed"]}
                 ]
             },
-            "entityId": {"type": "string"},
+            "recordType": {"type": "string"},
             "operation": {"type": "string", "enum": ["create", "patch"]},
             "profileId": {"type": "string"},
             "packageRevision": {"type": "string"},

@@ -60,7 +60,7 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                     errors.push(Diagnostic::error(
                         "breg.access.membership-entity-unknown",
                         &path,
-                        "membershipEntity must name a governed entity",
+                        "membershipRecordType must name a governed Record type",
                     ));
                     continue;
                 };

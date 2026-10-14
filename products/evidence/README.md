@@ -34,7 +34,7 @@ can be direct, search followed by fetch, or an explicitly bounded fetch set.
 Request and source batching preserve per-item authorization, disclosure and
 audit boundaries. Authenticated context and task grants establish only the
 explicit authority and selector origins their verified contracts permit.
-Evidence needs no BReg, Casework or Coordinator service or database. Assertions
+Evidence needs no Base Registry Engine (BReg), Casework or Coordinator service or database. Assertions
 establish claims and bindings, and confer no review approval or downstream write
 authority.
 
@@ -78,10 +78,10 @@ runnable synthetic SQLite project. `init --starter <dir> --profile local` copies
 a reviewed normalized project.
 
 ```sh
-evidencectl check <project> --target <target.yaml>
-evidencectl test <project> --target <target.yaml>
-evidencectl explain <project> --target <target.yaml>
-evidencectl types <project> --language typescript --output <new-file.ts>
+evidencectl check '<project>' --target '<target.yaml>'
+evidencectl test '<project>' --target '<target.yaml>'
+evidencectl explain '<project>' --target '<target.yaml>'
+evidencectl types '<project>' --language typescript --output '<new-file.ts>'
 ```
 
 `check` validates the same authoring model used by the compiler and editor.
@@ -113,7 +113,7 @@ caller authority.
 ### Package and deployment handoff
 
 ```sh
-evidencectl package <project> --target <target.yaml> --output <new-candidate-directory>
+evidencectl package '<project>' --target '<target.yaml>' --output '<new-candidate-directory>'
 ```
 
 Packaging is create-only. It reads regular files without following symlinks,
@@ -130,9 +130,9 @@ stable installed package path outside the build output. Install the bundle at
 that path and provision the referenced secrets and signer transport, then run:
 
 ```sh
-evidence authority activate --runtime-config <candidate>/runtime.yaml --document <candidate>/compiled-authority.yaml
+evidence authority activate --runtime-config '<candidate>/runtime.yaml' --document '<candidate>/compiled-authority.yaml'
 evidencectl doctor --runtime-config /absolute/path/to/candidate/runtime.yaml
-evidence serve --runtime-config <candidate>/runtime.yaml
+evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
 
 Authority activation derives its revision and digest, checks the package

@@ -56,3 +56,20 @@ void client.decideWorkItem(token, profile, {})
 // @ts-expect-error partial SubjectBinding selectors cannot name exact work
 const partial: ReviewStaffingQuery = { subjectId: "proposal-1" }
 void partial
+
+void client.previewReviewTaskTemplates(token, profile, { taskId: id, sourceProfile: 'source-reviewer' })
+void client.listReviewTaskGrants(token, profile, { taskId: id })
+// @ts-expect-error positional source profile and task ID cannot name a task grant read
+void client.previewReviewTaskTemplates(token, profile, 'source-reviewer', id)
+// @ts-expect-error positional source profile and task ID cannot name a task grant read
+void client.listReviewTaskGrants(token, profile, 'source-reviewer', id)
+
+const currentPolicyRequest: ReviewCreateRequest = { ...submitted, policy: { id: 'review' } }
+void client.createOrRecoverReviewRequest(token, 'requester', 'default-policy', currentPolicyRequest, digest)
+// @ts-expect-error a strict policy selector needs both version and digest
+const missingPolicyDigest: ReviewCreateRequest = { ...submitted, policy: { id: 'review', version: '1' } }
+// @ts-expect-error a strict policy selector needs both version and digest
+const missingPolicyVersion: ReviewCreateRequest = { ...submitted, policy: { id: 'review', digest } }
+// @ts-expect-error an accepted request must retain a concrete policy binding
+const unboundAccepted: ReviewRequestAccepted = { ...accepted, policy: { id: 'review' } }
+void missingPolicyDigest; void missingPolicyVersion; void unboundAccepted

@@ -76,3 +76,36 @@ fn old_question_inline_operation_and_disclosure_are_rejected() {
         let p=Project::new(&source);assert!(!p.index().diagnostics().is_empty());
     }
 }
+
+#[test]
+fn canonical_and_flat_target_diagnostics_match_the_owning_reader() {
+    for file in [
+        "target.yaml",
+        "local-target.yaml",
+        "targets/local/target.yaml",
+    ] {
+        for source in [
+            include_str!("../../../products/evidence/examples/standalone/local-target.yaml")
+                .replace("publicOrigin:", "publicOriginTypo:"),
+            include_str!("../../../products/evidence/examples/standalone/local-target.yaml")
+                .replace("kind: EvidenceTarget", "kind: EvidenceTargetSettings"),
+        ] {
+            let p = Project::new(SOURCE);
+            p.write(file, &source);
+            let report = registry_evidence_authoring::target::read_target(file, source.as_bytes())
+                .unwrap_err();
+            let index = p.index();
+            for finding in report.diagnostics() {
+                let diagnostic = index
+                    .diagnostics()
+                    .iter()
+                    .find(|x| x.path == p.path(file) && x.code.as_ref() == Some(&finding.code))
+                    .unwrap();
+                assert_eq!(diagnostic.message, finding.message);
+                if let Some(line) = finding.source.as_ref().and_then(|place| place.line) {
+                    assert_eq!(diagnostic.range.start.line, (line - 1) as u32);
+                }
+            }
+        }
+    }
+}

@@ -158,8 +158,8 @@ enum DevAction {
     ///
     /// A resident supervisor owns this project's PostgreSQL container and
     /// Casework child. Standalone sessions also own a pinned issuer container;
-    /// --issuer-project borrows a separately running BReg session's registered issuer. The database runs the pinned
-    /// image
+    /// --issuer-project borrows a separately running Base Registry Engine (BReg)
+    /// session's registered issuer. The database runs the pinned image
     /// public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
     /// the Docker Official Images mirror of postgres:17.11 at that digest,
     /// which the supervisor pulls on the first start. Each supervised
@@ -176,7 +176,7 @@ enum DevAction {
     Token(TokenArgs),
     /// Exchange an existing Casework approval using an explicit configured issuer connection.
     Grant(GrantArgs),
-    /// Show a stable native subject before authoring local directory or task templates.
+    /// Show a standalone issuer subject before authoring local directory or task templates.
     Identity(IdentityArgs),
 }
 
@@ -408,7 +408,7 @@ impl State {
             "issuer":self.issuer_origin(),"clientAssertionAudience":self.issuer_origin(),"resource":self.audience(),
             "audience":self.audience(),"journal":root.join("logs/casework.log"),
             "contextProviders":self.context_providers,
-            "clients":self.clients.iter().map(|client|json!({"id":client.id,"profile":client.profile,"role":client.role,
+            "clients":self.clients.iter().map(|client|json!({"id":client.id,"profile":client.profile,"role":client.role,"subject":client.principal,
                 "clientIdFile":root.join("credentials").join(&client.id).join("client-id"),
                 "assertionKeyFile":root.join("credentials").join(&client.id).join("assertion-key.jwk")})).collect::<Vec<_>>(),
             "directory":{"revision":self.directory_revision,"teams":self.directory_teams}})
@@ -632,6 +632,22 @@ fn borrowed_issuer(state: &State) -> Result<Option<PathBuf>> {
     Ok(Some(root))
 }
 
+fn verify_borrowed_subjects(state: &State, project: &Path) -> Result<()> {
+    let expected =
+        config::borrowed_subjects(state, &crate::project::load_and_check_policy(project)?)?;
+    if state.clients.iter().any(|client| {
+        expected
+            .get(&client.id)
+            .is_some_and(|subject| subject != &client.principal)
+    }) {
+        return Err(DevFailure::registration(anyhow::anyhow!(
+            "retained Casework subject differs from its exact issuer owner"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 fn ports(casework: u16, issuer: u16, database: u16) -> Result<()> {
     if casework == 0
         || issuer == 0
@@ -821,15 +837,6 @@ fn start(args: StartArgs) -> Result<Value> {
     {
         bail!("--issuer-project needs explicit integrations.resource and optional provider/task bindings in the local clients file");
     }
-    if requested_issuer.is_some()
-        || existing
-            .as_ref()
-            .is_some_and(|state| state.issuer_project.is_some())
-    {
-        config::require_stable_borrowed_principals(&crate::project::load_and_check_policy(
-            &project,
-        )?)?;
-    }
     // The source pin protects the records a session retains. Once `dev stop
     // --remove` has discarded them, changed inputs start a fresh session on
     // the ports and clients file the previous one used.
@@ -854,6 +861,7 @@ fn start(args: StartArgs) -> Result<Value> {
     let mut state = if let Some(mut state) = existing {
         private::validate_tree(&root.join("credentials"))?;
         private::validate_tree(&root.join("secrets"))?;
+        verify_borrowed_subjects(&state, &project)?;
         if control(&root, "status").is_ok_and(|status| status == "ready") {
             if borrowed_issuer(&state)?.is_some() {
                 issuer_keys(&state.issuer_origin())?;
@@ -910,7 +918,7 @@ fn start(args: StartArgs) -> Result<Value> {
         } else {
             None
         };
-        let state = State {
+        let mut state = State {
             api_version: DEV_STATE_API_VERSION.to_owned(),
             kind: DEV_STATE_KIND.to_owned(),
             project: project.clone(),
@@ -953,6 +961,13 @@ fn start(args: StartArgs) -> Result<Value> {
                 .map(|value| value.context_providers.keys().cloned().collect())
                 .unwrap_or_default(),
         };
+        let policy = crate::project::load_and_check_policy(&project)?;
+        let borrowed_subjects = config::borrowed_subjects(&state, &policy)?;
+        for client in &mut state.clients {
+            if let Some(subject) = borrowed_subjects.get(&client.id) {
+                client.principal = subject.clone();
+            }
+        }
         ports(state.casework_port, state.issuer_port, state.database_port)?;
         for port in std::iter::once(state.casework_port)
             .chain(state.issuer_project.is_none().then_some(state.issuer_port))
@@ -970,6 +985,7 @@ fn start(args: StartArgs) -> Result<Value> {
         initialize(&root, &state, &clients)?;
         read_state(&root)?
     };
+    verify_borrowed_subjects(&state, &project)?;
     retained_audit(&state)?;
     if clients.integrations.is_some() {
         integrations::validate_bindings(&root, &project)?;
@@ -2984,10 +3000,6 @@ pub(crate) enum DevFailure {
     ContextProviderBindingConfiguration {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
-    /// Borrowed local subjects cannot stand in for stable Casework principals.
-    BorrowedPrincipalConfiguration {
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
     /// A loopback port the session needs is bound by another process.
     PortOccupied { port: u16, source: std::io::Error },
     /// The authored inputs changed while the session retains records or
@@ -3032,7 +3044,6 @@ impl DevFailure {
                 | Self::SharedClientRegistration { .. }
                 | Self::SharedTaskAuthority { .. }
                 | Self::ContextProviderBindingConfiguration { .. }
-                | Self::BorrowedPrincipalConfiguration { .. }
         )
     }
 
@@ -3084,12 +3095,6 @@ impl DevFailure {
                 "A declared context provider connection cannot construct its maintained provider.".to_owned(),
                 "Check the deploymentRef, imported provider contract, status profile and service credential references against casework.yaml and the provider runtime, then retry.".to_owned(),
             ),
-            Self::BorrowedPrincipalConfiguration { .. } => (
-                "caseworkctl.dev.borrowed-principal-invalid",
-                "casework.yaml:/accessProfiles/principalClaim".to_owned(),
-                "A borrowed issuer session requires explicit stable Casework principal claims.".to_owned(),
-                "Use a stable principalClaim such as registry_principal in every Casework access profile and explicitly register its matching claim for each client in both projects' dev-clients.yaml. Do not use sub: it identifies the BReg owner's subject, not the Casework local principal.".to_owned(),
-            ),
             Self::PortOccupied { port, .. } => (
                 "caseworkctl.dev.port-occupied",
                 format!("dev:/ports/{port}"),
@@ -3140,7 +3145,6 @@ impl std::fmt::Display for DevFailure {
             Self::SharedClientRegistration { .. } => f.write_str("shared issuer registration differs from the Casework client"),
             Self::SharedTaskAuthority { .. } => f.write_str("shared issuer owner must pre-register the exact Casework task authority connection"),
             Self::ContextProviderBindingConfiguration { .. } => f.write_str("local context provider connection does not satisfy the maintained provider contract"),
-            Self::BorrowedPrincipalConfiguration { .. } => f.write_str("the shared BREG issuer requires explicit stable Casework principal claims"),
             Self::PortOccupied { .. } => f.write_str(
                 "a requested local port is already occupied; stop its owner or choose other ports",
             ),
@@ -3170,8 +3174,7 @@ impl std::error::Error for DevFailure {
             Self::IntegrationConfiguration { source }
             | Self::SharedClientRegistration { source }
             | Self::SharedTaskAuthority { source }
-            | Self::ContextProviderBindingConfiguration { source }
-            | Self::BorrowedPrincipalConfiguration { source } => Some(source.as_ref()),
+            | Self::ContextProviderBindingConfiguration { source } => Some(source.as_ref()),
             Self::PortOccupied { source, .. } => Some(source),
             Self::AuditFormatUnsupported { source } | Self::AuditUnavailable { source } => {
                 Some(source.as_ref())

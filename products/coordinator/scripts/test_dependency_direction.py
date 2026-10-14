@@ -68,7 +68,7 @@ INTENDED = {
     "breg-mcp": ["breg-client", ("breg", "dev")],
     "casework-client": ["casework-core", "review-client", "platform"],
     "casework-core": ["serde"],
-    "caseworkctl": ["casework-core", ("stack-client", "dev")],
+    "caseworkctl": ["casework-core", ("casework-client", "dev")],
     "review-client": ["review-protocol", "platform"],
     "review-protocol": ["serde"],
     "messaging": ["messaging-core", "platform"],
@@ -278,13 +278,15 @@ class DependentTests(unittest.TestCase):
             },
         )
 
-    def test_casework_adopter_facade_is_test_only_and_cannot_link_the_runtime(self):
+    def test_casework_tooling_cannot_reach_coordinator_through_any_dependency_kind(self):
         self.assertEqual(MODULE.violations(metadata()), [])
-        for dependency in ["client", "stack-client"]:
-            with self.subTest(dependency=dependency):
-                self.assertIn("registry-caseworkctl depends on Coordinator", failures(caseworkctl=["casework-core", dependency]))
-        self.assertIn("registry-caseworkctl depends on Coordinator", failures(caseworkctl=["casework-core", ("runtime", "dev")]))
-        self.assertEqual(MODULE.ALLOWED_TEST_DEPENDENTS, {"registry-caseworkctl": frozenset({"registry-coordinator-client"})})
+        for dependency in ["client", "stack-client", "runtime"]:
+            for kind in [None, "dev", "build"]:
+                with self.subTest(dependency=dependency, kind=kind):
+                    self.assertIn(
+                        "registry-caseworkctl depends on Coordinator",
+                        failures(caseworkctl=["casework-core", (dependency, kind)]),
+                    )
 
 
 class CommandTests(unittest.TestCase):

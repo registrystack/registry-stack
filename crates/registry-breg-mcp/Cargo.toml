@@ -64,6 +64,9 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
+serde_norway.workspace = true
+tokio-postgres.workspace = true
 base64.workspace = true
 jsonschema.workspace = true
 # The composed journey test serves the citizen review page beside the gateway;

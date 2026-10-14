@@ -429,7 +429,7 @@ mod tests {
              kind: BRegModelSelection\n\
              model: publicschema\n\
              registry:\n  id: example\n  title: Example\n\
-             entities: []\n",
+             recordTypes: []\n",
         )
         .expect("written");
         let Err(Refusal::Document(refusal)) = read_selection_file(&path) else {
@@ -462,7 +462,7 @@ mod tests {
              model: publicschema\n\
              modelVersion: \"0.3.0\"\n\
              registry:\n  id: place-registry\n  title: Place Registry\n\
-             entities:\n\
+             recordTypes:\n\
              \x20 - concept: Household\n\
              \x20   classification: public\n\
              \x20   properties:\n\
@@ -532,9 +532,9 @@ mod tests {
         let directory = tempfile::tempdir().expect("a temporary directory");
         let root = directory.path().canonicalize().expect("a canonical path");
         let selections = [
-            "entities:\n  - concept: Person\n    identifierField: created_at\n",
-            "entities:\n  - concept: Person\n    identifierField: given_name\n    properties:\n      - name: given_name\n",
-            "entities:\n  - concept: Person\n    properties:\n      - name: preferred_language\n\
+            "recordTypes:\n  - concept: Person\n    identifierField: created_at\n",
+            "recordTypes:\n  - concept: Person\n    identifierField: given_name\n    properties:\n      - name: given_name\n",
+            "recordTypes:\n  - concept: Person\n    properties:\n      - name: preferred_language\n\
              vocabularies:\n  - enum: Language\n    mode: inline\n",
         ];
         for (index, body) in selections.iter().enumerate() {
@@ -561,7 +561,7 @@ mod tests {
     fn the_next_steps_say_what_no_field_links() {
         let document = "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
              kind: BRegModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
-             entities:\n  - concept: Household\n    properties:\n      - name: name\n\
+             recordTypes:\n  - concept: Household\n    properties:\n      - name: name\n\
              \x20 - concept: School\n    properties:\n      - name: name\n";
         let selection = selection::Selection::parse("test", document.as_bytes()).expect("parses");
         let model = publicschema::model().expect("the snapshot reads");

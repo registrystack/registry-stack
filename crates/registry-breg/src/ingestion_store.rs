@@ -287,7 +287,7 @@ impl IngestionRunRecord {
                 ),
                 _ => Value::Null,
             },
-            "entityId": self.entity_id,
+            "recordType": self.entity_id,
             "operation": self.operation,
             "profileId": self.profile_id,
             "packageRevision": self.package_revision,

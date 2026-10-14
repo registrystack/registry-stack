@@ -25,7 +25,7 @@ exactly what each one destroys.
 | Command | Removes for good | Leaves in place |
 | --- | --- | --- |
 | `history erase` | The retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. | The current record, every later revision, the audit journal, and each spent idempotency key, so a retry answers `409 idempotency.conflict`. The key keeps the raw issuer, principal value, and key it was sent under until `idempotency-retention erase-expired` drops its receipt. |
-| `proposal-retention erase` | The payload detail of one Proposal submission version: proposal and target snapshots, the held idempotency responses, Proposal revision snapshots, outbox payloads, intake rows, and attachment references/content. | The value-free lifecycle rows of that Proposal, record history, and each spent idempotency key, so a retry answers `409 idempotency.conflict`. The key keeps the raw issuer, principal value, and key it was sent under until `idempotency-retention erase-expired` drops its receipt. |
+| `proposal-retention erase` | Eligible payload detail of one Proposal submission version: frozen snapshots, draft input, application reasons, Review payloads, held idempotency responses, and attachment references. Unresolved remote recovery keeps the exact request and acceptance it still needs; external content deletion can remain pending. | The value-free lifecycle rows of that Proposal, record history, and each spent idempotency key, so a retry answers `409 idempotency.conflict`. The key keeps the raw issuer, principal value, and key it was sent under until `idempotency-retention erase-expired` drops its receipt. |
 | `proposal-retention cleanup-attachments` | Unreferenced external attachment bytes awaiting deletion, including abandoned uploads and objects recreated after an earlier confirmed deletion. | Live attachment references, Proposal detail, and durable deletion tombstones. |
 | `evidence-retention erase-expired` | The signed Evidence responses and verification context a governed action retained, once their 24-hour window has closed. | Every retained assertion still inside its window, and the action receipts that used them. |
 | `idempotency-retention erase-expired` | The held responses of spent idempotency keys whose receipt horizon has passed, and the raw issuer, principal value, and key each was sent under. | Every spent key, as a digest of its caller and key with its request binding and times, kept indefinitely, so a retry is still refused rather than executed. |
@@ -204,7 +204,7 @@ bregctl --format json proposal-retention list \
   --runtime-config /etc/breg/runtime.yaml --action-id correct-address --limit 50
 bregctl --format json proposal-retention dry-run \
   --runtime-config /etc/breg/runtime.yaml --action-id correct-address \
-  --proposal-id <proposal-uuid> --submission-version <version>
+  --proposal-id '<proposal-uuid>' --submission-version '<version>'
 ```
 
 Inspect eligibility, current/pinned state, retention mode, and payload counts.
@@ -222,7 +222,7 @@ receipts cannot execute the command again.
 ```sh
 bregctl --format json proposal-retention erase \
   --runtime-config /etc/breg/runtime.yaml --action-id correct-address \
-  --proposal-id <proposal-uuid> --submission-version <version>
+  --proposal-id '<proposal-uuid>' --submission-version '<version>'
 ```
 
 Record history and other retained submissions have separate scopes. Identical

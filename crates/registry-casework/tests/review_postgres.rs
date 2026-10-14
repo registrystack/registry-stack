@@ -443,7 +443,8 @@ fn request(subject_id: &str, requester_reference: &str) -> ReviewCreateRequest {
         policy: project("1")
             .compile_policy("registry-correction")
             .unwrap()
-            .binding(),
+            .binding()
+            .into(),
         subject: SubjectBinding {
             source: "registry".to_owned(),
             subject_type: "record".to_owned(),
@@ -473,7 +474,8 @@ fn bind_request(
     request.policy = service
         .review_policy_description(&producer, &request.policy.id)
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     request
 }
 
@@ -3222,7 +3224,8 @@ async fn accountability_read_requires_live_retention_and_a_committed_audit() {
     answer_request.policy = service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let created = service
         .create_review_request(&fixture.producer, answer_request, "create-accountability")
         .await
@@ -3368,7 +3371,8 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
         input.policy = service
             .review_policy_description(&fixture.producer, "registry-answer")
             .unwrap()
-            .binding();
+            .binding()
+            .into();
         let accepted = service
             .create_review_request(&fixture.producer, input, &format!("create-{code}"))
             .await
@@ -4040,7 +4044,8 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
     answer_request.policy = service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let created = service
         .create_review_request(&fixture.producer, answer_request, "create-decision-audit")
         .await
@@ -4121,7 +4126,8 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
     second_request.policy = service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let second_created = service
         .create_review_request(&fixture.producer, second_request, "create-decision-audit-2")
         .await
@@ -4253,7 +4259,8 @@ async fn review_cancellation_is_audited_after_the_cancel_commits() {
     create.policy = service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let created = service
         .create_review_request(&fixture.producer, create.clone(), "create-cancel-audit")
         .await
@@ -4486,7 +4493,8 @@ async fn review_reads_check_access_before_disclosing_retention_expiry() {
     answer_request.policy = service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let created = service
         .create_review_request(
             &fixture.producer,
@@ -4609,7 +4617,8 @@ async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure()
     answer_request.policy = service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let created = service
         .create_review_request(
             &fixture.producer,
@@ -4756,7 +4765,8 @@ async fn standalone_structured_answers_support_polling_and_completion_modes() {
         answer_request.policy = service
             .review_policy_description(&fixture.producer, "registry-answer")
             .unwrap()
-            .binding();
+            .binding()
+            .into();
         let created = service
             .create_review_request(
                 &fixture.producer,
@@ -4970,7 +4980,8 @@ async fn concurrent_round_creation_and_duplicate_vote_leave_one_current_state() 
     answer_request.policy = answer_service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let answer = answer_service
         .create_review_request(&fixture.producer, answer_request, "create-duplicate-vote")
         .await
@@ -5057,7 +5068,8 @@ async fn cancellation_and_final_decision_commit_exactly_one_terminal_result() {
     create.policy = service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let created = service
         .create_review_request(
             &fixture.producer,
@@ -6123,7 +6135,8 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
     answer_request.policy = answer_service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let answer = answer_service
         .create_review_request(&fixture.producer, answer_request, "create-decision-replay")
         .await
@@ -6210,7 +6223,8 @@ async fn a_retained_decision_replay_is_withheld_until_its_response_entry_is_acce
     answer_request.policy = answer_service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let answer = answer_service
         .create_review_request(
             &fixture.producer,
@@ -6379,7 +6393,8 @@ async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
     answer_request.policy = answer_service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let answer = answer_service
         .create_review_request(
             &fixture.producer,
@@ -8584,7 +8599,8 @@ async fn subject_clocks_are_independent_across_concurrent_review_policies() {
     answer_request.policy = answer_service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let answer = answer_service
         .create_review_request(
             &fixture.producer,
@@ -9825,7 +9841,8 @@ async fn an_initiator_is_refused_by_name_and_is_only_recorded_from_a_trusted_iss
     named.policy = service
         .review_policy_description(&fixture.producer, "registry-answer")
         .unwrap()
-        .binding();
+        .binding()
+        .into();
     let created = service
         .create_review_request(&fixture.producer, named, "create-untrusted-initiator")
         .await

@@ -11,9 +11,8 @@ from pathlib import Path
 
 # The Coordinator composes products through their public clients. It may use
 # the Casework client and core, never the runtime, its tooling, or the BReg
-# adapter. Only the Casework tooling's adopter tests may reach the Coordinator
-# client through the unified client; no shipped Casework, review, or BReg crate
-# may reach a Coordinator crate.
+# adapter. No Casework, review, or BReg crate may reach a Coordinator crate,
+# including through its own test dependencies.
 COORDINATOR_PREFIX = "registry-coordinator"
 CASEWORK_FOR_COORDINATOR = ("registry-casework-client", "registry-casework-core")
 
@@ -109,13 +108,9 @@ def violations(metadata: dict) -> list[str]:
     for package_id, package_name in sorted(names.items(), key=lambda item: item[1]):
         reached = {names[item] for item in closure(package_id, every, linked)}
         if package_name.startswith(("registry-casework", "registry-review-", "registry-breg")):
-            permitted = set()
-            if package_name == "registry-caseworkctl":
-                shipped = {names[item] for item in closure(package_id, linked, linked)}
-                permitted = {"registry-coordinator-client"} - shipped
             forbidden = sorted(
                 item for item in reached
-                if item.startswith(COORDINATOR_PREFIX) and item not in permitted
+                if item.startswith(COORDINATOR_PREFIX)
             )
             if forbidden:
                 failures.append(

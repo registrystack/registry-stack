@@ -76,9 +76,11 @@ fn metadata() -> Value {
             "inputs":[
                 {"id":"target", "apiName":"targetId", "required":true,
                  "nullable":false, "classification":"internal",
+                 "schema":{"type":"string", "format":"uuid"},
                  "fieldType":{"type":"reference", "target":"item", "onDelete":"restrict"}},
                 {"id":"label", "apiName":"label", "required":true,
                  "nullable":false, "classification":"internal",
+                 "schema":{"type":"string", "minLength":1, "maxLength":16},
                  "fieldType":{"type":"string", "minimumLength":1, "maximumLength":16}}
             ],
             "referenceInputs":[{"input":"target", "apiName":"targetId", "targetRecordType":"item"}],

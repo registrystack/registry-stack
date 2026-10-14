@@ -55,7 +55,7 @@ struct Retained {
     key: String,
     request: ReviewCreateRequest,
     submission_digest: SubmissionDigest,
-    policy: registry_review_client::PolicyBinding,
+    policy: registry_review_client::PolicySelection,
     accepted: Option<ReviewRequestAccepted>,
     result: Option<ReviewResult>,
     proven_current_revision: Option<String>,
@@ -121,7 +121,7 @@ fn validate_retained_closure(registry_id: &str, row: &Retained) -> Result<(), Mu
             .map_err(|_| MutationError::PreconditionFailed)?;
         if accepted.request_id.is_nil()
             || accepted.subject != row.request.subject
-            || accepted.policy != *policy
+            || !policy.matches(&accepted.policy)
             || accepted.submission_digest != expected
         {
             return Err(MutationError::PreconditionFailed);
@@ -494,7 +494,7 @@ pub async fn prepare_proposal_activation_compatibility(
             let Some(accepted) = source.accepted.clone() else {
                 continue;
             };
-            if accepted.policy != source.policy
+            if !source.policy.matches(&accepted.policy)
                 || accepted.subject != source.request.subject
                 || accepted.submission_digest != source.submission_digest
             {

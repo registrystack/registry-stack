@@ -854,8 +854,17 @@
             ],
             "type": "object"
           },
-          "PolicyBinding": {
+          "PolicySelection": {
             "additionalProperties": false,
+            "dependentRequired": {
+              "digest": [
+                "version"
+              ],
+              "version": [
+                "digest"
+              ]
+            },
+            "description": "Select the trusted provider's current policy, or require one exact binding.\nThe selector stays in the submission identity; acceptance records the concrete binding.",
             "properties": {
               "digest": {
                 "$ref": "#/components/schemas/ReviewCreateRequest/$defs/ContentDigest"
@@ -868,9 +877,7 @@
               }
             },
             "required": [
-              "id",
-              "version",
-              "digest"
+              "id"
             ],
             "type": "object"
           },
@@ -974,7 +981,7 @@
             ]
           },
           "policy": {
-            "$ref": "#/components/schemas/ReviewCreateRequest/$defs/PolicyBinding"
+            "$ref": "#/components/schemas/ReviewCreateRequest/$defs/PolicySelection"
           },
           "requesterReference": {
             "type": "string"
@@ -995,130 +1002,6 @@
           "context"
         ],
         "title": "ReviewCreateRequest",
-        "type": "object"
-      },
-      "ReviewProblem": {
-        "additionalProperties": false,
-        "properties": {
-          "code": {
-            "enum": [
-              "admission.held",
-              "admission.recovery-only",
-              "audit.response-unavailable",
-              "authentication.refused",
-              "binding.conflict",
-              "binding.live-conflict",
-              "definition.refused",
-              "deployment.activation-changed",
-              "deployment.refused",
-              "evaluation.uncertain",
-              "event.invalid",
-              "event.source-unavailable",
-              "event.unauthenticated",
-              "execution.held",
-              "idempotency.key-invalid",
-              "idempotency.key-reused",
-              "input.invalid",
-              "operation.not-authorized",
-              "receipt.expired",
-              "reconcile.raced",
-              "reconcile.refused",
-              "reconcile.unsupported",
-              "request.body-too-large",
-              "request.invalid",
-              "request.limit-out-of-range",
-              "request.method-not-allowed",
-              "request.not-found",
-              "request.reason-invalid",
-              "request.retention-invalid",
-              "request.unprocessable",
-              "request.unsupported-media-type",
-              "restore.hold-required",
-              "restore.lease-incompatible",
-              "restore.review-required",
-              "restore.unresolved",
-              "retry.refused",
-              "review.result-expired",
-              "run.definition-incompatible",
-              "run.not-visible",
-              "run.payload-erased",
-              "runtime.failure",
-              "service.unavailable",
-              "workflow.not-served",
-              "workflow.revision-mismatch"
-            ],
-            "type": "string"
-          },
-          "detail": {
-            "type": "string"
-          },
-          "status": {
-            "type": "integer"
-          },
-          "title": {
-            "type": "string"
-          },
-          "traceId": {
-            "type": "string"
-          },
-          "type": {
-            "enum": [
-              "https://id.registrystack.org/problems/registry-review/admission/held",
-              "https://id.registrystack.org/problems/registry-review/admission/recovery-only",
-              "https://id.registrystack.org/problems/registry-review/audit/response-unavailable",
-              "https://id.registrystack.org/problems/registry-review/authentication/refused",
-              "https://id.registrystack.org/problems/registry-review/binding/conflict",
-              "https://id.registrystack.org/problems/registry-review/binding/live-conflict",
-              "https://id.registrystack.org/problems/registry-review/definition/refused",
-              "https://id.registrystack.org/problems/registry-review/deployment/activation-changed",
-              "https://id.registrystack.org/problems/registry-review/deployment/refused",
-              "https://id.registrystack.org/problems/registry-review/evaluation/uncertain",
-              "https://id.registrystack.org/problems/registry-review/event/invalid",
-              "https://id.registrystack.org/problems/registry-review/event/source-unavailable",
-              "https://id.registrystack.org/problems/registry-review/event/unauthenticated",
-              "https://id.registrystack.org/problems/registry-review/execution/held",
-              "https://id.registrystack.org/problems/registry-review/idempotency/key-invalid",
-              "https://id.registrystack.org/problems/registry-review/idempotency/key-reused",
-              "https://id.registrystack.org/problems/registry-review/input/invalid",
-              "https://id.registrystack.org/problems/registry-review/operation/not-authorized",
-              "https://id.registrystack.org/problems/registry-review/receipt/expired",
-              "https://id.registrystack.org/problems/registry-review/reconcile/raced",
-              "https://id.registrystack.org/problems/registry-review/reconcile/refused",
-              "https://id.registrystack.org/problems/registry-review/reconcile/unsupported",
-              "https://id.registrystack.org/problems/registry-review/request/body-too-large",
-              "https://id.registrystack.org/problems/registry-review/request/invalid",
-              "https://id.registrystack.org/problems/registry-review/request/limit-out-of-range",
-              "https://id.registrystack.org/problems/registry-review/request/method-not-allowed",
-              "https://id.registrystack.org/problems/registry-review/request/not-found",
-              "https://id.registrystack.org/problems/registry-review/request/reason-invalid",
-              "https://id.registrystack.org/problems/registry-review/request/retention-invalid",
-              "https://id.registrystack.org/problems/registry-review/request/unprocessable",
-              "https://id.registrystack.org/problems/registry-review/request/unsupported-media-type",
-              "https://id.registrystack.org/problems/registry-review/restore/hold-required",
-              "https://id.registrystack.org/problems/registry-review/restore/lease-incompatible",
-              "https://id.registrystack.org/problems/registry-review/restore/review-required",
-              "https://id.registrystack.org/problems/registry-review/restore/unresolved",
-              "https://id.registrystack.org/problems/registry-review/retry/refused",
-              "https://id.registrystack.org/problems/registry-review/review/result-expired",
-              "https://id.registrystack.org/problems/registry-review/run/definition-incompatible",
-              "https://id.registrystack.org/problems/registry-review/run/not-visible",
-              "https://id.registrystack.org/problems/registry-review/run/payload-erased",
-              "https://id.registrystack.org/problems/registry-review/runtime/failure",
-              "https://id.registrystack.org/problems/registry-review/service/unavailable",
-              "https://id.registrystack.org/problems/registry-review/workflow/not-served",
-              "https://id.registrystack.org/problems/registry-review/workflow/revision-mismatch"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "title",
-          "status",
-          "detail",
-          "code",
-          "traceId"
-        ],
         "type": "object"
       },
       "ReviewRequestAccepted": {
@@ -3976,7 +3859,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4001,7 +3884,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4033,7 +3916,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4056,7 +3939,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4079,7 +3962,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4102,7 +3985,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4134,7 +4017,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4157,7 +4040,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4180,7 +4063,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4203,7 +4086,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4280,7 +4163,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4303,7 +4186,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4335,7 +4218,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4358,7 +4241,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4381,7 +4264,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4404,7 +4287,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4428,7 +4311,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4451,7 +4334,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4548,7 +4431,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4573,7 +4456,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4605,7 +4488,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4628,7 +4511,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4651,7 +4534,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4674,7 +4557,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4698,7 +4581,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4721,7 +4604,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4744,7 +4627,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4767,7 +4650,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4790,7 +4673,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4878,7 +4761,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4901,7 +4784,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4933,7 +4816,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4959,7 +4842,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -4982,7 +4865,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -5008,7 +4891,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -5031,7 +4914,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -5118,7 +5001,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -5142,7 +5025,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -5174,7 +5057,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -5197,7 +5080,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -5220,7 +5103,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -5243,7 +5126,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {
@@ -5266,7 +5149,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/ReviewProblem"
+                      "$ref": "#/components/schemas/Problem"
                     },
                     {
                       "properties": {

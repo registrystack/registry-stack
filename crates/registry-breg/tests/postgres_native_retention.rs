@@ -7,6 +7,8 @@ mod client_http;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
+#[path = "support/proposal_review_authority.rs"]
+mod proposal_review_authority;
 
 use axum::{
     body::{Body, Bytes},
@@ -466,6 +468,276 @@ async fn shared_attachment_bytes_survive_until_the_last_native_proposal_erasure(
     assert_eq!(count.get::<_, i64>(0), 0);
     fixture.finish().await;
 }
+// This HTTP fixture injects admitted claims without bearer authentication and
+// therefore has no human-identity provenance. Seed only this optional retained
+// copy before delivery; production identity admission has its own signed tests.
+async fn seed_retention_initiator(
+    fixture: &client_http::ClientFixture,
+    proposal: &registry_breg_client::BRegProposal,
+) {
+    let id = uuid::Uuid::parse_str(proposal.id()).unwrap();
+    let value: Value=fixture.database.admin.query_one("SELECT create_request FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1",&[&id]).await.unwrap().get(0);
+    let mut request: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(value).unwrap();
+    request.initiator = Some(registry_review_client::HumanIdentity {
+        issuer: "https://retention-issuer.example.test".into(),
+        subject: "retention-initiator-canary".into(),
+    });
+    request.check().unwrap();
+    let digest =
+        registry_review_client::submission_digest("proposal-producer", "proposal-test", &request)
+            .unwrap();
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET create_request=$2,expected_submission_digest=$3 WHERE proposal_id=$1",&[&id,&json!(request),&digest.as_str()]).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_erasure_reports_sensitive_copies_and_preserves_only_bounded_review_recovery() {
+    use registry_breg::review_store::run_review_authority_once_for_test;
+    let policy =
+        json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+    let authority = proposal_review_authority::LocalAuthority::start(
+        serde_json::from_value(policy.clone()).unwrap(),
+    )
+    .await;
+    let mut source = registry_source(false);
+    source["reviewAuthorities"] =
+        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+    let configured = authority.registry.clone();
+    let human = VerifiedRequestClaims::authenticated_with_actor_kind(
+        "sub",
+        "retention-initiator-canary",
+        BTreeSet::from(["proposal:manage".into()]),
+        Some("registry-administration".into()),
+        BTreeMap::from([(
+            "jurisdiction".into(),
+            VerifiedClaimValue::direct_string("zone-a").unwrap(),
+        )]),
+        registry_platform_oidc::ActorKind::Human,
+    )
+    .unwrap();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        human,
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(configured.clone(), configured)
+        },
+    )
+    .await;
+    let client = &fixture.http.client;
+    let operator = cleanup(&fixture, AttachmentStorage::Database);
+    let draft = start(&fixture, "retention-value-canary", "scope-start").await;
+    let uploaded = client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            b"retention-attachment-canary",
+            &key("scope-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    let submit = client
+        .prepare_proposal(&uploaded, "submit", json!({}), &key("scope-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    seed_retention_initiator(&fixture, &submitted).await;
+    assert!(
+        run_review_authority_once_for_test(&fixture.pool, &authority.registry)
+            .await
+            .unwrap()
+    );
+    assert!(
+        run_review_authority_once_for_test(&fixture.pool, &authority.registry)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        authority.counts().0,
+        1,
+        "loopback provider accepted the original request"
+    );
+    let current = client.read_proposal(&submitted).await.unwrap().value;
+    let apply = client.prepare_proposal(&current,"apply",json!({"submissionVersion":1,"effectDigest":current.effect_digest().unwrap(),"reason":"retention-reason-canary"}),&key("scope-apply")).unwrap();
+    let applied = client.execute_proposal(&apply).await.unwrap().value;
+    let id = uuid::Uuid::parse_str(applied.id()).unwrap();
+    // Seed the two optional stored copies without adding a separate task-grant
+    // authorization journey. This test proves their retention scope only.
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_state SET action_title='retention-title-canary' WHERE proposal_id=$1",&[&id]).await.unwrap();
+    fixture.database.admin.execute("INSERT INTO registry_internal.registry_proposal_task_authority (action_id,proposal_id,submission_version,binding) VALUES ('correct-name',$1,1,$2)",&[&id,&json!({"selectors":{"synthetic":"retention-selector-canary"}})]).await.unwrap();
+    let before: Value = fixture.database.admin.query_one("SELECT jsonb_build_object(
+        'input',s.input,'title',s.action_title,'task',(SELECT binding FROM registry_internal.registry_proposal_task_authority WHERE proposal_id=s.proposal_id),'snapshot',p.snapshot,'targets',(SELECT jsonb_agg(jsonb_build_array(base_snapshot,after_snapshot)) FROM registry_internal.registry_proposal_targets WHERE proposal_id=s.proposal_id),
+        'reason',(SELECT reason FROM registry_internal.registry_proposal_applications WHERE proposal_id=s.proposal_id),
+        'request',r.create_request,'binding',r.accepted_binding,'result',(SELECT result FROM registry_internal.registry_proposal_review_results WHERE proposal_id=s.proposal_id))
+        FROM registry_internal.registry_proposal_state s JOIN registry_internal.registry_proposal_submissions p USING(action_id,proposal_id,submission_version)
+        JOIN registry_internal.registry_proposal_review_submissions r USING(action_id,proposal_id,submission_version) WHERE s.proposal_id=$1",&[&id]).await.unwrap().get(0);
+    assert!(before["input"]
+        .to_string()
+        .contains("retention-value-canary"));
+    assert!(before["snapshot"]
+        .to_string()
+        .contains("retention-value-canary"));
+    assert!(before["targets"]
+        .to_string()
+        .contains("retention-value-canary"));
+    assert_eq!(before["reason"], "retention-reason-canary");
+    assert_eq!(before["title"], "retention-title-canary");
+    assert!(before["task"]
+        .to_string()
+        .contains("retention-selector-canary"));
+    assert!(before["request"]
+        .to_string()
+        .contains("retention-initiator-canary"));
+    assert_ne!(before["binding"], json!({}));
+    assert_ne!(before["result"], json!({}));
+    let history_sql="SELECT jsonb_agg(to_jsonb(r) ORDER BY entity_id,record_id,record_revision) FROM registry_internal.registry_revisions r";
+    let history_before: Value = fixture
+        .database
+        .admin
+        .query_one(history_sql, &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(history_before.as_array().unwrap().len(), 2);
+    assert!(history_before
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| !row["snapshot"].is_null()));
+    let dry = operator.dry_run(scope(&applied)).await.unwrap();
+    assert!(dry.eligible_for_erasure);
+    assert_eq!(dry.erasure.proposal_snapshots, 1);
+    assert_eq!(dry.erasure.target_snapshots, 1);
+    assert_eq!(dry.erasure.draft_inputs, 1);
+    assert_eq!(dry.erasure.application_reasons, 1);
+    assert_eq!(dry.erasure.attachment_references, 1);
+    assert_eq!(dry.erasure.review_submission_requests, 1);
+    assert_eq!(dry.erasure.review_accepted_bindings, 1);
+    assert_eq!(dry.erasure.review_result_payloads, 1);
+    assert!(dry.erasure.idempotency_results >= 3);
+    let erased = operator.erase(scope(&applied)).await.unwrap();
+    assert_eq!(
+        erased.erasure, dry.erasure,
+        "dry-run and committed report count the same scope"
+    );
+    let remaining = fixture.database.admin.query_one("SELECT
+        s.input IS NULL AND s.action_title IS NULL,
+        p.snapshot IS NULL,
+        NOT EXISTS(SELECT 1 FROM registry_internal.registry_proposal_targets WHERE proposal_id=$1 AND (base_snapshot IS NOT NULL OR after_snapshot IS NOT NULL)),
+        NOT EXISTS(SELECT 1 FROM registry_internal.registry_idempotency i JOIN registry_internal.registry_proposal_idempotency_links l USING(key_reference) WHERE l.proposal_id=$1 AND i.response_body IS NOT NULL),
+        NOT EXISTS(SELECT 1 FROM registry_internal.registry_proposal_applications WHERE proposal_id=$1 AND reason IS NOT NULL),
+        NOT EXISTS(SELECT 1 FROM registry_internal.registry_proposal_attachments WHERE proposal_id=$1 AND (erased_at IS NULL OR uploaded_at IS NOT NULL OR uploaded_by IS NOT NULL)),
+        r.create_request='{}'::jsonb AND r.accepted_binding='{}'::jsonb,
+        NOT EXISTS(SELECT 1 FROM registry_internal.registry_proposal_review_results WHERE proposal_id=$1 AND result<>'{}'::jsonb),
+        NOT EXISTS(SELECT 1 FROM registry_internal.registry_attachment_blobs),
+        NOT EXISTS(SELECT 1 FROM registry_internal.registry_proposal_task_authority WHERE proposal_id=$1)
+        FROM registry_internal.registry_proposal_state s JOIN registry_internal.registry_proposal_submissions p USING(action_id,proposal_id,submission_version)
+        JOIN registry_internal.registry_proposal_review_submissions r USING(action_id,proposal_id,submission_version) WHERE s.proposal_id=$1",&[&id]).await.unwrap();
+    for column in 0..10 {
+        assert!(
+            remaining.get::<_, bool>(column),
+            "sensitive copy {column} erased"
+        );
+    }
+    assert!(
+        client.execute_proposal(&apply).await.is_err(),
+        "spent Apply receipt cannot reexecute after erasure"
+    );
+    let history_after: Value = fixture
+        .database
+        .admin
+        .query_one(history_sql, &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        history_after, history_before,
+        "Proposal detail erasure preserves exact Record history bytes and metadata"
+    );
+    assert_eq!(
+        operator.dry_run(scope(&applied)).await.unwrap().erasure,
+        Default::default()
+    );
+
+    // Cancellation is locally terminal while the accepted remote Review is
+    // unresolved. Only its exact recovery material survives detail erasure.
+    authority.set_results_unavailable(true);
+    let draft = start(&fixture, "recovery-value-canary", "bounded-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("bounded-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    seed_retention_initiator(&fixture, &submitted).await;
+    let id = uuid::Uuid::parse_str(submitted.id()).unwrap();
+    assert!(
+        run_review_authority_once_for_test(&fixture.pool, &authority.registry)
+            .await
+            .unwrap()
+    );
+    let recovery_sql = "SELECT create_request,accepted_binding,recovery_deadline-created_at FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1";
+    let recovery = fixture
+        .database
+        .admin
+        .query_one(recovery_sql, &[&id])
+        .await
+        .unwrap();
+    let original_request: Value = recovery.get(0);
+    let original_binding: Value = recovery.get(1);
+    assert!(original_request
+        .to_string()
+        .contains("retention-initiator-canary"));
+    let bounded: bool = fixture.database.admin.query_one("SELECT recovery_deadline=created_at+interval '7 days' FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1",&[&id]).await.unwrap().get(0);
+    assert!(bounded, "configured recovery horizon is durable");
+    let cancel = client
+        .prepare_proposal(&submitted, "cancel", json!({}), &key("bounded-cancel"))
+        .unwrap();
+    let cancelled = client.execute_proposal(&cancel).await.unwrap().value;
+    let dry = operator.dry_run(scope(&cancelled)).await.unwrap();
+    assert_eq!(dry.erasure.review_submission_requests, 0);
+    assert_eq!(dry.erasure.review_accepted_bindings, 0);
+    assert!(dry.erasure.proposal_snapshots > 0);
+    assert_eq!(
+        operator.erase(scope(&cancelled)).await.unwrap().erasure,
+        dry.erasure
+    );
+    let preserved = fixture
+        .database
+        .admin
+        .query_one(recovery_sql, &[&id])
+        .await
+        .unwrap();
+    assert_eq!(preserved.get::<_, Value>(0), original_request);
+    assert_eq!(preserved.get::<_, Value>(1), original_binding);
+    assert!(original_request.to_string().len() <= 98304);
+    assert!(original_binding.to_string().len() <= 8192);
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET recovery_deadline=clock_timestamp()-interval '1 second',lease_until=NULL WHERE proposal_id=$1",&[&id]).await.unwrap();
+    assert!(
+        run_review_authority_once_for_test(&fixture.pool, &authority.registry)
+            .await
+            .unwrap()
+    );
+    let expired = fixture.database.admin.query_one("SELECT state,last_error_code FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1",&[&id]).await.unwrap();
+    assert_eq!(expired.get::<_, String>(0), "failed");
+    assert_eq!(expired.get::<_, String>(1), "cancellation-recovery-expired");
+    let dry = operator.dry_run(scope(&cancelled)).await.unwrap();
+    assert_eq!(dry.erasure.review_submission_requests, 1);
+    assert_eq!(dry.erasure.review_accepted_bindings, 1);
+    assert_eq!(
+        operator.erase(scope(&cancelled)).await.unwrap().erasure,
+        dry.erasure
+    );
+    let after = fixture
+        .database
+        .admin
+        .query_one(recovery_sql, &[&id])
+        .await
+        .unwrap();
+    assert_eq!(after.get::<_, Value>(0), json!({}));
+    assert_eq!(after.get::<_, Value>(1), json!({}));
+    fixture.finish().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_proposal_erasure_refuses_a_failed_request_audit_without_changing_detail() {
     use registry_breg::postgres::{ExpectedManagedCatalog, RegistryLockKey};

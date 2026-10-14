@@ -36,27 +36,6 @@ mod admission_contracts;
 
 tokio::task_local! {
     static REQUEST_TRACE: TraceContext;
-    static REQUEST_CONTRACT: HttpContract;
-}
-
-#[derive(Clone, Copy, Default)]
-enum HttpContract {
-    #[default]
-    Coordinator,
-    Review,
-}
-
-impl HttpContract {
-    fn type_uri(self, code: &str) -> String {
-        match self {
-            Self::Coordinator => type_uri(code),
-            Self::Review => format!(
-                "{}{}",
-                registry_review_protocol::REVIEW_PROBLEM_TYPE_BASE,
-                code.replace('.', "/")
-            ),
-        }
-    }
 }
 
 const BINDING_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
@@ -144,39 +123,24 @@ pub fn router(state: HttpState) -> Router {
             post(review_completion),
         )
         .with_state(state.clone());
-    http_edge(routes).merge(contract_edge(
-        crate::review_provider::router().with_state(state),
-        HttpContract::Review,
-    ))
+    http_edge(routes.merge(crate::review_provider::router().with_state(state)))
 }
 fn http_edge(router: Router) -> Router {
-    contract_edge(router.fallback(route_not_found), HttpContract::Coordinator)
-}
-fn contract_edge(router: Router, contract: HttpContract) -> Router {
     router
+        .fallback(route_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(131_072))
         .layer(registry_platform_httpsec::request_body_limit(131_072))
-        .layer(middleware::from_fn(move |request, next| {
-            http_boundary(contract, request, next)
-        }))
+        .layer(middleware::from_fn(http_boundary))
         .layer(registry_platform_httpsec::security_headers(
             registry_platform_httpsec::CspBuilder::deny_by_default(),
         ))
 }
-async fn http_boundary(
-    contract: HttpContract,
-    request: axum::http::Request<axum::body::Body>,
-    next: Next,
-) -> Response {
+async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {
     let trace = TraceContext::from_headers(request.headers());
     let mut response = REQUEST_TRACE
         .scope(trace.clone(), async move {
-            REQUEST_CONTRACT
-                .scope(contract, async move {
-                    normalize_framework_rejection(next.run(request).await)
-                })
-                .await
+            normalize_framework_rejection(next.run(request).await)
         })
         .await;
     trace.apply(response.headers_mut());
@@ -290,9 +254,7 @@ fn problem_response(problem: ProblemCode) -> Response {
     let trace = current_trace();
     let status = problem.http_status();
     let body = ProblemBody {
-        type_uri: REQUEST_CONTRACT
-            .try_with(|contract| contract.type_uri(problem.code()))
-            .unwrap_or_else(|_| HttpContract::default().type_uri(problem.code())),
+        type_uri: type_uri(problem.code()),
         title: problem.title(),
         status,
         detail: problem.detail(),
@@ -713,19 +675,7 @@ mod problem_tests {
                     continue;
                 }
                 let schema = &response["content"]["application/problem+json"]["schema"];
-                let expected = if [
-                    "createReviewRequest",
-                    "reviewRequest",
-                    "reviewResult",
-                    "cancelReviewRequest",
-                    "reviewResults",
-                ]
-                .contains(&id)
-                {
-                    "#/components/schemas/ReviewProblem"
-                } else {
-                    "#/components/schemas/Problem"
-                };
+                let expected = "#/components/schemas/Problem";
                 assert_eq!(schema["allOf"][0]["$ref"], expected, "{id} {status}");
                 let codes = schema["allOf"][1]["properties"]["code"]["enum"]
                     .as_array()

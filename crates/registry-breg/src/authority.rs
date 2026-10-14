@@ -101,6 +101,14 @@ pub fn authority_inventory(
             }
         }
     }
+    for dataset in registry.statistical_datasets().values() {
+        for profile in dataset.access_profiles.values() {
+            inventory.profile(
+                Some(profile.principal_claim.as_str()),
+                &profile.required_purposes,
+            )?;
+        }
+    }
     for action in &registry.actions().actions {
         for grant in &action.permissions {
             inventory.profile(grant.principal_claim.as_deref(), &grant.required_purposes)?;

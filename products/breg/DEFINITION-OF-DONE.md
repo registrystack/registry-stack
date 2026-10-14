@@ -8,7 +8,7 @@ alone does not establish completion.
 
 The maintained public model consists of Record types, generated CRUD, immediate
 atomic Actions, and durable Proposals. Canonical inputs live in `acceptance/`,
-`fixtures/`, and `examples/refactor/`; tests load those inputs directly. The
+`fixtures/`, and `examples/`; tests load those inputs directly. The
 [acceptance guide](ACCEPTANCE-JOURNEYS.md) maps their purpose without duplicating
 fixture trees or claiming an old starter catalogue remains supported.
 

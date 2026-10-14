@@ -31,6 +31,9 @@ use sha2::{Digest, Sha256};
 use tower::Service as _;
 use zeroize::Zeroizing;
 
+mod proposals;
+use proposals::ProposalJourneyOperation;
+
 use crate::api::{HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture};
 use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use crate::auth::RegistryAuthenticator;
@@ -75,13 +78,13 @@ pub const JOURNEYS_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(JOURNEYS_API_VERSION)],
         retired_api_versions: &[RetiredApiVersion {
             api_version: "registry.registrystack.org/breg-journeys/v1",
-            replacement: "Start the file with `apiVersion: id.registrystack.org/formats/breg/journeys/v1` and `kind: BRegJourneys`, write each request's `operation: <form>` as `type: <form>` in kebab case (`submit-request` becomes `submit-request`), and rename `recordRef`, `etagRef`, `proposalVersionRef`, `effectDigestRef`, and `conditionRef`, including the `recordRef` marker inside request data, to `recordCapture`, `etagCapture`, `proposalVersionCapture`, `effectDigestCapture`, and `conditionCapture`.",
+            replacement: "Start the file with `apiVersion: id.registrystack.org/formats/breg/journeys/v1` and `kind: BRegJourneys`. Use `type: create`, `get`, or `invoke` for record and immediate Action requests. Use `type: proposal` with `transition: start`, `submit`, or another supported Proposal transition; later transitions name an earlier `proposalCapture`, and optional `etagCapture` or `submissionCapture` select exact retained conditions. Rename `recordRef`, `etagRef`, and `conditionRef`, including the `recordRef` marker inside request data, to `recordCapture`, `etagCapture`, and `conditionCapture`.",
         }],
     },
     removed_keys: &[
         RemovedKey {
             pointer: "/journeys/*/steps/*/request/operation",
-            replacement: "Name the request form with `type:` in kebab case, for example `type: submit-request`.",
+            replacement: "Name the request form with `type:`, for example `type: create`. Proposal submission uses `type: proposal`, `transition: submit`, and `proposalCapture` naming an earlier Proposal capture.",
         },
         RemovedKey {
             pointer: "/journeys/*/steps/*/request/recordRef",
@@ -398,6 +401,27 @@ struct StepSource {
 )]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 enum ActionSource {
+    Proposal {
+        #[serde(rename = "transition")]
+        operation: ProposalJourneyOperation,
+        #[serde(default, deserialize_with = "members::optional_local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
+        proposal_capture: Option<String>,
+        #[serde(default, deserialize_with = "members::optional_local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
+        etag_capture: Option<String>,
+        #[serde(default, deserialize_with = "members::optional_local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
+        submission_capture: Option<String>,
+        #[serde(default, deserialize_with = "members::http_object")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "members::http_object_schema")
+        )]
+        input: Map<String, Value>,
+        #[serde(default)]
+        idempotency_key: Option<String>,
+    },
     Import {
         #[serde(deserialize_with = "members::http_objects")]
         #[cfg_attr(
@@ -492,6 +516,7 @@ impl ActionSource {
     /// each body's node kind only; the registry's HTTP API reads its members.
     fn fill_bodies(&mut self, body: &dyn Fn(&str) -> Option<Value>) {
         match self {
+            Self::Proposal { input, .. } => fill_object(input, body("/input")),
             Self::Import { items } => {
                 for (index, item) in items.iter_mut().enumerate() {
                     fill_object(item, body(&format!("/items/{index}")));
@@ -521,6 +546,7 @@ impl ActionSource {
 
     fn operation(&self) -> Operation {
         match self {
+            Self::Proposal { .. } => Operation::Invoke,
             Self::Import { .. } => Operation::Import,
             Self::Create { .. } => Operation::Create,
             Self::Get { .. } => Operation::Get,
@@ -534,6 +560,7 @@ impl ActionSource {
 
     fn route_id(&self, entity_id: &str) -> String {
         let suffix = match self {
+            Self::Proposal { .. } => "proposal".to_owned(),
             Self::Import { .. } => "import".to_owned(),
             Self::Create { .. } => "create".to_owned(),
             Self::Get { .. } => "get".to_owned(),
@@ -949,6 +976,7 @@ struct FixtureProblemBindings {
 
 #[derive(Clone)]
 enum FixtureRoute {
+    Proposal(String),
     Entity(CompiledRoute),
     Action(CompiledActionRoute),
 }
@@ -956,6 +984,7 @@ enum FixtureRoute {
 impl FixtureRoute {
     fn path(&self) -> &str {
         match self {
+            Self::Proposal(path) => path,
             Self::Entity(route) => &route.path,
             Self::Action(route) => &route.path,
         }
@@ -964,6 +993,7 @@ impl FixtureRoute {
 
 #[derive(Clone)]
 struct CaptureSource {
+    proposal_action: Option<String>,
     entity: Option<String>,
     has_etag: bool,
     condition_map: bool,
@@ -1129,6 +1159,14 @@ pub fn validate_fixture_journeys(
                     } else {
                         FixtureError::LogicalReference(LogicalReferenceRefusal::StepIdentifier)
                     });
+                }
+                if let ActionSource::Proposal { .. } = &step.request {
+                    return proposals::validate_step(
+                        step,
+                        registry,
+                        &mut capture_sources,
+                        &mut capture_ids,
+                    );
                 }
                 let step_entity = (!step.entity.is_empty()).then_some(step.entity.as_str());
                 let step_action = step.action.as_deref();
@@ -1312,6 +1350,7 @@ pub fn validate_fixture_journeys(
                     capture_sources.insert(
                         identifier.to_owned(),
                         CaptureSource {
+                            proposal_action: None,
                             entity: entity_id.clone(),
                             has_etag: !matches!(
                                 action,
@@ -1325,6 +1364,7 @@ pub fn validate_fixture_journeys(
                     capture_sources.insert(
                         identifier.to_owned(),
                         CaptureSource {
+                            proposal_action: None,
                             entity: Some(entity),
                             has_etag: false,
                             condition_map: false,
@@ -1390,7 +1430,8 @@ fn validate_action_references(
         | ActionSource::Lookup { .. }
         | ActionSource::Batch { .. }
         | ActionSource::TargetConditions { .. }
-        | ActionSource::Invoke { .. } => &[],
+        | ActionSource::Invoke { .. }
+        | ActionSource::Proposal { .. } => &[],
     };
     for identifier in references {
         let Some(source) = captures
@@ -1449,6 +1490,7 @@ fn collect_action_value_record_refs<'a>(
     references: &mut Vec<&'a str>,
 ) -> Result<(), FixtureError> {
     match action {
+        ActionSource::Proposal { input, .. } => collect_map_value_record_refs(input, references),
         ActionSource::Import { items } => {
             for item in items {
                 collect_map_value_record_refs(item, references)?;
@@ -1983,9 +2025,9 @@ fn validate_action_fields(
             }
             Ok(())
         }
-        ActionSource::TargetConditions { .. } | ActionSource::Invoke { .. } => {
-            Err(FixtureError::LogicalReferenceRefused)
-        }
+        ActionSource::TargetConditions { .. }
+        | ActionSource::Invoke { .. }
+        | ActionSource::Proposal { .. } => Err(FixtureError::LogicalReferenceRefused),
     }
 }
 
@@ -2277,7 +2319,9 @@ fn internalize_entity_action(
                 })
                 .collect::<Result<Vec<_>, FixtureError>>()?,
         },
-        ActionSource::TargetConditions { .. } | ActionSource::Invoke { .. } => {
+        ActionSource::TargetConditions { .. }
+        | ActionSource::Invoke { .. }
+        | ActionSource::Proposal { .. } => {
             return Err(FixtureError::LogicalReferenceRefused);
         }
     })
@@ -2430,6 +2474,7 @@ fn externalize_action(
                 })
                 .collect::<Result<Vec<_>, FixtureError>>()?,
         },
+        ActionSource::Proposal { .. } => action.clone(),
         ActionSource::TargetConditions { input } => ActionSource::TargetConditions {
             input: input.clone(),
         },
@@ -2696,6 +2741,10 @@ struct Observation {
 
 #[derive(Clone)]
 enum ObservationKind {
+    Proposal {
+        document: Value,
+        etag: String,
+    },
     Record {
         record_id: String,
         etag: String,
@@ -2735,7 +2784,7 @@ fn observed_etag<'a>(
         .ok_or(FixtureError::RequestConstructionRefused)?
         .kind
     {
-        ObservationKind::Record { etag, .. } => Ok(etag),
+        ObservationKind::Record { etag, .. } | ObservationKind::Proposal { etag, .. } => Ok(etag),
         _ => Err(FixtureError::RequestConstructionRefused),
     }
 }
@@ -3669,6 +3718,9 @@ fn fixture_request(
     observations: &BTreeMap<String, Observation>,
     bearer_token: &str,
 ) -> Result<Request<Body>, FixtureError> {
+    if let ActionSource::Proposal { .. } = &step.action {
+        return proposals::request(journey_id, step, observations, bearer_token);
+    }
     let mut path = step.route.path().to_owned();
     let mut method = Method::GET;
     let mut body = Body::empty();
@@ -3676,6 +3728,7 @@ fn fixture_request(
     let mut if_match: Option<String> = None;
     let mut extra_query_options = Vec::new();
     match &step.action {
+        ActionSource::Proposal { .. } => return Err(FixtureError::RequestConstructionRefused),
         ActionSource::Import { .. } => {
             return Err(FixtureError::RequestConstructionRefused);
         }
@@ -4002,6 +4055,14 @@ fn capture_observation_kind(
     document: &Value,
 ) -> Result<ObservationKind, FixtureError> {
     match step.action {
+        ActionSource::Proposal { .. } => Ok(ObservationKind::Proposal {
+            document: document.clone(),
+            etag: headers
+                .get(ETAG)
+                .and_then(|v| v.to_str().ok())
+                .ok_or(FixtureError::ResponseShapeRefused)?
+                .to_owned(),
+        }),
         ActionSource::TargetConditions { .. } => Ok(ObservationKind::ActionConditions {
             if_match_by_input: parse_target_conditions(document)?,
         }),
@@ -4172,6 +4233,7 @@ fn assert_response(
             }
         }
         ExpectedOutcome::Success => match step.action {
+            ActionSource::Proposal { .. } => proposals::assert_response(step, document)?,
             ActionSource::Import { .. } => {
                 let object = exact_object(document, &["run", "receipt"])?;
                 let run = object

@@ -4,12 +4,10 @@ use registry_breg::{
     contract::{parse_project_yaml, ModuleAssetSource, RegistryProject},
     model::{CompiledActionExecution, CompiledPlanValue, CompiledProposalReview},
 };
-const MINIMAL: &[u8] =
-    include_bytes!("../../../products/breg/examples/refactor/minimal/registry.yaml");
-const PROJECT: &[u8] =
-    include_bytes!("../../../products/breg/examples/refactor/facility/registry.yaml");
+const MINIMAL: &[u8] = include_bytes!("../../../products/breg/examples/minimal/registry.yaml");
+const PROJECT: &[u8] = include_bytes!("../../../products/breg/examples/facility/registry.yaml");
 const FUNCTION: &[u8] =
-    include_bytes!("../../../products/breg/examples/refactor/facility/plans/correct-address.rhai");
+    include_bytes!("../../../products/breg/examples/facility/plans/correct-address.rhai");
 fn project_source() -> serde_json::Value {
     registry_platform_yaml::Reader::new("registry.yaml")
         .scan(PROJECT)
@@ -515,7 +513,8 @@ fn review_context_schema_has_exact_bytes_and_no_policy_digest_cycle() {
         schema.schema
     );
     assert_eq!(
-        schema.schema["properties"]["proposedCity"]["maxLength"],
+        schema.schema["properties"]["changes"]["items"]["properties"]["after"]["properties"]
+            ["city"]["maxLength"],
         json!(120)
     );
     assert!(schema.revision.starts_with("sha256:"));
@@ -525,6 +524,8 @@ fn review_context_schema_has_exact_bytes_and_no_policy_digest_cycle() {
         .iter()
         .position(|action| action["id"] == "correct-address")
         .unwrap();
+    value["actions"][action_index]["execution"]["proposal"]["review"]["policy"]["version"] =
+        json!("1");
     value["actions"][action_index]["execution"]["proposal"]["review"]["policy"]["digest"] =
         json!(format!("sha256:{}", "f".repeat(64)));
     let changed_policy =
@@ -1042,7 +1043,36 @@ fn public_action_export_comes_from_the_compiled_owner_contract() {
         .with_draft(jsonschema::Draft::Draft202012)
         .compile(&format_schema)
         .unwrap();
-    assert!(validator.is_valid(&exported));
+    if let Err(errors) = validator.validate(&exported) {
+        panic!(
+            "action export does not satisfy its schema: {:?}",
+            errors.map(|error| error.to_string()).collect::<Vec<_>>()
+        );
+    }
+    let reviewed_index = exported["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|action| action["review"]["type"] == "required")
+        .unwrap();
+    for selection in [
+        serde_json::json!({"id":"policy"}),
+        serde_json::json!({"id":"policy","version":"1","digest":format!("sha256:{}", "a".repeat(64))}),
+        serde_json::json!({"id":"policy","version":"1"}),
+        serde_json::json!({"id":"policy","digest":format!("sha256:{}", "a".repeat(64))}),
+        serde_json::json!({"id":"policy","version":null,"digest":null}),
+    ] {
+        let protocol_accepts =
+            serde_json::from_value::<registry_review_protocol::PolicySelection>(selection.clone())
+                .is_ok_and(|selection| selection.check().is_ok());
+        let mut variant = exported.clone();
+        variant["actions"][reviewed_index]["review"]["policy"] = selection.clone();
+        assert_eq!(
+            validator.is_valid(&variant),
+            protocol_accepts,
+            "selection schema differs from shared protocol: {selection}"
+        );
+    }
     let mut unversioned = exported.clone();
     unversioned.as_object_mut().unwrap().remove("apiVersion");
     assert!(!validator.is_valid(&unversioned));
@@ -1159,4 +1189,169 @@ fn coordinator_information_request_declares_and_executes_blank_reason_refusal() 
     };
     assert_eq!(refusal.code, "invalid-reason");
     assert_eq!(refusal.field.as_deref(), Some("reason"));
+}
+
+#[test]
+fn review_policy_omits_both_pins_or_requires_one_complete_exact_binding() {
+    use registry_breg::contract::parse_project_json;
+    use registry_review_protocol::{ContentDigest, PolicyBinding};
+    use serde_json::json;
+    let mut source = project_source();
+    let action = source["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|action| action["id"] == "correct-address")
+        .unwrap();
+    let exact = PolicyBinding {
+        id: "facility-address-review".into(),
+        version: "1".into(),
+        digest: ContentDigest::for_bytes(b"independently accepted policy"),
+    };
+    for selection in [json!({"id": exact.id}), json!(exact)] {
+        source["actions"][action]["execution"]["proposal"]["review"]["policy"] = selection.clone();
+        let registry =
+            compile(&parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap()).unwrap();
+        let action = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == "correct-address")
+            .unwrap();
+        let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+            panic!("Proposal")
+        };
+        let CompiledProposalReview::Required { policy, .. } = &proposal.review else {
+            panic!("Review")
+        };
+        assert!(policy.matches(&exact));
+        assert_eq!(serde_json::to_value(policy).unwrap(), selection);
+        assert!(!policy.matches(&PolicyBinding {
+            id: "another-policy".into(),
+            ..exact.clone()
+        }));
+    }
+    for invalid in [
+        json!({"id": exact.id, "version": exact.version}),
+        json!({"id": exact.id, "digest": exact.digest}),
+        json!({"id": exact.id, "version": null, "digest": null}),
+    ] {
+        source["actions"][action]["execution"]["proposal"]["review"]["policy"] = invalid;
+        let result = parse_project_json(&serde_json::to_vec(&source).unwrap());
+        assert!(result.is_err() || compile(&result.unwrap()).is_err());
+    }
+}
+
+#[test]
+fn proposal_start_route_uses_the_same_operation_id_as_metadata_and_openapi() {
+    let model = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
+    let routes = &model.actions().routes;
+    assert!(routes
+        .iter()
+        .any(|route| route.id == "actions.correct-address.start"));
+    assert!(routes
+        .iter()
+        .any(|route| route.id == "actions.register-facility.invoke"));
+    assert!(!routes
+        .iter()
+        .any(|route| route.id == "actions.correct-address.invoke"));
+}
+
+#[test]
+fn review_context_meaning_binds_resolved_record_type_and_source_without_global_pin() {
+    use registry_breg::compiler::review_context::{compile_schema, compile_schema_from_parts};
+    use registry_breg::contract::FieldTypeSource;
+    let registry = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "correct-address")
+        .unwrap();
+    let original = compile_schema(&registry, action).unwrap().unwrap();
+    let mut records = registry.entities().clone();
+    let mut alternative = records["facility"].clone();
+    alternative.id = "other-facility".into();
+    records.insert(alternative.id.clone(), alternative);
+    // Adding an unrelated Record type does not change the interface.
+    assert_eq!(
+        compile_schema_from_parts(registry.registry_id(), &records, action)
+            .unwrap()
+            .unwrap()
+            .revision,
+        original.revision
+    );
+    let mut rebound = action.clone();
+    let input = rebound
+        .inputs
+        .iter_mut()
+        .find(|input| input.id == "facility")
+        .unwrap();
+    let FieldTypeSource::Reference { target, .. } = &mut input.field_type else {
+        panic!("reference input")
+    };
+    *target = "other-facility".into();
+    let changed = compile_schema_from_parts(registry.registry_id(), &records, &rebound)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        changed.schema["properties"], original.schema["properties"],
+        "same JSON shape can describe a different Record source"
+    );
+    assert_ne!(changed.revision, original.revision);
+    let mut new_source = action.clone();
+    let registry_breg::model::CompiledActionExecution::Proposal { proposal } =
+        &mut new_source.execution
+    else {
+        panic!("proposal")
+    };
+    let registry_breg::model::CompiledProposalReview::Required { source, .. } =
+        &mut proposal.review
+    else {
+        panic!("review")
+    };
+    *source = "other-source".into();
+    let changed = compile_schema_from_parts(registry.registry_id(), &records, &new_source)
+        .unwrap()
+        .unwrap();
+    assert_ne!(changed.revision, original.revision);
+    assert_eq!(
+        changed.schema["x-registry-review-context"]["sourceNamespace"],
+        "other-source"
+    );
+}
+
+#[test]
+fn frozen_change_projection_requires_explicit_unique_existing_fields() {
+    for fields in [
+        serde_json::json!([]),
+        serde_json::json!(["missing"]),
+        serde_json::json!(["city", "city"]),
+    ] {
+        let mut source = project_source();
+        let action = source["actions"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|action| action["id"] == "correct-address")
+            .unwrap();
+        action["execution"]["proposal"]["reviewContext"]["fields"]["changes"]["fields"] = fields;
+        let project =
+            registry_breg::contract::parse_project_json(&serde_json::to_vec(&source).unwrap())
+                .unwrap();
+        assert!(compile(&project).is_err());
+    }
+    let mut source = project_source();
+    let action = source["actions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|action| action["id"] == "correct-address")
+        .unwrap();
+    action["execution"]["proposal"]["reviewContext"]["fields"]["changes"]["input"] =
+        serde_json::json!("city");
+    assert!(
+        registry_breg::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).is_err(),
+        "one context field has one source"
+    );
 }

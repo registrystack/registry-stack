@@ -1725,7 +1725,8 @@ pub struct ClaimedReviewSubmission {
     pub request: ReviewCreateRequest,
     pub expected_submission_digest: registry_review_client::SubmissionDigest,
     pub lease_until: DateTime<Utc>,
-    pub expected_policy: registry_review_protocol::PolicyBinding,
+    pub expected_policy: registry_review_protocol::PolicySelection,
+    pub accepted_binding: Option<ReviewRequestAccepted>,
 }
 
 pub async fn claim_submission(
@@ -1766,7 +1767,7 @@ pub async fn claim_submission(
                 AND s.proposal_id=c.proposal_id AND s.submission_version=c.submission_version
              RETURNING s.action_id,s.proposal_id,s.submission_version,s.authority,
                        s.idempotency_key,s.create_request,s.expected_submission_digest,
-                       s.lease_until,s.expected_policy",
+                       s.lease_until,s.expected_policy,s.accepted_binding",
             &[&lease_seconds, &authority],
         )
         .await
@@ -1785,6 +1786,11 @@ pub async fn claim_submission(
             .map_err(|_| MutationError::Unavailable)?,
             lease_until: row.get(7),
             expected_policy: serde_json::from_value(row.get(8))
+                .map_err(|_| MutationError::Unavailable)?,
+            accepted_binding: row
+                .get::<_, Option<serde_json::Value>>(9)
+                .map(serde_json::from_value)
+                .transpose()
                 .map_err(|_| MutationError::Unavailable)?,
         })
     })
@@ -1812,11 +1818,22 @@ pub async fn run_one_submission(
         .await;
     match response {
         Ok(complete) => {
-            if complete.value.policy != job.expected_policy {
+            let refusal = if job
+                .accepted_binding
+                .as_ref()
+                .is_some_and(|accepted| accepted != &complete.value)
+            {
+                Some("review-acceptance-changed")
+            } else if !job.expected_policy.matches(&complete.value.policy) {
+                Some("review-policy-changed")
+            } else {
+                None
+            };
+            if let Some(code) = refusal {
                 client
                     .execute(
                         "UPDATE registry_internal.registry_proposal_review_submissions
-                        SET state='failed',lease_until=NULL,last_error_code='review-policy-changed'
+                        SET state='failed',lease_until=NULL,last_error_code=$5
                       WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
                         AND state='submitting' AND lease_until=$4",
                         &[
@@ -1824,6 +1841,7 @@ pub async fn run_one_submission(
                             &job.proposal_id,
                             &job.submission_version,
                             &job.lease_until,
+                            &code,
                         ],
                     )
                     .await

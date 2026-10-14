@@ -2,6 +2,7 @@
 
 //! Revision-fenced durable Proposal transitions over one frozen neutral plan.
 use super::*;
+mod context_projection;
 use crate::api::proposals::ProposalMutationInput;
 use crate::model::{
     CompiledActionExecution, CompiledProposalReview, ProposalOperation, ProposalOwnership,
@@ -795,7 +796,7 @@ impl MutationCoordinator {
                     proposal.effect_digest().as_str(),
                 )
                 .await?;
-                if *authority != stored_authority || *policy != accepted.policy {
+                if *authority != stored_authority || !policy.matches(&accepted.policy) {
                     return Err(MutationError::PreconditionFailed);
                 }
                 let result = tx
@@ -2383,7 +2384,7 @@ impl MutationCoordinator {
             .map_err(|_| MutationError::PreconditionFailed)?;
         if accepted.as_ref().is_some_and(|accepted| {
             accepted.subject != create.subject
-                || accepted.policy != *policy
+                || !policy.matches(&accepted.policy)
                 || accepted.submission_digest != expected_digest
         }) {
             return Err(MutationError::PreconditionFailed);
@@ -2448,9 +2449,6 @@ impl MutationCoordinator {
         let frozen = workflow
             .current_proposal()
             .ok_or(MutationError::PreconditionFailed)?;
-        let CompiledActionExecution::Proposal { proposal: policy } = &action.execution else {
-            return Err(MutationError::PreconditionFailed);
-        };
         let mut value = json!({"id":document.proposal_id,"actionId":document.action_id,
             "actionRevision":document.action_revision,"submissionVersion":frozen.version().get(),
             "revision":document.header.workflow_revision,"effectDigest":frozen.effect_digest().as_str(),
@@ -2485,99 +2483,10 @@ impl MutationCoordinator {
                 }
             }
             ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext) => {
-                let mapping = policy
-                    .review_context
-                    .as_ref()
-                    .ok_or(MutationError::PreconditionFailed)?;
-                let permission = policy
-                    .permissions
-                    .iter()
-                    .find(|permission| {
-                        permission.profile_id == authority.common.access_profile()
-                            && permission
-                                .operations
-                                .contains(&ProposalOperation::GetReviewContext)
-                    })
-                    .ok_or(MutationError::PreconditionFailed)?;
-                let mut projected = Map::new();
-                for (field, source) in &mapping.fields {
-                    if !permission.readable_context_fields.contains(field) {
-                        return Err(MutationError::PreconditionFailed);
-                    }
-                    let resolved = if let Some(input) = &source.from_input {
-                        frozen
-                            .inputs()
-                            .get(input)
-                            .cloned()
-                            .ok_or(MutationError::PreconditionFailed)?
-                    } else {
-                        let input = source
-                            .from_record
-                            .as_ref()
-                            .ok_or(MutationError::PreconditionFailed)?;
-                        let declared = action
-                            .inputs
-                            .iter()
-                            .find(|declared| declared.id == *input)
-                            .ok_or(MutationError::PreconditionFailed)?;
-                        let crate::contract::FieldTypeSource::Reference { target, .. } =
-                            &declared.field_type
-                        else {
-                            return Err(MutationError::PreconditionFailed);
-                        };
-                        let entity = registry
-                            .entities()
-                            .get(target)
-                            .ok_or(MutationError::PreconditionFailed)?;
-                        let field = source
-                            .field
-                            .as_ref()
-                            .ok_or(MutationError::PreconditionFailed)?;
-                        let record = records
-                            .get(target)
-                            .ok_or(MutationError::PreconditionFailed)?;
-                        if !record.fields.contains(field) {
-                            return Err(MutationError::PreconditionFailed);
-                        }
-                        let id = frozen
-                            .inputs()
-                            .get(input)
-                            .and_then(Value::as_str)
-                            .and_then(|id| Uuid::parse_str(id).ok())
-                            .ok_or(MutationError::PreconditionFailed)?;
-                        // Proposal inspection admits the source target, while
-                        // disclosure uses the ordinary current Record policy.
-                        // Leaving the target context installed would add a
-                        // permissive RLS arm that bypasses membership/consent.
-                        record
-                            .context
-                            .install_row_boundaries(tx)
-                            .await
-                            .map_err(|_| MutationError::PreconditionFailed)?;
-                        let recipients = serde_json::to_string(record.context.recipients())
-                            .map_err(|_| MutationError::Unavailable)?;
-                        tx.execute(
-                            "SELECT set_config('registry.proposal_target_context','',true),
-                            set_config('registry.recipients',$1,true)",
-                            &[&recipients],
-                        )
-                        .await
-                        .map_err(map_database_error)?;
-                        let row = load_proposal_row(tx, entity, id, false).await?;
-                        if !authority
-                            .authorizes_snapshot(entity, id, &row.data)
-                            .map_err(|_| MutationError::PreconditionFailed)?
-                        {
-                            return Err(MutationError::PreconditionFailed);
-                        }
-                        row.data
-                            .get(field)
-                            .cloned()
-                            .ok_or(MutationError::PreconditionFailed)?
-                    };
-                    projected.insert(field.clone(), resolved);
-                }
-                value["context"]["fields"] = Value::Object(projected);
+                value["context"]["fields"] = Value::Object(
+                    context_projection::fields(tx, registry, document, authority, records, frozen)
+                        .await?,
+                );
             }
             _ => return Err(MutationError::PreconditionFailed),
         }

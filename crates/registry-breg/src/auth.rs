@@ -564,6 +564,12 @@ fn validate_claim_mapping(
         .entities()
         .values()
         .flat_map(|entity| entity.access_profiles.values())
+        .chain(
+            registry
+                .statistical_datasets()
+                .values()
+                .flat_map(|dataset| dataset.access_profiles.values()),
+        )
     {
         if profile
             .requester_clients

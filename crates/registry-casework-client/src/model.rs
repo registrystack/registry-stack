@@ -108,12 +108,6 @@ pub struct SupervisoryReviewTaskQuery {
     pub limit: Option<usize>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReviewTaskDecisionRequest {
-    pub decision: registry_casework_core::DecisionKind,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReviewResultResponse {
     Available(Box<CaseworkComplete<registry_casework_core::ReviewResult>>),

@@ -159,6 +159,7 @@ fn bounded_timeout(timeout: Duration) -> Result<Duration, HistoryErasureLifecycl
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawHistoryErasureRequest {
+    #[serde(rename = "recordType")]
     entity_id: String,
     record_id: String,
     erase_through_revision: i64,
@@ -267,7 +268,7 @@ mod tests {
     fn erasure_request_file_is_strict_and_complete() {
         let parsed = parse_erasure_request_bytes(
             br#"{
-              "entityId":"membership",
+              "recordType":"membership",
               "recordId":"018feaa0-68f9-4a45-b9e3-58436df07af7",
               "eraseThroughRevision":1,
               "operatorReference":"ops-ticket-1",
@@ -278,17 +279,30 @@ mod tests {
         assert_eq!(parsed.entity_id, "membership");
         assert_eq!(parsed.erase_through_revision, 1);
 
-        assert!(parse_erasure_request_bytes(
-            br#"{
-              "entityId":"membership",
-              "recordId":"018feaa0-68f9-4a45-b9e3-58436df07af7",
-              "eraseThroughRevision":1,
-              "operatorReference":"ops-ticket-1",
-              "reason":"retention request",
-              "extra":"refused"
-            }"#,
-        )
-        .is_err());
+        let valid = serde_json::json!({
+            "recordType": "membership",
+            "recordId": "018feaa0-68f9-4a45-b9e3-58436df07af7",
+            "eraseThroughRevision": 1,
+            "operatorReference": "ops-ticket-1",
+            "reason": "retention request"
+        });
+        for mutate in [
+            |request: &mut serde_json::Value| request["extra"] = serde_json::json!("refused"),
+            |request: &mut serde_json::Value| request["recordType"] = serde_json::json!(""),
+            |request: &mut serde_json::Value| request["recordType"] = serde_json::Value::Null,
+            |request: &mut serde_json::Value| {
+                let record_type = request
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("recordType")
+                    .unwrap();
+                request["entityId"] = record_type;
+            },
+        ] {
+            let mut request = valid.clone();
+            mutate(&mut request);
+            assert!(parse_erasure_request_bytes(&serde_json::to_vec(&request).unwrap()).is_err());
+        }
     }
 
     #[cfg(unix)]
@@ -303,7 +317,7 @@ mod tests {
         std::fs::write(
             &target,
             br#"{
-              "entityId":"membership",
+              "recordType":"membership",
               "recordId":"018feaa0-68f9-4a45-b9e3-58436df07af7",
               "eraseThroughRevision":1,
               "operatorReference":"ops-ticket-1",

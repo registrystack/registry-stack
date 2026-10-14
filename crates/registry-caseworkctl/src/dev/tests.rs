@@ -1356,12 +1356,24 @@ fn the_report_names_every_local_credential_without_a_secret() {
     assert_eq!(report["clients"][0]["id"], "requester");
     assert_eq!(report["clients"][0]["role"], "requester");
     assert_eq!(
+        report["clients"][0]["subject"],
+        config::principal("requester")
+    );
+    assert_eq!(
         report["clients"][0]["assertionKeyFile"],
         json!(state.root().join("credentials/requester/assertion-key.jwk"))
     );
     let text = report.to_string();
     assert!(!text.contains("token\":\""), "{text}");
     assert!(!text.contains("password"), "{text}");
+    let typed = crate::report::CliReport::from_value("dev", report).unwrap();
+    let typed = serde_json::to_value(typed).unwrap();
+    assert_eq!(typed["ok"], true);
+    assert_eq!(typed["data"]["issuer"], state.issuer_origin());
+    assert_eq!(
+        typed["data"]["clients"][0]["subject"],
+        config::principal("requester")
+    );
 }
 
 #[test]
@@ -3492,6 +3504,60 @@ fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
     .unwrap();
     assert_eq!(borrowed_issuer(&state).unwrap(), Some(owner_root.clone()));
 
+    fs::write(project.join("casework.yaml"), STANDALONE_YAML).unwrap();
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    policy
+        .access_profiles
+        .iter_mut()
+        .find(|profile| profile.id == "administrator")
+        .unwrap()
+        .principal_claim = "custom_principal".to_owned();
+    fs::write(
+        project.join("casework.yaml"),
+        serde_norway::to_string(&policy).unwrap(),
+    )
+    .unwrap();
+    state.clients = vec![
+        ReportedClient {
+            id: "staff".to_owned(),
+            profile: "staff".to_owned(),
+            role: CaseworkRole::Staff,
+            principal: config::principal("staff"),
+        },
+        ReportedClient {
+            id: "administrator".to_owned(),
+            profile: "administrator".to_owned(),
+            role: CaseworkRole::Administrator,
+            principal: "custom-administrator".to_owned(),
+        },
+    ];
+    private::create(
+        &owner_root.join("clients.json"),
+        &serde_json::to_vec(&json!({"clients":[{"id":"staff"},{"id":"administrator"}]})).unwrap(),
+    )
+    .unwrap();
+    let subjects = config::borrowed_subjects(&state, &policy).unwrap();
+    let expected =
+        registry_thunderid_tooling::local::agent_id(owner["instanceId"].as_str().unwrap(), "staff");
+    assert_eq!(subjects["staff"], expected);
+    assert!(
+        !subjects.contains_key("administrator"),
+        "custom principal claims retain their authored identity"
+    );
+    assert!(
+        verify_borrowed_subjects(&state, &project).is_err(),
+        "the standalone issuer's subject is not accepted under the borrowed issuer"
+    );
+    state.clients[0].principal = expected;
+    verify_borrowed_subjects(&state, &project).unwrap();
+    assert_eq!(state.clients[1].principal, "custom-administrator");
+    let mut foreign_owner = state.clone();
+    foreign_owner.issuer_owner = Some(uuid::Uuid::new_v4().to_string());
+    assert!(config::borrowed_subjects(&foreign_owner, &policy).is_err());
+    let mut foreign_issuer = state.clone();
+    foreign_issuer.issuer_port += 1;
+    assert!(config::borrowed_subjects(&foreign_issuer, &policy).is_err());
+
     let fields = owner.as_object_mut().unwrap();
     fields.remove("apiVersion").unwrap();
     fields.remove("kind").unwrap();
@@ -3741,19 +3807,9 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
     assert!(refusal.contains("destination scopes"), "{refusal}");
     let mut sub_profile = policy.clone();
     sub_profile.access_profiles[0].principal_claim = "sub".to_owned();
-    let refusal = integrations
+    integrations
         .validate_session(&borrowed, &sub_profile)
-        .unwrap_err();
-    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &refusal);
-    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
-    assert_eq!(
-        diagnostic["code"],
-        "caseworkctl.dev.borrowed-principal-invalid"
-    );
-    assert_eq!(
-        diagnostic["path"],
-        "casework.yaml:/accessProfiles/principalClaim"
-    );
+        .unwrap();
 
     let standalone = session(&project);
     assert!(integrations.validate_session(&standalone, &policy).is_err());
@@ -4418,31 +4474,7 @@ fn a_port_bind_refused_for_another_reason_is_not_reported_as_occupied() {
 }
 
 #[test]
-fn borrowed_principals_and_invalid_source_bindings_have_specific_safe_diagnostics() {
-    let workspace = crate::canonical_tempdir();
-    let project = standalone(workspace.path());
-    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
-    for profile in &mut policy.access_profiles {
-        profile.principal_claim = "registry_principal".into();
-    }
-    config::require_stable_borrowed_principals(&policy).unwrap();
-    policy.access_profiles[0].principal_claim = "sub".into();
-    let error = config::require_stable_borrowed_principals(&policy).unwrap_err();
-    let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);
-    assert_eq!(exit, crate::DOMAIN_REFUSAL_EXIT);
-    assert_eq!(
-        diagnostic["code"],
-        "caseworkctl.dev.borrowed-principal-invalid"
-    );
-    assert_eq!(
-        diagnostic["path"],
-        "casework.yaml:/accessProfiles/principalClaim"
-    );
-    assert!(diagnostic["suggestedAction"]
-        .as_str()
-        .unwrap()
-        .contains("Do not use sub"));
-
+fn invalid_source_bindings_have_specific_safe_diagnostics() {
     let error =
         integrations::provider_binding_failure(registry_casework_core::ReviewContextError::Invalid);
     let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &error);

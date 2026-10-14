@@ -176,7 +176,7 @@ formats:
       function: load_runtime_config
       type: RuntimeConfig
     check: bregctl check {project} --runtime-config {file}
-    example: products/breg/examples/refactor/minimal/runtime.example.yaml
+    example: products/breg/examples/minimal/runtime.example.yaml
     conformance:
       requiredText: /identity/instanceId
       optionalText: /authentication/authorityClaims/purpose
@@ -620,7 +620,7 @@ formats:
       function: catalogue
       type: Catalogue
     check: bregctl check --file {file}
-    example: products/breg/examples/refactor/minimal/examples/scenarios.json
+    example: products/breg/examples/minimal/examples/scenarios.json
     conformance:
       requiredText: /scenarios/0/id
       optionalText: /scenarios/0/steps/0/input
@@ -864,17 +864,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha5
       kind: BRegAccessExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: ACCESS_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha5
       kind: BRegAccessExplanation
     schema:
       path: products/breg/contracts/explain/AccessExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json
+      id: https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha5.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -924,17 +924,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha5
       kind: BRegActionsExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: ACTIONS_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha5
       kind: BRegActionsExplanation
     schema:
       path: products/breg/contracts/explain/ActionsExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha4.schema.json
+      id: https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha5.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -946,6 +946,36 @@ formats:
     conformance: none
     securityMembers: []
     restrictingMembers: []
+  - id: breg/proposals-explanation
+    product: breg
+    title: bregctl explain output (ProposalsExplanation)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: id.registrystack.org/formats/breg/proposals-explanation/v1alpha1
+      kind: BRegProposalsExplanation
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: PROPOSALS_EXPLANATION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/proposals-explanation/v1alpha1
+      kind: BRegProposalsExplanation
+    schema:
+      path: products/breg/contracts/explain/ProposalsExplanation.schema.json
+      id: https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha1.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: PROPOSALS_EXPLANATION
+    check: none
+    example: products/breg/examples/formats/explain/proposals-explanation.json
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
   - id: breg/events-explanation
     product: breg
     title: bregctl explain output (EventsExplanation)
@@ -954,17 +984,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/events-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/events-explanation/v1alpha5
       kind: BRegEventsExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: EVENTS_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/events-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/events-explanation/v1alpha5
       kind: BRegEventsExplanation
     schema:
       path: products/breg/contracts/explain/EventsExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha4.schema.json
+      id: https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha5.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -984,17 +1014,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha5
       kind: BRegLifecycleExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: LIFECYCLE_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha5
       kind: BRegLifecycleExplanation
     schema:
       path: products/breg/contracts/explain/LifecycleExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha4.schema.json
+      id: https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha5.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -1014,17 +1044,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha5
       kind: BRegModelExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: MODEL_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha5
       kind: BRegModelExplanation
     schema:
       path: products/breg/contracts/explain/ModelExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha4.schema.json
+      id: https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha5.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -1044,17 +1074,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/queries-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/queries-explanation/v1alpha5
       kind: BRegQueriesExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: QUERIES_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/queries-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/queries-explanation/v1alpha5
       kind: BRegQueriesExplanation
     schema:
       path: products/breg/contracts/explain/QueriesExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha4.schema.json
+      id: https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha5.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -1074,17 +1104,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha5
       kind: BRegRoutesExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: ROUTES_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha4
+      apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha5
       kind: BRegRoutesExplanation
     schema:
       path: products/breg/contracts/explain/RoutesExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha4.schema.json
+      id: https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha5.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none

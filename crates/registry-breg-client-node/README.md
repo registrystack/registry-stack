@@ -13,8 +13,8 @@ const health = await client.health();
 Writes never accept caller-supplied operation routes as authority. Fetch a
 caller-filtered registry contract, select the expected operation and profile,
 then pass the returned opaque binding to `createRecord` or `patchRecord`.
-Lifecycle actions similarly require a metadata-selected authority and an
-action promoted from one Registry Record.
+Actions use `selectAction`; Proposal transitions use links promoted from an
+authorized `BRegProposal`, separately from Registry Record writes.
 
 Every call accepts only a bounded, acyclic graph of plain JSON inputs. Proxies,
 accessors, symbols, exotic objects, sparse arrays, non-finite numbers, more
@@ -33,9 +33,9 @@ configuration, and never follows links automatically; the one resend is the
 bounded same-key retry of a keyed mutation described under the actions below.
 
 Failures are `BaseRegistryClientError` values with a stable `kind`, a boolean
-`outcomeUnknown`, and, where available, `code`, `planRefusal`, `refusalCode`,
+`outcomeUnknown`, and, where available, `code`, `refusalCode`,
 `fieldPath`, `status`, `traceId`, `transportKind`, and `tokenKind`. Errors do
-not expose token, private-key, record, or lifecycle payload values.
+not expose token, private-key, record, or Proposal payload values.
 
 ## Webhook verification
 
@@ -64,25 +64,26 @@ code from `missing-header`, `malformed-signature`, `signature-mismatch`, or
 
 Use the public server-side package `@registrystack/client` and its `breg`
 namespace. `registryContract(profile).operations` exposes typed,
-caller-filtered field, readable request field, request, and query descriptors.
+caller-filtered field, request, and query descriptors.
 Labels are inert presentation text;
 `schemaJson` preserves JSON Schema numbers. Descriptors grant no authority.
-Continue to use `selectCreate`, `selectPatch`, and `selectLifecycle` to obtain
+Continue to use `selectCreate`, `selectPatch`, and `selectAction` to obtain
 opaque authorities bound to the client source and selected profile.
 
 The same contract exposes lookup selectors, named read paths, code labels,
-reference operations, storage validation, spatial-query limits, visible
-change-request capability, and immediate-action descriptors. These values are
-descriptive. Mutation authority still comes only from `selectImmediateAction`,
-`selectBatch`, or `selectTombstone` on the fetched contract.
+reference operations, storage validation, spatial-query limits, and Action
+descriptors with their declared immediate or Proposal mode. These values are
+descriptive. Mutation authority comes from the fetched contract's selectors,
+including `selectAction`, `selectBatch`, and `selectTombstone`. Proposal Get
+and List use `selectProposalGet` and `selectProposals` separately.
 
 Methods ending in `Json` keep domain values on the Rust side of the JavaScript
 number boundary. `getRecordJson`, `listRecordsJson`, `continueListJson`,
 `lookupRecordJson`, `createRecordJson`, `patchRecordJson`, and
-`executeLifecycleActionJson` return `valueJson` with the same trace, ETag,
+`invokeActionJson` return `valueJson` with the same trace, ETag,
 location, and opaque continuation semantics as their object counterparts.
-`lifecycleActionsJson` accepts a complete record envelope as JSON text; its
-opaque actions expose `bodyJson` for exact display.
+Proposal methods use JSON text for inputs and transition bodies and expose the
+validated representation as `BRegProposal.documentJson`.
 
 ```js
 const { breg } = require('@registrystack/client');
@@ -113,8 +114,8 @@ Do not round unsupported input to make it pass. JSON whitespace and equivalent
 number spellings may be canonicalized; the promise concerns values and types.
 
 Actions retain their original opaque authority and exact retry semantics.
-A keyed mutation (create, patch, attachment upload or delete, lifecycle
-action, immediate action, batch, tombstone, statistics publish or withdraw)
+A keyed mutation (create, patch, attachment upload or delete, Proposal
+transition, immediate Action, batch, tombstone, statistics publish or withdraw)
 whose outcome is unknown is resent identically under the same key up to
 `maxMutationRetries` times: 0 to 2, default 2, and 0 sends it once. The
 outcome is unknown after a timeout or broken exchange once the request was
@@ -141,17 +142,13 @@ temporal parameters and continuations distinct. Snapshot continuations bind
 the returned snapshot and optional `validAt` identity. Relationship lists
 bind the root record and relationship path. `getRecordRevision` returns one
 validated retained record as inert bytes, while `recordRevisions` returns the
-bounded revision collection. `requestHistoryAfterProposalVersion` is accepted
-only by `getRecord`. Every specialized object read has an exact `...Json`
+bounded revision collection. Every specialized object read has an exact `...Json`
 variant when record or GeoJSON values may cross JavaScript's integer boundary.
 
-`requestHistory(record)` is a pure projection over one already loaded record.
-It returns a `BRegRetainedRequestHistoryPage` with strict proposal and result
-reference types, or `null` when history was not returned. A loaded proposal with
-an empty `resultReferences` list means only that no results were visible in that
-observation. Use the page cursor in a later explicit `getRecord`; the helper does
-not page, fetch targets, retry, or widen authority. Target revisions are applied
-provenance, not current ETags or write preconditions.
+Standalone Proposals use `getProposal` or one explicit `listProposals` page.
+An applied Proposal's result links record application provenance and grant no
+record authority. Read targets through ordinary authorized record methods;
+result revisions are not current ETags or write preconditions.
 
 ## Immediate and atomic mutations
 
@@ -170,14 +167,13 @@ selected entity binding, record UUID, current strong ETag, and caller-chosen
 idempotency key. Exact JSON variants preserve large integer values in inputs
 and receipts.
 
-For recovery across a process restart, call `prepareCreate` or
-`prepareLifecycleAction` before the first send and persist the returned
-capsule's `toBytes()` value in owner-protected storage. Use
-`BRegPreparedCreate.fromBytes` or `BRegPreparedLifecycle.fromBytes` after
-restart, fetch caller-filtered metadata again, and call `recoverCreate` or
-`recoverLifecycleAction` with freshly selected authority. Recovery is a pure
-revalidation step. The returned opaque operation remains inert until the
-application calls its corresponding `executeRecovered...` method. The saved
+For recovery across a process restart, call `prepareCreate` before the first
+send and persist the returned capsule's `toBytes()` value in owner-protected
+storage. Use
+`BRegPreparedCreate.fromBytes` after restart, fetch caller-filtered metadata
+again, and call `recoverCreate` with freshly selected authority. Recovery is a
+pure revalidation step. The returned opaque operation remains inert until the
+application calls `executeRecoveredCreate`. The saved
 bytes contain the original request values and idempotency key, but no token or
 metadata authority, and their diagnostic representation is redacted. The
 `...Json` variants preserve values outside the JavaScript safe-integer range.
@@ -193,48 +189,62 @@ fetches new ones. `executeRecoveredAction` is the explicit send under the
 original key. The saved bytes contain input values and must be treated as
 private application state.
 
-Use `action.withReason(text)` on a promoted `apply-request` action to add an
-optional application explanation. It returns a copy and validates before network effects. The
-original action omits the reason. Text
-is preserved exactly, allows an empty string, and is limited to 4096 Unicode
-characters with NUL refused. Reuse the same action and idempotency key for an
-explicit retry.
+## Standalone Proposals
 
-## Request attachments
-
-Governed binary slots are engine-owned. They are never set through create,
-JSON Patch, or request effects. Select them from a caller-filtered contract,
-then use the three exchanges the engine advertises.
+Select a Proposal-mode Action with `selectAction`, then call `startProposal`
+with its input object encoded as JSON text and a caller-chosen idempotency key.
+`prepareProposal` binds an available transition's promoted condition, exact
+body, and key; `executeProposal` is the explicit send.
 
 ```js
 const contract = await client.registryContract(profile);
-const [slot] = contract.selectAttachments('company', profile);
-const upload = slot.prepareUpload('application/pdf', bytes);
-await client.uploadAttachment(slot, recordId, etag, upload, 'upload-supporting-file-1');
-const stored = await client.downloadAttachment(slot, recordId, proposalVersion);
-await client.deleteAttachment(slot, recordId, nextEtag, 'remove-supporting-file-1');
+const action = contract.selectAction('correct-address', profile);
+const draft = await client.startProposal(action, inputsJson, 'correction-start-1');
+const submit = client.prepareProposal(draft, 'submit', '{}', 'correction-submit-1');
+// Persist submit.toBytes() in owner-protected storage before dispatch.
+const submitted = await client.executeProposal(submit);
 ```
 
-`slot` carries the served policy: `slotIdentifier`, `requiredForSubmit`,
-`maximumBytes`, `contentTypes`, `classification`, `acceptsContentType(type)`,
-and the `canDownload`, `canUpload`, and `canRemove` routes the caller's profile
-was granted. `prepareUpload` refuses an empty body, a body larger than
-`maximumBytes`, and any content type outside `contentTypes` before a request is
-built, so a refused upload never leaves the process. Uploads and removals need
-the record's current ETag and a caller-chosen idempotency key, exactly like
-`patchRecord`. `uploadAttachmentJson` and `deleteAttachmentJson` return the same
-record envelope as exact JSON text.
+Transitions are `edit`, `submit`, `revise`, `rebase`, `retry`, `cancel`, and
+`apply`, subject to current availability and caller authority. Apply's body
+binds `submissionVersion` and `effectDigest`; optional `reason` text is limited
+to 4096 Unicode characters with NUL refused. Proposal conditions are distinct
+from record ETags. Use `readProposal` or `getProposal` for a current observation.
+Read review status or context explicitly through `readProposalReviewStatus`
+or `readProposalReviewContext` when their links are promoted.
 
-`slot.valueIn(record)` reads the engine-owned projection of the slot out of one
-record envelope: `{kind: 'not-selected' | 'empty' | 'filled'}` with a `value`
-holding `proposalVersion`, `byteSize`, `sha256`, `contentType`, `uploadedAt`,
-`uploadedBy`, `erased`, and `verificationStatus` when the slot is filled.
+After restart, restore `BRegPreparedProposal.fromBytes`, fetch the current
+authorized Proposal, and call `recoverProposal` before `executeProposal`.
+Recovery retains the original condition, body and key. A later status read
+does not recover an uncertain command. To retain a Start attempt, use
+`prepareActionJson` before `startProposal`, then `recoverActionJson` and
+`executeRecoveredProposalStart` with fresh Action authority and the original
+inputs and key. Protect saved bytes as private application state.
 
-A download requires the proposal version and returns the stored bytes with
-their stored content type. A retained older value may carry a content type the
-current policy no longer accepts. The response is bounded by both the slot
-capacity and the client's `maxResponseBytes`, so raise `maxResponseBytes` when a
-slot may hold more than the default bound.
+## Proposal attachments
+
+Governed binary slots are engine-owned and advertised on an authorized
+Proposal. They are never set through record creation or JSON Patch. Use the
+Proposal's promoted slot links through the dedicated methods.
+
+```js
+const contract = await client.registryContract(profile);
+const binding = contract.selectProposalGet(profile);
+let proposal = await client.getProposal(binding, proposalId);
+proposal = await client.uploadProposalAttachment(proposal, 'supporting-document',
+  'application/pdf', bytes, 'upload-supporting-file-1');
+const stored = await client.downloadProposalAttachment(proposal, 'supporting-document');
+proposal = await client.deleteProposalAttachment(proposal, 'supporting-document',
+  'remove-supporting-file-1');
+```
+
+`BRegProposal.documentJson` retains the disclosed slot policy and value.
+Uploads refuse an empty body, a body larger than `maximumBytes`, and a content
+type outside `contentTypes` before I/O. Uploads and removals use the promoted
+slot condition and caller-chosen idempotency key and return a new Proposal.
+Downloads follow the promoted link and return bounded bytes with their stored
+content type. Keep the returned Proposal for subsequent operations; do not
+substitute a Registry Record ETag or construct an attachment route.
 
 ## Explicit OAuth token exchange
 

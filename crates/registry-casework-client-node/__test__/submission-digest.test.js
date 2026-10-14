@@ -27,6 +27,8 @@ test('submission digest refuses invalid inputs locally with value-free errors', 
   for (const [caller, namespace, body] of [
     ['', sourceNamespace, request], [producer, '', request],
     [producer, sourceNamespace, { ...request, policy: { ...request.policy, digest: 'private-bad-digest' } }],
+    [producer, sourceNamespace, { ...request, policy: { id: request.policy.id, version: request.policy.version } }],
+    [producer, sourceNamespace, { ...request, policy: { id: request.policy.id, digest: request.policy.digest } }],
     [producer, sourceNamespace, { ...request, unknown: 'private-value' }],
     [producer, sourceNamespace, { ...request, context: { mode: 'submitted', snapshot: { count: 9007199254740992 } } }],
     [producer, sourceNamespace, cyclic],
@@ -42,12 +44,14 @@ test('submission digest refuses invalid inputs locally with value-free errors', 
   }
 });
 
-test('computed digest composes with exact admission and response-loss recovery', async (context) => {
+for (const pinned of [false, true]) {
+test(`computed digest composes with ${pinned ? 'pinned' : 'current'} policy admission and response-loss recovery`, async (context) => {
   const http = require('node:http');
   const { CaseworkClient } = require('../client');
-  const { producer, sourceNamespace, request } = fixture;
+  const { producer, sourceNamespace } = fixture;
+  const request = { ...fixture.request, policy: pinned ? fixture.request.policy : { id: fixture.request.policy.id } };
   const digest = submissionDigest(producer, sourceNamespace, request);
-  const accepted = { requestId: '00000000-0000-4000-8000-000000000001', subject: request.subject, policy: request.policy, submissionDigest: digest };
+  const accepted = { requestId: '00000000-0000-4000-8000-000000000001', subject: request.subject, policy: fixture.request.policy, submissionDigest: digest };
   const seen = [];
   const server = http.createServer((incoming, response) => {
     let body = '';
@@ -74,3 +78,5 @@ test('computed digest composes with exact admission and response-loss recovery',
   assert.deepEqual(JSON.parse(seen[0].body), request);
   assert.deepEqual(seen[1], seen[0]);
 });
+
+}

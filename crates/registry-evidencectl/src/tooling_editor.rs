@@ -84,6 +84,7 @@ struct EditorSchema {
     name: &'static str,
     filename: &'static str,
     file_glob: &'static str,
+    additional_file_globs: &'static [&'static str],
     document: &'static str,
 }
 
@@ -102,36 +103,42 @@ const EDITOR_SCHEMA_CATALOG: [EditorSchema; 6] = [
         name: "project",
         filename: "project.schema.json",
         file_glob: "evidence.yaml",
+        additional_file_globs: &[],
         document: include_str!("../schemas/authoring/project.schema.json"),
     },
     EditorSchema {
         name: "target",
         filename: "target.schema.json",
         file_glob: "*-target.yaml",
+        additional_file_globs: &["target.yaml", "targets/*/target.yaml"],
         document: include_str!("../schemas/authoring/target.schema.json"),
     },
     EditorSchema {
         name: "target-authority",
         filename: "target-authority.schema.json",
         file_glob: "*-authority.yaml",
+        additional_file_globs: &["authority.yaml", "targets/*/authority.yaml"],
         document: include_str!("../schemas/authoring/target-authority.schema.json"),
     },
     EditorSchema {
         name: "access-client",
         filename: "access-client.schema.json",
         file_glob: "access/clients/*.yaml",
+        additional_file_globs: &[],
         document: include_str!("../schemas/authoring/access-client.schema.json"),
     },
     EditorSchema {
         name: "fixture",
         filename: "fixture.schema.json",
         file_glob: "fixtures/*.yaml",
+        additional_file_globs: &[],
         document: include_str!("../../../products/evidence/generated/fixture/fixture.schema.json"),
     },
     EditorSchema {
         name: "mock-plan",
         filename: "mock-plan.schema.json",
         file_glob: "mocks/source.yaml",
+        additional_file_globs: &[],
         document: include_str!("../schemas/authoring/mock-plan.schema.json"),
     },
 ];
@@ -183,6 +190,8 @@ struct EditorManifestSchema {
     kind: String,
     path: String,
     file_glob: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    additional_file_globs: Vec<String>,
     sha256: String,
 }
 
@@ -421,6 +430,11 @@ fn current_editor_manifest(prefix: &str) -> EditorManifest {
                 kind: entry.name.to_string(),
                 path: format!("schemas/{}", entry.filename),
                 file_glob: format!("{prefix}{}", entry.file_glob),
+                additional_file_globs: entry
+                    .additional_file_globs
+                    .iter()
+                    .map(|glob| format!("{prefix}{glob}"))
+                    .collect(),
                 sha256: schema_hash(entry.document.as_bytes()),
             })
             .collect(),
@@ -444,7 +458,13 @@ fn editor_configuration_files_at(
         .map(|schema| {
             (
                 format!("./{prefix}{EDITOR_ROOT}/{}", schema.path),
-                schema.file_glob.clone(),
+                if schema.additional_file_globs.is_empty() {
+                    json!(schema.file_glob)
+                } else {
+                    json!(std::iter::once(&schema.file_glob)
+                        .chain(&schema.additional_file_globs)
+                        .collect::<Vec<_>>())
+                },
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -608,6 +628,13 @@ fn validate_managed_prior_editor(
             schema.kind == entry.name
                 && schema.path == format!("schemas/{}", entry.filename)
                 && schema.file_glob == format!("{}{}", manifest.project_prefix, entry.file_glob)
+                && (schema.additional_file_globs.is_empty()
+                    || schema.additional_file_globs
+                        == entry
+                            .additional_file_globs
+                            .iter()
+                            .map(|glob| format!("{}{glob}", manifest.project_prefix))
+                            .collect::<Vec<_>>())
         });
         if !known || !is_schema_hash(&schema.sha256) || !listed.insert(schema.kind.as_str()) {
             bail!(
@@ -1244,7 +1271,11 @@ mod tests {
         );
         assert_eq!(
             mappings["./.evidence-editor/schemas/target.schema.json"],
-            "authoring-project/*-target.yaml"
+            json!([
+                "authoring-project/*-target.yaml",
+                "authoring-project/target.yaml",
+                "authoring-project/targets/*/target.yaml"
+            ])
         );
         for location in mappings.as_object().unwrap().keys() {
             assert!(workspace.join(location).is_file());
@@ -1480,6 +1511,41 @@ mod tests {
     }
 
     #[test]
+    fn prior_flat_mappings_refresh_to_include_canonical_target_files() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = project(&temporary);
+        setup_project_editor(&project).unwrap();
+        let mut prior = current_editor_manifest("");
+        for schema in &mut prior.schemas {
+            schema.additional_file_globs.clear();
+        }
+        fs::write(
+            project.join(EDITOR_MANIFEST_PATH),
+            pretty_json(&prior).unwrap(),
+        )
+        .unwrap();
+        for file in editor_configuration_files(&prior.schemas).unwrap() {
+            fs::write(project.join(file.relative_path), file.bytes).unwrap();
+        }
+        setup_project_editor(&project).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(project.join(".vscode/settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            settings["yaml.schemas"]["./.evidence-editor/schemas/target.schema.json"],
+            json!(["*-target.yaml", "target.yaml", "targets/*/target.yaml"])
+        );
+        assert_eq!(
+            settings["yaml.schemas"]["./.evidence-editor/schemas/target-authority.schema.json"],
+            json!([
+                "*-authority.yaml",
+                "authority.yaml",
+                "targets/*/authority.yaml"
+            ])
+        );
+    }
+
+    #[test]
     fn the_catalog_globs_match_the_layout_the_authoring_crate_owns() {
         let globs = EDITOR_SCHEMA_CATALOG
             .iter()
@@ -1526,7 +1592,13 @@ mod tests {
         for entry in &EDITOR_SCHEMA_CATALOG {
             assert_eq!(
                 mappings[&format!("./{EDITOR_ROOT}/schemas/{}", entry.filename)],
-                serde_json::Value::String(entry.file_glob.to_string()),
+                if entry.additional_file_globs.is_empty() {
+                    json!(entry.file_glob)
+                } else {
+                    json!(std::iter::once(&entry.file_glob)
+                        .chain(entry.additional_file_globs)
+                        .collect::<Vec<_>>())
+                },
             );
         }
 

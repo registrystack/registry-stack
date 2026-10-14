@@ -25,7 +25,7 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 const SOURCE: &[u8] =
-    include_bytes!("../../../products/breg/examples/refactor/reviewed-change/registry.yaml");
+    include_bytes!("../../../products/breg/examples/reviewed-change/registry.yaml");
 
 fn registry() -> registry_breg::CompiledRegistry {
     compile_project(

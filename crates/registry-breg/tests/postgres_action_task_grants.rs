@@ -32,7 +32,7 @@ use std::{
 fn registry() -> registry_breg::CompiledRegistry {
     let mut source: Value = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(include_bytes!(
-            "../../../products/breg/examples/refactor/minimal/registry.yaml"
+            "../../../products/breg/examples/minimal/registry.yaml"
         ))
         .expect("canonical fixture uses the supported YAML subset")
         .expect("canonical fixture is nonempty")

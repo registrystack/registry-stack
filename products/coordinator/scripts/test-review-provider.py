@@ -50,10 +50,10 @@ def write_source(native, root, urls, bindings=None, *, borrower=False):
     record["fields"].append({"id": "active", "type": "boolean", "required": True, "classification": "internal"})
     base = next(action for action in registry["actions"] if action["id"] == "correct-amount")
     base["execution"]["proposal"]["reviewContext"] = {"id": "application-amount-context", "fields": {
-        "applicationId": {"fromInput": "application"},
-        "recordActive": {"fromRecord": "application", "field": "active"},
-        "currentAmount": {"fromRecord": "application", "field": "requested-amount"},
-        "proposedAmount": {"fromInput": "proposed-amount"},
+        "applicationId": {"type": "input", "input": "application"},
+        "recordActive": {"type": "record", "input": "application", "field": "active"},
+        "currentAmount": {"type": "record", "input": "application", "field": "requested-amount"},
+        "proposedAmount": {"type": "input", "input": "proposed-amount"},
     }}
     for action_id in list(VARIANTS)[1:]:
         action = copy.deepcopy(base)
@@ -93,7 +93,11 @@ def write_source(native, root, urls, bindings=None, *, borrower=False):
         registry["reviewAuthorities"] = [{"id": "coordinator", "protocol": "id.registrystack.org/protocols/review/v1"}]
         for action in registry["actions"]:
             if action["id"] in VARIANTS:
-                action["execution"]["proposal"]["review"] = {"type": "required", "authority": "coordinator", "source": native.SOURCE, "policy": bindings[action["id"]]}
+                binding = bindings[action["id"]]
+                # Automatic application uses the provider's current policy at
+                # acceptance. Manual and expiry fixtures exercise strict pins.
+                policy = {"id": binding["id"]} if action["id"] == "correct-amount" else binding
+                action["execution"]["proposal"]["review"] = {"type": "required", "authority": "coordinator", "source": native.SOURCE, "policy": policy}
     native.private(root / "registry.yaml", registry)
     clients = load(root / "dev-clients.yaml")
     reader = next(client for client in clients["clients"] if client["id"] == "application-reader")
@@ -305,11 +309,12 @@ def run(args):
         proof = {"boundary": "native_breg_coordinator_review_casework", "sourceApplyAuthority": "independent BReg grants and current commit guards", "binarySha256": journey.binary_digests}
         record, proposal = create("automatic")
         view, result = terminal(proposal, "approved")
+        assert view["policy"] == provider_bindings["correct-amount"], "ID-only selection must accept and retain the concrete provider policy"
         effect = applied(proposal)
         assert effect["application"]["effectDigest"] == proposal["effectDigest"]
         wait_until(lambda: upstream.commands, lambda commands: len(commands) >= 2, "source did not recover the lost Review acceptance")
         assert upstream.commands[0]["key"] == upstream.commands[1]["key"] and upstream.commands[0]["bodyHash"] == upstream.commands[1]["bodyHash"]
-        proof["automatic"] = {"subject": view["subject"], "resultId": result["resultId"], "application": effect["application"], "sameKeyAcceptanceRecovery": True}
+        proof["automatic"] = {"policySelector": {"id": provider_bindings["correct-amount"]["id"]}, "acceptedPolicy": view["policy"], "subject": view["subject"], "resultId": result["resultId"], "application": effect["application"], "sameKeyAcceptanceRecovery": True}
         # A dedicated service assessment profile cannot borrow source apply.
         native.http("POST", journey.urls["breg"] + f"/v1/proposals/{proposal['id']}/apply?accessProfile=assessment", journey.token("bregctl", bootstrap, "application-reader"), apply_body(proposal), {"Idempotency-Key": str(uuid.uuid4()), "If-Match": f'"{effect["revision"]}"'}, (403, 404))
         human_record, human_proposal = create("human", amount=1500)

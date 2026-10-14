@@ -413,8 +413,17 @@
         ],
         "type": "object"
       },
-      "PolicyBinding": {
+      "PolicySelection": {
         "additionalProperties": false,
+        "dependentRequired": {
+          "digest": [
+            "version"
+          ],
+          "version": [
+            "digest"
+          ]
+        },
+        "description": "Select the trusted provider's current policy, or require one exact binding.\nThe selector stays in the submission identity; acceptance records the concrete binding.",
         "properties": {
           "digest": {
             "$ref": "#/$defs/ContentDigest"
@@ -427,9 +436,7 @@
           }
         },
         "required": [
-          "id",
-          "version",
-          "digest"
+          "id"
         ],
         "type": "object"
       },
@@ -533,7 +540,7 @@
         ]
       },
       "policy": {
-        "$ref": "#/$defs/PolicyBinding"
+        "$ref": "#/$defs/PolicySelection"
       },
       "requesterReference": {
         "type": "string"

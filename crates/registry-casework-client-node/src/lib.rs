@@ -51,6 +51,13 @@ pub struct CaseworkClientConfig {
     pub max_mutation_retries: Option<f64>,
 }
 
+/// Identify a human task grant read without positional string ambiguity.
+#[napi(object)]
+pub struct ReviewTaskGrantReadOptions {
+    pub task_id: String,
+    pub source_profile: Option<String>,
+}
+
 #[napi(object)]
 pub struct CaseworkOutcome {
     pub kind: String,
@@ -368,15 +375,14 @@ impl CaseworkClient {
         &self,
         token: String,
         profile: String,
-        task_id: String,
-        source_profile: Option<String>,
+        options: ReviewTaskGrantReadOptions,
     ) -> Result<CaseworkOutcome> {
-        let task_id = uuid(&task_id)?;
+        let task_id = uuid(&options.task_id)?;
         let token = bearer(token)?;
         outcome(
             self.inner
                 .preview_review_task_templates(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(&token, &profile, options.source_profile.as_deref()),
                     task_id,
                 )
                 .await,
@@ -388,15 +394,14 @@ impl CaseworkClient {
         &self,
         token: String,
         profile: String,
-        task_id: String,
-        source_profile: Option<String>,
+        options: ReviewTaskGrantReadOptions,
     ) -> Result<CaseworkOutcome> {
-        let task_id = uuid(&task_id)?;
+        let task_id = uuid(&options.task_id)?;
         let token = bearer(token)?;
         outcome(
             self.inner
                 .list_review_task_grants(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(&token, &profile, options.source_profile.as_deref()),
                     task_id,
                 )
                 .await,

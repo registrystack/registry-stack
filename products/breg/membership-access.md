@@ -30,7 +30,7 @@ accessProfiles:
               valueOrigin: request
           membershipBoundaries:
             - field: organization
-              membershipEntity: membership
+              membershipRecordType: membership
               membershipKeyField: organization
               principalField: principal
               activeField: active

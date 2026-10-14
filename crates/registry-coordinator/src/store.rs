@@ -119,6 +119,12 @@ pub struct Actor {
     pub operator: bool,
 }
 
+/// One transactional admission, including its immutable Review response when applicable.
+struct AdmissionOutcome {
+    run_id: Uuid,
+    accepted_review: Option<registry_review_protocol::ReviewRequestAccepted>,
+}
+
 pub struct StoreSecurity {
     pub database_id: String,
     pub keys: StateKeys,
@@ -977,45 +983,30 @@ impl Store {
             None,
         )
         .await
+        .map(|admission| admission.run_id)
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Admission binds caller identity, command, runtime and expected revision independently"
-    )]
-    async fn admit_bound(
+    fn admission_identity(
         &self,
-        definition: &Definition,
-        input: Value,
+        workflow: &str,
         producer: &str,
         key: &str,
-        binding_digest: &str,
-        runtime: Option<&crate::runtime::RuntimeConfig>,
-        expected_revision: &str,
-        review: Option<&crate::review_provider::ReviewAdmission>,
-        event: Option<(&str, &crate::event_trigger::EventTrigger)>,
-    ) -> Result<Uuid> {
-        let event_binding = event.map(|(binding, _)| binding);
-        if producer.is_empty()
-            || key.is_empty()
-            || producer.len() > 256
-            || key.len() > 256
-            || binding_digest.is_empty()
-            || binding_digest.len() > 256
-        {
+        input: &Value,
+    ) -> Result<(String, String)> {
+        if producer.is_empty() || key.is_empty() || producer.len() > 256 || key.len() > 256 {
             return Err(refused(
                 "admission-invalid",
-                "producer, idempotency key and binding digest must be bounded nonempty values",
+                "producer and idempotency key must be bounded nonempty values",
             ));
         }
-        crate::functions::check_value(&input).map_err(|_| {
+        crate::functions::check_value(input).map_err(|_| {
             refused(
                 "input-invalid",
                 "input must fit the documented structured value bounds",
             )
         })?;
         let input_bytes = zeroize::Zeroizing::new(
-            registry_platform_canonical_json::canonicalize_json(&input).map_err(|_| {
+            registry_platform_canonical_json::canonicalize_json(input).map_err(|_| {
                 refused(
                     "input-invalid",
                     "input must have an unambiguous canonical JSON representation",
@@ -1027,23 +1018,19 @@ impl Store {
             &[
                 self.security.database_id.as_bytes(),
                 producer.as_bytes(),
-                definition.workflow.id.as_bytes(),
+                workflow.as_bytes(),
                 key.as_bytes(),
             ],
         );
-        let event_binding = event_binding.map(|binding| {
-            self.security
-                .keys
-                .commitment("event", &[identity.as_bytes(), binding.as_bytes()])
-        });
         let input_digest = self
             .security
             .keys
             .commitment("input", &[identity.as_bytes(), &input_bytes]);
-        let snapshot = definition.snapshot()?;
-        let mut client = self.client().await.map_err(unavailable)?;
-        let tx = client.transaction().await.map_err(unavailable)?;
-        self.verify_transaction(&tx).await.map_err(unavailable)?;
+        Ok((identity, input_digest))
+    }
+
+    async fn lock_admission(&self, tx: &Transaction<'_>) -> Result<()> {
+        self.verify_transaction(tx).await.map_err(unavailable)?;
         tx.query_one(
             &format!(
                 "SELECT id FROM {}.admission_lock WHERE id FOR UPDATE",
@@ -1067,7 +1054,48 @@ impl Store {
         if held {
             return Err(refused("restore-admissions-held","recover complete admission history before enabling starts; inspect known runs while ingress is held"));
         }
-        if let Some(row) = tx
+        Ok(())
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Admission binds caller identity, command, runtime and expected revision independently"
+    )]
+    async fn admit_bound(
+        &self,
+        definition: &Definition,
+        input: Value,
+        producer: &str,
+        key: &str,
+        binding_digest: &str,
+        runtime: Option<&crate::runtime::RuntimeConfig>,
+        expected_revision: &str,
+        review: Option<&crate::review_provider::ReviewAdmission>,
+        event: Option<(&str, &crate::event_trigger::EventTrigger)>,
+    ) -> Result<AdmissionOutcome> {
+        let event_binding = event.map(|(binding, _)| binding);
+        if binding_digest.is_empty() || binding_digest.len() > 256 {
+            return Err(refused(
+                "admission-invalid",
+                "producer, idempotency key and binding digest must be bounded nonempty values",
+            ));
+        }
+        let (identity, input_digest) =
+            self.admission_identity(&definition.workflow.id, producer, key, &input)?;
+        let event_binding = event_binding.map(|binding| {
+            self.security
+                .keys
+                .commitment("event", &[identity.as_bytes(), binding.as_bytes()])
+        });
+        let snapshot = definition.snapshot()?;
+        let mut client = self.client().await.map_err(unavailable)?;
+        let tx = client.transaction().await.map_err(unavailable)?;
+        self.lock_admission(&tx).await?;
+        if review.is_some() {
+            if let Some(accepted) = self.recover_review_admission(&tx, &identity, &input_digest).await? {
+                return Ok(AdmissionOutcome { run_id: accepted.request_id, accepted_review: Some(accepted) });
+            }
+        } else if let Some(row) = tx
             .query_opt(
                 &format!(
                     "SELECT run_id,input_digest,definition_digest,event_binding FROM {}.runs WHERE start_identity=$1",
@@ -1087,27 +1115,42 @@ impl Store {
                     "this producer, workflow and idempotency key already names different admitted work",
                 ));
             }
-            // Recovery is bound to the originally admitted revision and exact
-            // input, including when only the protected tombstone remains.
-            return Ok(row.get(0));
+            let run_id = row.get(0);
+            return Ok(AdmissionOutcome { run_id, accepted_review: None });
         }
         if expected_revision != definition.digest {
             return Err(refused("workflow-revision-mismatch", "the expected Workflow revision is not active; discover the active contract before starting new work"));
         }
-        if let Some(review) = review {
+        let run = Uuid::new_v4();
+        let retained_review = if let Some(review) = review {
             if review.request.result_constraints.is_some() {
                 return Err(refused("request.invalid","this Review provider does not declare structured results; omit resultConstraints").at("request","$.resultConstraints"));
             }
-            if crate::review_provider::policy_binding(&definition.workflow, &definition.digest)?
-                .as_ref()
-                != Some(&review.request.policy)
-            {
+            let binding =
+                crate::review_provider::policy_binding(&definition.workflow, &definition.digest)?
+                    .ok_or_else(|| {
+                    refused("workflow-absent", "this Workflow does not provide Review")
+                })?;
+            if !review.request.policy.matches(&binding) {
                 return Err(refused(
                     "workflow-revision-mismatch",
                     "the expected Review policy is not active",
                 ));
             }
-        }
+            Some(
+                review.retain(
+                    run,
+                    binding,
+                    definition
+                        .workflow
+                        .review
+                        .as_ref()
+                        .expect("checked Review policy"),
+                )?,
+            )
+        } else {
+            None
+        };
         if let Some(runtime) = runtime {
             self.check_live_bindings(&tx, runtime).await?;
         }
@@ -1125,11 +1168,9 @@ impl Store {
             .get(0);
         let deadline = definition.deadline_at(now)?;
         let due = definition.initial_due(&input, now)?;
-        let run = Uuid::new_v4();
         let sealed_snapshot = self.seal(run, "snapshot", "", &snapshot)?;
         let sealed_input = self.seal(run, "input", "", &input)?;
         let sealed_outputs = self.seal(run, "outputs", "", &BTreeMap::<String, Value>::new())?;
-        let retained_review = review.map(|review| review.retain(run)).transpose()?;
         let review_source = retained_review.as_ref().map(|review| {
             self.security.keys.commitment(
                 "review-source",
@@ -1185,7 +1226,10 @@ impl Store {
         .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
         self.metrics.record_run_admitted();
-        Ok(run)
+        Ok(AdmissionOutcome {
+            run_id: run,
+            accepted_review: retained_review.map(|review| review.accepted),
+        })
     }
 
     async fn require_unheld(&self, tx: &Transaction<'_>) -> Result<()> {

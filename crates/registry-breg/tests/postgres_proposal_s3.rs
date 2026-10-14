@@ -219,6 +219,7 @@ struct Objects {
     // External verifier: approve, reject, or exceed its transport deadline.
     verifier_mode: AtomicUsize,
     verifier_bytes: tokio::sync::Mutex<Vec<Vec<u8>>>,
+    verifier_content_types: tokio::sync::Mutex<Vec<String>>,
 }
 async fn object_request(
     State(state): State<Arc<Objects>>,
@@ -231,7 +232,13 @@ async fn object_request(
         use sha2::{Digest, Sha256};
         assert_eq!(method, Method::POST);
         assert_eq!(headers["authorization"], "Bearer synthetic-verifier");
-        assert_eq!(headers["content-type"], "text/plain");
+        let content_type = headers["content-type"].to_str().unwrap();
+        assert!(["text/plain", "application/pdf"].contains(&content_type));
+        state
+            .verifier_content_types
+            .lock()
+            .await
+            .push(content_type.to_owned());
         assert_eq!(
             headers["x-content-sha256"].to_str().unwrap(),
             hex::encode(Sha256::digest(&body))
@@ -716,8 +723,11 @@ async fn native_verifier_worker_releases_only_exact_approved_bytes() {
     let storage = s3.storage.clone();
     let verification = s3.config.activate_attachment_verification().unwrap();
     let configured_verification = verification.clone();
+    let mut source = registry_source(false);
+    source["actions"][0]["execution"]["proposal"]["attachments"][0]["contentTypes"] =
+        json!(["text/plain", "application/pdf"]);
     let fixture = client_http::ClientFixture::start_with_mutations(
-        registry(false),
+        compile(source),
         claims("synthetic-author", "zone-a"),
         move |mutations| {
             mutations
@@ -784,6 +794,83 @@ async fn native_verifier_worker_releases_only_exact_approved_bytes() {
             .get::<_, String>(0),
         "approved"
     );
+
+    // A verdict binds media type as well as bytes and policy. Keep the first
+    // reference live so its approved decision remains available for deduplication.
+    let other = start(&fixture, "Other media", "verifier-media-start").await;
+    let other = client
+        .upload_proposal_attachment(
+            &other,
+            "support",
+            "application/pdf",
+            b"approved-exact-bytes",
+            &key("verifier-media-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    let bindings = fixture.database.admin.query("SELECT content_type,verdict,sha256 FROM registry_internal.registry_attachment_verification ORDER BY content_type",&[]).await.unwrap();
+    assert_eq!(bindings.len(), 2);
+    assert_eq!(bindings[0].get::<_, String>(0), "application/pdf");
+    assert_eq!(bindings[0].get::<_, String>(1), "pending");
+    assert_eq!(bindings[1].get::<_, String>(1), "approved");
+    assert_eq!(
+        bindings[0].get::<_, String>(2),
+        bindings[1].get::<_, String>(2)
+    );
+    let blobs: i64 = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_attachment_blobs",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        blobs, 1,
+        "same hash shares blob identity, never a verdict for another media type"
+    );
+    assert_eq!(
+        raw_download(&fixture.http, &other).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    s3.state.verifier_mode.store(1, Ordering::SeqCst);
+    assert!(worker.run_once().await.unwrap());
+    assert_eq!(
+        raw_download(&fixture.http, &other).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        client
+            .download_proposal_attachment(&approved, "support")
+            .await
+            .unwrap()
+            .value
+            .as_bytes(),
+        b"approved-exact-bytes"
+    );
+    let cancel = client
+        .prepare_proposal(&other, "cancel", json!({}), &key("verifier-media-cancel"))
+        .unwrap();
+    let other = client.execute_proposal(&cancel).await.unwrap().value;
+    cleanup(&fixture, s3.storage.clone())
+        .with_verification_policy_for_test(
+            s3.config
+                .activate_attachment_verification()
+                .unwrap()
+                .binding_digest(),
+        )
+        .erase(
+            registry_breg::proposal_retention::ProposalDetailErasureScope {
+                action_id: "correct-name",
+                proposal_id: uuid::Uuid::parse_str(other.id()).unwrap(),
+                submission_version: 1,
+            },
+        )
+        .await
+        .unwrap();
 
     // The previous approval cannot release replacement bytes in the same slot.
     s3.state.verifier_mode.store(1, Ordering::SeqCst);
@@ -864,11 +951,16 @@ async fn native_verifier_worker_releases_only_exact_approved_bytes() {
         *requests,
         vec![
             b"approved-exact-bytes".to_vec(),
+            b"approved-exact-bytes".to_vec(),
             b"replacement-rejected".to_vec(),
             b"replacement-timeout".to_vec()
         ]
     );
     drop(requests);
+    assert_eq!(
+        *s3.state.verifier_content_types.lock().await,
+        vec!["text/plain", "application/pdf", "text/plain", "text/plain"]
+    );
     let audit = capture.entries();
     assert!(audit
         .iter()

@@ -158,6 +158,11 @@ export type KnownCaseworkProblemCode =
 export type CaseworkProblemCode = KnownCaseworkProblemCode | (string & {})
 export type CaseworkProtocolFailure = 'header-bounds' | 'trace-context' | 'media-type' | 'body' | 'problem' | 'status' | 'protocol'
 
+export interface ReviewTaskGrantReadOptions {
+  taskId: Uuid
+  sourceProfile?: string | null
+}
+
 export class CaseworkClientError extends Error {
   readonly kind: 'configuration' | 'invalid-request' | 'transport' | 'problem' | 'protocol'
   /**
@@ -200,12 +205,14 @@ export interface ReviewClockRecomputeResult { tasks: ReadonlyArray<ReviewClockRe
 export type ContentDigest = `sha256:${string}`
 export interface SubjectBinding { source: string; type: string; id: string; version: string; digest: ContentDigest }
 export interface PolicyBinding { id: string; version: string; digest: ContentDigest }
+/** Select the current admitted policy by ID, or require one complete exact pin. */
+export type PolicySelection = { id: string; version?: never; digest?: never } | PolicyBinding
 export interface HumanIdentity { issuer: string; subject: string }
 export type ReviewContext =
   | { mode: 'submitted'; snapshot: Readonly<Record<string, JsonValue>> }
   | { mode: 'current-source'; binding: { reference: string } }
 export interface ReviewCreateRequest {
-  policy: PolicyBinding
+  policy: PolicySelection
   subject: SubjectBinding
   requesterReference: string
   initiator?: HumanIdentity
@@ -392,8 +399,8 @@ export class CaseworkClient {
   ownReviewDecisions(token: string, profile: string, query?: OwnReviewDecisionQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<OwnReviewDecisionPage>>
   reviewTask(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTask>>
   reviewTaskContext(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskContext>>
-  previewReviewTaskTemplates(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<TaskTemplatePreviews>>
-  listReviewTaskGrants(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<TaskGrantList>>
+  previewReviewTaskTemplates(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome<TaskTemplatePreviews>>
+  listReviewTaskGrants(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome<TaskGrantList>>
   approveReviewTaskGrant(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, approval: TaskApprovalRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<TaskGrantView>>
   revokeReviewTaskGrant(token: string, profile: string, taskId: Uuid, grantId: string): Promise<CaseworkOutcome<TaskGrantRevocation>>
   claimReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTask>>

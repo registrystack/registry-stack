@@ -34,13 +34,13 @@ enum OutputFormat {
 }
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create a complete standalone ReviewPolicy project.
+    /// Create a standalone or source-backed ReviewPolicy project.
     Init {
         /// New project directory; existing destinations are never overwritten.
         #[arg(value_name = "DIRECTORY")]
         project: PathBuf,
-        /// Starter to create (standalone-decision).
-        #[arg(long, default_value = "standalone-decision")]
+        /// Starter to create.
+        #[arg(long, default_value = "standalone-decision", value_parser = ["standalone-decision", "canonical-review"])]
         template: String,
     },
     /// Validate policy, closed context schemas and required provider capabilities offline.
@@ -116,10 +116,10 @@ enum ProviderCommand {
         /// Declared Casework context provider to pair.
         #[arg(long)]
         provider_id: String,
-        /// Sealed native BReg package directory containing the action's context export.
+        /// Sealed native Base Registry Engine (BReg) package containing the action's context export.
         #[arg(long, value_name = "DIRECTORY")]
         breg_package: PathBuf,
-        /// BReg action that declares the required review context.
+        /// Base Registry Engine (BReg) action that declares the required review context.
         #[arg(long)]
         action_id: String,
         /// Matching bregctl executable used to verify the producer package.
@@ -161,7 +161,7 @@ struct CheckArgs {
     /// Refuse authored warnings as well as errors.
     #[arg(long)]
     deny_warnings: bool,
-    /// Compare imported provider contracts with this sealed native BReg package.
+    /// Compare imported provider contracts with this sealed native Base Registry Engine (BReg) package.
     #[arg(long, value_name = "DIRECTORY")]
     against_breg_package: Option<PathBuf>,
     /// Limit native package comparison to this declared provider.
@@ -599,6 +599,31 @@ mod tests {
         assert!(human.contains("1 error, 0 warnings in 1 file"), "{human}");
         assert!(!human.contains("\"diagnostics\":"), "{human}");
     }
+    #[test]
+    fn canonical_review_template_embeds_the_owner_project_and_context_schema() {
+        let temp = canonical_tempdir();
+        let project = temp.path().join("canonical");
+        project::init(&project, "canonical-review").unwrap();
+        for (name, bytes) in [
+            ("casework.yaml", include_bytes!("../../../products/casework/examples/canonical-review/casework.yaml").as_slice()),
+            ("schemas/correct-address.schema.json", include_bytes!("../../../products/casework/examples/canonical-review/schemas/correct-address.schema.json").as_slice()),
+            ("dev-clients.yaml", include_bytes!("../../../products/casework/examples/canonical-review/dev-clients.yaml").as_slice()),
+        ] {
+            assert_eq!(std::fs::read(project.join(name)).unwrap(), bytes, "{name}");
+        }
+        project::load_and_check_policy(&project).unwrap();
+        for name in ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml"] {
+            let text = std::fs::read_to_string(project.join(name)).unwrap();
+            let schema = text
+                .lines()
+                .next()
+                .unwrap()
+                .strip_prefix("# yaml-language-server: $schema=")
+                .unwrap();
+            assert!(project.join(schema).is_file(), "{name}");
+        }
+    }
+
     #[test]
     fn init_files_select_existing_local_editor_schemas() {
         let temp = canonical_tempdir();

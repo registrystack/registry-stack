@@ -21,7 +21,7 @@
 //! release gate. This is real HTTP/native-facade proof, not installed tarball
 //! or wheel proof.
 
-use registry_stack_client::casework::{
+use registry_casework_client::{
     submission_digest, BearerToken, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
     ContentDigest, ReviewContext, ReviewCreateRequest, ReviewResultResponse, SubjectBinding,
 };
@@ -570,7 +570,7 @@ fn create_review_request(session: &Session, report: &Value, reference: &str) -> 
         .expect("compiled producer policy")
         .binding();
     let request = ReviewCreateRequest {
-        policy: expected.clone(),
+        policy: expected.clone().into(),
         subject: SubjectBinding {
             source: "standalone".into(),
             subject_type: "batch".into(),

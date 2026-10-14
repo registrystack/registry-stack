@@ -133,25 +133,25 @@ exceptions:
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/routes-explanation
-  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/properties/routes/items/oneOf/1/properties/method/enum/DELETE
+  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/$defs/HttpMethod/enum/DELETE
   class: protocol-constant
   reason: DELETE is written as HTTP methods (RFC 9110) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/routes-explanation
-  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/properties/routes/items/oneOf/1/properties/method/enum/GET
+  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/$defs/HttpMethod/enum/GET
   class: protocol-constant
   reason: GET is written as HTTP methods (RFC 9110) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/routes-explanation
-  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/properties/routes/items/oneOf/1/properties/method/enum/PATCH
+  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/$defs/HttpMethod/enum/PATCH
   class: protocol-constant
   reason: PATCH is written as HTTP PATCH (RFC 5789) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
   format: breg/routes-explanation
-  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/properties/routes/items/oneOf/1/properties/method/enum/POST
+  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/$defs/HttpMethod/enum/POST
   class: protocol-constant
   reason: POST is written as HTTP methods (RFC 9110) defines it
   resolution: Permanent.
@@ -301,10 +301,10 @@ exceptions:
   resolution: Permanent.
 - rule: CFG-ID-1
   format: breg/module
-  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/PolicyBindingSource/properties/id
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/PolicySelectionSource/properties/id
   class: exchange-model
-  reason: "PolicyBinding.id is issued by the review authority under the shared Review v1 exchange contract, not defined in the BReg local namespace. It is typed ExternalId and checked against the protocol's 128 UTF-8 byte bound; changing its spelling would change the exact policy binding."
-  resolution: "Permanent for the Review v1 PolicyBinding exchange model. native_source_conventions proves non-local policy IDs and the protocol byte bound."
+  reason: "PolicySelection.id is issued by the review authority under the shared Review v1 exchange contract, not defined in the BReg local namespace. It is typed ExternalId and checked against the protocol's 128 UTF-8 byte bound; changing its spelling would change the exact policy binding."
+  resolution: "Permanent for the Review v1 PolicySelection exchange model. native_source_conventions proves non-local policy IDs and the protocol byte bound."
 - rule: CFG-ID-1
   format: breg/module
   location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ProposalReviewContextSource/properties/fields
@@ -349,10 +349,10 @@ exceptions:
   resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
 - rule: CFG-ID-1
   format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/PolicyBindingSource/properties/id
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/PolicySelectionSource/properties/id
   class: exchange-model
-  reason: "PolicyBinding.id is issued by the review authority under the shared Review v1 exchange contract, not defined in the BReg local namespace. It is typed ExternalId and checked against the protocol's 128 UTF-8 byte bound; changing its spelling would change the exact policy binding."
-  resolution: "Permanent for the Review v1 PolicyBinding exchange model. native_source_conventions proves non-local policy IDs and the protocol byte bound."
+  reason: "PolicySelection.id is issued by the review authority under the shared Review v1 exchange contract, not defined in the BReg local namespace. It is typed ExternalId and checked against the protocol's 128 UTF-8 byte bound; changing its spelling would change the exact policy binding."
+  resolution: "Permanent for the Review v1 PolicySelection exchange model. native_source_conventions proves non-local policy IDs and the protocol byte bound."
 - rule: CFG-ID-1
   format: breg/project
   location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ProposalReviewContextSource/properties/fields
@@ -480,3 +480,9 @@ exceptions:
   class: protocol-constant
   reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
+- rule: CFG-ID-1
+  format: coordinator/runtime
+  location: products/coordinator/generated/runtime/runtime.schema.json#/$defs/ReviewProducer/properties/id
+  class: exchange-model
+  reason: "Review producer identity is issued by the trusted producer and participates unchanged in the shared protocol submission digest. It is an ExternalId, not a Coordinator-local identifier."
+  resolution: "Permanent for the shared Review producer identity contract; current caller binding and Review digest tests cover its use."

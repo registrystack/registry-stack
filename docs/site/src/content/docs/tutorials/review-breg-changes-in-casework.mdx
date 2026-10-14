@@ -107,13 +107,14 @@ The package contains the reviewed policy and its local dependency closure.
 This offline result establishes authoring consistency; it does not establish source reachability or
 human disclosure in a deployment.
 
-Before enabling the BReg producer, put the actual compiled Casework policy binding in BReg's required
-review declaration. Rebuild the tested BReg package and recheck pairing when that package changes.
-A synthetic example policy digest is not a production binding.
+Before enabling the BReg producer, select the Casework policy ID in BReg's required
+review declaration. Casework freezes the concrete version and digest on acceptance.
+If you require an exact pin, add the actual compiled version and digest together.
+Rebuild the tested BReg package and recheck pairing when that package changes.
 
 {/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs;
     crates/registry-caseworkctl/src/project.rs;
-    products/breg/examples/refactor/facility/registry.yaml. */}
+    products/breg/examples/facility/registry.yaml. */}
 
 ## Bind transport and authority
 
@@ -162,7 +163,7 @@ and idempotency key. A later observation is not proof that the uncertain command
 executed. Repair a named binding or use the currently authorized recovery
 transition; never force either product's work tables to a result.
 
-{/* Evidence: products/breg/examples/refactor/facility/registry.yaml;
+{/* Evidence: products/breg/examples/facility/registry.yaml;
     crates/registry-breg/src/runtime_config.rs; crates/registry-breg/src/review_store.rs;
     crates/registry-breg/src/api/proposals.rs; crates/registry-breg-client/src/proposal.rs. */}
 

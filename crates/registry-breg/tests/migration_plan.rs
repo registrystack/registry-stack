@@ -36,7 +36,7 @@ journeys:
   - id: asset-list
     steps:
       - id: list-assets
-        entity: asset
+        recordType: asset
         accessProfile: reader
         claims: {principal: package-reader}
         request: {type: list}
@@ -189,6 +189,42 @@ fn reviewed_package_whose_receipt_carries_the_retired_proofs_is_refused() {
 }
 
 #[test]
+fn reviewed_migration_record_type_references_have_one_positioned_spelling() {
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
+    let artifacts = backfill_artifacts("required-field", &previous, &candidate);
+    let descriptor = serde_json::to_value(&artifacts.descriptor).unwrap();
+    for parent in ["/steps/0", "/steps/0/objects/0"] {
+        assert_eq!(
+            descriptor.pointer(&format!("{parent}/recordType")),
+            Some(&serde_json::json!("asset"))
+        );
+        for old in ["entity", "entityId"] {
+            for value in [serde_json::json!("asset"), serde_json::Value::Null] {
+                let mut document = descriptor.clone();
+                let members = document
+                    .pointer_mut(parent)
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap();
+                members.remove("recordType");
+                members.insert(old.to_owned(), value);
+                let report = read_migration_descriptor("descriptor.json", &canonical(&document))
+                    .expect_err("previous reference is refused");
+                let diagnostic = report
+                    .diagnostics()
+                    .iter()
+                    .find(|diagnostic| diagnostic.code == "config.removed-key")
+                    .expect("migration guidance is present");
+                assert_eq!(diagnostic.path, format!("{parent}/{old}"));
+                assert!(diagnostic.suggested_action.contains("recordType"));
+                assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+            }
+        }
+    }
+}
+
+#[test]
 fn reviewed_migration_documents_refuse_their_previous_spellings_at_each_key() {
     let previous = compile_variant(Variant::Base);
     let candidate = compile_variant(Variant::RequiredField);
@@ -202,10 +238,10 @@ fn reviewed_migration_documents_refuse_their_previous_spellings_at_each_key() {
         .remove("lockTimeoutMilliseconds");
     descriptor["lockTimeoutMs"] = lock_timeout;
     let step = &mut descriptor["steps"][0];
-    let entity = step["entity"].take();
+    let entity = step["recordType"].take();
     step.as_object_mut()
         .expect("step is an object")
-        .remove("entity");
+        .remove("recordType");
     step["entity_id"] = entity;
     let report = read_migration_descriptor("descriptor.json", &canonical(&descriptor))
         .expect_err("the reader refuses the previous spellings");

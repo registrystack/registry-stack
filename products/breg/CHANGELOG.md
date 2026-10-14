@@ -2,50 +2,24 @@
 
 ## Unreleased
 
-- BREAKING: a filtered, sorted list page is served from an index. The
-  compiler appends the record id as the last column of every authored index
-  under `entities[].indexes`, because every list orders by the record id
-  last; entity source views are no longer `security_barrier` views, so the
-  planner reaches those indexes; and a continuation over a required stored
-  field is one row comparison the index can seek. Reference, unique
-  constraint, and spatial indexes are unchanged, and so are row-level
-  security policies, cursors, and page order. An index declared as the
-  fields a list compares with `eq` followed by the field it sorts by now
-  returns each page of that list, first or deep, without ordering the
-  filtered set. A range or `in` filter on a leading field is still ordered
-  for each page.
-  The generated DDL, and with it every package revision and managed schema
-  fingerprint, changes, so this release's `breg` refuses a v0.41.0 package
-  with `the package compiler derivation failed` until a successor is active.
-  Migration: build a successor over the active v0.41.0 package with this
-  release's `bregctl` and apply it before starting this release's `breg`.
-  v0.41.0 state upgrades in place. The first successor this release builds
-  over a v0.41.0 package, from an unchanged project too, also brings the
-  compiler-generated DDL up to date once: it replaces every entity source
-  view, and drops and rebuilds every declared index. Dropping an index takes
-  an `ACCESS EXCLUSIVE` lock on its entity table, rebuilding it takes a
-  `SHARE` lock and reads the table once, and replacing a view rewrites no
-  row. A successor without a reviewed migration runs its statements in one
-  transaction, so the locks are held until it commits and a failure rolls
-  all of them back. Each lock wait is bounded by
-  `operationalTimeouts.migrationLockMilliseconds` and each statement by
-  `operationalTimeouts.migrationStatementMilliseconds`: size the second for
-  the largest indexed entity table. A successor built over a package this
-  release built carries none of these statements.
-- BREAKING: an authored index declares at most 31 fields. The compiler
-  refuses a longer one with `breg.index.fields-too-many`, because the
-  record id it appends takes the last of the 32 key columns PostgreSQL
-  allows in an index. An index of exactly 32 fields, which compiled and
-  applied before, must drop a field.
-- `package.json` gains the optional
-  `migrationPlan.priorBaseline.generatedDdlSha256`: the digest of the
-  `database/ddl.sql` the baseline package carries, as its manifest file list
-  states it. A successor whose baseline states the digest this compiler
-  generates for the baseline model plans only the change; one whose baseline
-  states another digest, or none, also carries the statements that bring
-  compiler-generated views and declared indexes up to date. A package
-  v0.41.0 built has no such key in its own plan and still reads as a
-  baseline.
+- BREAKING: projects declare `recordTypes` and Actions. Immediate Actions
+  commit their plan in one transaction; durable Proposals freeze the same plan
+  for inspection, optional Review, and independently authorized application.
+  The old entity-backed change-request model and its routes are removed.
+  Build packages from the current project format and apply them to a fresh
+  database. This baseline provides no compatibility layer or state migration
+  for the removed contracts.
+- Review policies select the provider's current policy by ID by default. An
+  optional complete version and digest pin requires an exact policy. Once
+  accepted, a Review keeps its exact policy and frozen submission identity
+  across retries and recovery.
+- Filtered, sorted lists use declared indexes under `recordTypes[].indexes`.
+  The compiler appends the record ID to each index, so an index accepts at
+  most 31 authored fields. Source views allow the PostgreSQL planner to reach
+  those indexes while row-level security continues to enforce disclosure.
+  Index fields matching equality filters followed by the sort field support
+  indexed continuation; a range or `in` filter on a leading field can still
+  require a sort for each page.
 - `bregctl dev` requests local client tokens for the resource that
   `issuer.clientResources` assigns to that client. Previously, startup requested
   every token for the owner BReg audience, so an owner that registered a client

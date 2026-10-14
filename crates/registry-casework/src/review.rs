@@ -252,98 +252,12 @@ impl CaseworkService {
             ReviewRecovery::Recovered(recovered) => return Ok(*recovered),
             ReviewRecovery::Fresh(audit) => *audit,
         };
-        let policy = self
-            .project
-            .review_policies
-            .iter()
-            .find(|policy| policy.id == request.policy.id)
-            .ok_or(ReviewRuntimeError::Forbidden)?;
-        let snapshot = self
-            .project
-            .compile_policy(&policy.id)
-            .map_err(|_| ReviewRuntimeError::Corrupt)?;
-        if policy_binding(&snapshot) != request.policy {
-            return Err(ReviewRuntimeError::PolicyMismatch);
-        }
-        let requires_initiator = snapshot.stages.iter().any(|stage| stage.exclude_initiator);
-        // A producer with no trusted initiator issuer submits only kinds that
-        // exclude nobody, so an initiator it names is not recorded: storing it
-        // would let that unverified person read the request's history.
-        let initiator = match (
-            request.initiator.as_ref(),
-            admission.producer.trusted_initiator_issuer.as_deref(),
-        ) {
-            (Some(initiator), Some(issuer)) if initiator.issuer == issuer => Some(initiator),
-            (Some(_), None) if !requires_initiator => None,
-            (None, _) if requires_initiator => return Err(ReviewRuntimeError::InitiatorRequired),
-            (None, _) => None,
-            _ => return Err(ReviewRuntimeError::Invalid),
-        };
-        match (&snapshot.context, &request.context) {
-            (
-                registry_casework_core::ReviewContextPolicy::Submitted,
-                registry_casework_core::ReviewContext::Submitted { snapshot: display },
-            ) => snapshot
-                .validate_display(display)
-                .map_err(review_validation_error)?,
-            (
-                registry_casework_core::ReviewContextPolicy::CurrentSource { .. },
-                registry_casework_core::ReviewContext::CurrentSource { .. },
-            ) => {
-                let provider = snapshot
-                    .dependencies
-                    .context_provider
-                    .as_ref()
-                    .ok_or(ReviewRuntimeError::Corrupt)?;
-                if request.subject.source != provider.source_namespace {
-                    return Err(ReviewRuntimeError::Forbidden);
-                }
-            }
-            _ => return Err(ReviewRuntimeError::Invalid),
-        }
-        if let Some(constraints) = &request.result_constraints {
-            snapshot
-                .validate_result_constraints(constraints)
-                .map_err(review_validation_error)?;
-        }
-        let initiator = initiator.map(|person| IssuerPrincipal {
-            issuer: person.issuer.clone(),
-            subject: person.subject.clone(),
-        });
-        let clocks = snapshot
-            .clocks
-            .iter()
-            .map(|clock_id| {
-                let clock = snapshot
-                    .dependencies
-                    .clocks
-                    .iter()
-                    .find(|clock| clock.id() == clock_id)
-                    .cloned()
-                    .ok_or(ReviewRuntimeError::Corrupt)?;
-                let calendar = match &clock {
-                    ClockPolicy::Subject { .. } => None,
-                    ClockPolicy::Activity { calendar, .. } => Some(
-                        snapshot
-                            .dependencies
-                            .calendars
-                            .iter()
-                            .find(|candidate| candidate.id == *calendar)
-                            .cloned()
-                            .ok_or(ReviewRuntimeError::Corrupt)?,
-                    ),
-                };
-                Ok::<_, ReviewRuntimeError>((clock, calendar))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         self.store
             .create_review(
                 &admission.producer,
                 actor,
                 request,
-                initiator,
-                snapshot,
-                clocks,
+                &self.project,
                 digest,
                 idempotency_key,
                 audit,
@@ -2416,21 +2330,13 @@ impl PostgresStore {
         producer: &registry_casework_core::ReviewProducerPolicy,
         actor: &ActorContext,
         request: ReviewCreateRequest,
-        initiator: Option<IssuerPrincipal>,
-        policy: ReviewPolicyClosure,
-        clocks: Vec<(ClockPolicy, Option<CalendarPolicy>)>,
+        project: &CaseworkProject,
         digest: ContentDigest,
         idempotency_key: &str,
         mut audit: crate::audit::AuditOperation,
     ) -> Result<ReviewCreateOutcome, ReviewRuntimeError> {
         let now = Utc::now();
         let recovery_deadline = now + TimeDelta::days(i64::from(producer.recovery_days));
-        let retained_until = now
-            + TimeDelta::days(i64::from(
-                producer
-                    .recovery_days
-                    .max(policy.retention.accountability_days),
-            ));
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let resource = format!("review-producer:{}", producer.id);
@@ -2467,14 +2373,152 @@ impl PostgresStore {
                 recovered: true,
             });
         }
+        let reservation = transaction
+            .query_opt(
+                "SELECT submission_digest,request_id,recovery_deadline
+                 FROM casework_review_submission_reservations
+                 WHERE binding_digest=$1
+                 FOR UPDATE",
+                &[&binding_digest],
+            )
+            .await?;
+        if let Some(reservation) = reservation {
+            let retained_digest: String = reservation.get(0);
+            if retained_digest != digest.as_str() {
+                return Err(ReviewRuntimeError::SubmissionConflict);
+            }
+            if reservation.get::<_, DateTime<Utc>>(2) <= now {
+                return Err(ReviewRuntimeError::ResultExpired);
+            }
+            if let Some(request_id) = reservation.get::<_, Option<Uuid>>(1) {
+                let record = load_request(&transaction, producer, request_id, true).await?;
+                if record
+                    .result_available_until
+                    .is_some_and(|available_until| available_until <= now)
+                {
+                    return Err(ReviewRuntimeError::ResultExpired);
+                }
+                let accepted = accepted(&record);
+                insert_review_idempotency(
+                    &transaction,
+                    request_id,
+                    actor,
+                    "review.create",
+                    &resource,
+                    idempotency_key,
+                    digest.as_str(),
+                    &serde_json::to_value(&accepted)?,
+                )
+                .await?;
+                audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+                audit.commit(transaction).await?;
+                return Ok(ReviewCreateOutcome {
+                    accepted,
+                    recovered: true,
+                });
+            }
+
+            // A reservation is committed only together with its accepted request.
+            return Err(ReviewRuntimeError::Corrupt);
+        }
+        // Resolve only fresh submissions while holding the subject lock. The
+        // concrete policy and response are committed with the original selector digest.
+        let policy = project
+            .review_policies
+            .iter()
+            .find(|policy| policy.id == request.policy.id)
+            .ok_or(ReviewRuntimeError::Forbidden)?;
+        let snapshot = project
+            .compile_policy(&policy.id)
+            .map_err(|_| ReviewRuntimeError::Corrupt)?;
+        if !request.policy.matches(&policy_binding(&snapshot)) {
+            return Err(ReviewRuntimeError::PolicyMismatch);
+        }
+        let requires_initiator = snapshot.stages.iter().any(|stage| stage.exclude_initiator);
+        // A producer with no trusted initiator issuer submits only kinds that
+        // exclude nobody, so an initiator it names is not recorded: storing it
+        // would let that unverified person read the request's history.
+        let initiator = match (
+            request.initiator.as_ref(),
+            producer.trusted_initiator_issuer.as_deref(),
+        ) {
+            (Some(initiator), Some(issuer)) if initiator.issuer == issuer => Some(initiator),
+            (Some(_), None) if !requires_initiator => None,
+            (None, _) if requires_initiator => return Err(ReviewRuntimeError::InitiatorRequired),
+            (None, _) => None,
+            _ => return Err(ReviewRuntimeError::Invalid),
+        };
+        match (&snapshot.context, &request.context) {
+            (
+                registry_casework_core::ReviewContextPolicy::Submitted,
+                registry_casework_core::ReviewContext::Submitted { snapshot: display },
+            ) => snapshot
+                .validate_display(display)
+                .map_err(review_validation_error)?,
+            (
+                registry_casework_core::ReviewContextPolicy::CurrentSource { .. },
+                registry_casework_core::ReviewContext::CurrentSource { .. },
+            ) => {
+                let provider = snapshot
+                    .dependencies
+                    .context_provider
+                    .as_ref()
+                    .ok_or(ReviewRuntimeError::Corrupt)?;
+                if request.subject.source != provider.source_namespace {
+                    return Err(ReviewRuntimeError::Forbidden);
+                }
+            }
+            _ => return Err(ReviewRuntimeError::Invalid),
+        }
+        if let Some(constraints) = &request.result_constraints {
+            snapshot
+                .validate_result_constraints(constraints)
+                .map_err(review_validation_error)?;
+        }
+        let initiator = initiator.map(|person| IssuerPrincipal {
+            issuer: person.issuer.clone(),
+            subject: person.subject.clone(),
+        });
+        let clocks = snapshot
+            .clocks
+            .iter()
+            .map(|clock_id| {
+                let clock = snapshot
+                    .dependencies
+                    .clocks
+                    .iter()
+                    .find(|clock| clock.id() == clock_id)
+                    .cloned()
+                    .ok_or(ReviewRuntimeError::Corrupt)?;
+                let calendar = match &clock {
+                    ClockPolicy::Subject { .. } => None,
+                    ClockPolicy::Activity { calendar, .. } => Some(
+                        snapshot
+                            .dependencies
+                            .calendars
+                            .iter()
+                            .find(|candidate| candidate.id == *calendar)
+                            .cloned()
+                            .ok_or(ReviewRuntimeError::Corrupt)?,
+                    ),
+                };
+                Ok::<_, ReviewRuntimeError>((clock, calendar))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let policy = snapshot;
+        let retained_until = now
+            + TimeDelta::days(i64::from(
+                producer
+                    .recovery_days
+                    .max(policy.retention.accountability_days),
+            ));
         transaction
             .execute(
                 "INSERT INTO casework_review_submission_reservations(
                     binding_digest,producer_id,source_namespace,subject_source,subject_type,subject_id,
                     subject_version,policy_id,submission_digest,request_id,recovery_deadline,
                     retained_until,created_at)
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12)
-                 ON CONFLICT DO NOTHING",
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12)",
                 &[
                     &binding_digest,
                     &producer.id,
@@ -2491,50 +2535,6 @@ impl PostgresStore {
                 ],
             )
             .await?;
-        let reservation = transaction
-            .query_one(
-                "SELECT submission_digest,request_id,recovery_deadline
-                 FROM casework_review_submission_reservations
-                 WHERE binding_digest=$1
-                 FOR UPDATE",
-                &[&binding_digest],
-            )
-            .await?;
-        let retained_digest: String = reservation.get(0);
-        if retained_digest != digest.as_str() {
-            return Err(ReviewRuntimeError::SubmissionConflict);
-        }
-        if reservation.get::<_, DateTime<Utc>>(2) <= now {
-            return Err(ReviewRuntimeError::ResultExpired);
-        }
-        if let Some(request_id) = reservation.get::<_, Option<Uuid>>(1) {
-            let record = load_request(&transaction, producer, request_id, true).await?;
-            if record
-                .result_available_until
-                .is_some_and(|available_until| available_until <= now)
-            {
-                return Err(ReviewRuntimeError::ResultExpired);
-            }
-            let accepted = accepted(&record);
-            insert_review_idempotency(
-                &transaction,
-                request_id,
-                actor,
-                "review.create",
-                &resource,
-                idempotency_key,
-                digest.as_str(),
-                &serde_json::to_value(&accepted)?,
-            )
-            .await?;
-            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
-            audit.commit(transaction).await?;
-            return Ok(ReviewCreateOutcome {
-                accepted,
-                recovered: true,
-            });
-        }
-
         let superseded = transaction
             .query(
                 "SELECT request_id FROM casework_review_requests

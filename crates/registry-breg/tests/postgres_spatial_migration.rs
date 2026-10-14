@@ -51,7 +51,7 @@ journeys:
   - id: site-list
     steps:
       - id: list-sites
-        entity: site
+        recordType: site
         accessProfile: reader
         claims: {principal: package-reader}
         request: {type: list}

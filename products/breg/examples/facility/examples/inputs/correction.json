@@ -1,0 +1,10 @@
+{
+  "correction": {
+    "facilityId": {
+      "recordCapture": "facility"
+    },
+    "addressLine": "2 Corrected Road",
+    "city": "Corrected city",
+    "postalCode": "10300"
+  }
+}

@@ -211,7 +211,7 @@ impl AcceptedReviewEvidence {
         &self,
         authority: &str,
         source: &str,
-        policy: &registry_review_protocol::PolicyBinding,
+        policy: &registry_review_protocol::PolicySelection,
         request_id: &str,
         submission_version: u32,
         proposal_digest: &str,
@@ -228,11 +228,17 @@ impl AcceptedReviewEvidence {
             )
         })()
         .unwrap_or(false);
+        let policy_matches = registry_review_protocol::ContentDigest::parse(&self.policy.digest)
+            .is_ok_and(|digest| {
+                policy.matches(&registry_review_protocol::PolicyBinding {
+                    id: self.policy.id.clone(),
+                    version: self.policy.version.clone(),
+                    digest,
+                })
+            });
         self.authority == authority
             && self.subject.subject_type == "proposal"
-            && self.policy.id == policy.id
-            && self.policy.version == policy.version
-            && self.policy.digest == policy.digest.as_str()
+            && policy_matches
             && self.subject.source == source
             && self.subject.id == request_id
             && self.subject.version == submission_version.to_string()

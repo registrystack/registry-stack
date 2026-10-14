@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-REFACTOR_PATHS = (
+FACILITY_PATHS = (
     'compiled/access.json',
     'compiled/actions.json',
     'compiled/effective-model.json',
@@ -38,7 +38,7 @@ REFACTOR_PATHS = (
     'generated/sdk/project.ts',
 )
 
-REFACTOR_MINIMAL_PATHS = (
+MINIMAL_PATHS = (
     "compiled/access.json",
     "compiled/effective-model.json",
     "compiled/event-deliveries.json",
@@ -55,8 +55,8 @@ REFACTOR_MINIMAL_PATHS = (
 )
 
 EXPECTED_PATHS_BY_BASELINE = {
-    "refactor": REFACTOR_PATHS,
-    "refactor-minimal": REFACTOR_MINIMAL_PATHS,
+    "facility": FACILITY_PATHS,
+    "minimal": MINIMAL_PATHS,
 }
 
 

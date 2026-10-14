@@ -1202,41 +1202,26 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
 EVIDENCE_KID = "upgrade-rehearsal-evidence-issuer"
 EVIDENCE_REQUIREMENT = "urn:example:requirement:record-status:v1"
 EVIDENCE_PURPOSE = "record-status-check"
-EVIDENCE_LOCAL_IDENTIFIERS = "urn:registrystack:evidence:local:"
-EVIDENCE_REHEARSAL_IDENTIFIERS = "urn:example:upgrade-rehearsal:"
 EVIDENCE_PUBLIC_ORIGIN = "https://evidence.example.test"
 
 
-def evidence_production_governance(document: dict[str, Any], issuer: str,
-                                   public_jwk_file: str) -> dict[str, Any]:
-    """Turn the governance `target new --local` writes into a production one:
-    `evidencectl package` refuses a local target, and a production profile
-    refuses the local starter's disposable identifiers, plain-HTTP origins,
-    and empty response formats."""
+def evidence_production_target(document: dict[str, Any], issuer: str,
+                               public_jwk_file: str) -> dict[str, Any]:
+    """Configure the normalized local target for production Transit signing.
 
-    text = json.dumps(document).replace(EVIDENCE_LOCAL_IDENTIFIERS,
-                                        EVIDENCE_REHEARSAL_IDENTIFIERS)
-    governance = json.loads(text)
-    governance["assuranceProfile"] = "production"
-    governance["service"]["publicOrigin"] = EVIDENCE_PUBLIC_ORIGIN
-    governance["publication"]["endpointUrl"] = EVIDENCE_PUBLIC_ORIGIN
-    governance["responseFormats"] = ["signed-jws"]
-    governance["signing"]["activePublicJwkFile"] = public_jwk_file
-    # A local target grants every starter request implicitly; production
-    # names the one path the rehearsal's request takes.
-    for profile in governance["authorityProfiles"].values():
-        if not profile["grants"]:
-            profile["grants"] = [{
-                "requirement": EVIDENCE_REQUIREMENT, "purpose": EVIDENCE_PURPOSE,
-                "audienceFrom": "authenticated-requester", "responseFormats": ["signed-jws"],
-                "subjects": [{"role": "subject", "selectorProfile": "record-reference-v1",
-                              "valueOrigin": "request"}]}]
-    oidc = governance["authentication"]["oidc"]
+    Complete grants remain in the target's separate authority document.
+    """
+    target = json.loads(json.dumps(document))
+    target["assuranceProfile"] = "production"
+    target["service"]["publicOrigin"] = EVIDENCE_PUBLIC_ORIGIN
+    target["responseFormats"] = ["signed-jws"]
+    target["signer"] = {"type": "transit", "algorithm": "ES256",
+                        "publicJwkFile": public_jwk_file}
+    oidc = target["authentication"]["oidc"]
     oidc["issuer"] = issuer
+    oidc["algorithms"] = ["RS256"]
     oidc["jwksSource"] = {"type": "uri", "uri": f"{issuer}/oauth2/jwks"}
-    return governance
-
-
+    return target
 
 
 def evidence_arguments(runtime: Path, subcommand: str) -> list[str]:
@@ -1262,37 +1247,41 @@ class Evidence:
         signing_key.chmod(0o600)
         self.signing_jwk = ec_public_jwk(signing_key)
         self.transit = TransitServer(signing_key)
-        self.governance: dict[str, Any] = {}
+        self.target_document: dict[str, Any] = {}
+        self.authority: dict[str, Any] = {}
+        self.ca_file = tls / "ca.pem"
+        self.ca_file.chmod(0o444)
 
     def stop(self) -> None:
         self.jwks.stop()
         self.transit.stop()
 
-    def target_runtime(self, runtime: dict[str, Any]) -> dict[str, Any]:
-        """Point a target runtime at this rehearsal's listener, audit file,
-        extract, Transit signer, and installed package."""
-
-        runtime["signer"] = {"type": "transit", "unixSocketPath": str(self.transit.socket_path),
-                             "mount": "transit", "keyName": TransitServer.KEY_NAME,
-                             "keyVersion": 1, "attemptTimeoutMilliseconds": 2000}
-        # The package is installed at a stable path outside the candidate.
-        runtime["package"]["root"] = str(self.installed)
-        runtime["listener"]["bind"] = f"127.0.0.1:{self.port}"
-        runtime["audit"]["path"] = str(self.audit / "evidence.jsonl")
+    def deployment_target(self, target: dict[str, Any]) -> dict[str, Any]:
+        """Bind authored target resources to the rehearsal's stable locations."""
+        target["signer"].update({"unixSocketPath": str(self.transit.socket_path),
+                                  "mount": "transit", "keyName": TransitServer.KEY_NAME,
+                                  "keyVersion": 1, "attemptTimeoutMilliseconds": 2000})
+        target["package"]["root"] = str(self.installed / "bundle")
+        target["listener"].update({"bind": f"127.0.0.1:{self.port}",
+                                    "tlsTermination": "operator-controlled-upstream"})
+        target["audit"]["path"] = str(self.audit / "evidence.jsonl")
+        target["secretProviders"]["file"]["root"] = str(self.project / ".generated" / "secrets")
+        target["authentication"]["oidc"]["tlsTrustProfile"] = "rehearsal"
+        target["outboundTls"] = {"systemRoots": True, "trustProfiles": {
+            "rehearsal": {"caBundleFile": str(self.ca_file)}}}
         extract = self.work / "record-status.sqlite"
         if not extract.exists():
             self.extract()
-        runtime["sourceExtracts"] = {"record-status-extract": {"path": str(extract)}}
-        return runtime
+        target["extracts"] = {"record-status": {"path": str(extract)}}
+        return target
 
     def package(self, side: Side, candidate: Path) -> None:
         """Package the target, install the package, and write the operative
         runtime beside it."""
 
-        target_runtime = self.target / "runtime.yaml"
         side.run("evidencectl", "package", "--target", str(self.target), "--output",
                  str(candidate), str(self.project))
-        runtime = load_yaml(target_runtime)
+        runtime = load_yaml(candidate / "runtime.yaml")
         if self.installed.exists():
             # evidencectl seals every package directory read-only.
             for directory, _, _ in os.walk(self.installed):
@@ -1304,25 +1293,25 @@ class Evidence:
         dump_yaml(self.runtime, runtime)
         # Evidence refuses a deployment input it could rewrite.
         self.runtime.chmod(0o444)
+        side.run("evidence", "authority", "activate", "--runtime-config", str(self.runtime),
+                 "--document", str(self.installed / "compiled-authority.yaml"))
 
     def author(self, side: Side) -> None:
-        side.run("evidencectl", "new", "--transport", "sqlite-extract", "--profile", "local",
+        side.run("evidencectl", "init", "--transport", "sqlite-extract", "--profile", "local",
                  str(self.project))
         side.run("evidencectl", "target", "new", "--local", "--project", str(self.project),
                  str(self.target))
         # `evidencectl package` refuses a local target, so the rehearsal
         # deploys a production one signing through Transit.
         public_keys = self.target / "public-keys"
-        for stale in public_keys.iterdir():
-            stale.unlink()
+        public_keys.mkdir(exist_ok=True)
         public_jwk_file = f"public-keys/{self.signing_jwk['kid']}.jwk.json"
         (self.target / public_jwk_file).write_text(json.dumps(self.signing_jwk) + "\n")
-        governance_path = self.target / "governance.yaml"
-        self.governance = evidence_production_governance(load_yaml(governance_path),
-                                                         self.issuer, public_jwk_file)
-        dump_yaml(governance_path, self.governance)
-        target_runtime = self.target / "runtime.yaml"
-        dump_yaml(target_runtime, self.target_runtime(load_yaml(target_runtime)))
+        target_path = self.target / "target.yaml"
+        self.target_document = self.deployment_target(evidence_production_target(
+            load_yaml(target_path), self.issuer, public_jwk_file))
+        dump_yaml(target_path, self.target_document)
+        self.authority = load_yaml(self.target / self.target_document["authority"])
         self.package(side, self.candidate)
 
     def upgrade(self, side: Side) -> None:
@@ -1352,15 +1341,15 @@ class Evidence:
         return path
 
     def request(self) -> tuple[int, Any]:
-        authentication = self.governance["authentication"]["oidc"]
-        profile = next(iter(self.governance["authorityProfiles"].values()))
+        authentication = self.target_document["authentication"]["oidc"]
+        profile = next(iter(self.authority["accessProfiles"].values()))
         claims = {"iss": self.issuer, "aud": authentication["audience"],
                   "sub": "upgrade-rehearsal-caller", "client_id": "upgrade-rehearsal-caller",
                   "scope": " ".join(authentication["requiredScopes"]),
                   "registry_actor_kind": "service",
                   authentication["requesterTagsClaim"]: profile["requesterTags"],
                   authentication["evidenceAudienceClaim"]:
-                      EVIDENCE_REHEARSAL_IDENTIFIERS + "caller"}
+                      authentication["audience"]}
         token = self.keys.mint("RS256", EVIDENCE_KID, claims)
         status, _headers, body = http(
             "POST", f"http://127.0.0.1:{self.port}/v1/evidence",
@@ -1368,8 +1357,8 @@ class Evidence:
             body={"requestNonce": b64url(secrets.token_bytes(32)),
                   "requirement": EVIDENCE_REQUIREMENT, "purpose": EVIDENCE_PURPOSE,
                   "subjects": [{"role": "subject", "selector": {
-                      "profile": "record-reference-v1",
-                      "values": {"record_reference": "REC-0001"}}}]})
+                      "profile": "record-reference",
+                      "values": {"record-reference": "REC-0001"}}}]})
         return status, body
 
 

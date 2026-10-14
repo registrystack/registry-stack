@@ -1243,8 +1243,8 @@ class CiChangesTest(unittest.TestCase):
 
     def test_native_example_inputs_run_compiler_and_native_example_tests(self) -> None:
         for path in (
-            "products/breg/examples/refactor/minimal/registry.yaml",
-            "products/breg/examples/refactor/facility/registry.yaml",
+            "products/breg/examples/minimal/registry.yaml",
+            "products/breg/examples/facility/registry.yaml",
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))

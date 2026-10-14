@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 const EXAMPLES: &[(&str, &str)] = &[
     (
         "journeys.v1.schema.json",
-        "products/breg/examples/refactor/minimal/tests/journeys.yaml",
+        "products/breg/examples/minimal/tests/journeys.yaml",
     ),
     (
         "schema-test-credentials.v1.schema.json",
@@ -33,7 +33,7 @@ const EXAMPLES: &[(&str, &str)] = &[
     ),
     (
         "example-scenarios.v1alpha1.schema.json",
-        "products/breg/examples/refactor/minimal/examples/scenarios.json",
+        "products/breg/examples/minimal/examples/scenarios.json",
     ),
     (
         "backup-binding.v1alpha1.schema.json",
@@ -120,7 +120,7 @@ fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
     for (file, root, name, least) in [
         (
             "journeys.v1.schema.json",
-            "products/breg/examples/refactor",
+            "products/breg/examples",
             "journeys.yaml",
             1,
         ),
@@ -132,7 +132,7 @@ fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
         ),
         (
             "example-scenarios.v1alpha1.schema.json",
-            "products/breg/examples/refactor",
+            "products/breg/examples",
             "scenarios.json",
             1,
         ),
@@ -168,7 +168,7 @@ fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
 fn the_journeys_schema_refuses_an_empty_suite() {
     let documents = documents().expect("the tool schemas generate");
     let schema = compile(&documents["journeys.v1.schema.json"]);
-    let mut suite = example("products/breg/examples/refactor/minimal/tests/journeys.yaml");
+    let mut suite = example("products/breg/examples/minimal/tests/journeys.yaml");
     assert!(schema.is_valid(&suite));
     suite["journeys"] = Value::Array(Vec::new());
     assert!(!schema.is_valid(&suite), "an empty suite was accepted");
@@ -249,7 +249,7 @@ fn full_descriptor() -> Value {
     let object = json!({
         "schema": "registry_data",
         "table": "asset",
-        "entity": "asset",
+        "recordType": "asset",
         "kind": "field",
         "member": "batch",
         "physicalName": "batch",
@@ -277,7 +277,7 @@ fn full_descriptor() -> Value {
             {
                 "type": "chunked-backfill",
                 "id": "backfill",
-                "entity": "asset",
+                "recordType": "asset",
                 "sqlPath": "modules/core/migrations/seal-batch/steps/backfill.sql",
                 "objects": [object],
                 "cursor": "record-id-uuid-array",
@@ -290,7 +290,7 @@ fn full_descriptor() -> Value {
             {
                 "type": "field-encryption-backfill",
                 "id": "seal",
-                "entity": "asset",
+                "recordType": "asset",
                 "objects": [object],
                 "cursor": "record-id-uuid-array",
                 "chunkSize": 100,

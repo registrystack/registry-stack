@@ -253,14 +253,70 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1."
     },
     {
-      "glob": "products/breg/contracts/explain/*.schema.json",
+      "glob": "products/breg/contracts/explain/AccessExplanation.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha5",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
+    },
+    {
+      "glob": "products/breg/contracts/explain/AccessPreview.schema.json",
       "owner": "breg",
       "status": "active",
       "compatibilityLine": "v1alpha4",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
     },
     {
-      "glob": "products/breg/generated/refactor/generated/action-contracts.schema.json",
+      "glob": "products/breg/contracts/explain/ActionsExplanation.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha5",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
+    },
+    {
+      "glob": "products/breg/contracts/explain/EventsExplanation.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha5",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
+    },
+    {
+      "glob": "products/breg/contracts/explain/LifecycleExplanation.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha5",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
+    },
+    {
+      "glob": "products/breg/contracts/explain/ModelExplanation.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha5",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
+    },
+    {
+      "glob": "products/breg/contracts/explain/ProposalsExplanation.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
+    },
+    {
+      "glob": "products/breg/contracts/explain/QueriesExplanation.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha5",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
+    },
+    {
+      "glob": "products/breg/contracts/explain/RoutesExplanation.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha5",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
+    },
+    {
+      "glob": "products/breg/generated/facility/generated/action-contracts.schema.json",
       "sourcePath": "crates/registry-breg/src/artifacts.rs",
       "owner": "breg",
       "status": "active",
