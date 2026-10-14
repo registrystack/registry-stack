@@ -64,7 +64,14 @@ impl BregContextProvider {
         let document = client
             .read_proposal_review_by_id(&binding, &identity.subject.id)
             .await
-            .map_err(map_error)?
+            .map_err(|error| match error {
+                // A context reply without the owning closed contract is not
+                // the interface this paired provider was authorized to use.
+                BaseRegistryClientError::InvalidRequest { .. } if display => {
+                    ReviewContextError::ContractChanged
+                }
+                error => map_error(error),
+            })?
             .value;
         if document.subject.source != identity.subject.source
             || document.subject.subject_type != identity.subject.subject_type
@@ -74,7 +81,13 @@ impl BregContextProvider {
         {
             return Err(ReviewContextError::BindingMoved);
         }
-        if display && document.context.id.as_deref() != Some(self.export.context_id.as_str()) {
+        if display
+            && !document.context.contract.as_ref().is_some_and(|contract| {
+                contract.id == self.export.contract.id
+                    && contract.revision == self.export.contract.revision.as_str()
+                    && contract.schema_digest == self.export.contract.schema_digest.as_str()
+            })
+        {
             return Err(ReviewContextError::ContractChanged);
         }
         if client

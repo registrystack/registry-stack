@@ -12,7 +12,7 @@ use wiremock::{
 const ID: &str = "00000000-0000-4000-8000-000000000001";
 const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 fn export() -> BregContextExport {
-    let mut schema = json!({"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"urn:context","x-registry-review-context":{"actionId":"correct-address","contextId":"address"},"type":"object","additionalProperties":false,"required":["reference"],"properties":{"reference":{"type":"string","maxLength":128}}});
+    let mut schema = json!({"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"urn:registry:breg:review-context:source:correct-address:address","x-registry-review-context":{"actionId":"correct-address","contextId":"address"},"type":"object","additionalProperties":false,"required":["reference"],"properties":{"reference":{"type":"string","maxLength":128}}});
     let revision =
         sha256_uri(&registry_platform_canonical_json::canonicalize_json(&schema).unwrap());
     schema["x-registry-definition-revision"] = json!(revision);
@@ -25,7 +25,7 @@ fn export() -> BregContextExport {
         action_id: "correct-address".into(),
         context_id: "address".into(),
         contract: ReviewContextContract {
-            id: "urn:context".into(),
+            id: "urn:registry:breg:review-context:source:correct-address:address".into(),
             revision: ContentDigest::parse(&revision).unwrap(),
             schema_digest: ContentDigest::parse(&sha256_uri(schema_bytes.as_bytes())).unwrap(),
         },
@@ -69,7 +69,7 @@ async fn mocks(server: &MockServer, profile: &str, bearer: &str, display: bool, 
     Mock::given(method("GET")).and(path("/v1/registry")).and(query_param("accessProfile",profile)).and(header("authorization",format!("Bearer {bearer}"))).respond_with(response(json!({"metadataVersion":"1","id":"registry","version":"1","revision":revision,"recordTypes":[],"operations":[],"proposals":{"method":"GET","path":"/v1/proposals","accessProfiles":[],"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":[]},"actions":[{"actionId":"correct-address","accessProfile":profile,"operations":[operation]}]}}))).mount(server).await;
     let mut context = json!({"reference":"native-proposal"});
     if display {
-        context["id"] = json!("address");
+        context["contract"] = serde_json::to_value(export().contract).unwrap();
         context["fields"] = json!({"reference":"REF-42"});
     }
     Mock::given(method("GET")).and(path(format!("/v1/proposals/{ID}/{suffix}"))).and(header("authorization",format!("Bearer {bearer}"))).respond_with(response(json!({"id":ID,"actionId":"correct-address","actionRevision":DIGEST,"submissionVersion":1,"revision":1,"effectDigest":DIGEST,"subject":{"source":"source","subjectType":"proposal","id":ID,"version":"1","digest":DIGEST},"context":context,"reviewable":true}))).mount(server).await;
@@ -222,4 +222,53 @@ fn canonical_review_project_compiles_both_context_modes() {
     .unwrap();
     assert!(project.compile_policy("facility-address-review").is_ok());
     assert!(project.compile_policy("decision").is_ok());
+}
+
+#[tokio::test]
+async fn missing_or_changed_producer_contract_refuses_without_releasing_fields() {
+    for member in [None, Some("id"), Some("revision"), Some("schemaDigest")] {
+        let server = MockServer::start().await;
+        let export = export();
+        let identity = identity(&export);
+        let mut contract = serde_json::to_value(&export.contract).unwrap();
+        let provider = provider(&server, export);
+        mocks(&server, "reviewer", "human-bearer", true, DIGEST).await;
+        if let Some(member) = member {
+            contract[member] = if member == "id" {
+                json!("urn:registry:breg:review-context:source:correct-address:other-context")
+            } else {
+                json!(format!("sha256:{}", "b".repeat(64)))
+            };
+        }
+        let mut context =
+            json!({"reference":"native-proposal","fields":{"reference":"private-field-canary"}});
+        if member.is_some() {
+            context["contract"] = contract;
+        }
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/proposals/{ID}/review-context")))
+            .respond_with(response(json!({"id":ID,"actionId":"correct-address","actionRevision":DIGEST,
+                "submissionVersion":1,"revision":1,"effectDigest":DIGEST,
+                "subject":{"source":"source","subjectType":"proposal","id":ID,"version":"1","digest":DIGEST},
+                "context":context,"reviewable":true})))
+            .with_priority(1)
+            .mount(&server).await;
+        assert_eq!(
+            provider
+                .human_display(HumanDisplayRequest {
+                    identity: &identity,
+                    source_profile_id: "reviewer",
+                    credential: EphemeralCredential::new("human-bearer"),
+                })
+                .await
+                .unwrap_err(),
+            ReviewContextError::ContractChanged
+        );
+        assert!(server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method == "GET"));
+    }
 }

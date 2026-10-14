@@ -835,6 +835,13 @@ impl BaseRegistryClient {
             || document.subject.source.len() > 512
             || document.context.reference.is_empty()
             || document.context.reference.len() > 2048
+            || document.context.contract.as_ref().is_some_and(|contract| {
+                !contract.id.starts_with("urn:registry:breg:review-context:")
+                    || contract.id.len() > 2048
+                    || contract.id.chars().any(char::is_control)
+                    || !digest(&contract.revision)
+                    || !digest(&contract.schema_digest)
+            })
             || document.authority.is_some() != document.policy.is_some()
             || document.policy.as_ref().is_some_and(|policy| {
                 !digest(&policy.digest) || policy.id.is_empty() || policy.version.is_empty()
@@ -855,8 +862,10 @@ impl BaseRegistryClient {
                     .as_deref()
                     .is_some_and(|id| Uuid::parse_str(id).is_err())
             })
-            || is_context && (document.context.id.is_none() || document.context.fields.is_none())
-            || !is_context && (document.context.id.is_some() || document.context.fields.is_some())
+            || is_context
+                && (document.context.contract.is_none() || document.context.fields.is_none())
+            || !is_context
+                && (document.context.contract.is_some() || document.context.fields.is_some())
         {
             return Err(refusal());
         }
@@ -1370,7 +1379,11 @@ fn validate_body(operation: &str, body: &Value) -> Result<(), BaseRegistryClient
         }
         _ => false,
     };
-    if valid { Ok(()) } else { Err(refusal()) }
+    if valid {
+        Ok(())
+    } else {
+        Err(refusal())
+    }
 }
 fn validate_link(link: &BRegProposalLink) -> Result<(), BaseRegistryClientError> {
     if !matches!(link.method.as_str(), "GET" | "POST")
@@ -1405,7 +1418,7 @@ mod tests {
     const ID: &str = "00000000-0000-4000-8000-000000000001";
     #[tokio::test]
     async fn review_context_exchange_requires_a_closed_producer_contract_binding() {
-        use axum::{Json, Router, extract::State, routing::get};
+        use axum::{extract::State, routing::get, Json, Router};
         use std::sync::{Arc, Mutex};
 
         let valid = json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,
@@ -1429,6 +1442,7 @@ mod tests {
                                 "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
                             ),
                             ("cache-control", "no-store"),
+                            ("vary", "authorization, accept"),
                         ],
                         Json(value.lock().unwrap().clone()),
                     )
@@ -1447,6 +1461,27 @@ mod tests {
             .unwrap();
         assert_eq!(
             accepted.value.context.contract.unwrap().schema_digest,
+            REVISION
+        );
+        let actions = json!([{"actionId":"correct-address","accessProfile":"author","operations":["get-review-context"]}]);
+        let purpose = BRegProposalReviewBinding::from_metadata(
+            &actions,
+            &client.source_binding(),
+            "author",
+            "correct-address",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            client
+                .read_proposal_review_by_id(&purpose, ID)
+                .await
+                .unwrap()
+                .value
+                .context
+                .contract
+                .unwrap()
+                .schema_digest,
             REVISION
         );
         let mut refused = Vec::new();
@@ -1492,12 +1527,14 @@ mod tests {
         refused.push(old_local_id);
         for changed in refused {
             *response.lock().unwrap() = changed;
-            assert!(
-                client
-                    .read_proposal_review_context(&promoted)
-                    .await
-                    .is_err()
-            );
+            assert!(client
+                .read_proposal_review_context(&promoted)
+                .await
+                .is_err());
+            assert!(client
+                .read_proposal_review_by_id(&purpose, ID)
+                .await
+                .is_err());
         }
         server.abort();
     }
@@ -1708,56 +1745,46 @@ mod tests {
             {"actionId":"correct-address","accessProfile":"status","operations":["get-review-status"]},
         ]);
         let source = "https://registry.example/";
-        assert!(
-            BRegProposalReviewBinding::from_metadata(
-                &actions,
-                source,
-                "reviewer",
-                "correct-address",
-                false
-            )
-            .is_ok()
-        );
-        assert!(
-            BRegProposalReviewBinding::from_metadata(
-                &actions,
-                source,
-                "status",
-                "correct-address",
-                true
-            )
-            .is_ok()
-        );
-        assert!(
-            BRegProposalReviewBinding::from_metadata(
-                &actions,
-                source,
-                "status",
-                "correct-address",
-                false
-            )
-            .is_err()
-        );
-        assert!(
-            BRegProposalReviewBinding::from_metadata(
-                &actions,
-                source,
-                "reviewer",
-                "correct-address",
-                true
-            )
-            .is_err()
-        );
-        assert!(
-            BRegProposalReviewBinding::from_metadata(
-                &actions,
-                source,
-                "reviewer",
-                "other-action",
-                false
-            )
-            .is_err()
-        );
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "reviewer",
+            "correct-address",
+            false
+        )
+        .is_ok());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "status",
+            "correct-address",
+            true
+        )
+        .is_ok());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "status",
+            "correct-address",
+            false
+        )
+        .is_err());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "reviewer",
+            "correct-address",
+            true
+        )
+        .is_err());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "reviewer",
+            "other-action",
+            false
+        )
+        .is_err());
     }
     #[tokio::test]
     async fn direct_review_read_refuses_foreign_binding_and_noncanonical_id_before_io() {
@@ -1771,18 +1798,14 @@ mod tests {
             false,
         )
         .unwrap();
-        assert!(
-            client("https://other.example/")
-                .read_proposal_review_by_id(&binding, ID)
-                .await
-                .is_err()
-        );
-        assert!(
-            source
-                .read_proposal_review_by_id(&binding, "../other")
-                .await
-                .is_err()
-        );
+        assert!(client("https://other.example/")
+            .read_proposal_review_by_id(&binding, ID)
+            .await
+            .is_err());
+        assert!(source
+            .read_proposal_review_by_id(&binding, "../other")
+            .await
+            .is_err());
     }
     #[test]
     fn application_receipts_refuse_internal_actor_and_reason_projections() {
@@ -1819,11 +1842,9 @@ mod tests {
         let bytes = serde_json::to_vec(&document()).unwrap();
         let inert = BRegProposal::from_slice(&bytes).unwrap();
         let key = BRegIdempotencyKey::parse("original-key").unwrap();
-        assert!(
-            client
-                .prepare_proposal(&inert, "apply", json!({}), &key)
-                .is_err()
-        );
+        assert!(client
+            .prepare_proposal(&inert, "apply", json!({}), &key)
+            .is_err());
         let bound = proposal(&client, document());
         let attempt = client
             .prepare_proposal(
@@ -1835,11 +1856,9 @@ mod tests {
             .unwrap();
         assert!(!format!("{attempt:?}").contains("original-key"));
         let other = super::tests::client("https://other.example/");
-        assert!(
-            other
-                .prepare_proposal(&bound, "apply", json!({}), &key)
-                .is_err()
-        );
+        assert!(other
+            .prepare_proposal(&bound, "apply", json!({}), &key)
+            .is_err());
         let restored = BRegPreparedProposal::from_slice(attempt.as_bytes()).unwrap();
         assert!(!restored.executable);
         assert!(
@@ -1868,33 +1887,27 @@ mod tests {
         terminal["links"]["apply"]["ifMatch"] = json!("\"current-condition\"");
         terminal["links"]["apply"]["availability"] = json!({"available":false,"observedRevision":3,"reason":"already-applied","recovery":"receipt-only"});
         let terminal = proposal(&client, terminal);
-        assert!(
-            client
-                .prepare_proposal(
-                    &terminal,
-                    "apply",
-                    json!({}),
-                    &BRegIdempotencyKey::parse("new-key").unwrap()
-                )
-                .is_err()
-        );
+        assert!(client
+            .prepare_proposal(
+                &terminal,
+                "apply",
+                json!({}),
+                &BRegIdempotencyKey::parse("new-key").unwrap()
+            )
+            .is_err());
         let recovered = client.recover_proposal(&terminal, &attempt).unwrap();
         assert_eq!(recovered.as_bytes(), attempt.as_bytes());
         let mut changed = document();
         changed["actionRevision"] =
             json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        assert!(
-            client
-                .recover_proposal(&proposal(&client, changed), &attempt)
-                .is_err()
-        );
+        assert!(client
+            .recover_proposal(&proposal(&client, changed), &attempt)
+            .is_err());
         let mut revoked = document();
         revoked["links"].as_object_mut().unwrap().remove("apply");
-        assert!(
-            client
-                .recover_proposal(&proposal(&client, revoked), &attempt)
-                .is_err()
-        );
+        assert!(client
+            .recover_proposal(&proposal(&client, revoked), &attempt)
+            .is_err());
     }
     #[test]
     fn revised_and_rebased_receipts_require_the_exact_next_draft_version() {
@@ -1970,12 +1983,10 @@ mod tests {
             "reviewer",
         )
         .unwrap();
-        assert!(
-            client("https://other.example/")
-                .get_proposal(&binding, ID)
-                .await
-                .is_err()
-        );
+        assert!(client("https://other.example/")
+            .get_proposal(&binding, ID)
+            .await
+            .is_err());
         for id in [
             "../secret",
             "00000000-0000-4000-8000-00000000000A",
@@ -2009,24 +2020,20 @@ mod tests {
     }
     #[test]
     fn a_get_grant_does_not_promote_collection_authority() {
-        assert!(
-            BRegProposalCollection::from_metadata(
-                &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),
-                "https://registry.example/",
-                REVISION,
-                "get-author"
-            )
-            .is_err()
-        );
-        assert!(
-            BRegProposalCollection::from_metadata(
-                &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),
-                "https://registry.example/",
-                REVISION,
-                "list-author"
-            )
-            .is_ok()
-        );
+        assert!(BRegProposalCollection::from_metadata(
+            &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),
+            "https://registry.example/",
+            REVISION,
+            "get-author"
+        )
+        .is_err());
+        assert!(BRegProposalCollection::from_metadata(
+            &json!({"method":"GET","path":"/v1/proposals","accessProfiles":["list-author"]}),
+            "https://registry.example/",
+            REVISION,
+            "list-author"
+        )
+        .is_ok());
     }
     #[test]
     fn promoted_links_bind_method_operation_resource_and_selected_profile() {
@@ -2047,17 +2054,13 @@ mod tests {
             );
         }
         let parsed = BRegProposal::from_slice(&serde_json::to_vec(&document()).unwrap()).unwrap();
-        assert!(
-            parsed
-                .clone()
-                .bind_profile("https://registry.example/base/".to_owned(), "other-profile")
-                .is_err()
-        );
-        assert!(
-            parsed
-                .bind_profile("https://registry.example/base/".to_owned(), "author")
-                .is_ok()
-        );
+        assert!(parsed
+            .clone()
+            .bind_profile("https://registry.example/base/".to_owned(), "other-profile")
+            .is_err());
+        assert!(parsed
+            .bind_profile("https://registry.example/base/".to_owned(), "author")
+            .is_ok());
     }
     #[test]
     fn lifecycle_bodies_are_closed_before_transport() {
@@ -2076,13 +2079,11 @@ mod tests {
         ] {
             assert!(validate_body(operation, &body).is_err());
         }
-        assert!(
-            validate_body(
-                "apply",
-                &json!({"submissionVersion":1,"effectDigest":REVISION})
-            )
-            .is_ok()
-        );
+        assert!(validate_body(
+            "apply",
+            &json!({"submissionVersion":1,"effectDigest":REVISION})
+        )
+        .is_ok());
         assert!(validate_body("rebase", &json!({"input":{"address":"Example"}})).is_ok());
     }
 }
