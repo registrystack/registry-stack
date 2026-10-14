@@ -5058,14 +5058,14 @@
     {
       "name": "caseworkctl",
       "invocation": "caseworkctl",
-      "about": "Registry Casework project and local operator tooling",
+      "about": "Compile and operate bounded review policies",
       "long_about": null,
       "usage": "caseworkctl [OPTIONS] <COMMAND>",
       "arguments": [],
       "options": [
         {
           "display": "--format <FORMAT>",
-          "description": "Emit the selected command's report in this format",
+          "description": "Output format: human for terminal reading or json for automation",
           "always_required": false,
           "repeatable": false,
           "default_values": [
@@ -5101,13 +5101,13 @@
         {
           "name": "init",
           "invocation": "caseworkctl init",
-          "about": "Create a complete Casework authoring project in a new directory",
+          "about": "Create a complete standalone ReviewPolicy project",
           "long_about": null,
-          "usage": "caseworkctl init [OPTIONS] --template <NAME> <PROJECT>",
+          "usage": "caseworkctl init [OPTIONS] <DIRECTORY>",
           "arguments": [
             {
-              "display": "<PROJECT>",
-              "description": "New directory for the authored Casework project",
+              "display": "<DIRECTORY>",
+              "description": "New directory for the standalone ReviewPolicy project",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5117,17 +5117,19 @@
           ],
           "options": [
             {
-              "display": "--template <NAME>",
-              "description": "Project template: professional-review or standalone-decision",
-              "always_required": true,
+              "display": "--template <TEMPLATE>",
+              "description": "Built-in project template to write",
+              "always_required": false,
               "repeatable": false,
-              "default_values": [],
+              "default_values": [
+                "standalone-decision"
+              ],
               "possible_values": [],
               "environment": null
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
+              "description": "Output format: human for terminal reading or json for automation",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5153,16 +5155,285 @@
           "subcommands": []
         },
         {
-          "name": "source",
-          "invocation": "caseworkctl source",
-          "about": "Connect an authored source through its owning public tooling",
+          "name": "check",
+          "invocation": "caseworkctl check",
+          "about": "Validate policy, closed context schemas and required provider capabilities offline",
           "long_about": null,
-          "usage": "caseworkctl source [OPTIONS] <COMMAND>",
+          "usage": "caseworkctl check [OPTIONS] <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Existing authored Casework project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--production",
+              "description": "Require production-ready policy configuration",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--deny-warnings",
+              "description": "Treat warnings as refusals",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--against-breg-package <DIRECTORY>",
+              "description": "Verified native BReg package whose provider contracts must match",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--provider-id <PROVIDER_ID>",
+              "description": "Limit native contract comparison to this configured context provider",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bregctl-bin <BINARY>",
+              "description": "Matching-release bregctl executable used to verify the native package",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "bregctl"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--environment",
+              "description": "Resolve environment substitutions in the runtime configuration",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format: human for terminal reading or json for automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--provider-id <PROVIDER_ID>",
+              "arguments": [
+                "--against-breg-package <DIRECTORY>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--environment",
+              "arguments": [
+                "--runtime-config <FILE>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "explain",
+          "invocation": "caseworkctl explain",
+          "about": "Explain pinned policy, context custody, staffing, refusals and recovery",
+          "long_about": null,
+          "usage": "caseworkctl explain [OPTIONS] <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Existing authored Casework project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format: human for terminal reading or json for automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "test",
+          "invocation": "caseworkctl test",
+          "about": "Exercise bounded review context fixtures offline",
+          "long_about": null,
+          "usage": "caseworkctl test [OPTIONS] <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Existing authored Casework project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format: human for terminal reading or json for automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "types",
+          "invocation": "caseworkctl types",
+          "about": "Generate policy bindings and context/request/task/result TypeScript and Python types",
+          "long_about": null,
+          "usage": "caseworkctl types [OPTIONS] --output <DIRECTORY> <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Existing authored Casework project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--output <DIRECTORY>",
+              "description": "New directory for the generated bindings",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format: human for terminal reading or json for automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "provider",
+          "invocation": "caseworkctl provider",
+          "about": "Pair a context provider with an existing native producer export and reader authority",
+          "long_about": null,
+          "usage": "caseworkctl provider [OPTIONS] <COMMAND>",
           "arguments": [],
           "options": [
             {
               "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
+              "description": "Output format: human for terminal reading or json for automation",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5187,15 +5458,15 @@
           "constraints": [],
           "subcommands": [
             {
-              "name": "add",
-              "invocation": "caseworkctl source add",
-              "about": "Preview or apply one local Base Registry Engine (BReg) connection",
+              "name": "pair",
+              "invocation": "caseworkctl provider pair",
+              "about": "Pair one configured provider with an exact review-context export from a BReg package",
               "long_about": null,
-              "usage": "caseworkctl source add [OPTIONS] --project <CASEWORK_PROJECT> --source-id <SOURCE_ID> <BREG_PROJECT>",
+              "usage": "caseworkctl provider pair [OPTIONS] --provider-id <PROVIDER_ID> --breg-package <DIRECTORY> --action-id <ACTION_ID> <PROJECT>",
               "arguments": [
                 {
-                  "display": "<BREG_PROJECT>",
-                  "description": "Authored Base Registry Engine project",
+                  "display": "<PROJECT>",
+                  "description": "Existing authored Casework project directory",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5205,8 +5476,8 @@
               ],
               "options": [
                 {
-                  "display": "--project <CASEWORK_PROJECT>",
-                  "description": "Authored Casework project",
+                  "display": "--provider-id <PROVIDER_ID>",
+                  "description": "Configured context provider to pair",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5214,8 +5485,8 @@
                   "environment": null
                 },
                 {
-                  "display": "--source-id <SOURCE_ID>",
-                  "description": "Stable Casework source identifier",
+                  "display": "--breg-package <DIRECTORY>",
+                  "description": "Verified native BReg package that owns the context contract",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5223,39 +5494,37 @@
                   "environment": null
                 },
                 {
-                  "display": "--apply",
-                  "description": "Apply the exact reported local authoring changes",
-                  "always_required": false,
+                  "display": "--action-id <ACTION_ID>",
+                  "description": "Exact Action ID whose review-context contract is imported",
+                  "always_required": true,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 },
                 {
-                  "display": "--casework-endpoint <URL>",
-                  "description": "Loopback URL of the local Casework session that the generated BReg review authority calls; match the session's --casework-port",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "http://127.0.0.1:8092"
-                  ],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--bregctl-bin <BREGCTL_BIN>",
-                  "description": "Public bregctl binary of the same Registry Stack version",
+                  "display": "--bregctl-bin <BINARY>",
+                  "description": "Matching-release bregctl executable used to verify the native package",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
                     "bregctl"
                   ],
                   "possible_values": [],
-                  "environment": "BREGCTL_BIN"
+                  "environment": null
+                },
+                {
+                  "display": "--apply",
+                  "description": "Write the verified provider description and bind it in the project",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
                 },
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
+                  "description": "Output format: human for terminal reading or json for automation",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -5283,240 +5552,16 @@
           ]
         },
         {
-          "name": "check",
-          "invocation": "caseworkctl check",
-          "about": "Check a project and, with --runtime-config, a runtime file, offline, and print effective defaults",
-          "long_about": null,
-          "usage": "caseworkctl check [OPTIONS] <PROJECT>",
-          "arguments": [
-            {
-              "display": "<PROJECT>",
-              "description": "Authored Casework project directory",
-              "always_required": true,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "options": [
-            {
-              "display": "--production",
-              "description": "Require every declared source import and all deployment policy inputs",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--deny-warnings",
-              "description": "Exit 1 when a warning is reported",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--against-breg-package <DIRECTORY>",
-              "description": "Closed Base Registry Engine (BReg) package whose rederived registry revision must equal the pinned sourceRevision of a BReg source; verified by bregctl",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--source-id <ID>",
-              "description": "BReg source to compare with the package; required when the project declares more than one",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--bregctl-bin <BREGCTL_BIN>",
-              "description": "bregctl binary of the same release that verifies the package",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "bregctl"
-              ],
-              "possible_values": [],
-              "environment": "BREGCTL_BIN"
-            },
-            {
-              "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration file",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--environment",
-              "description": "Fill `${NAME}` expressions in the runtime file from the process environment and check the values they produce. Without it, each expression is checked by syntax and position only",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "human"
-              ],
-              "possible_values": [
-                "human",
-                "json"
-              ],
-              "environment": null
-            },
-            {
-              "display": "-h, --help",
-              "description": "Print help",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "constraints": [
-            {
-              "kind": "requires-all",
-              "when": "--source-id <ID>",
-              "arguments": [
-                "--against-breg-package <DIRECTORY>"
-              ]
-            },
-            {
-              "kind": "requires-all",
-              "when": "--environment",
-              "arguments": [
-                "--runtime-config <FILE>"
-              ]
-            }
-          ],
-          "subcommands": []
-        },
-        {
-          "name": "explain",
-          "invocation": "caseworkctl explain",
-          "about": "Explain the running policy from validated local inputs",
-          "long_about": null,
-          "usage": "caseworkctl explain [OPTIONS] <PROJECT>",
-          "arguments": [
-            {
-              "display": "<PROJECT>",
-              "description": "Authored Casework project directory",
-              "always_required": true,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "options": [
-            {
-              "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "human"
-              ],
-              "possible_values": [
-                "human",
-                "json"
-              ],
-              "environment": null
-            },
-            {
-              "display": "-h, --help",
-              "description": "Print help",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "constraints": [],
-          "subcommands": []
-        },
-        {
           "name": "lifecycle",
           "invocation": "caseworkctl lifecycle",
-          "about": "Report the occurrence and review state machines the runtime enforces",
+          "about": "Report the one review lifecycle",
           "long_about": null,
           "usage": "caseworkctl lifecycle [OPTIONS]",
           "arguments": [],
           "options": [
             {
               "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "human"
-              ],
-              "possible_values": [
-                "human",
-                "json"
-              ],
-              "environment": null
-            },
-            {
-              "display": "-h, --help",
-              "description": "Print help",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "constraints": [],
-          "subcommands": []
-        },
-        {
-          "name": "simulate",
-          "invocation": "caseworkctl simulate",
-          "about": "Evaluate a simulation using its controlled clock and source facts",
-          "long_about": null,
-          "usage": "caseworkctl simulate [OPTIONS] --simulation <FILE> <PROJECT>",
-          "arguments": [
-            {
-              "display": "<PROJECT>",
-              "description": "Authored Casework project directory",
-              "always_required": true,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "options": [
-            {
-              "display": "--simulation <FILE>",
-              "description": "Simulation file (`CaseworkSimulation`) with source facts and a controlled clock",
-              "always_required": true,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
+              "description": "Output format: human for terminal reading or json for automation",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5544,13 +5589,13 @@
         {
           "name": "package",
           "invocation": "caseworkctl package",
-          "about": "Package validated policy and exact imported descriptions for deployment",
-          "long_about": "Package validated policy and exact imported descriptions for deployment. The package is the unit caseworkctl plan and apply activate: a new directory holding the checked policy and the source descriptions it pins, named by the runtime configuration. bregctl package is a different verb that builds a Base Registry Engine (BReg) registry package from a tested BReg project.",
+          "about": "Package the policy and its exact local schema and provider dependency closure",
+          "long_about": null,
           "usage": "caseworkctl package [OPTIONS] <--output <DIRECTORY>|--dry-run> <PROJECT>",
           "arguments": [
             {
               "display": "<PROJECT>",
-              "description": "Authored Casework project directory",
+              "description": "Existing authored Casework project directory",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5561,7 +5606,16 @@
           "options": [
             {
               "display": "--output <DIRECTORY>",
-              "description": "New directory for the verified policy package. Required unless --dry-run",
+              "description": "New directory for the verified policy package",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--revision <REVISION>",
+              "description": "Optional source revision label covered by the package digest",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5570,16 +5624,7 @@
             },
             {
               "display": "--dry-run",
-              "description": "Report the same packageDigest and files a package would produce, without writing one",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--revision <TEXT>",
-              "description": "Free-text revision recorded in the package's REVISION file and covered by its digest",
+              "description": "Compile and report the package closure without writing a package",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5588,7 +5633,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
+              "description": "Output format: human for terminal reading or json for automation",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5602,7 +5647,7 @@
             },
             {
               "display": "-h, --help",
-              "description": "Print help (see a summary with '-h')",
+              "description": "Print help",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5631,60 +5676,15 @@
           "subcommands": []
         },
         {
-          "name": "test",
-          "invocation": "caseworkctl test",
-          "about": "Run the project's fixtures and simulations offline",
-          "long_about": null,
-          "usage": "caseworkctl test [OPTIONS] <PROJECT>",
-          "arguments": [
-            {
-              "display": "<PROJECT>",
-              "description": "Authored Casework project directory",
-              "always_required": true,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "options": [
-            {
-              "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "human"
-              ],
-              "possible_values": [
-                "human",
-                "json"
-              ],
-              "environment": null
-            },
-            {
-              "display": "-h, --help",
-              "description": "Print help",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "constraints": [],
-          "subcommands": []
-        },
-        {
           "name": "doctor",
           "invocation": "caseworkctl doctor",
-          "about": "Check live database, issuer, source and directory readiness",
+          "about": "Inspect activation, schema readiness and local runtime configuration",
           "long_about": null,
-          "usage": "caseworkctl doctor [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+          "usage": "caseworkctl doctor [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
@@ -5694,7 +5694,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
+              "description": "Output format: human for terminal reading or json for automation",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5722,13 +5722,13 @@
         {
           "name": "plan",
           "invocation": "caseworkctl plan",
-          "about": "Report what applying the configured package would change, without writing",
+          "about": "Compare a verified policy package with the currently activated package",
           "long_about": null,
-          "usage": "caseworkctl plan [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+          "usage": "caseworkctl plan [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
@@ -5738,69 +5738,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "human"
-              ],
-              "possible_values": [
-                "human",
-                "json"
-              ],
-              "environment": null
-            },
-            {
-              "display": "-h, --help",
-              "description": "Print help",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "constraints": [],
-          "subcommands": []
-        },
-        {
-          "name": "apply",
-          "invocation": "caseworkctl apply",
-          "about": "Apply the configured package with migration authority and record it as active",
-          "long_about": null,
-          "usage": "caseworkctl apply [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
-          "arguments": [],
-          "options": [
-            {
-              "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Runtime configuration file",
-              "always_required": true,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--operator-reference <TEXT>",
-              "description": "Change or ticket reference for this activation; recorded and audited only as a keyed hash, never as the text given",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--backup <REF>",
-              "description": "Backup or snapshot reference recorded with this activation. Repeatable",
-              "always_required": false,
-              "repeatable": true,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
+              "description": "Output format: human for terminal reading or json for automation",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5828,13 +5766,13 @@
         {
           "name": "status",
           "invocation": "caseworkctl status",
-          "about": "Report the active package, every activation, and the runtime role mode",
+          "about": "Report the active policy package and runtime readiness",
           "long_about": null,
-          "usage": "caseworkctl status [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+          "usage": "caseworkctl status [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
@@ -5844,7 +5782,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
+              "description": "Output format: human for terminal reading or json for automation",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5870,16 +5808,43 @@
           "subcommands": []
         },
         {
-          "name": "retention",
-          "invocation": "caseworkctl retention",
-          "about": "Preview or erase retained local payload copies for one source request",
+          "name": "apply",
+          "invocation": "caseworkctl apply",
+          "about": "Activate a verified policy package using current migration authority",
           "long_about": null,
-          "usage": "caseworkctl retention [OPTIONS] <COMMAND>",
+          "usage": "caseworkctl apply [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--operator-reference <OPERATOR_REFERENCE>",
+              "description": "Operator reference recorded with the activation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--backup-reference <BACKUP_REFERENCE>",
+              "description": "Backup reference recorded with the activation; repeat for multiple references",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
+              "description": "Output format: human for terminal reading or json for automation",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -5902,331 +5867,12 @@
             }
           ],
           "constraints": [],
-          "subcommands": [
-            {
-              "name": "erase",
-              "invocation": "caseworkctl retention erase",
-              "about": "Preview or erase retained local payload copies for one exact source request",
-              "long_about": null,
-              "usage": "caseworkctl retention erase [OPTIONS] --source-id <SOURCE_ID> --request-kind <REQUEST_KIND> --request-id <REQUEST_ID> <PROJECT>",
-              "arguments": [
-                {
-                  "display": "<PROJECT>",
-                  "description": "Authored Casework project directory",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--runtime-config <FILE>",
-                  "description": "Runtime configuration file",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--source-id <SOURCE_ID>",
-                  "description": "Stable Casework source identifier",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--request-kind <REQUEST_KIND>",
-                  "description": "Source-owned request kind",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--request-id <REQUEST_ID>",
-                  "description": "Source-owned request identifier",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--apply",
-                  "description": "Apply the reviewed local erasure. Omit to preview",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            }
-          ]
-        },
-        {
-          "name": "attempt",
-          "invocation": "caseworkctl attempt",
-          "about": "Preview or record an operator decision about one source attempt whose lease has expired",
-          "long_about": null,
-          "usage": "caseworkctl attempt [OPTIONS] <COMMAND>",
-          "arguments": [],
-          "options": [
-            {
-              "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "human"
-              ],
-              "possible_values": [
-                "human",
-                "json"
-              ],
-              "environment": null
-            },
-            {
-              "display": "-h, --help",
-              "description": "Print help",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "constraints": [],
-          "subcommands": [
-            {
-              "name": "settle",
-              "invocation": "caseworkctl attempt settle",
-              "about": "Preview or record an operator settlement of one uncertain source attempt",
-              "long_about": "Preview or record an operator settlement of one uncertain source attempt. Only an uncertain attempt whose execution lease has expired can be settled. Apply changes the attempt and its work item and records the decision in the work item's history in one transaction.",
-              "usage": "caseworkctl attempt settle [OPTIONS] --attempt-id <UUID> --outcome <OUTCOME> --reason <REASON> --decided-by <DECIDED_BY> <PROJECT>",
-              "arguments": [
-                {
-                  "display": "<PROJECT>",
-                  "description": "Authored Casework project directory",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--runtime-config <FILE>",
-                  "description": "Runtime configuration file",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--attempt-id <UUID>",
-                  "description": "Uncertain source attempt to settle",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--outcome <OUTCOME>",
-                  "description": "What the source owner confirmed about the attempt",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [
-                    "applied",
-                    "not-applied"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "--reason <REASON>",
-                  "description": "Why the attempt is settled this way; recorded in the work item's history",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--decided-by <DECIDED_BY>",
-                  "description": "Who made the decision; recorded in the work item's history",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--apply",
-                  "description": "Apply the reviewed settlement. Omit to preview",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help (see a summary with '-h')",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            },
-            {
-              "name": "mark-uncertain",
-              "invocation": "caseworkctl attempt mark-uncertain",
-              "about": "Preview or record an operator marking of one pending source attempt as uncertain",
-              "long_about": "Preview or record an operator marking of one pending source attempt as uncertain. Only a pending attempt whose execution lease has expired can be marked, for an attempt the actor who started it cannot recover. The command connects with the migration database credential. Apply changes the attempt and its work item and records the decision, naming the decider and the attempt's original actor, in the work item's history in one transaction; settle the attempt afterwards.",
-              "usage": "caseworkctl attempt mark-uncertain [OPTIONS] --attempt-id <UUID> --reason <REASON> --decided-by <DECIDED_BY> <PROJECT>",
-              "arguments": [
-                {
-                  "display": "<PROJECT>",
-                  "description": "Authored Casework project directory",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--runtime-config <FILE>",
-                  "description": "Runtime configuration file",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--attempt-id <UUID>",
-                  "description": "Pending source attempt to mark uncertain",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--reason <REASON>",
-                  "description": "Why the attempt is marked uncertain; recorded in the work item's history",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--decided-by <DECIDED_BY>",
-                  "description": "Who made the decision; recorded in the work item's history",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--apply",
-                  "description": "Apply the reviewed marking. Omit to preview",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help (see a summary with '-h')",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            }
-          ]
+          "subcommands": []
         },
         {
           "name": "dev",
           "invocation": "caseworkctl dev",
-          "about": "Start, stop and inspect this project's retained local Casework runtime",
+          "about": "Start, stop and inspect a retained standalone local session",
           "long_about": null,
           "usage": "caseworkctl dev [OPTIONS] [PROJECT]\n       caseworkctl dev <COMMAND>",
           "arguments": [
@@ -6289,17 +5935,8 @@
               "environment": "CASEWORKCTL_DEV_DATABASE_PORT"
             },
             {
-              "display": "--source-project <[ID=]PATH>",
-              "description": "Running Base Registry Engine (BReg) dev project serving a declared source. This compatibility bridge is available only without explicit integrations or task templates",
-              "always_required": false,
-              "repeatable": true,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
               "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
+              "description": "Output format: human for terminal reading or json for automation",
               "always_required": false,
               "repeatable": false,
               "default_values": [
@@ -6327,7 +5964,7 @@
               "name": "start",
               "invocation": "caseworkctl dev start",
               "about": "Start or reuse the project's retained local database and services",
-              "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL container and Casework child. Standalone sessions also own a pinned issuer container; --source-project sessions use the running Base Registry Engine (BReg) session's stock issuer. The database runs the pinned image public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, the Docker Official Images mirror of postgres:17.11 at that digest, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .casework/dev/logs directory.",
+              "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL container and Casework child. Standalone sessions also own a pinned issuer container; --issuer-project borrows a separately running BReg session's registered issuer. The database runs the pinned image public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, the Docker Official Images mirror of postgres:17.11 at that digest, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .casework/dev/logs directory.",
               "usage": "caseworkctl dev start [OPTIONS] [PROJECT]",
               "arguments": [
                 {
@@ -6389,17 +6026,8 @@
                   "environment": "CASEWORKCTL_DEV_DATABASE_PORT"
                 },
                 {
-                  "display": "--source-project <[ID=]PATH>",
-                  "description": "Running Base Registry Engine (BReg) dev project serving a declared source. This compatibility bridge is available only without explicit integrations or task templates",
-                  "always_required": false,
-                  "repeatable": true,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
                   "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
+                  "description": "Output format: human for terminal reading or json for automation",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6455,7 +6083,7 @@
                 },
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
+                  "description": "Output format: human for terminal reading or json for automation",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6502,7 +6130,7 @@
               "options": [
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
+                  "description": "Output format: human for terminal reading or json for automation",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6558,7 +6186,7 @@
               "options": [
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
+                  "description": "Output format: human for terminal reading or json for automation",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6632,7 +6260,7 @@
                 },
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
+                  "description": "Output format: human for terminal reading or json for automation",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6677,7 +6305,7 @@
               "options": [
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
+                  "description": "Output format: human for terminal reading or json for automation",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -6889,7 +6517,7 @@
           "options": [
             {
               "display": "--project <PROJECT>",
-              "description": "Directory containing workflow.yaml and functions.rhai",
+              "description": "Directory containing workflow.yaml and its declared code and contract assets",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -6977,8 +6605,153 @@
           "options": [
             {
               "display": "--project <PROJECT>",
-              "description": "Directory containing workflow.yaml and functions.rhai",
+              "description": "Directory containing workflow.yaml and its declared code and contract assets",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "types",
+          "invocation": "coordinatorctl types",
+          "about": "Export revision-pinned typed clients from the compiled workflow contract",
+          "long_about": null,
+          "usage": "coordinatorctl types [OPTIONS] --project <PROJECT> --language <LANGUAGE> --output <OUTPUT>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Directory containing workflow.yaml and its declared code and contract assets",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--language <LANGUAGE>",
+              "description": "Language for the generated input/outcome types and revision-pinned client",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "typescript",
+                "python"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "File to write with the generated typed client source",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "workflow",
+          "invocation": "coordinatorctl workflow",
+          "about": "Discover a permitted workflow's active revision and input/outcome contract",
+          "long_about": null,
+          "usage": "coordinatorctl workflow [OPTIONS] --workflow <WORKFLOW>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--workflow <WORKFLOW>",
+              "description": "Allowed workflow identifier whose active contract should be returned",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <FILE>",
+              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -7030,7 +6803,7 @@
           "options": [
             {
               "display": "--project <PROJECT>",
-              "description": "Directory containing workflow.yaml and functions.rhai",
+              "description": "Directory containing workflow.yaml and its declared code and contract assets",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -7092,7 +6865,7 @@
           "options": [
             {
               "display": "--project <PROJECT>",
-              "description": "Directory containing workflow.yaml and functions.rhai",
+              "description": "Directory containing workflow.yaml and its declared code and contract assets",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -7147,14 +6920,14 @@
         {
           "name": "plan",
           "invocation": "coordinatorctl plan",
-          "about": "Inspect activation, schema and each flow's package change using runtime credentials, without migrating",
+          "about": "Inspect activation, schema and each workflow's package change using runtime credentials, without migrating",
           "long_about": null,
           "usage": "coordinatorctl plan [OPTIONS]",
           "arguments": [],
           "options": [
             {
-              "display": "--remove-flow <FLOW>",
-              "description": "Active flow to retire because its package is no longer listed; repeat for each flow",
+              "display": "--remove-workflow <WORKFLOW>",
+              "description": "Active workflow to retire because its package is no longer listed; repeat for each workflow",
               "always_required": false,
               "repeatable": true,
               "default_values": [],
@@ -7200,14 +6973,14 @@
         {
           "name": "apply",
           "invocation": "coordinatorctl apply",
-          "about": "Apply every listed flow's package and least-privileged runtime grants using migration credentials",
+          "about": "Apply every listed workflow's package and least-privileged runtime grants using migration credentials",
           "long_about": null,
           "usage": "coordinatorctl apply [OPTIONS]",
           "arguments": [],
           "options": [
             {
-              "display": "--remove-flow <FLOW>",
-              "description": "Active flow to retire because its package is no longer listed; refused while it has runs that are not terminal",
+              "display": "--remove-workflow <WORKFLOW>",
+              "description": "Active workflow to retire because its package is no longer listed; refused while it has runs that are not terminal",
               "always_required": false,
               "repeatable": true,
               "default_values": [],
@@ -7253,7 +7026,7 @@
         {
           "name": "deployment-status",
           "invocation": "coordinatorctl deployment-status",
-          "about": "Inspect deployed flow packages and schema using runtime credentials",
+          "about": "Inspect deployed workflow packages and schema using runtime credentials",
           "long_about": null,
           "usage": "coordinatorctl deployment-status [OPTIONS]",
           "arguments": [],
@@ -7341,14 +7114,23 @@
         {
           "name": "start",
           "invocation": "coordinatorctl start",
-          "about": "Start one allowed flow with caller ownership and an idempotency key",
+          "about": "Start one allowed workflow with caller ownership and an idempotency key",
           "long_about": null,
-          "usage": "coordinatorctl start [OPTIONS] --flow <FLOW> --input <INPUT> --key-file <KEY_FILE>",
+          "usage": "coordinatorctl start [OPTIONS] --workflow <WORKFLOW> --workflow-revision <WORKFLOW_REVISION> --input <INPUT> --key-file <KEY_FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--flow <FLOW>",
-              "description": "Allowed flow identifier from the activated workflow package",
+              "display": "--workflow <WORKFLOW>",
+              "description": "Allowed workflow identifier from the activated workflow package",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--workflow-revision <WORKFLOW_REVISION>",
+              "description": "Computed revision obtained from types export or workflow discovery",
               "always_required": true,
               "repeatable": false,
               "default_values": [],

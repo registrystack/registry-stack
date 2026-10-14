@@ -7,7 +7,7 @@ mod report;
 #[cfg(feature = "schema")]
 pub mod schema;
 use anyhow::Result;
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use std::{
     ffi::OsString,
@@ -18,6 +18,7 @@ use std::{
 #[derive(Debug, Parser)]
 #[command(name="caseworkctl",version=registry_platform_buildinfo::DISPLAY_VERSION,about="Compile and operate bounded review policies")]
 struct Cli {
+    /// Output format: human for terminal reading or json for automation.
     #[arg(long, value_enum, global = true, default_value_t)]
     format: OutputFormat,
     #[command(subcommand)]
@@ -33,7 +34,10 @@ enum OutputFormat {
 enum Command {
     /// Create a complete standalone ReviewPolicy project.
     Init {
+        /// New directory for the standalone ReviewPolicy project.
+        #[arg(value_name = "DIRECTORY")]
         project: PathBuf,
+        /// Built-in project template to write.
         #[arg(long, default_value = "standalone-decision")]
         template: String,
     },
@@ -45,8 +49,11 @@ enum Command {
     Test(ProjectArgs),
     /// Generate policy bindings and context/request/task/result TypeScript and Python types.
     Types {
+        /// Existing authored Casework project directory.
+        #[arg(value_name = "PROJECT")]
         project: PathBuf,
-        #[arg(long)]
+        /// New directory for the generated bindings.
+        #[arg(long, value_name = "DIRECTORY")]
         output: PathBuf,
     },
     /// Pair a context provider with an existing native producer export and reader authority.
@@ -57,23 +64,36 @@ enum Command {
     /// Report the one review lifecycle.
     Lifecycle,
     /// Package the policy and its exact local schema and provider dependency closure.
+    #[command(group(ArgGroup::new("package-output").required(true).args(["output", "dry_run"])))]
     Package {
+        /// Existing authored Casework project directory.
+        #[arg(value_name = "PROJECT")]
         project: PathBuf,
-        #[arg(long)]
+        /// New directory for the verified policy package.
+        #[arg(long, value_name = "DIRECTORY")]
         output: Option<PathBuf>,
+        /// Optional source revision label covered by the package digest.
         #[arg(long)]
         revision: Option<String>,
+        /// Compile and report the package closure without writing a package.
         #[arg(long)]
         dry_run: bool,
     },
+    /// Inspect activation, schema readiness and local runtime configuration.
     Doctor(OperatorArgs),
+    /// Compare a verified policy package with the currently activated package.
     Plan(OperatorArgs),
+    /// Report the active policy package and runtime readiness.
     Status(OperatorArgs),
+    /// Activate a verified policy package using current migration authority.
     Apply {
-        #[arg(long)]
+        /// Runtime configuration file
+        #[arg(long, value_name = "FILE")]
         runtime_config: PathBuf,
+        /// Operator reference recorded with the activation.
         #[arg(long)]
         operator_reference: Option<String>,
+        /// Backup reference recorded with the activation; repeat for multiple references.
         #[arg(long)]
         backup_reference: Vec<String>,
     },
@@ -86,44 +106,64 @@ enum Command {
 }
 #[derive(Debug, Subcommand)]
 enum ProviderCommand {
+    /// Pair one configured provider with an exact review-context export from a BReg package.
     Pair {
+        /// Existing authored Casework project directory.
+        #[arg(value_name = "PROJECT")]
         project: PathBuf,
+        /// Configured context provider to pair.
         #[arg(long)]
         provider_id: String,
-        #[arg(long)]
+        /// Verified native BReg package that owns the context contract.
+        #[arg(long, value_name = "DIRECTORY")]
         breg_package: PathBuf,
+        /// Exact Action ID whose review-context contract is imported.
         #[arg(long)]
         action_id: String,
-        #[arg(long, default_value = "bregctl")]
+        /// Matching-release bregctl executable used to verify the native package.
+        #[arg(long, default_value = "bregctl", value_name = "BINARY")]
         bregctl_bin: PathBuf,
+        /// Write the verified provider description and bind it in the project.
         #[arg(long)]
         apply: bool,
     },
 }
 #[derive(Debug, Args)]
 struct ProjectArgs {
+    /// Existing authored Casework project directory.
+    #[arg(value_name = "PROJECT")]
     project: PathBuf,
 }
 #[derive(Debug, Args)]
 struct OperatorArgs {
-    #[arg(long)]
+    /// Runtime configuration file
+    #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
 }
 #[derive(Debug, Args)]
 struct CheckArgs {
+    /// Existing authored Casework project directory.
+    #[arg(value_name = "PROJECT")]
     project: PathBuf,
+    /// Require production-ready policy configuration.
     #[arg(long)]
     production: bool,
+    /// Treat warnings as refusals.
     #[arg(long)]
     deny_warnings: bool,
-    #[arg(long)]
+    /// Verified native BReg package whose provider contracts must match.
+    #[arg(long, value_name = "DIRECTORY")]
     against_breg_package: Option<PathBuf>,
+    /// Limit native contract comparison to this configured context provider.
     #[arg(long, requires = "against_breg_package")]
     provider_id: Option<String>,
-    #[arg(long, default_value = "bregctl")]
+    /// Matching-release bregctl executable used to verify the native package.
+    #[arg(long, default_value = "bregctl", value_name = "BINARY")]
     bregctl_bin: PathBuf,
-    #[arg(long)]
+    /// Runtime configuration file
+    #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
+    /// Resolve environment substitutions in the runtime configuration.
     #[arg(long, requires = "runtime_config")]
     environment: bool,
 }
@@ -481,6 +521,28 @@ mod tests {
     fn removed_commands_are_not_exposed() {
         for name in ["source", "attempt", "retention", "simulate"] {
             assert!(Cli::try_parse_from(["caseworkctl", name]).is_err());
+        }
+    }
+    #[test]
+    fn package_requires_exactly_one_output_choice() {
+        for args in [
+            vec!["caseworkctl", "package", "project"],
+            vec![
+                "caseworkctl",
+                "package",
+                "project",
+                "--dry-run",
+                "--output",
+                "package",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        for args in [
+            vec!["caseworkctl", "package", "project", "--dry-run"],
+            vec!["caseworkctl", "package", "project", "--output", "package"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
         }
     }
     #[test]

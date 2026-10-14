@@ -52,14 +52,14 @@ pub mod casework {
         ReviewHistoryPage, ReviewMutationErrorClass, ReviewNoteRequest, ReviewPageQuery,
         ReviewPolicy, ReviewPolicyClosure, ReviewPolicyDependencies, ReviewPurpose,
         ReviewRequestAccepted, ReviewRequestLifecycle, ReviewRequestView, ReviewResult,
-        ReviewResultFeedEntry, ReviewResultFeedPage, ReviewResultResponse, ReviewResultStatus,
-        ReviewSourceBindingStatus, ReviewSourceProjection, ReviewStaffingQuery, ReviewTask,
-        ReviewTaskContext, ReviewTaskContextData, ReviewTaskDecisionRequest, ReviewTaskDraft,
-        ReviewTaskDraftInput, ReviewTaskOwnership, ReviewTaskPage, ReviewTaskSort, ReviewTaskState,
-        ReviewValidationError, ReviewValidationReason, RoutingActivity, RoutingCondition,
-        RoutingPredicate, RoutingRule, SchedulingTaskPermission, SourceContextBinding,
-        StaffingDiagnostic, SubjectBinding, SubjectClockAnchor, SubjectClockCompletion,
-        SubmissionDigest, SupervisoryReviewTask, SupervisoryReviewTaskPage,
+        ReviewResultFeedEntry, ReviewResultFeedPage, ReviewResultObservation, ReviewResultResponse,
+        ReviewResultStatus, ReviewSourceBindingStatus, ReviewSourceProjection, ReviewStaffingQuery,
+        ReviewTask, ReviewTaskContext, ReviewTaskContextData, ReviewTaskDecisionRequest,
+        ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskOwnership, ReviewTaskPage, ReviewTaskSort,
+        ReviewTaskState, ReviewValidationError, ReviewValidationReason, RoutingActivity,
+        RoutingCondition, RoutingPredicate, RoutingRule, SchedulingTaskPermission,
+        SourceContextBinding, StaffingDiagnostic, SubjectBinding, SubjectClockAnchor,
+        SubjectClockCompletion, SubmissionDigest, SupervisoryReviewTask, SupervisoryReviewTaskPage,
         SupervisoryReviewTaskQuery, SupervisoryReviewTaskState, TaskApprovalRequest,
         TaskAssertionResponse, TaskAuthorizationMode, TaskGrantBounds, TaskGrantList,
         TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView,
@@ -71,10 +71,10 @@ pub mod casework {
 pub mod coordinator {
     pub use registry_coordinator_client::{
         BearerToken, CoordinatorClient, CoordinatorClientConfig, CoordinatorClientError,
-        CoordinatorComplete, CoordinatorProtocolFailure, EffectKind, KeyRequirement,
-        OperationIdentity, RecoverySemantics, RecoveryStatus, RetryBlockReason, RetryScheduled,
-        RunInspection, RunList, RunListQuery, RunListState, RunStatus, StartRunRequest, StepStatus,
-        TransportKind, Uuid,
+        CoordinatorComplete, CoordinatorProtocolFailure, EffectKind, EffectState, EffectStatus,
+        KeyRequirement, OperationIdentity, RecoverySemantics, RecoveryStatus, RetryBlockReason,
+        RetryScheduled, RunInspection, RunList, RunListQuery, RunListState, RunStatus,
+        StartRunRequest, StepStatus, TransportKind, Uuid, WaitStatus, WorkflowContract,
     };
 }
 
