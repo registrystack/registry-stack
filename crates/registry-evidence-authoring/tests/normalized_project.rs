@@ -109,6 +109,25 @@ fn question_presentation_does_not_change_definition_dependencies() {
     );
 }
 
+#[test]
+fn definition_dependencies_ignore_function_declaration_order() {
+    let original = project();
+    let mut reordered = original.clone();
+    reordered.functions.reverse();
+    assert_eq!(
+        compile::definition_dependencies(&original, "active-status"),
+        compile::definition_dependencies(&reordered, "active-status")
+    );
+
+    let mut changed = serde_json::to_value(&original).unwrap();
+    changed["selectorProfiles"]["person-by-id"]["maximumAggregateBytes"] = json!(65);
+    let changed: project::EvidenceProject = serde_json::from_value(changed).unwrap();
+    assert_ne!(
+        compile::definition_dependencies(&original, "active-status"),
+        compile::definition_dependencies(&changed, "active-status")
+    );
+}
+
 fn authority() -> Value {
     json!({"target":"local","project":"synthetic-evidence","accessProfiles":{"consumer":{"authority":"organizational","actorKind":"service","requesterTags":["consumer"],"grants":[{"definition":"active-status","purpose":"status-verification","audienceFrom":"authenticated-requester","representations":["signed-jws"],"subjectBinding":"audience-scoped","subjects":[{"role":"person","selectorProfile":"person-by-id","valueOrigin":"request"}]}]}}})
 }
