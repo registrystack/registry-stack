@@ -299,3 +299,39 @@ exceptions:
   class: protocol-constant
   reason: 2.0 is written as the PDF specification (ISO 32000) numbers its versions
   resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetAccessTokenAlgorithm/enum/ES256
+  class: protocol-constant
+  reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetAccessTokenAlgorithm/enum/EdDSA
+  class: protocol-constant
+  reason: EdDSA is written as JOSE EdDSA (RFC 8037) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetAccessTokenAlgorithm/enum/RS256
+  class: protocol-constant
+  reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetAccessTokenType/enum/application~1at+jwt
+  class: protocol-constant
+  reason: application/at+jwt is the JWT access token media type defined by RFC 9068
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetAccessTokenType/enum/at+jwt
+  class: protocol-constant
+  reason: at+jwt is the JWT access token type defined by RFC 9068
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetSigningAlgorithm/enum/ES256
+  class: protocol-constant
+  reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.

@@ -3133,7 +3133,9 @@ formats:
         whenOmitted: refused
       - pointer: /audit
         whenOmitted: refused
-    restrictingMembers: [/authentication, /connections, /signer, /subjectBinding, /audit]
+    # Connections grant named HTTP bindings; an empty map grants none and is
+    # valid for extract-only projects. Omission is still refused above.
+    restrictingMembers: [/authentication, /signer, /subjectBinding, /audit]
   - id: evidence/target-authority
     product: evidence
     title: Evidence target authority
