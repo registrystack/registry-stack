@@ -59,7 +59,7 @@ authored limits agree. It does not contact the Source or prove target-host depen
 
 ## Write synthetic cases
 
-Keep every fixture under `fixtures/`, set `synthetic_only: true`, and use the current
+Keep every fixture under `fixtures/`, set `syntheticOnly: true`, and use the current
 `EvidenceFixture` envelope. Put shared observation time, selectors, and transport expectations in
 `common`; each case then states one input variation and its expected outcome.
 
@@ -143,7 +143,7 @@ and `sign` entries report identifiers, counts, and shapes. A failed case adds a 
 codes and stops at the stage that ended it.
 
 The trace never prints a response, fact, derived value, or selector value. Evaluation also refuses
-a trace containing a value listed in `privacy_expectation.diagnostics_exclude`. `--explain` changes
+a trace containing a value listed in `privacyExpectation.diagnosticsExclude`. `--explain` changes
 no outcome or exit code.
 
 ## Package the proved revision

@@ -2378,9 +2378,9 @@ fn extract_batch(response, context) {
                 .get(requirement.acquisition.initial_source())
                 .expect("requirement source exists");
             for test_case in fixture["cases"].as_array().expect("cases is an array") {
-                if test_case.get("source_failure").is_some()
-                    || test_case.get("injected_derivation").is_some()
-                    || test_case.get("companion_bundle").is_some()
+                if test_case.get("sourceFailure").is_some()
+                    || test_case.get("injectedDerivation").is_some()
+                    || test_case.get("companionBundle").is_some()
                     || test_case.get("subjects").is_some()
                 {
                     continue;
@@ -2409,10 +2409,10 @@ fn extract_batch(response, context) {
                         projection(),
                     )
                 });
-                match test_case.get("expected_lookup").and_then(Value::as_str) {
+                match test_case.get("expectedLookup").and_then(Value::as_str) {
                     Some("no_match") => assert!(matches!(result, Ok(KernelOutcome::NoMatch))),
                     Some("ambiguous") => assert!(matches!(result, Ok(KernelOutcome::Ambiguous))),
-                    _ if test_case.get("expected_public_problem").is_some() => {
+                    _ if test_case.get("expectedPublicProblem").is_some() => {
                         assert!(result.is_err(), "{case}: {}", test_case["id"])
                     }
                     _ => {
@@ -2422,7 +2422,7 @@ fn extract_batch(response, context) {
                             panic!("{case}: expected match");
                         };
                         assert!(!values.as_slice().is_empty());
-                        if let Some(expected) = test_case.get("expected_value") {
+                        if let Some(expected) = test_case.get("expectedValue") {
                             assert_eq!(
                                 serde_json::to_value(&values.as_slice()[0].value)
                                     .expect("value serializes"),
@@ -3734,11 +3734,11 @@ fn extract_batch(response, context) {
 
     fn observed_for_case(fixture: &Value, test_case: &Value) -> DateTime<Utc> {
         let local_date = test_case
-            .get("legal_local_date")
+            .get("legalLocalDate")
             .or_else(|| {
                 fixture
                     .get("common")
-                    .and_then(|common| common.get("legal_local_date"))
+                    .and_then(|common| common.get("legalLocalDate"))
             })
             .and_then(Value::as_str)
             .unwrap_or("2026-08-02");

@@ -21,8 +21,8 @@ use registry_evidence_authoring::formats::{
 };
 use registry_evidence_authoring::{project::ActorKind, target::AccessProfile};
 use registry_platform_crypto::{PrivateJwk, PublicJwk};
-use registry_platform_yaml::FormatSpec;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use registry_platform_yaml::{Decoded, Report, Severity, MAXIMUM_DOCUMENT_BYTES};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{authoring, dev, keygen, OutputFormat};
@@ -966,34 +966,100 @@ fn load_client_documents_if_present(project: &Path) -> Result<BTreeMap<String, C
     Ok(clients)
 }
 
-fn read_client_document(path: &Path) -> Result<ClientDocument> {
-    let mut document: ClientDocument = read_yaml(path, PUBLIC_FILE_MODE, &ACCESS_CLIENT)?;
-    validate_identifier(&document.client_id, "client")?;
-    validate_filename_id(path, &document.client_id, "client")?;
+/// Check the public registration bytes without requiring a local project,
+/// filename, private key, or installed file permissions.
+pub(crate) fn check_client_document(file: &str, bytes: &[u8]) -> Result<Report, Report> {
+    decode_client_document(file, bytes).map(|decoded| decoded.document.warnings())
+}
+
+fn decode_client_document(file: &str, bytes: &[u8]) -> Result<Decoded<ClientDocument>, Report> {
+    let mut decoded = decode_authored::<ClientDocument>(file, bytes, &ACCESS_CLIENT)?;
+    if let Err((path, message, action)) = validate_client_document(&mut decoded.value) {
+        return Err(Report::new(vec![decoded.document.diagnostic_at_value(
+            Severity::Error,
+            "evidence.access.invalid-client",
+            path,
+            message,
+            action,
+        )]));
+    }
+    Ok(decoded)
+}
+
+/// The same content rules apply to standalone checks and local registration.
+/// Faults name only fixed fields and fixes, never a caller value or key bytes.
+fn validate_client_document(
+    document: &mut ClientDocument,
+) -> Result<(), (&'static str, &'static str, &'static str)> {
+    validate_identifier(&document.client_id, "client").map_err(|_| {
+        (
+            "/clientId",
+            "the client id must be a bounded lowercase local identifier",
+            "Write a lowercase local identifier of at most 64 bytes.",
+        )
+    })?;
     document.access_profiles = canonical_sorted_unique(
         &document.access_profiles,
         "access profiles",
         MAX_PROFILES_PER_CLIENT,
-    )?;
-    if document.principal != local_client_uri(&document.client_id)
-        || !authoring::valid_local_audience(&document.evidence_audience)
-    {
-        bail!("local client principal must match its client id and evidence audience must be a bounded URI");
+    )
+    .map_err(|_| {
+        (
+            "/accessProfiles",
+            "access profiles must be a nonempty bounded sorted unique list",
+            "Declare between one and 32 distinct access profiles in sorted order.",
+        )
+    })?;
+    if document.principal != local_client_uri(&document.client_id) {
+        return Err((
+            "/principal",
+            "the local client principal must match its client id",
+            "Use urn:registrystack:evidence:local:client: followed by the client id.",
+        ));
+    }
+    if !authoring::valid_local_audience(&document.evidence_audience) {
+        return Err((
+            "/evidenceAudience",
+            "the evidence audience must be a bounded URI",
+            "Declare a bounded URI for the audience of this client's evidence.",
+        ));
     }
     if document.keys.len() != 1 {
-        bail!("a local client must contain exactly one public key");
+        return Err((
+            "/keys",
+            "a local client must contain exactly one public key",
+            "Declare exactly one public JWK without private key material.",
+        ));
     }
-    for key in &document.keys {
-        if key.get("d").is_some() {
-            bail!("client documents must never contain private key material");
-        }
-        let text = serde_json::to_string(key).context("rendering client public key")?;
-        PublicJwk::parse(&text).context("client public JWK is invalid")?;
+    let key = &document.keys[0];
+    if key.get("d").is_some()
+        || serde_json::to_string(key)
+            .ok()
+            .and_then(|text| PublicJwk::parse(&text).ok())
+            .is_none()
+    {
+        return Err((
+            "/keys/0",
+            "the client key must be a valid public JWK without private key material",
+            "Declare a valid public JWK and retain its private key outside this document.",
+        ));
     }
-    if let Some(exchange) = &document.exchange {
-        exchange.validate()?;
+    if document
+        .exchange
+        .as_ref()
+        .is_some_and(|exchange| exchange.validate().is_err())
+    {
+        return Err(("/exchange", "the local client exchange binding is invalid",
+            "Declare the bounded bootstrap scope and the resource and issuer required by its exchange kind."));
     }
-    Ok(document)
+    Ok(())
+}
+
+fn read_client_document(path: &Path) -> Result<ClientDocument> {
+    let text = read_bounded_file(path, MAXIMUM_DOCUMENT_BYTES as u64, Some(PUBLIC_FILE_MODE))?;
+    let decoded = decode_client_document(&path.display().to_string(), text.as_bytes())?;
+    validate_filename_id(path, &decoded.value.client_id, "client")?;
+    Ok(decoded.value)
 }
 
 fn validate_private_client_key(project: &Path, document: &ClientDocument) -> Result<PathBuf> {
@@ -1068,13 +1134,6 @@ fn validate_optional_access_root(project: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
-}
-
-/// Read one authored access document through the shared reader, which
-/// reports every problem it finds with its position and fix.
-fn read_yaml<T: DeserializeOwned>(path: &Path, mode: u32, format: &FormatSpec<'_>) -> Result<T> {
-    let text = read_bounded_file(path, MAX_DOCUMENT_BYTES, Some(mode))?;
-    Ok(decode_authored::<T>(&path.display().to_string(), text.as_bytes(), format)?.value)
 }
 
 fn read_bounded_file(path: &Path, maximum: u64, required_mode: Option<u32>) -> Result<String> {

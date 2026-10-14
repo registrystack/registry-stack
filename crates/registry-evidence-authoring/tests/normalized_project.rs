@@ -801,17 +801,11 @@ fn malformed_selector_fields_and_derive_inputs_are_refused_before_type_projectio
         json!({"type":"controlled-code"}),
         json!({"type":"controlled-code","codelist":"codelists/codes.yaml","maximumBytes":32}),
         json!({"type":"string","minimumBytes":1}),
-        json!({"type":"integer","minimum":10,"maximum":1}),
         json!({"type":"boolean","maximumBytes":4}),
     ] {
         let mut value = serde_json::to_value(project()).unwrap();
         value["selectorProfiles"]["person-by-id"]["fields"]["person-id"] = field;
-        let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
-        let findings = compile::compile(&project, &scripts()).unwrap_err();
-        assert!(findings.iter().any(|finding| finding
-            .field
-            .to_json_pointer()
-            .starts_with("/selectorProfiles/person-by-id/fields/person-id")));
+        assert!(serde_json::from_value::<project::EvidenceProject>(value).is_err());
     }
     let mut value = serde_json::to_value(project()).unwrap();
     value["assertionDefinitions"]["active-status"]["derive"]["selectorInputs"] =
@@ -938,4 +932,68 @@ fn reused_source_functions_have_definition_specific_prior_fact_contexts() {
         json!({"reference":{"type":"string","maxLength":64}})
     );
     assert_eq!(fetch["stage"], "fetch");
+}
+
+#[test]
+fn selector_semantic_bounds_remain_checked_after_typed_decoding() {
+    for field in [
+        json!({"type":"string","minimumBytes":32,"maximumBytes":16}),
+        json!({"type":"string","minimumBytes":1,"maximumBytes":65}),
+        json!({"type":"integer","minimum":10,"maximum":1}),
+        json!({"type":"integer","minimum":-9_007_199_254_740_992_i64,"maximum":1}),
+        json!({"type":"controlled-code","codelist":"outside/codes.yaml","codelistVersion":"1","maximumBytes":32}),
+        json!({"type":"controlled-code","codelist":"codelists/codes.yaml","codelistVersion":"","maximumBytes":32}),
+        json!({"type":"controlled-code","codelist":"codelists/codes.yaml","codelistVersion":"1","maximumBytes":65}),
+    ] {
+        let mut value = serde_json::to_value(project()).unwrap();
+        value["selectorProfiles"]["person-by-id"]["fields"]["person-id"] = field;
+        let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
+        let findings = compile::compile(&project, &scripts()).unwrap_err();
+        assert!(findings
+            .iter()
+            .any(|finding| finding.code == "selector-field-bounds"
+                && finding.field.to_json_pointer()
+                    == "/selectorProfiles/person-by-id/fields/person-id"));
+    }
+}
+
+#[test]
+fn typed_selector_fields_round_trip_and_compile_without_presentation() {
+    for field in [
+        json!({"type":"string","minimumBytes":1,"maximumBytes":64}),
+        json!({"type":"date"}),
+        json!({"type":"integer","minimum":-42,"maximum":42}),
+        json!({"type":"boolean"}),
+        json!({"type":"controlled-code","codelist":"codelists/codes.yaml","codelistVersion":"1","maximumBytes":32}),
+    ] {
+        let mut authored = field.clone();
+        authored["label"] = json!("Selector label");
+        authored["description"] = json!("Selector explanation");
+        let mut value = serde_json::to_value(project()).unwrap();
+        value["selectorProfiles"]["person-by-id"]["fields"]["person-id"] = authored.clone();
+        let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            serde_json::to_value(&project).unwrap()["selectorProfiles"]["person-by-id"]["fields"]
+                ["person-id"],
+            authored
+        );
+        let mut scripts = scripts();
+        scripts.insert("codelists/codes.yaml".to_owned(), "apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1\nkind: EvidenceCodelist\nuri: urn:example:codes\nversion: '1'\ntype: code-list\ncodes: [one, two]\n".to_owned());
+        let compiled = compile::compile(&project, &scripts).unwrap();
+        assert_eq!(
+            compiled.model["selectorProfiles"]["person-by-id"]["fields"]["person-id"],
+            field
+        );
+        assert!(!project::typescript(&project, &compiled).is_empty());
+        if field["type"] == "controlled-code" {
+            assert!(compiled.artifacts.contains_key("codelists/codes.yaml"));
+            let mismatched =
+                scripts["codelists/codes.yaml"].replace("version: '1'", "version: '2'");
+            scripts.insert("codelists/codes.yaml".to_owned(), mismatched);
+            assert!(compile::compile(&project, &scripts)
+                .unwrap_err()
+                .iter()
+                .any(|finding| finding.code == "codelist-identity"));
+        }
+    }
 }

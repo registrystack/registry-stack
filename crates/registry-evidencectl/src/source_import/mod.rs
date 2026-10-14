@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub(crate) use export::DocumentRefused;
+pub(crate) use export::EXPORT_FORMAT;
 #[cfg(test)]
-pub(crate) use export::EXPORT_API_VERSION;
-pub(crate) use export::EXPORT_KIND;
+pub(crate) use export::{EXPORT_API_VERSION, EXPORT_KIND};
 pub(crate) use files::ProjectLock;
 use files::{
     artifact_path, authored_bound, digest, read, snapshot, write, Contents, JOURNAL_PATH,
@@ -30,7 +30,7 @@ use files::{
 use resolution::{decode_resolution_file, MAX_ARTIFACTS};
 #[cfg(feature = "schema")]
 pub(crate) use resolution::{resolution_schema, RESOLUTION_API_VERSION, RESOLUTION_SCHEMA_ID};
-pub(crate) use resolution::{Resolution, RESOLUTION_KIND};
+pub(crate) use resolution::{Resolution, RESOLUTION_FORMAT};
 
 /// The largest file `evidencectl check --file` reads: the importer's own
 /// largest file, the transaction journal.

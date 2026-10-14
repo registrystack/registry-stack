@@ -47,7 +47,7 @@ const BINDING_KEY: &[u8] = b"reference-project-binding-key-v1";
 const TEST_CA: &str = "-----BEGIN CERTIFICATE-----\nMAMCAQE=\n-----END CERTIFICATE-----\n";
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FixtureContract {
     synthetic_only: bool,
     common: FixtureCommon,
@@ -57,13 +57,13 @@ struct FixtureContract {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FixtureCommon {
     observed_at: String,
     #[serde(default)]
     purpose: Option<String>,
     selectors: Value,
-    #[serde(default, rename = "verified_token_claims")]
+    #[serde(default, rename = "verifiedTokenClaims")]
     verified_token_claims: Option<Value>,
     #[serde(default, rename = "derivationSelectorInputs")]
     derivation_selector_inputs: Option<Value>,
@@ -78,7 +78,7 @@ struct FixtureCommon {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FixtureCase {
     id: String,
     #[serde(default)]
@@ -1596,7 +1596,7 @@ fn fixture_common_object(fixture: &FixtureContract) -> JsonMap<String, Value> {
         common.insert("purpose".to_owned(), Value::String(purpose.clone()));
     }
     if let Some(claims) = &fixture.common.verified_token_claims {
-        common.insert("verified_token_claims".to_owned(), claims.clone());
+        common.insert("verifiedTokenClaims".to_owned(), claims.clone());
     }
     common
 }
@@ -1616,7 +1616,7 @@ fn fixture_case_object(fixture: &FixtureContract, case: &FixtureCase) -> JsonMap
         output.insert("purpose".to_owned(), Value::String(purpose.clone()));
     }
     if let Some(claims) = &fixture.common.verified_token_claims {
-        output.insert("verified_token_claims".to_owned(), claims.clone());
+        output.insert("verifiedTokenClaims".to_owned(), claims.clone());
     }
     output
 }

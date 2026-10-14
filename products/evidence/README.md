@@ -92,7 +92,7 @@ Checks resolve no secrets and make no dependency request. Fixtures execute the
 bounded source/extraction/derivation path using supplied synthetic responses.
 
 `evidencectl check --file <file>` checks one tooling file offline, including a
-client profile, reviewed contracts, development state or source-import document.
+client profile, local access client registration, reviewed contracts, development state or source-import document.
 Diagnostics identify files, fields and available source spans. The common exit
 classes are `0` success, `1` refusal, `2` usage and `3` operational failure.
 Use global `--format json` for machine-readable reports.

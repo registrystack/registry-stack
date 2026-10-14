@@ -1,8 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-synthetic_only: true
+syntheticOnly: true
 common:
-  observed_at: '2026-10-14T00:00:00Z'
+  observedAt: '2026-10-14T00:00:00Z'
   selectors:
     licence:
       profile: record-by-id
@@ -15,60 +15,60 @@ cases:
     record:
       record_id: licence
       status: active
-  expected_value: active
-  expected_lookup: match
-  derivation_runs: true
-  signed_success: true
+  expectedValue: active
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
 - id: suspended
   source:
     total: 1
     record:
       record_id: licence
       status: suspended
-  expected_value: suspended
-  expected_lookup: match
-  derivation_runs: true
-  signed_success: true
+  expectedValue: suspended
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
 - id: expired
   source:
     total: 1
     record:
       record_id: licence
       status: expired
-  expected_value: expired
-  expected_lookup: match
-  derivation_runs: true
-  signed_success: true
+  expectedValue: expired
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
 - id: no-match
   source:
     total: 0
-  expected_lookup: no_match
-  expected_public_problem: evidence.unavailable
-  derivation_runs: false
-  signed_success: false
+  expectedLookup: no_match
+  expectedPublicProblem: evidence.unavailable
+  derivationRuns: false
+  signedSuccess: false
 - id: ambiguous
   source:
     total: 2
-  expected_lookup: ambiguous
-  expected_public_problem: evidence.unavailable
-  derivation_runs: false
-  signed_success: false
+  expectedLookup: ambiguous
+  expectedPublicProblem: evidence.unavailable
+  derivationRuns: false
+  signedSuccess: false
 - id: source-failure
-  source_failure: timeout
-  expected_public_problem: source.unavailable
-  signed_success: false
+  sourceFailure: timeout
+  expectedPublicProblem: source.unavailable
+  signedSuccess: false
 - id: boundary-declared-value
   source:
     total: 1
     record:
       record_id: licence
       status: expired
-  expected_value: expired
-  expected_lookup: match
-  derivation_runs: true
-  signed_success: true
+  expectedValue: expired
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
 - id: negative-outside-controlled-values
-  injected_derivation:
+  injectedDerivation:
   - concept_id: urn:example:concept:licence-status:v1
     value: unreviewed
   expected: output-gate-rejection
@@ -77,17 +77,17 @@ cases:
     total: 1
     record:
       record_id: licence
-  derivation_runs: false
-  signed_success: false
-  expected_public_problem: source.unavailable
+  derivationRuns: false
+  signedSuccess: false
+  expectedPublicProblem: source.unavailable
 - id: anti-reconstruction
-  companion_bundle: threshold-ladder
+  companionBundle: threshold-ladder
   expected: bundle-rejection
-privacy_expectation:
-  diagnostics_exclude:
+privacyExpectation:
+  diagnosticsExclude:
   - synthetic-address-private-canary
-  evidence_excludes:
+  evidenceExcludes:
   - synthetic-address-private-canary
-  evidence_contains:
+  evidenceContains:
   - urn:example:concept:licence-status:v1
-coequal_acceptance_definition: true
+coequalAcceptanceDefinition: true

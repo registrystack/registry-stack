@@ -510,7 +510,7 @@ fn write_runtime_bundle(package: &Path, model: Value, artifacts: BTreeMap<String
         "fixtures/all-forms.yaml",
         br#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-synthetic_only: true
+syntheticOnly: true
 cases:
   - {id: positive}
   - {id: negative-output}

@@ -16,7 +16,7 @@ pub(crate) const EXPORT_API_VERSION: &str =
     "id.registrystack.org/formats/breg/evidence-source-export/v1alpha1";
 pub(crate) const EXPORT_KIND: &str = "BRegEvidenceSourceExport";
 
-const EXPORT_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const EXPORT_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: EXPORT_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(EXPORT_API_VERSION)],

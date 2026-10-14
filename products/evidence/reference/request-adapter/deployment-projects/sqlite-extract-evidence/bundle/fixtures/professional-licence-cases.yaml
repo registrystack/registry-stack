@@ -1,8 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-synthetic_only: true
+syntheticOnly: true
 common:
-  observed_at: "2026-08-02T00:00:00Z"
+  observedAt: "2026-08-02T00:00:00Z"
   selectors:
     subject:
       profile: record-reference-v1
@@ -238,7 +238,7 @@ cases:
   # The extract was published exactly the declared maximum age before this
   # instant. The bound is inclusive, so it is still answered from.
   - id: boundary-extract-published-exactly-at-the-bound
-    observed_at: "2026-08-08T00:00:00Z"
+    observedAt: "2026-08-08T00:00:00Z"
     selectors:
       subject:
         profile: record-reference-v1
@@ -253,7 +253,7 @@ cases:
   # changed: the age is checked against the evaluation instant before a row is
   # read, so a stale snapshot fails as a dependency rather than answering.
   - id: stale-extract
-    observed_at: "2026-08-08T00:00:01Z"
+    observedAt: "2026-08-08T00:00:01Z"
     selectors:
       subject:
         profile: record-reference-v1

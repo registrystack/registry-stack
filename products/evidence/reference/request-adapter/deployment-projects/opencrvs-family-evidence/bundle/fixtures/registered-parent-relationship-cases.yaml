@@ -1,8 +1,8 @@
 apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-synthetic_only: true
+syntheticOnly: true
 common:
-  observed_at: "2026-08-02T00:00:00Z"
+  observedAt: "2026-08-02T00:00:00Z"
   selectors:
     child:
       profile: opencrvs-tracking-id-v1
@@ -17,7 +17,7 @@ common:
     candidate-parent:
       profile: civil-person-reference-v1
       values: {person_reference: PERSON-SYNTHETIC-A}
-  verified_token_claims:
+  verifiedTokenClaims:
     grant:
       candidate_parent: {person_reference: PERSON-SYNTHETIC-A}
   expectedRequestParts:

@@ -60,7 +60,12 @@ pub(crate) fn check(
                     None,
                 )?;
                 crate::build::reject_review_markers(&compiled.bundle_path)?;
-                crate::build::check_compiled_bundle(&evidence, &compiled.bundle_path, project)
+                crate::build::check_compiled_bundle(
+                    &evidence,
+                    &compiled.bundle_path,
+                    project,
+                    &compiled.fixture_paths,
+                )
             })();
             crate::build::make_tree_removable(stage.path())?;
             let result = result?;

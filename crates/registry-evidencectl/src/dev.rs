@@ -52,7 +52,7 @@ const DEV_STATE_API_VERSION: &str = "id.registrystack.org/formats/evidence/dev-s
 pub(crate) const DEV_STATE_KIND: &str = "EvidenceDevState";
 /// The session state `evidencectl dev` retains in `.evidence/dev/state.json`
 /// (CFG-ENV-1). Only evidencectl writes it.
-const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: DEV_STATE_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(DEV_STATE_API_VERSION)],

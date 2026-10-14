@@ -284,7 +284,7 @@ pub fn finding_action(code: &str) -> &'static str {
         "authority-ceiling" | "authority-definition" => "Declare complete grants using existing definitions and stay within every definition ceiling.",
         "authority-value-claims" | "authority-claim-path" | "authority-request-claims" => "Match valueClaims exactly to the selected profile for authenticated values, and omit them for request values.",
         "authority-task-clients" | "authority-task-issuer" | "authority-task-only" => "Declare requester clients and the trusted issuer exactly when a subject uses authenticated-grant values.",
-        "selector-field-required" | "selector-field-type" | "selector-field-bounds" => "Declare the closed selector field type and its required bounds or codelist reference.",
+        "selector-field-bounds" => "Declare the closed selector field type and its required bounds or codelist reference.",
         "kebab-case" | "date-time" | "x-evidencectl-mock" | "x-evidencectl-recursive-ref" => "Correct the inspected OpenAPI description as the message describes.",
         _ => "Correct the named member as the message describes, then check the project again.",
     }

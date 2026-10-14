@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 use registry_platform_yaml::{
-    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
+    ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
 };
 
 use crate::{build, evidence_binary, source_import::ProjectLock};
@@ -93,6 +93,7 @@ const FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
 /// how many cases that fixture evaluated.
 struct StepOutcome {
     passed: bool,
+    diagnostics: Vec<Diagnostic>,
     stderr: Option<String>,
     evaluated_cases: Option<usize>,
     trace: Option<JsonValue>,
@@ -189,7 +190,7 @@ fn no_fixture_report() -> Report {
         "fixtures",
         "",
         "No fixture file was found in the project's fixtures directory.",
-        "Add fixtures/<definition-id>.yaml with `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1`, `kind: EvidenceFixture`, `synthetic_only: true`, and at least one case, name it in the definition's `fixtures`, then rerun evidencectl test <project>.",
+        "Add fixtures/<definition-id>.yaml with `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1`, `kind: EvidenceFixture`, `syntheticOnly: true`, and at least one case, name it in the definition's `fixtures`, then rerun evidencectl test <project>.",
     )]);
     report.set_files_checked(0);
     report
@@ -281,7 +282,7 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let _editable_lock = editable_lock;
     let fixture_paths = select_fixture_paths(target.fixture_paths(), args.fixture.as_deref())?;
 
-    let check_outcome = target.check(&evidence_bin);
+    let check_outcome = target.check(&evidence_bin, &args.project);
     let check_passed = check_outcome.passed;
 
     // A broken bundle makes per-fixture results meaningless, so a failing
@@ -328,6 +329,14 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
         evaluated_cases,
         diagnostics: if steps_passed && evaluated_cases == 0 {
             vec![no_case_diagnostic()]
+        } else if !check_outcome.diagnostics.is_empty() {
+            check_outcome
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| {
+                    serde_json::to_value(diagnostic).expect("native diagnostic serializes")
+                })
+                .collect()
         } else if !overall_passed {
             vec![failed_run_diagnostic(args.command)]
         } else {
@@ -465,21 +474,31 @@ impl FixtureTarget {
         }
     }
 
-    fn check(&self, evidence_bin: &Path) -> StepOutcome {
-        match self {
+    fn check(&self, evidence_bin: &Path, project: &Path) -> StepOutcome {
+        let mut outcome = match self {
             Self::Deployment { runtime_path, .. } => run_evidence_step(
                 evidence_bin,
                 &["check", "--runtime-config"],
                 Some(runtime_path),
-                &[],
+                &["--format", "json"],
             ),
             Self::TargetedEditable { compilation } => run_evidence_step(
                 evidence_bin,
                 &["bundle-check", "--bundle"],
                 Some(&compilation.bundle_path),
-                &[],
+                &["--json"],
             ),
+        };
+        if let Self::TargetedEditable { compilation } = self {
+            let report = crate::authored::runtime_bundle_refusal(
+                Report::new(std::mem::take(&mut outcome.diagnostics)),
+                &compilation.bundle_path,
+                project,
+                &compilation.fixture_paths,
+            );
+            outcome.diagnostics = report.into_diagnostics();
         }
+        outcome
     }
 
     fn evaluate(
@@ -640,6 +659,7 @@ fn run_evidence_step(
             let trace = structured_trace(&stdout);
             StepOutcome {
                 passed: true,
+                diagnostics: Vec::new(),
                 evaluated_cases: structured_evaluated_cases(trace.as_ref())
                     .or_else(|| evaluated_cases(&stdout)),
                 stderr: None,
@@ -654,6 +674,8 @@ fn run_evidence_step(
             let trace = structured_trace(&stdout);
             StepOutcome {
                 passed: false,
+                diagnostics: crate::authored::runtime_refusal(stdout.as_bytes())
+                    .map_or_else(Vec::new, Report::into_diagnostics),
                 evaluated_cases: structured_evaluated_cases(trace.as_ref())
                     .or_else(|| evaluated_cases(&stdout)),
                 trace,
@@ -664,6 +686,7 @@ fn run_evidence_step(
         }
         Err(error) => StepOutcome {
             passed: false,
+            diagnostics: Vec::new(),
             stderr: Some(format!("failed to run {}: {error}", evidence_bin.display())),
             evaluated_cases: None,
             trace: None,

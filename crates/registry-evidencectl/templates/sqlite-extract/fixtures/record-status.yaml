@@ -5,14 +5,14 @@
 apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
 
-# Every value below is invented. `synthetic_only` says so, and the run refuses
+# Every value below is invented. `syntheticOnly` says so, and the run refuses
 # to reach a real source.
-synthetic_only: true
+syntheticOnly: true
 
 # What every case starts from: the observation time, the caller input, and the
 # extract the statement runs against. A case overrides only what it is about.
 common:
-  observed_at: "2026-08-02T00:00:00Z"
+  observedAt: "2026-08-02T00:00:00Z"
   selectors:
     subject:
       profile: record-reference
@@ -117,7 +117,7 @@ cases:
       sourceRequestCount: 1
 
   - id: boundary-extract-at-age-bound
-    observed_at: "2026-08-08T00:00:00Z"
+    observedAt: "2026-08-08T00:00:00Z"
     selectors:
       subject:
         profile: record-reference
@@ -129,7 +129,7 @@ cases:
       value: true
 
   - id: stale-extract
-    observed_at: "2026-08-08T00:00:01Z"
+    observedAt: "2026-08-08T00:00:01Z"
     selectors:
       subject:
         profile: record-reference

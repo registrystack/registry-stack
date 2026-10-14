@@ -17,14 +17,14 @@
 
 use std::collections::BTreeMap;
 
-use registry_platform_yaml::{ExternalId, LocalId};
+use registry_platform_yaml::ExternalId;
 use schemars::generate::SchemaSettings;
 use serde_json::{json, Value};
 
 use crate::codelist::{
     CodelistDocument, CODELIST_MAXIMUM_ITEMS, EVIDENCE_CODELIST_API_VERSION, EVIDENCE_CODELIST_KIND,
 };
-use crate::fixture::{EVIDENCE_FIXTURE_API_VERSION, EVIDENCE_FIXTURE_KIND, MAXIMUM_CASES};
+use crate::fixture::{EVIDENCE_FIXTURE_API_VERSION, EVIDENCE_FIXTURE_KIND};
 
 /// The committed code list schema file name.
 pub const CODELIST_SCHEMA_FILE: &str = "codelist.schema.json";
@@ -69,58 +69,94 @@ pub const FIXTURE_SCHEMA_FILE: &str = "fixture.schema.json";
 pub const FIXTURE_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/evidence/fixture/fixture.v1alpha1.schema.json";
 
-/// The fixture schema document, by file name.
-///
-/// `read_fixture` is untyped: it reads the envelope, `synthetic_only`, and the
-/// case list, and hands every other member to the offline runner, which checks
-/// the members of the replay mode it runs. The schema states what the reader
-/// itself holds and leaves the runner's members open under a stated reason.
-/// The schema requires `synthetic_only` but does not type it: the key is not
-/// camelCase, so the schema cannot name it, and the reader alone refuses a
-/// value other than `true`.
+/// The fixture schema derives the two existing evaluator control-key shells.
+/// Synthetic source/response and value trees retain their own JSON vocabulary.
 pub fn fixture_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
-    let local_id = serde_json::to_value(<LocalId as schemars::JsonSchema>::json_schema(
-        &mut SchemaSettings::draft2020_12().into_generator(),
-    ))?;
-    let runner = "the offline runner reads the members of the replay mode it runs and refuses what that mode does not know";
-    let schema = json!({
+    let mut generator = SchemaSettings::draft2020_12().into_generator();
+    let reference = generator.subschema_for::<crate::fixture::shape::ReferenceFixture>();
+    let coequal = generator.subschema_for::<crate::fixture::shape::CoequalFixture>();
+    let mut schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": FIXTURE_SCHEMA_ID,
         "title": "Evidence fixture set",
         "type": "object",
-        "required": ["apiVersion", "kind", "synthetic_only", "cases"],
+        "required": ["apiVersion", "kind"],
         "properties": {
-            "apiVersion": {"const": EVIDENCE_FIXTURE_API_VERSION},
-            "kind": {"const": EVIDENCE_FIXTURE_KIND},
-            "common": {
-                "type": "object",
-                "description": "What every case starts from.",
-                "x-registry-passthrough": runner
-            },
-            "cases": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": MAXIMUM_CASES,
-                "description": "Declared synthetic cases; production and evidence-grade bundles require complete category coverage.",
-                "items": {
-                    "type": "object",
-                    "required": ["id"],
-                    "properties": {
-                        "id": {"$ref": "#/$defs/LocalId"},
-                        "declaredUnresolved": {"const": true}
-                    },
-                    "additionalProperties": true,
-                    "x-registry-passthrough": runner
-                }
-            }
+            "apiVersion": {"const":EVIDENCE_FIXTURE_API_VERSION},
+            "kind": {"const":EVIDENCE_FIXTURE_KIND}
         },
-        "additionalProperties": true,
-        "x-registry-passthrough": runner,
-        "$defs": {"LocalId": local_id}
+        "if": {"properties":{"coequalAcceptanceDefinition":{"const":true}},"required":["coequalAcceptanceDefinition"]},
+        "then": coequal,
+        "else": reference,
+        "unevaluatedProperties": false,
+        "$defs": generator.take_definitions(true)
     });
+    for name in ["ReferenceFixture", "CoequalFixture"] {
+        let shape = &mut schema["$defs"][name];
+        shape["properties"]["apiVersion"] = json!({"const":EVIDENCE_FIXTURE_API_VERSION});
+        shape["properties"]["kind"] = json!({"const":EVIDENCE_FIXTURE_KIND});
+        let required = shape["required"]
+            .as_array_mut()
+            .expect("a fixture shell has required members");
+        required.push(json!("apiVersion"));
+        required.push(json!("kind"));
+    }
+    // Publish the shared list envelope for schema navigation; the selected
+    // fixture shape supplies its closed typed case items.
+    let mut cases = schema["$defs"]["ReferenceFixture"]["properties"]["cases"].clone();
+    cases
+        .as_object_mut()
+        .expect("the case list has an object schema")
+        .remove("items");
+    schema["properties"]["cases"] = cases;
+    refuse_null_controls(&mut schema);
     let mut rendered = serde_json::to_string_pretty(&schema)?;
     rendered.push('\n');
     Ok([(FIXTURE_SCHEMA_FILE, rendered)].into())
+}
+
+/// Optional fixture controls are omitted, never written as null. Opaque JSON
+/// payloads retain null and all other foreign values exactly as authored.
+fn refuse_null_controls(schema: &mut Value) {
+    match schema {
+        Value::Object(object) => {
+            if object.contains_key("x-registry-foreign") {
+                return;
+            }
+            if object.get("default") == Some(&Value::Null) {
+                object.remove("default");
+            }
+            if let Some(Value::Array(kinds)) = object.get_mut("type") {
+                kinds.retain(|kind| kind != "null");
+                if let [only] = kinds.as_slice() {
+                    let only = only.clone();
+                    object.insert("type".to_owned(), only);
+                }
+            }
+            for keyword in ["anyOf", "oneOf"] {
+                let Some(Value::Array(branches)) = object.get_mut(keyword) else {
+                    continue;
+                };
+                branches.retain(|branch| branch.get("type") != Some(&Value::from("null")));
+                if let [Value::Object(only)] = branches.as_slice() {
+                    let only = only.clone();
+                    object.remove(keyword);
+                    object.extend(only);
+                }
+            }
+            for (key, member) in object.iter_mut() {
+                if !matches!(key.as_str(), "default" | "const" | "enum" | "examples") {
+                    refuse_null_controls(member);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                refuse_null_controls(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// State the envelope and size rules `read_codelist` enforces, in each form.
@@ -311,20 +347,27 @@ mod tests {
             .map(|n| format!("  - {{id: case-{n}}}\n"))
             .collect();
         let cases: Vec<(String, bool)> = vec![
-            (format!("{header}synthetic_only: true\ncases:\n{complete}"), true),
-            (format!("{header}synthetic_only: true\ncases:\n  - {{id: positive}}\n"), true),
-            (format!("{header}synthetic_only: true\ncommon: {{observed_at: x}}\ncases:\n{complete}"), true),
+            (format!("{header}syntheticOnly: true\ncases:\n{complete}"), true),
+            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive}}\n"), true),
+            (format!("{header}syntheticOnly: true\ncommon: {{observedAt: x}}\ncases:\n{complete}"), true),
+            (format!("{header}syntheticOnly: true\ncommon: null\ncases:\n{complete}"), false),
+            (format!("{header}syntheticOnly: true\ncommon: {{observedAt: null}}\ncases:\n{complete}"), false),
+            (format!("{header}syntheticOnly: true\ncommon: {{selectors: null}}\ncases:\n{complete}"), true),
+            (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - {{id: positive, observedAt: null}}\n"), false),
+            (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - {{id: positive, source: null, expectedValue: null}}\n"), true),
+            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive, expected: {{sourceRequestCount: 2}}}}\n"), true),
+            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive, expected: {{sourceRequestCount: 3}}}}\n"), false),
             (format!("{header}cases:\n{complete}"), false),
-            (format!("{header}synthetic_only: true\n"), false),
-            (format!("{header}synthetic_only: true\ncases: []\n"), false),
-            (format!("{header}synthetic_only: true\ncases:\n{too_many}"), false),
-            (format!("{header}synthetic_only: true\ncases:\n  - {{id: Positive}}\n"), false),
-            (format!("{header}synthetic_only: true\ncases:\n  - {{note: no id}}\n"), false),
+            (format!("{header}syntheticOnly: true\n"), false),
+            (format!("{header}syntheticOnly: true\ncases: []\n"), false),
+            (format!("{header}syntheticOnly: true\ncases:\n{too_many}"), false),
+            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: Positive}}\n"), false),
+            (format!("{header}syntheticOnly: true\ncases:\n  - {{note: no id}}\n"), false),
             (
-                format!("{header}synthetic_only: true\ncases:\n{complete}  - {{id: extra, declaredUnresolved: false}}\n"),
+                format!("{header}syntheticOnly: true\ncases:\n{complete}  - {{id: extra, declaredUnresolved: false}}\n"),
                 false,
             ),
-            (format!("synthetic_only: true\ncases:\n{complete}"), false),
+            (format!("syntheticOnly: true\ncases:\n{complete}"), false),
         ];
         for (text, expected) in cases {
             let reader = crate::fixture::read_fixture(

@@ -608,6 +608,21 @@ fn init_writes_the_normalized_project_envelope() {
     assert!(fs::read_to_string(project.join("evidence.yaml"))
         .expect("normalized EvidenceProject")
         .contains("kind: EvidenceProject"));
+    let fixture_bytes = fs::read(project.join("fixtures/record-status.yaml")).unwrap();
+    let fixture = registry_platform_yaml::Reader::new("fixture")
+        .scan(&fixture_bytes)
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    assert_eq!(
+        fixture["coequalAcceptanceDefinition"], true,
+        "HTTP source cases select the coequal evaluator"
+    );
+    assert_eq!(fixture["syntheticOnly"], true);
+    assert!(fixture["cases"][0].get("source").is_some());
+    assert!(fixture["cases"][0].get("expectedValue").is_some());
+    assert!(fixture.get("synthetic_only").is_none());
+
     assert_eq!(
         fs::metadata(project.join("evidence.yaml"))
             .expect("project metadata")

@@ -1767,8 +1767,8 @@ const MUTATED_FIXTURE_FAILURE: &str = concat!(
 fn state_an_impossible_lookup(deployment: &Deployment) {
     deployment.replace(
         "bundle/fixtures/cases.yaml",
-        "{id: no-match, source: {total: 0}, expected_lookup: no_match,",
-        "{id: no-match, source: {total: 0}, expected_lookup: match,",
+        "{id: no-match, source: {total: 0}, expectedLookup: no_match,",
+        "{id: no-match, source: {total: 0}, expectedLookup: match,",
     );
 }
 
@@ -1896,7 +1896,7 @@ fn a_case_identifier_carrying_a_control_character_is_refused() {
     );
     let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
     assert!(
-        stderr.contains("error[evidence.fixture.invalid-case-id]")
+        stderr.contains("error[config.invalid-value]")
             && stderr.contains("/cases/1/id")
             && !stderr.contains("forged"),
         "the forged identifier was not refused by the reader, or was echoed: {stderr}"
@@ -1922,8 +1922,8 @@ fn a_failing_run_is_refused_when_its_trace_holds_a_declared_canary() {
     // saw, and the fixture now declares one of those names protected.
     deployment.replace(
         "bundle/fixtures/cases.yaml",
-        "diagnostics_exclude: [Amina, Diallo, '2000-01-01', fixture-source-canary]",
-        "diagnostics_exclude: [Amina, Diallo, '2000-01-01', fixture-source-canary, total]",
+        "diagnosticsExclude: [Amina, Diallo, '2000-01-01', fixture-source-canary]",
+        "diagnosticsExclude: [Amina, Diallo, '2000-01-01', fixture-source-canary, total]",
     );
     let output = deployment.evaluate(&["--explain"]);
 
@@ -2530,7 +2530,7 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.write(
                     &format!("bundle/fixtures/orphan {CANARY}.yaml"),
-                    "synthetic_only: true\n",
+                    "syntheticOnly: true\n",
                 );
             },
             prefix: "evidence: deployment artifact closure is invalid: the bundle contains an artifact the configuration does not reference\n",
@@ -2619,15 +2619,15 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.write(
                     "bundle/fixtures/adult-status-cases.yaml",
-                    &format!("apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\nkind: EvidenceFixture\nsynthetic_only: true\ncases: {CANARY}\n"),
+                    &format!("apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\nkind: EvidenceFixture\nsyntheticOnly: true\ncases: {CANARY}\n"),
                 );
             },
-            prefix: "evidence: the configuration reader refused the configuration\nerror[evidence.fixture.missing-cases] ",
-            suffix: "fixtures/adult-status-cases.yaml:4:8 /cases\n  a fixture declares its cases as a list\n  next: Declare `cases` as a list of cases, each with an `id`.\n1 error, 0 warnings in 1 file\n",
+            prefix: "evidence: the configuration reader refused the configuration\nerror[config.invalid-type] ",
+            suffix: "fixtures/adult-status-cases.yaml:4:8 /cases\n  expected a list, not unquoted text\n  next: Write the items as a list.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
-                "evidence.fixture.missing-cases",
-                "a fixture declares its cases as a list",
+                "config.invalid-type",
+                "expected a list, not unquoted text",
             ),
         },
         FailureCase {
@@ -4980,4 +4980,115 @@ fn set_tree_mode(path: &Path, directory_mode: u32, file_mode: u32) {
         fs::set_permissions(path, fs::Permissions::from_mode(file_mode))
             .expect("set staged file mode");
     }
+}
+
+#[test]
+fn bundle_check_json_retains_fixture_unknown_duplicate_and_bounded_diagnostics() {
+    let header = "apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\nkind: EvidenceFixture\nsyntheticOnly: true\ncases:\n  - id: positive\n";
+    for (text, code, path) in [
+        (
+            format!("{header}unknownControl: {CANARY}\n"),
+            "config.unknown-key",
+            "/unknownControl",
+        ),
+        (
+            format!("{header}common: null\n"),
+            "config.null-value",
+            "/common",
+        ),
+        (
+            format!("{header}common: {{observedAt: null}}\n"),
+            "config.null-value",
+            "/common/observedAt",
+        ),
+        (
+            format!("{header}  - id: positive\n"),
+            "config.duplicate-id",
+            "/cases/1/id",
+        ),
+        (
+            format!(
+                "{header}{}",
+                (0..105)
+                    .map(|index| format!("unknown-{index}: {CANARY}\n"))
+                    .collect::<String>()
+            ),
+            "config.too-many-problems",
+            "",
+        ),
+    ] {
+        let deployment = Deployment::stage("adult-status");
+        deployment.write("bundle/fixtures/cases.yaml", &text);
+        deployment.seal();
+        let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+            .args(["bundle-check", "--bundle"])
+            .arg(deployment.path("bundle"))
+            .arg("--json")
+            .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "native JSON refusal missing: {error}; stderr={}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+        assert_eq!(report["kind"], "EvidenceCtlReport");
+        assert_eq!(report["ok"], false);
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code && diagnostic["path"] == path)
+            .unwrap_or_else(|| panic!("missing {code} at {path}: {diagnostics:?}"));
+        assert_eq!(diagnostic["artifact"], "EvidenceFixture");
+        if code != "config.too-many-problems" {
+            assert!(diagnostic["source"]["line"].is_number());
+        }
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(CANARY));
+        if code == "config.duplicate-id" {
+            assert_eq!(diagnostic["related"][0]["path"], "/cases/0/id");
+            assert_eq!(diagnostic["related"][0]["line"], 5);
+        }
+        if code == "config.too-many-problems" {
+            assert_eq!(diagnostics.len(), 101);
+        }
+    }
+}
+
+#[test]
+fn coequal_fixture_selector_overrides_reach_existing_authorization() {
+    let deployment = Deployment::stage("adult-status");
+    let path = deployment.path("bundle/fixtures/cases.yaml");
+    let document = registry_platform_yaml::Reader::new("fixture")
+        .scan(&fs::read(&path).unwrap())
+        .unwrap()
+        .unwrap();
+    let mut fixture = document.to_json_value();
+    let valid_values = fixture["common"]["selectors"]["subject"]["values"].clone();
+    fixture["common"]["selectors"]["subject"]["values"]["given_name"] = json!(true);
+    fixture["cases"][0]["selectorOverrides"] = json!({"subject":{"values":valid_values}});
+    deployment.write(
+        "bundle/fixtures/cases.yaml",
+        &serde_norway::to_string(&fixture).unwrap(),
+    );
+    let accepted = deployment.evaluate(&["--case", "positive"]);
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    fixture["cases"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("selectorOverrides");
+    deployment.write(
+        "bundle/fixtures/cases.yaml",
+        &serde_norway::to_string(&fixture).unwrap(),
+    );
+    let refused = deployment.evaluate(&["--case", "positive"]);
+    assert!(
+        !refused.status.success(),
+        "the invalid common selector was accepted without its override"
+    );
 }

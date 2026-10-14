@@ -404,6 +404,54 @@ pub(crate) fn report_in(error: &anyhow::Error) -> Option<&Report> {
         .find_map(|cause| cause.downcast_ref::<Report>())
 }
 
+/// Recover the runtime's existing native JSON diagnostic channel without
+/// interpreting or recreating any validation rule.
+pub(crate) fn runtime_refusal(stdout: &[u8]) -> Option<Report> {
+    let document: Value = serde_json::from_slice(stdout).ok()?;
+    if document.get("ok") != Some(&Value::Bool(false)) {
+        return None;
+    }
+    let diagnostics: Vec<Diagnostic> =
+        serde_json::from_value(document.get("diagnostics")?.clone()).ok()?;
+    let report = Report::new(diagnostics);
+    report.has_errors().then_some(report)
+}
+
+/// A compiled fixture is a byte-identical copy of its authored file, so its
+/// positions and related ID sites carry through to the authored project path.
+pub(crate) fn runtime_bundle_refusal(
+    report: Report,
+    bundle: &Path,
+    project: &Path,
+    fixtures: &[String],
+) -> Report {
+    let rebase_file = |file: &str| match Path::new(file).strip_prefix(bundle) {
+        Ok(relative)
+            if fixtures
+                .iter()
+                .any(|fixture| Path::new(fixture) == relative) =>
+        {
+            project.join(relative).to_string_lossy().into_owned()
+        }
+        _ => file.to_owned(),
+    };
+    Report::new(
+        report
+            .into_diagnostics()
+            .into_iter()
+            .map(|mut diagnostic| {
+                if let Some(source) = diagnostic.source.as_mut() {
+                    source.file = rebase_file(&source.file);
+                }
+                for related in &mut diagnostic.related {
+                    related.file = rebase_file(&related.file);
+                }
+                diagnostic
+            })
+            .collect(),
+    )
+}
+
 /// Render a value as block YAML with every sequence indented beneath its key,
 /// the form the convention's examples use. `serde_norway` writes a sequence
 /// at its key's column, so each such block is shifted two columns right,
@@ -463,6 +511,37 @@ mod tests {
         reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
     )]
     use super::*;
+
+    #[test]
+    fn runtime_rebase_changes_only_explicit_captured_fixture_paths() {
+        let fixture: Diagnostic = serde_json::from_value(serde_json::json!({
+            "severity":"error","code":"config.duplicate-id","path":"/cases/1/id","message":"duplicate","suggestedAction":"Use unique IDs.",
+            "source":{"file":"/staged/bundle/fixtures/a.yaml","line":6,"column":9},
+            "related":[{"file":"/staged/bundle/fixtures/a.yaml","path":"/cases/0/id","line":5,"column":9,"message":"first ID"}]
+        })).unwrap();
+        let mut generated = fixture.clone();
+        generated.source.as_mut().unwrap().file = "/staged/bundle/evidence.yaml".to_owned();
+        generated.related[0].file = "/staged/bundle/generated.yaml".to_owned();
+        let report = runtime_bundle_refusal(
+            Report::new(vec![fixture, generated]),
+            Path::new("/staged/bundle"),
+            Path::new("./authored"),
+            &["fixtures/a.yaml".to_owned()],
+        );
+        let fixture = &report.diagnostics()[0];
+        assert_eq!(
+            fixture.source.as_ref().unwrap().file,
+            "./authored/fixtures/a.yaml"
+        );
+        assert_eq!(fixture.related[0].file, "./authored/fixtures/a.yaml");
+        assert_eq!(fixture.related[0].line, Some(5));
+        let generated = &report.diagnostics()[1];
+        assert_eq!(
+            generated.source.as_ref().unwrap().file,
+            "/staged/bundle/evidence.yaml"
+        );
+        assert_eq!(generated.related[0].file, "/staged/bundle/generated.yaml");
+    }
 
     #[test]
     fn sequences_are_indented_beneath_their_keys_at_every_depth() {

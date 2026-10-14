@@ -206,3 +206,84 @@ fn finding_codes_name_their_area_once() {
         "evidence.output-schema.open-object"
     );
 }
+
+#[test]
+fn selector_structural_errors_use_shared_leaf_diagnostics() {
+    for (original, replacement, code, suffix, line, column) in [
+        (
+            "minimumBytes: 1",
+            "minimumBytes: 0",
+            "config.out-of-range",
+            "minimumBytes",
+            10,
+            23,
+        ),
+        (
+            "maximumBytes: 64",
+            "maximumBytes: 8193",
+            "config.out-of-range",
+            "maximumBytes",
+            11,
+            23,
+        ),
+        (
+            "minimumBytes: 1",
+            "minimumBytes: 'MARKER'",
+            "config.expected-integer",
+            "minimumBytes",
+            10,
+            23,
+        ),
+        (
+            "type: string",
+            "type: MARKER",
+            "config.unknown-variant",
+            "type",
+            9,
+            15,
+        ),
+        (
+            "maximumBytes: 64",
+            "maximumBytes: 64\n        conformanceUnknown: MARKER",
+            "config.unknown-key",
+            "conformanceUnknown",
+            12,
+            9,
+        ),
+    ] {
+        let text = PROJECT_TEXT.replacen(original, replacement, 1);
+        let report = project::read_project("evidence.yaml", text.as_bytes()).unwrap_err();
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.path
+                    == format!("/selectorProfiles/record-by-id/fields/record-id/{suffix}")
+            })
+            .expect("the selector leaf is addressed");
+        assert_eq!(diagnostic.code, code);
+        let source = diagnostic
+            .source
+            .as_ref()
+            .expect("the diagnostic has a source position");
+        assert_eq!((source.line, source.column), (Some(line), Some(column)));
+        assert!(!format!("{:?}", report.diagnostics()).contains("MARKER"));
+    }
+}
+
+#[test]
+fn selector_bounds_stop_at_the_first_typed_error() {
+    let text = PROJECT_TEXT
+        .replacen("minimumBytes: 1", "minimumBytes: 0", 1)
+        .replacen("maximumBytes: 64", "maximumBytes: 8193", 1);
+    let report = project::read_project("evidence.yaml", text.as_bytes()).unwrap_err();
+    assert_eq!(codes(&report), ["config.out-of-range"]);
+    assert_eq!(
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/selectorProfiles/record-by-id/fields/record-id/minimumBytes"]
+    );
+}

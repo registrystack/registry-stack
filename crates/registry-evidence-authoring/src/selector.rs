@@ -4,10 +4,10 @@ use crate::{
     project::{self, SelectorProfile},
 };
 use registry_platform_yaml::BoundedU64;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     remote = "Self",
@@ -20,11 +20,15 @@ pub enum Field {
     String {
         minimum_bytes: BoundedU64<1, 8192>,
         maximum_bytes: BoundedU64<1, 8192>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
     Date {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
     Integer {
@@ -32,23 +36,56 @@ pub enum Field {
         minimum: i64,
         #[cfg_attr(feature="schema",schemars(range(min = -9_007_199_254_740_991_i64,max = 9_007_199_254_740_991_i64)))]
         maximum: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
     Boolean {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
     ControlledCode {
         codelist: String,
         codelist_version: String,
         maximum_bytes: BoundedU64<1, 8192>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
 }
 registry_platform_yaml::tagged_union!(Field, tag = "type");
+impl Serialize for Field {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let external = Self::serialize(self, serde_json::value::Serializer)
+            .map_err(serde::ser::Error::custom)?;
+        let Value::Object(variants) = external else {
+            return Err(serde::ser::Error::custom(
+                "selector variant must be a mapping",
+            ));
+        };
+        let Some((tag, Value::Object(mut body))) = variants.into_iter().next() else {
+            return Err(serde::ser::Error::custom("selector body must be a mapping"));
+        };
+        body.insert("type".to_owned(), Value::String(tag));
+        body.serialize(serializer)
+    }
+}
 impl Field {
+    pub fn codelist(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::ControlledCode {
+                codelist,
+                codelist_version,
+                ..
+            } => Some((codelist, codelist_version)),
+            _ => None,
+        }
+    }
+
     fn valid(&self, maximum: u64) -> bool {
         match self {
             Self::String {
@@ -90,43 +127,20 @@ pub fn validate(profile: &SelectorProfile, at: &FieldPath) -> Vec<Finding> {
             "declare between one and 16 bounded selector fields",
         ));
     }
-    for (id, value) in &profile.fields {
-        let at = at.clone().key("fields").map_key(id.to_string());
-        let required: &[&str] = match value["type"].as_str() {
-            Some("string") => &["minimumBytes", "maximumBytes"],
-            Some("integer") => &["minimum", "maximum"],
-            Some("controlled-code") => &["codelist", "codelistVersion", "maximumBytes"],
-            Some("date" | "boolean") => &[],
-            _ => {
-                findings.push(Finding::new(at.clone().key("type"),"selector-field-type","declare a retained string, date, integer, boolean or controlled-code selector field"));
-                continue;
-            }
-        };
-        for key in required {
-            if value.get(*key).is_none() {
-                findings.push(Finding::new(
-                    at.clone().map_key((*key).to_owned()),
-                    "selector-field-required",
-                    "declare every constraint required by this selector field type",
-                ));
-            }
-        }
-        let decoded = serde_json::from_value::<Field>(value.clone());
-        if decoded.as_ref().is_err()
-            || decoded.is_ok_and(|field| !field.valid(profile.maximum_aggregate_bytes.get()))
-        {
+    for (id, field) in &profile.fields {
+        if !field.valid(profile.maximum_aggregate_bytes.get()) {
             findings.push(Finding::new(
-                at,
+                at.clone().key("fields").map_key(id.to_string()),
                 "selector-field-bounds",
-                "declare exactly the bounded constraints required by this selector field type",
+                "declare bounded selector constraints within the profile aggregate and reviewed codelist contract",
             ));
         }
     }
     findings
 }
 /// Presentation is inspected but does not enter the retained runtime field contract.
-pub fn compiled(value: &Value) -> Value {
-    let mut value = value.clone();
+pub fn compiled(field: &Field) -> Value {
+    let mut value = serde_json::to_value(field).expect("selector field serializes");
     if let Some(object) = value.as_object_mut() {
         object.remove("label");
         object.remove("description");

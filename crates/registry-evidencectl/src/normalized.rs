@@ -91,7 +91,7 @@ pub(crate) fn read(root: &Path) -> Result<(EvidenceProject, BTreeMap<String, Str
                     profile
                         .fields
                         .values()
-                        .filter_map(|field| field.get("codelist").and_then(Value::as_str))
+                        .filter_map(|field| field.codelist().map(|(path, _)| path))
                 }),
         );
     for asset in assets.chain(codelists) {

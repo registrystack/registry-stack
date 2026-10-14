@@ -126,6 +126,9 @@ if [ "$step" = "${{FAIL_STEP:-}}" ]; then
   if [ "$explain_json" = "true" ]; then
     printf '{{"passed":false,"evaluatedCases":%s,"cases":%s}}\n' "$cases_json" "${{STUB_CASES:-[]}}"
   fi
+  if [ -n "${{STUB_REFUSAL:-}}" ]; then
+    printf '%s\n' "$STUB_REFUSAL"
+  fi
   printf 'stub failure for %s\n' "$step" >&2
   if [ -n "${{FAIL_CASE:-}}" ]; then
     if [ -n "${{FAIL_EXPECTED:-}}" ]; then
@@ -199,7 +202,13 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
     assert_eq!(
         invocations,
         vec![
-            vec!["check", "--runtime-config", runtime_path],
+            vec![
+                "check",
+                "--runtime-config",
+                runtime_path,
+                "--format",
+                "json"
+            ],
             vec![
                 "evaluate",
                 "--runtime-config",
@@ -265,7 +274,13 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
     assert_eq!(
         read_argv_log(&argv_log),
         vec![
-            vec!["check", "--runtime-config", runtime_path],
+            vec![
+                "check",
+                "--runtime-config",
+                runtime_path,
+                "--format",
+                "json"
+            ],
             vec![
                 "evaluate",
                 "--runtime-config",
@@ -946,7 +961,13 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
     assert_eq!(
         invocations,
         vec![
-            vec!["check", "--runtime-config", runtime_path],
+            vec![
+                "check",
+                "--runtime-config",
+                runtime_path,
+                "--format",
+                "json"
+            ],
             vec![
                 "evaluate",
                 "--runtime-config",
@@ -1722,4 +1743,32 @@ fn a_project_with_no_fixture_file_says_so_and_where_one_goes() {
             "{report}"
         );
     }
+}
+
+#[test]
+fn native_fixture_refusal_diagnostics_survive_the_driver_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let diagnostic = serde_json::json!({
+        "severity":"error","code":"config.duplicate-id","artifact":"EvidenceFixture",
+        "path":"/cases/1/id","message":"a case ID is repeated","suggestedAction":"Give each case a unique ID.",
+        "source":{"file":project.join("bundle/fixtures/a.yaml"),"line":6,"column":9},
+        "related":[{"file":project.join("bundle/fixtures/a.yaml"),"path":"/cases/0/id","line":5,"column":9,"message":"the first case ID is here"}]
+    });
+    let refusal = serde_json::json!({"ok":false,"diagnostics":[diagnostic.clone()]});
+    let output = evidencectl()
+        .args(["fixtures", "run"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .env("ARGV_LOG", dir.path().join("argv.log"))
+        .env("FAIL_STEP", "check")
+        .env("STUB_REFUSAL", refusal.to_string())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["diagnostics"], serde_json::json!([diagnostic]));
 }

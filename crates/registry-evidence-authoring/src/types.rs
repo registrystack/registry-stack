@@ -155,15 +155,10 @@ fn selectors(
                                         .1;
                                     (
                                         name,
-                                        if value["type"] == "controlled-code" {
-                                            codelist_codes(
-                                                value["codelist"]
-                                                    .as_str()
-                                                    .expect("selector codelist"),
-                                                compiled,
-                                            )
+                                        if let Some((path, _)) = value.codelist() {
+                                            codelist_codes(path, compiled)
                                         } else {
-                                            project::value_schema(value)
+                                            project::value_schema(&crate::selector::compiled(value))
                                         },
                                     )
                                 })),

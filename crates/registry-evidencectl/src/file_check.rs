@@ -18,15 +18,17 @@ use std::{
 };
 
 use registry_evidence_client::{
-    read_client_profile, read_reviewed_contracts, EVIDENCE_CLIENT_CONTRACTS_KIND,
+    read_client_profile, read_reviewed_contracts, EVIDENCE_CLIENT_CONTRACTS_API_VERSION,
+    EVIDENCE_CLIENT_CONTRACTS_KIND, EVIDENCE_CLIENT_PROFILE_API_VERSION,
     EVIDENCE_CLIENT_PROFILE_KIND,
 };
 use registry_platform_yaml::{
-    Diagnostic, NodeValue, Reader, Report, Source, MAXIMUM_DOCUMENT_BYTES,
+    ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, NodeValue, Reader, Report, Source,
+    MAXIMUM_DOCUMENT_BYTES,
 };
 use serde_json::{json, Value};
 
-use crate::{dev, report, source_import, OutputFormat};
+use crate::{access, dev, report, source_import, OutputFormat};
 
 type Check = fn(&str, &[u8]) -> Result<Report, Failure>;
 
@@ -45,28 +47,67 @@ const REMOVED_SCHEMA_HEADERS: [(&str, Check); 2] = [
 /// may exceed the shared reader's document bound, and its check. The two
 /// source-import files embed project content, so the importer bounds them
 /// itself and the reader never sees them.
-const FORMATS: [(&str, bool, Check); 7] = [
-    (EVIDENCE_CLIENT_CONTRACTS_KIND, false, |file, bytes| {
-        Ok(read_reviewed_contracts(file, bytes).map(|_| one_file(Vec::new()))?)
-    }),
-    (EVIDENCE_CLIENT_PROFILE_KIND, false, |file, bytes| {
-        Ok(read_client_profile(file, bytes).map(|_| one_file(Vec::new()))?)
-    }),
-    (dev::DEV_STATE_KIND, false, |file, bytes| {
+macro_rules! tooling_format {
+    ($kind:expr, $version:expr) => {
+        FormatSpec {
+            kind: $kind,
+            envelope: EnvelopeRule::ApiVersionKind {
+                api_versions: &[ApiVersion::current($version)],
+                retired_api_versions: &[],
+            },
+            removed_keys: &[],
+        }
+    };
+}
+
+const FORMATS: [(FormatSpec<'static>, bool, Check); 8] = [
+    (
+        registry_evidence_authoring::formats::ACCESS_CLIENT,
+        false,
+        |file, bytes| Ok(access::check_client_document(file, bytes)?),
+    ),
+    (
+        tooling_format!(
+            EVIDENCE_CLIENT_CONTRACTS_KIND,
+            EVIDENCE_CLIENT_CONTRACTS_API_VERSION
+        ),
+        false,
+        |file, bytes| Ok(read_reviewed_contracts(file, bytes).map(|_| one_file(Vec::new()))?),
+    ),
+    (
+        tooling_format!(
+            EVIDENCE_CLIENT_PROFILE_KIND,
+            EVIDENCE_CLIENT_PROFILE_API_VERSION
+        ),
+        false,
+        |file, bytes| Ok(read_client_profile(file, bytes).map(|_| one_file(Vec::new()))?),
+    ),
+    (dev::DEV_STATE_FORMAT, false, |file, bytes| {
         Ok(dev::check_state_document(file, bytes).map(|()| one_file(Vec::new()))?)
     }),
-    (source_import::JOURNAL_KIND, true, |file, bytes| {
-        let text = utf8(file, bytes)?;
-        source_import_refusal(file, source_import::check_journal_file(text))
-    }),
-    (source_import::STATE_KIND, true, |file, bytes| {
-        let text = utf8(file, bytes)?;
-        source_import_refusal(file, source_import::check_state_file(text))
-    }),
-    (source_import::RESOLUTION_KIND, false, |file, bytes| {
+    (
+        tooling_format!(
+            source_import::JOURNAL_KIND,
+            source_import::JOURNAL_API_VERSION
+        ),
+        true,
+        |file, bytes| {
+            let text = utf8(file, bytes)?;
+            source_import_refusal(file, source_import::check_journal_file(text))
+        },
+    ),
+    (
+        tooling_format!(source_import::STATE_KIND, source_import::STATE_API_VERSION),
+        true,
+        |file, bytes| {
+            let text = utf8(file, bytes)?;
+            source_import_refusal(file, source_import::check_state_file(text))
+        },
+    ),
+    (source_import::RESOLUTION_FORMAT, false, |file, bytes| {
         Ok(source_import::check_resolution_file(file, bytes).map(|()| one_file(Vec::new()))?)
     }),
-    (source_import::EXPORT_KIND, false, |file, bytes| {
+    (source_import::EXPORT_FORMAT, false, |file, bytes| {
         Ok(source_import::check_export_manifest(file, bytes).map(|()| one_file(Vec::new()))?)
     }),
 ];
@@ -177,7 +218,7 @@ fn check(file: &Path, label: &str) -> Result<Report, Failure> {
     };
     let found = FORMATS
         .iter()
-        .find(|(wanted, ..)| kind.as_deref() == Some(wanted));
+        .find(|(wanted, ..)| kind.as_deref() == Some(wanted.kind));
     let Some((_, may_exceed_reader_bound, check)) = found else {
         if kind.is_none() {
             let removed = REMOVED_SCHEMA_HEADERS
@@ -191,33 +232,16 @@ fn check(file: &Path, label: &str) -> Result<Report, Failure> {
             // The reader refuses a document over its bound, naming the bound.
             Reader::new(label).scan(&bytes)?;
         }
-        return Err(Failure::Refused(one_file(vec![unknown_format(label)])));
+        // No format was selected. Let the shared envelope reader report missing
+        // or unsupported kinds with the complete supported envelope list.
+        let formats: Vec<_> = FORMATS.iter().map(|(format, ..)| *format).collect();
+        Reader::new(label).read(&bytes, &Expect::new(&formats))?;
+        unreachable!("a known valid kind would have selected its owning checker")
     };
     if bytes.len() > MAXIMUM_DOCUMENT_BYTES && !may_exceed_reader_bound {
         Reader::new(label).scan(&bytes)?;
     }
     check(label, &bytes)
-}
-
-/// The diagnostic for a file whose `kind` names no format this command
-/// reads. It lists the kinds it does read.
-fn unknown_format(label: &str) -> Diagnostic {
-    let known: Vec<String> = FORMATS
-        .iter()
-        .map(|(kind, ..)| format!("kind {kind}"))
-        .collect();
-    in_file(
-        Diagnostic::error(
-            "evidence.check.unknown-format",
-            "",
-            "the file's root `kind` names no format this command checks",
-            format!(
-                "Name one of: {}. To check an authoring project, pass its directory without --file.",
-                known.join(", ")
-            ),
-        ),
-        label,
-    )
 }
 
 /// Read the file, bounded to one byte more than the largest file any format

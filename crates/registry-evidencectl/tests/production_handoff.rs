@@ -922,27 +922,27 @@ impl Fixture {
 "#).expect("adult derivation Function");
         fs::write(self.project.join("fixtures/adult-status.yaml"), format!(r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-coequal_acceptance_definition: true
-synthetic_only: true
+coequalAcceptanceDefinition: true
+syntheticOnly: true
 common:
-  observed_at: '2026-08-02T00:00:00Z'
-  legal_local_date: '2026-08-02'
+  observedAt: '2026-08-02T00:00:00Z'
+  legalLocalDate: '2026-08-02'
   selectors:
     subject: {{profile: person-reference-v1, values: {{person-id: {SELECTOR_CANARY}}}}}
 cases:
-  - {{id: positive, source: {{total: 1, date_of_birth: '2000-01-01'}}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}}
-  - {{id: negative-false-is-success, source: {{total: 1, date_of_birth: '2010-01-01'}}, expected_value: false, expected_lookup: match, derivation_runs: true, signed_success: true}}
-  - {{id: boundary-on, legal_local_date: '2026-08-02', source: {{total: 1, date_of_birth: '2008-08-02'}}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}}
-  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: source-failure, source_failure: timeout, expected_public_problem: source.unavailable, signed_success: false}}
-  - {{id: negative-wrong-derived-type, injected_derivation: [{{concept_id: {CONCEPT}, value: 'true'}}], expected: output-gate-rejection}}
-  - {{id: anti-reconstruction, companion_bundle: threshold-ladder, expected: bundle-rejection}}
-privacy_expectation:
-  evidence_contains: [{CONCEPT}]
-  evidence_excludes: [date_of_birth, person-id]
-  diagnostics_exclude: [{SELECTOR_CANARY}, fixture-source-canary]
+  - {{id: positive, source: {{total: 1, date_of_birth: '2000-01-01'}}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: negative-false-is-success, source: {{total: 1, date_of_birth: '2010-01-01'}}, expectedValue: false, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: boundary-on, legalLocalDate: '2026-08-02', source: {{total: 1, date_of_birth: '2008-08-02'}}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: missing-fact, source: {{total: 1}}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: no-match, source: {{total: 0}}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: source-failure, sourceFailure: timeout, expectedPublicProblem: source.unavailable, signedSuccess: false}}
+  - {{id: negative-wrong-derived-type, injectedDerivation: [{{concept_id: {CONCEPT}, value: 'true'}}], expected: output-gate-rejection}}
+  - {{id: anti-reconstruction, companionBundle: threshold-ladder, expected: bundle-rejection}}
+privacyExpectation:
+  evidenceContains: [{CONCEPT}]
+  evidenceExcludes: [date_of_birth, person-id]
+  diagnosticsExclude: [{SELECTOR_CANARY}, fixture-source-canary]
 "#)).expect("adult fixture");
     }
 
@@ -1121,11 +1121,11 @@ privacy_expectation:
             format!(
                 r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-coequal_acceptance_definition: true
-synthetic_only: true
+coequalAcceptanceDefinition: true
+syntheticOnly: true
 common:
-  observed_at: '2026-08-02T00:00:00Z'
-  legal_local_date: '2026-08-02'
+  observedAt: '2026-08-02T00:00:00Z'
+  legalLocalDate: '2026-08-02'
   selectors:
     subject: {{profile: person-reference-v1, values: {{person-id: {SELECTOR_CANARY}}}}}
   expectedRequestParts:
@@ -1135,19 +1135,19 @@ common:
     path: /v1/facts
     fixedHeaders: [{{name: Accept, value: application/json}}]
 cases:
-  - {{id: positive, source: {{total: 1, date_of_birth: '2000-01-01'}}, expected_value: 25-to-64, expected_lookup: match, derivation_runs: true, signed_success: true}}
-  - {{id: negative-under-18-is-success, source: {{total: 1, date_of_birth: '2010-01-01'}}, expected_value: under-18, expected_lookup: match, derivation_runs: true, signed_success: true}}
-  - {{id: boundary-on-18, source: {{total: 1, date_of_birth: '2008-08-02'}}, expected_value: 18-to-24, expected_lookup: match, derivation_runs: true, signed_success: true}}
-  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: source-failure, source_failure: timeout, expected_public_problem: source.unavailable, signed_success: false}}
-  - {{id: negative-wrong-derived-type, injected_derivation: [{{concept_id: {AGE_CONCEPT}, value: true}}], expected: output-gate-rejection}}
-  - {{id: anti-reconstruction, companion_bundle: threshold-ladder, expected: bundle-rejection}}
-privacy_expectation:
-  evidence_contains: [{AGE_CONCEPT}]
-  evidence_excludes: [date_of_birth, person_id]
-  diagnostics_exclude: [{SELECTOR_CANARY}, fixture-source-canary]
+  - {{id: positive, source: {{total: 1, date_of_birth: '2000-01-01'}}, expectedValue: 25-to-64, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: negative-under-18-is-success, source: {{total: 1, date_of_birth: '2010-01-01'}}, expectedValue: under-18, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: boundary-on-18, source: {{total: 1, date_of_birth: '2008-08-02'}}, expectedValue: 18-to-24, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: missing-fact, source: {{total: 1}}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: no-match, source: {{total: 0}}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: source-failure, sourceFailure: timeout, expectedPublicProblem: source.unavailable, signedSuccess: false}}
+  - {{id: negative-wrong-derived-type, injectedDerivation: [{{concept_id: {AGE_CONCEPT}, value: true}}], expected: output-gate-rejection}}
+  - {{id: anti-reconstruction, companionBundle: threshold-ladder, expected: bundle-rejection}}
+privacyExpectation:
+  evidenceContains: [{AGE_CONCEPT}]
+  evidenceExcludes: [date_of_birth, person_id]
+  diagnosticsExclude: [{SELECTOR_CANARY}, fixture-source-canary]
 "#
             ),
         )
@@ -1158,10 +1158,10 @@ privacy_expectation:
             format!(
                 r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-coequal_acceptance_definition: true
-synthetic_only: true
+coequalAcceptanceDefinition: true
+syntheticOnly: true
 common:
-  observed_at: '2026-08-02T00:00:00Z'
+  observedAt: '2026-08-02T00:00:00Z'
   selectors:
     subject: {{profile: person-reference-v1, values: {{person-id: {SELECTOR_CANARY}}}}}
   expectedRequestParts:
@@ -1173,36 +1173,36 @@ common:
 cases:
   - id: positive
     source: {{total: 1, dose_count: 4}}
-    expected_values: {{schedule-complete: true, dose-count: 4}}
-    expected_lookup: match
-    derivation_runs: true
-    signed_success: true
+    expectedValues: {{schedule-complete: true, dose-count: 4}}
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
   - id: negative-false-is-success
     source: {{total: 1, dose_count: 2}}
-    expected_values: {{schedule-complete: false, dose-count: 2}}
-    expected_lookup: match
-    derivation_runs: true
-    signed_success: true
+    expectedValues: {{schedule-complete: false, dose-count: 2}}
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
   - id: boundary-maximum
     source: {{total: 1, dose_count: 20}}
-    expected_values: {{schedule-complete: true, dose-count: 20}}
-    expected_lookup: match
-    derivation_runs: true
-    signed_success: true
-  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: source-failure, source_failure: timeout, expected_public_problem: source.unavailable, signed_success: false}}
+    expectedValues: {{schedule-complete: true, dose-count: 20}}
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+  - {{id: missing-fact, source: {{total: 1}}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: no-match, source: {{total: 0}}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: source-failure, sourceFailure: timeout, expectedPublicProblem: source.unavailable, signedSuccess: false}}
   - id: negative-wrong-derived-type
-    injected_derivation:
+    injectedDerivation:
       - {{concept_id: {SCHEDULE_CONCEPT}, value: true}}
       - {{concept_id: {DOSE_COUNT_CONCEPT}, value: '4'}}
     expected: output-gate-rejection
-  - {{id: anti-reconstruction, companion_bundle: threshold-ladder, expected: bundle-rejection}}
-privacy_expectation:
-  evidence_contains: [{SCHEDULE_CONCEPT}, {DOSE_COUNT_CONCEPT}]
-  evidence_excludes: [dose_count, person_id]
-  diagnostics_exclude: [{SELECTOR_CANARY}, fixture-source-canary]
+  - {{id: anti-reconstruction, companionBundle: threshold-ladder, expected: bundle-rejection}}
+privacyExpectation:
+  evidenceContains: [{SCHEDULE_CONCEPT}, {DOSE_COUNT_CONCEPT}]
+  evidenceExcludes: [dose_count, person_id]
+  diagnosticsExclude: [{SELECTOR_CANARY}, fixture-source-canary]
 "#
             ),
         )
@@ -1213,10 +1213,10 @@ privacy_expectation:
             format!(
                 r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-coequal_acceptance_definition: true
-synthetic_only: true
+coequalAcceptanceDefinition: true
+syntheticOnly: true
 common:
-  observed_at: '2026-08-02T00:00:00Z'
+  observedAt: '2026-08-02T00:00:00Z'
   selectors:
     child: {{profile: child-reference-v1, values: {{child-id: synthetic-child-001}}}}
     candidate-parent: {{profile: candidate-reference-v1, values: {{candidate-id: synthetic-parent-001}}}}
@@ -1230,25 +1230,25 @@ common:
     path: /v1/relationships
     fixedHeaders: [{{name: Accept, value: application/json}}]
 cases:
-  - {{id: positive, source: {{total: 1, relationship_confirmed: true}}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}}
-  - {{id: negative-false-is-success, source: {{total: 1, relationship_confirmed: false}}, expected_value: false, expected_lookup: match, derivation_runs: true, signed_success: true}}
+  - {{id: positive, source: {{total: 1, relationship_confirmed: true}}, expectedValue: true, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
+  - {{id: negative-false-is-success, source: {{total: 1, relationship_confirmed: false}}, expectedValue: false, expectedLookup: match, derivationRuns: true, signedSuccess: true}}
   - id: boundary-role-order
     source: {{total: 1, relationship_confirmed: true}}
-    expected_value: true
-    expected_lookup: match
-    derivation_runs: true
-    signed_success: true
-    expected_subject_roles: [child, candidate-parent]
-  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
-  - {{id: source-failure, source_failure: timeout, expected_public_problem: source.unavailable, signed_success: false}}
-  - {{id: negative-wrong-derived-type, injected_derivation: [{{concept_id: {RELATIONSHIP_CONCEPT}, value: 'true'}}], expected: output-gate-rejection}}
-  - {{id: anti-reconstruction, companion_bundle: relationship-graph, expected: bundle-rejection}}
-privacy_expectation:
-  evidence_contains: [child, candidate-parent, {RELATIONSHIP_CONCEPT}]
-  evidence_excludes: [child_id, candidate_id, relationship_confirmed]
-  diagnostics_exclude: [synthetic-child-001, synthetic-parent-001, fixture-source-canary]
+    expectedValue: true
+    expectedLookup: match
+    derivationRuns: true
+    signedSuccess: true
+    expectedSubjectRoles: [child, candidate-parent]
+  - {{id: missing-fact, source: {{total: 1}}, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: no-match, source: {{total: 0}}, expectedLookup: no_match, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expectedLookup: ambiguous, expectedPublicProblem: evidence.unavailable, derivationRuns: false, signedSuccess: false}}
+  - {{id: source-failure, sourceFailure: timeout, expectedPublicProblem: source.unavailable, signedSuccess: false}}
+  - {{id: negative-wrong-derived-type, injectedDerivation: [{{concept_id: {RELATIONSHIP_CONCEPT}, value: 'true'}}], expected: output-gate-rejection}}
+  - {{id: anti-reconstruction, companionBundle: relationship-graph, expected: bundle-rejection}}
+privacyExpectation:
+  evidenceContains: [child, candidate-parent, {RELATIONSHIP_CONCEPT}]
+  evidenceExcludes: [child_id, candidate_id, relationship_confirmed]
+  diagnosticsExclude: [synthetic-child-001, synthetic-parent-001, fixture-source-canary]
 "#
             ),
         )

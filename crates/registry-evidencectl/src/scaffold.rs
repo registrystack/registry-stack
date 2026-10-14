@@ -664,9 +664,10 @@ fn write_normalized_starter(root: &Path, source: AuthoringSource<'_>) -> anyhow:
     } else {
         r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
-synthetic_only: true
+syntheticOnly: true
+coequalAcceptanceDefinition: true
 common:
-  observed_at: '2026-01-01T00:00:00Z'
+  observedAt: '2026-01-01T00:00:00Z'
   selectors:
     subject:
       profile: record-reference
@@ -674,20 +675,20 @@ common:
 cases:
 - id: positive
   source: {matched: true}
-  expected_value: true
-  expected_lookup: match
-  derivation_runs: true
-  signed_success: true
+  expectedValue: true
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
 - id: negative
   source: {matched: false}
-  expected_value: false
-  expected_lookup: match
-  derivation_runs: true
-  signed_success: true
-privacy_expectation:
-  evidence_contains: [urn:example:concept:record-status:v1]
-  evidence_excludes: [record-reference, REC-0001]
-  diagnostics_exclude: [REC-0001]
+  expectedValue: false
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+privacyExpectation:
+  evidenceContains: [urn:example:concept:record-status:v1]
+  evidenceExcludes: [record-reference, REC-0001]
+  diagnosticsExclude: [REC-0001]
 "#
     };
     let fixture_path = root.join("fixtures/record-status.yaml");

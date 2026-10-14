@@ -356,7 +356,7 @@ pub fn compile(
     }
     for (id, profile) in &project.selector_profiles {
         for (name, field) in &profile.fields {
-            if let Some(path) = field.get("codelist").and_then(Value::as_str) {
+            if let Some((path, version)) = field.codelist() {
                 let at = FieldPath::root()
                     .key("selectorProfiles")
                     .map_key(id.to_string())
@@ -378,7 +378,7 @@ pub fn compile(
                             "the reviewed selector codelist asset is invalid",
                         )]
                     })?;
-                if value["version"] != field["codelistVersion"] {
+                if value["version"] != version {
                     return Err(vec![Finding::new(
                         at,
                         "codelist-identity",

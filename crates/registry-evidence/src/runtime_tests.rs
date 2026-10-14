@@ -8524,11 +8524,11 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
         {
             let case = case.as_object().expect("case is an object");
             let case_id = case["id"].as_str().expect("case id is text");
-            if case.contains_key("injected_derivation") {
+            if case.contains_key("injectedDerivation") {
                 runtime_equivalents.insert(format!("{definition}/{case_id}:output-gate"));
                 continue;
             }
-            if case.contains_key("companion_bundle") {
+            if case.contains_key("companionBundle") {
                 startup_only.insert(format!("{definition}/{case_id}:bundle-rejection"));
                 continue;
             }
@@ -8561,7 +8561,7 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
             let response = if let Some(source) = case.get("source") {
                 ResponseTemplate::new(200).set_body_json(source)
             } else {
-                match case.get("source_failure").and_then(Value::as_str) {
+                match case.get("sourceFailure").and_then(Value::as_str) {
                     Some("timeout") => ResponseTemplate::new(200)
                         .set_body_json(json!({"total": 1}))
                         .set_delay(Duration::from_millis(3_050)),
@@ -8591,8 +8591,8 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
 
             let principal = format!("principal-{definition}-{index}");
             let fixture_claims = case
-                .get("verified_token_claims")
-                .or_else(|| common.get("verified_token_claims"));
+                .get("verifiedTokenClaims")
+                .or_else(|| common.get("verifiedTokenClaims"));
             let token_claims = if is_relationship {
                 let mut claims = parent_grant_claims_for(parent_candidate());
                 if let Some(Value::Object(fixture_claims)) = fixture_claims {
@@ -8621,7 +8621,7 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
                 .json(&request)
                 .await;
 
-            if case.contains_key("expected_value") || case.contains_key("expected_values") {
+            if case.contains_key("expectedValue") || case.contains_key("expectedValues") {
                 response.assert_status_ok();
                 let jws = response.json::<FlattenedJws>();
                 let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
@@ -8629,7 +8629,7 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
                 policy.now = evaluation_time;
                 let evidence = verify_flattened_jws(&serialized, fixture.runtime.jwks(), &policy)
                     .expect("matrix JWS verifies");
-                if let Some(expected) = case.get("expected_value") {
+                if let Some(expected) = case.get("expectedValue") {
                     assert_eq!(
                         serde_json::to_value(&evidence.supported_values[0].value)
                             .expect("value serializes"),
@@ -8637,7 +8637,7 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
                         "{definition}/{case_id}"
                     );
                 } else {
-                    let expected = case["expected_values"]
+                    let expected = case["expectedValues"]
                         .as_object()
                         .expect("expected values are an object");
                     for value in &evidence.supported_values {
@@ -8656,7 +8656,7 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
                 assert_minimized_payload(&serialized);
             } else {
                 let expected = match case
-                    .get("expected_public_problem")
+                    .get("expectedPublicProblem")
                     .and_then(Value::as_str)
                     .expect("failed case names its public problem")
                 {
@@ -8872,16 +8872,16 @@ fn acceptance_case_time(
     common: &serde_json::Map<String, Value>,
 ) -> chrono::DateTime<Utc> {
     if let Some(date) = case
-        .get("legal_local_date")
-        .or_else(|| common.get("legal_local_date"))
+        .get("legalLocalDate")
+        .or_else(|| common.get("legalLocalDate"))
         .and_then(Value::as_str)
     {
         return format!("{date}T05:00:00Z")
             .parse()
             .expect("fixed legal-local fixture date converts");
     }
-    case.get("observed_at")
-        .or_else(|| common.get("observed_at"))
+    case.get("observedAt")
+        .or_else(|| common.get("observedAt"))
         .and_then(Value::as_str)
         .unwrap_or("2026-08-02T00:00:00Z")
         .parse()

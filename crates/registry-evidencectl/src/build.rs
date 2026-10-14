@@ -163,8 +163,13 @@ pub(crate) fn validated_question_revisions(
     let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
     let interruption = BuildInterruption::passive();
     let compiled = compile_target_fixture_project(project, target, &evidence_bin)?;
-    let report =
-        run_bundle_check_report(&evidence_bin, &compiled.bundle_path, project, &interruption)?;
+    let report = run_bundle_check_report(
+        &evidence_bin,
+        &compiled.bundle_path,
+        project,
+        &compiled.fixture_paths,
+        &interruption,
+    )?;
     for fixture in &compiled.fixture_paths {
         run_bundle_fixture(
             &evidence_bin,
@@ -413,8 +418,13 @@ fn prepare_candidate(
     reject_review_markers(&compiled.bundle_path)?;
     reject_review_markers_in_bytes(&target.runtime, "runtime.yaml")?;
     let secret_references = secret_references(&compiled.bundle)?;
-    let package_digest =
-        run_bundle_check(evidence_bin, &compiled.bundle_path, project, interruption)?;
+    let package_digest = run_bundle_check(
+        evidence_bin,
+        &compiled.bundle_path,
+        project,
+        &compiled.fixture_paths,
+        interruption,
+    )?;
     for fixture in &compiled.fixture_paths {
         interruption.check()?;
         run_bundle_fixture(
@@ -459,15 +469,20 @@ fn run_bundle_check(
     evidence_bin: &Path,
     bundle: &Path,
     project: &Path,
+    fixtures: &[String],
     interruption: &BuildInterruption,
 ) -> Result<String> {
-    Ok(run_bundle_check_report(evidence_bin, bundle, project, interruption)?.package_digest)
+    Ok(
+        run_bundle_check_report(evidence_bin, bundle, project, fixtures, interruption)?
+            .package_digest,
+    )
 }
 
 fn run_bundle_check_report(
     evidence_bin: &Path,
     bundle: &Path,
     project: &Path,
+    fixtures: &[String],
     interruption: &BuildInterruption,
 ) -> Result<BundleCheckReport> {
     let mut command = Command::new(evidence_bin);
@@ -485,6 +500,11 @@ fn run_bundle_check_report(
     }
     let output = run_evidence(command, interruption, true, true)?;
     if !output.status.success() {
+        if let Some(report) = crate::authored::runtime_refusal(&output.stdout) {
+            return Err(
+                crate::authored::runtime_bundle_refusal(report, bundle, project, fixtures).into(),
+            );
+        }
         return runtime_failure(
             "Evidence rejected the generated deployment bundle",
             &format!("evidencectl test {}", project.display()),
@@ -517,8 +537,15 @@ pub(crate) fn check_compiled_bundle(
     evidence_bin: &Path,
     bundle: &Path,
     project: &Path,
+    fixtures: &[String],
 ) -> Result<BundleCheckReport> {
-    run_bundle_check_report(evidence_bin, bundle, project, &BuildInterruption::passive())
+    run_bundle_check_report(
+        evidence_bin,
+        bundle,
+        project,
+        fixtures,
+        &BuildInterruption::passive(),
+    )
 }
 
 fn parse_bundle_check_report(stdout: &[u8]) -> Result<BundleCheckReport> {

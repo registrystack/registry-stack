@@ -75,11 +75,7 @@ pub struct SelectorProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub maximum_aggregate_bytes: BoundedU64<1, 8192>,
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "BTreeMap<LocalId, crate::selector::Field>")
-    )]
-    pub fields: BTreeMap<LocalId, Value>,
+    pub fields: BTreeMap<LocalId, crate::selector::Field>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

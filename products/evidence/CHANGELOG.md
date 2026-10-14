@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- BREAKING: `EvidenceFixture` control keys use camelCase and both fixture forms
+  reject unknown control keys. In an existing fixture, rename snake_case keys
+  directly under the root, `common`, each `cases` item and `privacyExpectation`
+  to camelCase, including `synthetic_only` to `syntheticOnly`,
+  `coequal_acceptance_definition` to `coequalAcceptanceDefinition`,
+  `privacy_expectation` to `privacyExpectation`, `observed_at` to `observedAt`,
+  and `expected_value` to `expectedValue`. Use the
+  [complete control-key mapping](../../release/notes/unreleased.md#evidence-fixture-controls)
+  for each location. Preserve nested source, response, selector, claim, fact and
+  expected-value payload keys and Rhai ABI names. Run `evidencectl test PROJECT
+  --target TARGET --deny-warnings`, then rebuild any package that captures these
+  fixtures. Old control spellings report `config.removed-key` with the replacement;
+  they are not aliases. Local client file checks now share the public 1 MiB
+  document limit and positioned structural diagnostics with native registration.
 - BREAKING: authoring uses one normalized `evidence.yaml` project with named
   Sources and Functions, AssertionDefinitions and declared Outputs, plus a
   separate target and complete target authority. Retired question/source/selector

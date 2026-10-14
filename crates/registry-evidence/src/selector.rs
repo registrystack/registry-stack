@@ -872,8 +872,8 @@ pub fn resolve_offline_fixture_authorization(
         })
         .ok_or(AuthorizationError::Unauthorized)?;
     let claims = case
-        .get("verified_token_claims")
-        .or_else(|| common.and_then(|value| value.get("verified_token_claims")))
+        .get("verifiedTokenClaims")
+        .or_else(|| common.and_then(|value| value.get("verifiedTokenClaims")))
         .cloned()
         .unwrap_or_else(|| Value::Object(Default::default()));
     let uses_task_grant = configured_grant
