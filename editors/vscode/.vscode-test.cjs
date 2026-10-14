@@ -24,7 +24,7 @@ const legacyEvidencectlWrapper = path.join(testRunDirectory, 'legacy-bin', 'evid
 const installerMetadata = path.join(__dirname, 'dist', 'registry-stack-cli-path');
 fs.mkdirSync(projectAlpha, { recursive: true });
 fs.mkdirSync(projectBeta, { recursive: true });
-fs.mkdirSync(path.join(projectEvidence, 'selectors'), { recursive: true });
+fs.mkdirSync(projectEvidence, { recursive: true });
 fs.mkdirSync(pathBinDirectory, { recursive: true });
 fs.mkdirSync(path.dirname(legacyEvidencectlWrapper), { recursive: true });
 writeToolingLanguageServerWrapper(evidencectlWrapper);
@@ -41,14 +41,9 @@ fs.writeFileSync(
   'apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: { id: beta-registry }\n',
 );
 fs.writeFileSync(
-  path.join(projectEvidence, 'evidence-project.yaml'),
-  'apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\nkind: EvidenceAuthoringProject\n',
+  path.join(projectEvidence, 'evidence.yaml'),
+  normalizedEvidenceProject('smoke-project', 'smoke'),
 );
-fs.writeFileSync(
-  path.join(projectEvidence, 'source.openapi.yaml'),
-  'openapi: 3.1.0\ninfo: { title: test, version: 1.0.0 }\npaths: {}\n',
-);
-fs.writeFileSync(path.join(projectEvidence, 'selectors', 'smoke.yaml'), 'fields: {}\n');
 fs.writeFileSync(
   workspaceFolder,
   JSON.stringify({
@@ -60,6 +55,26 @@ fs.writeFileSync(
   }),
 );
 process.env.PATH = `${path.dirname(legacyEvidencectlWrapper)}${path.delimiter}${pathBinDirectory}${path.delimiter}${process.env.PATH ?? ''}`;
+
+function normalizedEvidenceProject(id, selector) {
+  return [
+    'apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1',
+    'kind: EvidenceProject',
+    `id: ${id}`,
+    'selectorProfiles:',
+    `  ${selector}:`,
+    '    maximumAggregateBytes: 64',
+    '    fields:',
+    '      record-id:',
+    '        type: string',
+    '        minimumBytes: 1',
+    '        maximumBytes: 64',
+    'functions: []',
+    'sources: {}',
+    'assertionDefinitions: {}',
+    '',
+  ].join('\n');
+}
 
 function writeToolingLanguageServerWrapper(wrapperPath) {
   fs.writeFileSync(

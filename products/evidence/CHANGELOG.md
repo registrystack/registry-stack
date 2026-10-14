@@ -14,6 +14,9 @@
 - Targets now have closed nested schemas and field-addressed diagnostics.
   Production check refuses a missing governed public signing key before runtime
   delegation. Check and explain accept a target file or its containing directory.
+- Target reading validates secret references, digest pins, issuer identifiers,
+  direct claim names and assertion-issuer admission bounds before runtime
+  delegation. Extract-only targets retain explicit empty HTTP bindings.
 - `evidencectl check --file` accepts the standard `--deny-warnings` policy,
   as project checks do. Source suggestions name the actual project file and
   require authored fixtures before recommending fixture evaluation.

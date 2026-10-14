@@ -29,7 +29,7 @@ PRODUCT_FILES = {
     "discovery": "origins.yaml",
     "manifest": "metadata.yaml",
     "render": "manifest.yaml",
-    "evidence": "evidence-project.yaml",
+    "evidence": "evidence.yaml",
     "platform": "task-connection.yaml",
     "evidence-deployment": "runtime.yaml",
 }
@@ -121,6 +121,30 @@ SCHEMAS = {
     ),
     "evidence": (
         (
+            "crates/registry-evidencectl/schemas/authoring/project.schema.json",
+            "evidence.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target.schema.json",
+            "*-target.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
+            "*-authority.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/access-client.schema.json",
+            "access/clients/*.yaml",
+        ),
+        (
+            "products/evidence/generated/fixture/fixture.schema.json",
+            "fixtures/*.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/mock-plan.schema.json",
+            "mocks/source.yaml",
+        ),
+        (
             "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
             "*.resolutions.json",
         ),
@@ -128,26 +152,10 @@ SCHEMAS = {
             "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
             "source-resolutions.json",
         ),
-        (
-            "crates/registry-evidencectl/schemas/authoring/selector.schema.json",
-            "selectors/*.yaml",
-        ),
-        (
-            "crates/registry-evidencectl/schemas/authoring/source.schema.json",
-            "sources/*.yaml",
-        ),
-        (
-            "crates/registry-evidencectl/schemas/authoring/target-settings.schema.json",
-            "targets/*/settings.yaml",
-        ),
         ("products/evidence/generated/client-profile/client-profile.schema.json", "client-profile.json"),
         ("products/evidence/generated/client-profile/client-profile.schema.json", "*.profile.json"),
     ),
     "evidence-deployment": (
-        (
-            "crates/registry-evidencectl/schemas/authoring/target-governance.schema.json",
-            "governance.yaml",
-        ),
         ("products/evidence/contracts/runtime.schema.yaml", "runtime.yaml"),
         ("products/evidence/contracts/bundle.schema.yaml", "bundle/evidence.yaml"),
         ("products/evidence/contracts/holder-bound-verification-policy.schema.yaml", "holder-bound*.policy.yaml"),
@@ -267,9 +275,6 @@ def check_project(product: str, project: Path, document_arg: str | None) -> tupl
     if product == "manifest" or product == "evidence-oid4vci":
         return safe_document(project, document_arg or PRODUCT_FILES["manifest"])
     marker = PRODUCT_FILES[product]
-    if product == "evidence" and not (project / marker).is_file():
-        if (project / "source.openapi.yaml").is_file() and (project / "questions").is_dir():
-            return None, None
     if not (project / marker).is_file() or (project / marker).is_symlink():
         raise SetupError(f"{product} project needs {marker}: {project}")
     return None, None

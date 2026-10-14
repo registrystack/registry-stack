@@ -71,6 +71,7 @@ The public surface:
 | `ScalarHook`, `ScalarSite`, `Refusal` | Inspect or replace scalars while the tree is built. |
 | `Invalid`, `Invalid::into_error()` | What a checking type returns: the expectation and the fix, never the value. `into_error()` turns it into any deserializer's error. |
 | `LocalId`, `ExternalId`, `Digest`, `Url`, `ProjectIdentity`, `DataLiteral`, `ForeignValue` | Shared value types (CFG-ID, CFG-VAL). |
+| `SecretReference`, `SecretProvider`, `SECRET_REFERENCE_PATTERN` | Pure parsing, provider discrimination, redacted diagnostics, and schema for exact `secret:env/NAME` and `secret:file/name` references. |
 | `BoundedU32<MIN, MAX>`, `BoundedU64<MIN, MAX>` | Integers with both bounds in the type and the schema (CFG-QTY-4). |
 | `UniqueList<T>`, `UniqueIdList<T>` with `Identified` | A set (`config.duplicate-item`) and a list of named items (`config.duplicate-id`) (CFG-ID-5, CFG-ID-6). |
 | `tagged_union!`, `shape_union!`, `SHARED_BLOCK_PREFIX` | The serde recipes below. |

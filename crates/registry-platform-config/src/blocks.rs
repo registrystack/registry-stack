@@ -23,8 +23,7 @@ use crate::{SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SE
 pub const SECRET_PROVIDER_PATTERN: &str = "^secret:(?:env|file)/";
 
 /// The schema pattern of an exact secret reference.
-pub const SECRET_REFERENCE_PATTERN: &str =
-    "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$";
+pub const SECRET_REFERENCE_PATTERN: &str = registry_platform_yaml::SECRET_REFERENCE_PATTERN;
 
 /// Why a shared block was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

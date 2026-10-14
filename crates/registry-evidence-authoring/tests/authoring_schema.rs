@@ -667,6 +667,233 @@ fn target_admission_gates_are_exact_in_schema_and_reader() {
     );
 }
 
+fn assert_target_value_refused(document: &Value, pointer: &str) {
+    assert!(
+        !schema(TARGET_SCHEMA_FILE).is_valid(document),
+        "target schema accepted an invalid value at {pointer}",
+    );
+    let report = target::read_target(
+        "target.yaml",
+        &serde_json::to_vec(document).expect("target renders"),
+    )
+    .expect_err("the target reader refuses the invalid scalar or collection");
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.path == pointer),
+        "the refusal did not retain {pointer}: {}",
+        report.render_human(),
+    );
+    assert!(!report.render_human().contains("TARGET-PRIVATE-CANARY"));
+}
+
+#[test]
+fn target_secret_references_use_one_shared_syntax_at_every_retained_position() {
+    let base = yaml_as_json(NORMALIZED_TARGET);
+    let variants = [
+        (
+            serde_json::json!({"type":"basic","usernameRef":"secret:env/SOURCE_USER","passwordRef":"secret:file/password"}),
+            vec!["usernameRef", "passwordRef"],
+        ),
+        (
+            serde_json::json!({"type":"bearer","tokenRef":"secret:file/token"}),
+            vec!["tokenRef"],
+        ),
+        (
+            serde_json::json!({"type":"static-authorization","tokenRef":"secret:file/token"}),
+            vec!["tokenRef"],
+        ),
+        (
+            serde_json::json!({"type":"static-api-key","headerName":"X-Api-Key","valueRef":"secret:file/api-key"}),
+            vec!["valueRef"],
+        ),
+        (
+            serde_json::json!({"type":"oauth2-client-credentials","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:env/CLIENT_ID","clientSecretRef":"secret:file/client-secret","credentialPlacement":"basic-header","maximumCacheSeconds":300}),
+            vec!["clientIdRef", "clientSecretRef"],
+        ),
+        (
+            serde_json::json!({"type":"oauth2-private-key-jwt","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:env/CLIENT_ID","clientAssertionKeyRef":"secret:file/client-key","maximumCacheSeconds":300}),
+            vec!["clientIdRef", "clientAssertionKeyRef"],
+        ),
+    ];
+    for (authentication, members) in variants {
+        let mut valid = base.clone();
+        valid["connections"]["probe"] =
+            serde_json::json!({"origin":"https://source.invalid", "authentication":authentication});
+        assert!(schema(TARGET_SCHEMA_FILE).is_valid(&valid));
+        target::read_target("target.yaml", &serde_json::to_vec(&valid).unwrap())
+            .expect("valid shared references read");
+        for member in members {
+            let mut invalid = valid.clone();
+            invalid["connections"]["probe"]["authentication"][member] =
+                serde_json::json!("TARGET-PRIVATE-CANARY");
+            assert_target_value_refused(
+                &invalid,
+                &format!("/connections/probe/authentication/{member}"),
+            );
+        }
+    }
+    for pointer in [
+        "/signer/privateKeyRef",
+        "/audit/hashKeyRef",
+        "/subjectBinding/secretRef",
+    ] {
+        for invalid in [
+            "TARGET-PRIVATE-CANARY",
+            "secret:file/../escape",
+            "secret:env/lowercase",
+            "secret:file/nested/key",
+        ] {
+            let mut document = base.clone();
+            *document
+                .pointer_mut(pointer)
+                .expect("canonical reference exists") = serde_json::json!(invalid);
+            assert_target_value_refused(&document, pointer);
+        }
+    }
+}
+
+#[test]
+fn target_digest_syntax_is_checked_before_runtime_delegation() {
+    for invalid in [
+        "TARGET-PRIVATE-CANARY".to_owned(),
+        format!("sha512:{}", "a".repeat(64)),
+        format!("sha256:{}", "A".repeat(64)),
+        format!("sha256:{}", "a".repeat(63)),
+        format!("sha256:{}", "a".repeat(65)),
+    ] {
+        let mut document = yaml_as_json(NORMALIZED_TARGET);
+        document["package"]["expectedDigest"] = serde_json::json!(invalid);
+        assert_target_value_refused(&document, "/package/expectedDigest");
+    }
+}
+
+#[test]
+fn target_identifiers_claim_names_and_protocol_constants_keep_their_meaning() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["service"]["issuer"] = serde_json::json!("urn:Example:Issuer:é");
+    document["authentication"]["oidc"]["claims"] =
+        serde_json::json!({"grantSourceIssuer":"Grant_Source.Issuer-1"});
+    document["authentication"]["oidc"]["assertionIssuers"] =
+        serde_json::json!({"urn:Example.Client:1":["urn:Example:Issuer:1"]});
+    document["authentication"]["oidc"]["algorithms"] =
+        serde_json::json!(["ES256", "EdDSA", "RS256"]);
+    document["authentication"]["oidc"]["tokenTypes"] =
+        serde_json::json!(["application/at+jwt", "at+jwt"]);
+    assert!(schema(TARGET_SCHEMA_FILE).is_valid(&document));
+    let target = target::read_target("target.yaml", &serde_json::to_vec(&document).unwrap())
+        .expect("external identifiers and exact protocol values read")
+        .value;
+    let (_, issuer) = target.service.governed_values().unwrap();
+    assert_eq!(issuer["uri"], "urn:Example:Issuer:é");
+    let governed = target.authentication.governed_value().unwrap();
+    assert_eq!(
+        governed["oidc"]["claims"]["grantSourceIssuer"],
+        "Grant_Source.Issuer-1"
+    );
+    assert_eq!(
+        governed["oidc"]["assertionIssuers"]["urn:Example.Client:1"][0],
+        "urn:Example:Issuer:1"
+    );
+    assert_eq!(
+        governed["oidc"]["algorithms"],
+        document["authentication"]["oidc"]["algorithms"]
+    );
+    assert_eq!(
+        governed["oidc"]["tokenTypes"],
+        document["authentication"]["oidc"]["tokenTypes"]
+    );
+
+    for invalid in [
+        "relative-identifier".to_owned(),
+        "urn:example:with space".to_owned(),
+        "urn:example:with\u{2000}space".to_owned(),
+        format!("urn:{}", "a".repeat(509)),
+    ] {
+        let mut document = document.clone();
+        document["service"]["issuer"] = serde_json::json!(invalid);
+        assert_target_value_refused(&document, "/service/issuer");
+    }
+    for member in [
+        "actorKind",
+        "purpose",
+        "grantId",
+        "grantSourceIssuer",
+        "grantClient",
+        "grantResource",
+        "grantExp",
+        "grantBounds",
+        "approver",
+    ] {
+        for invalid in [
+            "claim name".to_owned(),
+            "1claim".to_owned(),
+            "claim/name".to_owned(),
+            "a".repeat(129),
+        ] {
+            let mut document = document.clone();
+            document["authentication"]["oidc"]["claims"][member] = serde_json::json!(invalid);
+            assert_target_value_refused(
+                &document,
+                &format!("/authentication/oidc/claims/{member}"),
+            );
+        }
+    }
+    let mut invalid = document;
+    invalid["authentication"]["oidc"]["algorithms"] = serde_json::json!(["es256"]);
+    assert_target_value_refused(&invalid, "/authentication/oidc/algorithms/0");
+}
+
+#[test]
+fn target_assertion_issuer_admission_is_bounded_and_empty_connections_grant_none() {
+    let mut valid = yaml_as_json(NORMALIZED_TARGET);
+    valid["connections"] = serde_json::json!({});
+    valid["authentication"]["oidc"]["assertionIssuers"] = Value::Object(
+        (0..32)
+            .map(|client| {
+                (
+                    format!("urn:Client:{client}"),
+                    serde_json::json!((0..8)
+                        .map(|issuer| format!("issuer-{issuer}"))
+                        .collect::<Vec<_>>()),
+                )
+            })
+            .collect(),
+    );
+    assert!(schema(TARGET_SCHEMA_FILE).is_valid(&valid));
+    let decoded = target::read_target("target.yaml", &serde_json::to_vec(&valid).unwrap())
+        .expect("explicit empty HTTP binding map and exact admission bounds read");
+    assert!(decoded.value.connections.is_empty());
+    for invalid in [
+        serde_json::json!({}),
+        serde_json::json!({"client":[]}),
+        serde_json::json!({"client":[""]}),
+        serde_json::json!({"client":["issuer","issuer"]}),
+        serde_json::json!({"client":["a".repeat(513)]}),
+        serde_json::json!({"a".repeat(129):["issuer"]}),
+        Value::Object(
+            (0..33)
+                .map(|client| (format!("client-{client}"), serde_json::json!(["issuer"])))
+                .collect(),
+        ),
+        serde_json::json!({"client":(0..9).map(|issuer| format!("issuer-{issuer}")).collect::<Vec<_>>()}),
+    ] {
+        let mut document = valid.clone();
+        document["authentication"]["oidc"]["assertionIssuers"] = invalid;
+        assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+        assert!(
+            target::read_target("target.yaml", &serde_json::to_vec(&document).unwrap()).is_err()
+        );
+    }
+    let mut omitted = valid;
+    omitted.as_object_mut().unwrap().remove("connections");
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&omitted));
+    let refusal = target::read_target("target.yaml", &serde_json::to_vec(&omitted).unwrap())
+        .expect_err("connection choice must remain explicit");
+    assert_eq!(refusal.diagnostics()[0].code, "config.missing-key");
+}
+
 #[test]
 fn every_retired_question_corpus_case_is_refused_as_a_normalized_project() {
     let schema = schema(PROJECT_SCHEMA_FILE);

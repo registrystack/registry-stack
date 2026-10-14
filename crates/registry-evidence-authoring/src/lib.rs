@@ -34,6 +34,7 @@ pub mod schema;
 pub mod selector;
 pub mod target;
 mod target_binding;
+mod target_value;
 pub mod types;
 pub mod validate;
 

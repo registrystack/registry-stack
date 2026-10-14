@@ -218,12 +218,29 @@ trust-domain identity. `authentication.oidc` supplies issuer verification,
 resource audience, allowed token types/algorithms, JWKS URI, identity claim
 mapping and scope/client constraints. The target's `connections` map each
 project connection name to its origin, authentication references, TLS profile
-and operational concurrency ceiling.
+and operational concurrency ceiling. Write `connections: {}` explicitly when
+there are no HTTP bindings, as in an extract-only project. This grants no HTTP
+connection; every HTTP Source must still resolve its named binding.
+
+`service.issuer` is an absolute Evidence issuer identifier, including a URN,
+within 512 Unicode characters and without whitespace or control characters. It
+names the signer and is never fetched. The OIDC issuer and connection origins
+use their separate network URL rules. Members under `authentication.oidc.claims`
+name direct JWT claims: dots are literal characters, and `grantSourceIssuer`
+there names a claim rather than holding an issuer URL.
+
+Optional `assertionIssuers` maps external client identifiers, preserved exactly,
+to the issuer strings they may assert. A present map has one to 32 clients,
+each within 128 bytes, with one to eight distinct nonempty issuer strings per
+client, each within 512 bytes. Omit the map to add no assertion-issuer rule.
 
 `listener`, `secretProviders`, `signer`, `subjectBinding`, `audit`, `rateLimits`,
 optional `outboundTls` and `extracts` bind the process. They do not change a
 Source's meaning or grant access. Secret references identify externally
-provisioned material. `signer.publicJwkFile` supplies the reviewed public key
+provisioned material using exact `secret:env/NAME` or `secret:file/name` syntax.
+An optional `package.expectedDigest` is `sha256:` followed by 64 lowercase hex
+digits. Target reading checks these scalar forms before runtime delegation.
+`signer.publicJwkFile` supplies the reviewed public key
 asset; the private key is never a portable project input. Local authoring may
 use a disposable JWK signer. Production and evidence-grade targets require
 the retained pinned non-exportable Transit signer and transport guarantees.

@@ -25,10 +25,8 @@
   "activationEvents": [
     "workspaceContains:registry.yaml",
     "workspaceContains:**/registry.yaml",
-    "workspaceContains:evidence-project.yaml",
-    "workspaceContains:**/evidence-project.yaml",
-    "workspaceContains:source.openapi.yaml",
-    "workspaceContains:**/source.openapi.yaml",
+    "workspaceContains:evidence.yaml",
+    "workspaceContains:**/evidence.yaml",
     "workspaceContains:casework.yaml",
     "workspaceContains:**/casework.yaml",
     "workspaceContains:scheduling.yaml",

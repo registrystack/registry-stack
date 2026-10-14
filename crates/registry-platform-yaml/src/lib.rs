@@ -112,6 +112,7 @@ mod envelope;
 mod messages;
 mod node;
 mod scalar;
+mod secret;
 mod structure;
 mod types;
 mod union;
@@ -128,6 +129,7 @@ pub use envelope::{
 };
 pub use messages::{CodeInfo, CODES};
 pub use node::{escape_pointer_segment, Entry, Node, NodeValue, Position, ScalarStyle, Span, Text};
+pub use secret::{SecretProvider, SecretReference, SECRET_REFERENCE_PATTERN};
 pub use structure::{Refusal, ScalarHook, ScalarSite, MAXIMUM_DEPTH};
 pub use types::{
     BoundedU32, BoundedU64, DataLiteral, Digest, ExternalId, ForeignValue, Identified, LocalId,

@@ -1296,6 +1296,7 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/scripts/fixtures/fhir-tutorial-mock.py",
             "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
             "docs/site/package.json",
+            "products/evidence/examples/standalone/evidence.yaml",
         )
         for path in infrastructure:
             with self.subTest(path=path):

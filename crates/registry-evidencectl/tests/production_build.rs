@@ -537,6 +537,58 @@ fn a_missing_target_public_key_refuses_production_check_before_delegation() {
 }
 
 #[test]
+fn invalid_target_scalars_refuse_check_and_package_without_effects() {
+    for (pointer, invalid) in [
+        ("/package/expectedDigest", "production-build-secret-canary"),
+        ("/service/issuer", "relative-issuer"),
+        (
+            "/subjectBinding/secretRef",
+            "production-build-secret-canary",
+        ),
+        ("/audit/hashKeyRef", "secret:file/../escape"),
+        (
+            "/connections/registry-http/authentication/tokenRef",
+            "production-build-secret-canary",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        edit_json(&fixture.target, |target| {
+            if pointer == "/package/expectedDigest" {
+                target["package"]["expectedDigest"] = json!(invalid);
+            } else {
+                *target.pointer_mut(pointer).unwrap() = json!(invalid);
+            }
+        });
+        let target_before = fs::read(&fixture.target).unwrap();
+        let project_before = snapshot(&fixture.project);
+        for output in [fixture.check_production("json"), fixture.package("json")] {
+            assert_failed(&output, "invalid typed target scalar");
+            assert_value_free(&output);
+            let report: Value =
+                serde_json::from_slice(&output.stdout).expect("JSON refusal report");
+            let diagnostics = report["diagnostics"].as_array().unwrap();
+            assert!(
+                diagnostics.iter().any(|diagnostic| {
+                    let Some(path) = diagnostic["path"].as_str() else {
+                        return false;
+                    };
+                    path == pointer || path.ends_with(&format!("target.yaml:{pointer}"))
+                }),
+                "{report}"
+            );
+        }
+        assert!(
+            fixture.invocations().is_empty(),
+            "target syntax must fail before runtime delegation"
+        );
+        assert!(!fixture.output.exists());
+        assert_eq!(fs::read(&fixture.target).unwrap(), target_before);
+        assert_eq!(snapshot(&fixture.project), project_before);
+        fixture.assert_no_staging_residue();
+    }
+}
+
+#[test]
 fn target_explain_reports_complete_grants_without_runtime_secret_resolution() {
     let fixture = Fixture::new();
     let output = fixture.explain();

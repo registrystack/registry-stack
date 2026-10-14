@@ -107,6 +107,9 @@ pub(super) fn normalize_artifacts(
     let source_object = source
         .as_object_mut()
         .ok_or_else(|| anyhow!("exported Source must be a mapping"))?;
+    if source_object.contains_key("adapterParameters") {
+        bail!("exported Source requires adapterParameters inside request");
+    }
     source_object.remove("apiVersion");
     source_object.remove("kind");
     let posture = source_object
@@ -132,6 +135,13 @@ pub(super) fn normalize_artifacts(
         .remove("adapterParametersSchema")
         .and_then(|value| value.as_str().map(str::to_owned))
         .ok_or_else(|| anyhow!("exported Source requires adapterParametersSchema"))?;
+    let adapter_parameters = request.remove("adapterParameters");
+    let redirects = request
+        .remove("redirects")
+        .ok_or_else(|| anyhow!("exported Source requires redirects"))?;
+    if redirects.as_str() != Some("deny") {
+        bail!("exported Source requires redirects to be `deny`");
+    }
     let timeout = request
         .remove("attemptTimeoutMilliseconds")
         .unwrap_or_else(|| json!(5000));
@@ -236,6 +246,9 @@ pub(super) fn normalize_artifacts(
         "adapterParametersSchema".to_owned(),
         adapter_parameters_schema,
     );
+    if let Some(parameters) = adapter_parameters {
+        source_object.insert("adapterParameters".to_owned(), parameters);
+    }
     if let Some(limits) = preparation_limits {
         source_object.insert("preparationLimits".to_owned(), limits);
     }

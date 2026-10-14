@@ -23,8 +23,12 @@ selectorProfiles:
     maximumAggregateBytes: 64
     fields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}
 functions:
-  - {id: other-extract, interface: source-extract/v1, source: functions/other-extract.rhai}
-  - {id: other-derive, interface: assertion-derive/v1, source: functions/other-derive.rhai}
+- id: other-extract
+  interface: source-extract/v1
+  source: functions/other-extract.rhai
+- id: other-derive
+  interface: assertion-derive/v1
+  source: functions/other-derive.rhai
 sources:
   other:
     type: http-json
@@ -36,6 +40,7 @@ sources:
     extract: {function: other-extract}
     facts: {matched: {type: boolean}}
     limits: {attemptTimeoutMilliseconds: 1000, maximumConcurrency: 1}
+# This authored boundary comment is outside the collections source import owns.
 assertionDefinitions:
   other:
     question: Is the other synthetic record matched?
@@ -101,7 +106,7 @@ assertionDefinitions:
             .find_map(|(path, text)| path.starts_with("selectors/").then_some(*text))
             .unwrap_or("synthetic selector");
         let source = format!(
-            "type: http-json\nposture: record-transformed\nconnection: {id}\nbehaviorRevision: {}\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: {selector_id}}}]\n  projection: [/matched]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.schema.yaml\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/{id}-response.schema.yaml\nextractScript: {}\nfactSchema: schemas/{id}-facts.schema.yaml\n",
+            "type: http-json\nposture: record-transformed\nconnection: {id}\nbehaviorRevision: {}\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: {selector_id}}}]\n  projection: [/matched]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParameters: {{}}\n  adapterParametersSchema: schemas/{id}-parameters.schema.yaml\n  redirects: deny\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/{id}-response.schema.yaml\nextractScript: {}\nfactSchema: schemas/{id}-facts.schema.yaml\n",
             digest(source_revision.as_bytes()),
             extract.0
         );
@@ -183,6 +188,20 @@ fn put(root: &Path, path: &str, text: &str) {
     fs::write(root.join(path), text).unwrap();
 }
 
+fn replace_export_artifact(root: &Path, path: &str, text: &str) {
+    put(root, path, text);
+    let manifest_path = root.join(MANIFEST_FILE);
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    let artifact = manifest["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|artifact| artifact["path"] == path)
+        .unwrap();
+    artifact["digest"] = Value::String(format!("sha256:{}", digest(text.as_bytes())));
+    fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+}
+
 fn accepted(
     lock: &ProjectLock,
     exports: &[PathBuf],
@@ -195,6 +214,210 @@ fn accepted(
     let no_op = candidate.report().no_op;
     candidate.apply(lock).unwrap();
     no_op
+}
+
+#[test]
+fn canonical_block_project_imports_and_preserves_unowned_authored_text() {
+    let fixture = Fixture::new();
+    let before = fs::read_to_string(fixture.project.join("evidence.yaml")).unwrap();
+    let unowned = before.split_once("assertionDefinitions:").unwrap().1;
+    let export = fixture.export("export", "lookup", "v1", &[]);
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let mut candidate = prepare(&lock, &[export], &BTreeMap::new()).unwrap();
+    let candidate_text = fs::read_to_string(candidate.project().join("evidence.yaml")).unwrap();
+    assert_eq!(
+        candidate_text
+            .split_once("assertionDefinitions:")
+            .unwrap()
+            .1,
+        unowned
+    );
+    assert!(candidate_text.contains(
+        "# This authored boundary comment is outside the collections source import owns."
+    ));
+    let decoded = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        candidate_text.as_bytes(),
+    )
+    .unwrap();
+    assert!(decoded
+        .value
+        .functions
+        .iter()
+        .any(|function| function.id.as_str() == "lookup-extract"));
+    let imported = decoded
+        .value
+        .sources
+        .values()
+        .find(|source| source.adapter_parameters.is_some())
+        .unwrap();
+    assert_eq!(imported.adapter_parameters, Some(json!({})));
+    assert!(imported.request.get("adapterParameters").is_none());
+    assert!(imported.request.get("redirects").is_none());
+    candidate.validate(|_| Ok(())).unwrap();
+    candidate.apply(&lock).unwrap();
+    assert_eq!(
+        fs::read_to_string(fixture.project.join("evidence.yaml")).unwrap(),
+        candidate_text
+    );
+}
+
+#[test]
+fn flow_and_empty_project_collections_import_without_partial_entries() {
+    for functions in [
+        "[{id: existing, interface: source-extract/v1, source: functions/existing.rhai}]",
+        "\n  []",
+    ] {
+        let project = format!(
+            "apiVersion: {}\nkind: {}\nfunctions: {functions}\n# Preserve this comment and the unowned member.\nuntouched: true\n",
+            registry_evidence_authoring::project::PROJECT_API_VERSION,
+            registry_evidence_authoring::project::PROJECT_KIND,
+        );
+        let document = registry_platform_yaml::Reader::new("evidence.yaml")
+            .read(
+                project.as_bytes(),
+                &registry_platform_yaml::Expect::one(
+                    &registry_evidence_authoring::project::PROJECT,
+                ),
+            )
+            .unwrap();
+        let replacement = json!([
+            {
+                "id": "imported-prepare",
+                "interface": "source-prepare/v1",
+                "source": "functions/imported-prepare.rhai"
+            },
+            {
+                "id": "imported-extract",
+                "interface": "source-extract/v1",
+                "source": "functions/imported-extract.rhai"
+            }
+        ]);
+        let replaced =
+            replace_project_sections(&project, &document, [("/functions", &replacement)]).unwrap();
+        registry_platform_yaml::Reader::new("evidence.yaml")
+            .read(
+                replaced.as_bytes(),
+                &registry_platform_yaml::Expect::one(
+                    &registry_evidence_authoring::project::PROJECT,
+                ),
+            )
+            .unwrap();
+        assert!(
+            replaced.contains("# Preserve this comment and the unowned member.\nuntouched: true")
+        );
+        assert!(!replaced.contains("- ["));
+    }
+}
+
+#[test]
+fn json_project_import_remains_valid() {
+    let fixture = Fixture::new();
+    let project_path = fixture.project.join("evidence.yaml");
+    let project = fs::read(&project_path).unwrap();
+    let value = registry_platform_yaml::Reader::new("evidence.yaml")
+        .scan(&project)
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    fs::write(&project_path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    let export = fixture.export("export", "lookup", "v1", &[]);
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let candidate = prepare(&lock, &[export], &BTreeMap::new()).unwrap();
+    let candidate_text = fs::read_to_string(candidate.project().join("evidence.yaml")).unwrap();
+    let decoded = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        candidate_text.as_bytes(),
+    )
+    .unwrap();
+    assert!(decoded
+        .value
+        .sources
+        .keys()
+        .any(|id| id.as_str() == "lookup"));
+}
+
+#[test]
+fn adapter_parameters_move_to_the_source_without_losing_values() {
+    let fixture = Fixture::new();
+    let export = fixture.export("export", "lookup", "v1", &[]);
+    let source_path = "sources/lookup.yaml";
+    let source = fs::read_to_string(export.join(source_path))
+        .unwrap()
+        .replace(
+            "adapterParameters: {}",
+            "adapterParameters: {strategy: exact}",
+        );
+    replace_export_artifact(&export, source_path, &source);
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let candidate = prepare(&lock, &[export], &BTreeMap::new()).unwrap();
+    let candidate_text = fs::read_to_string(candidate.project().join("evidence.yaml")).unwrap();
+    let decoded = registry_evidence_authoring::project::read_project(
+        "evidence.yaml",
+        candidate_text.as_bytes(),
+    )
+    .unwrap();
+    let imported = decoded
+        .value
+        .sources
+        .values()
+        .find(|source| source.adapter_parameters.is_some())
+        .unwrap();
+    assert_eq!(
+        imported.adapter_parameters,
+        Some(json!({"strategy": "exact"}))
+    );
+}
+
+#[test]
+fn root_adapter_parameters_are_refused_without_overwriting_request_parameters() {
+    let fixture = Fixture::new();
+    let export = fixture.export("export", "lookup", "v1", &[]);
+    let source_path = "sources/lookup.yaml";
+    let mut source = fs::read_to_string(export.join(source_path)).unwrap();
+    source.push_str("adapterParameters: {unexpected: root}\n");
+    replace_export_artifact(&export, source_path, &source);
+    let before = snapshot(&fixture.project).unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[export], &BTreeMap::new())
+        .err()
+        .expect("root adapter parameters are outside the export contract");
+    assert_eq!(
+        error.to_string(),
+        "exported Source requires adapterParameters inside request"
+    );
+    assert_eq!(snapshot(&fixture.project).unwrap(), before);
+    assert!(!fixture.project.join(STATE_PATH).exists());
+    assert!(!fixture.project.join(JOURNAL_PATH).exists());
+}
+
+#[test]
+fn missing_or_non_deny_redirect_policy_is_refused_without_authored_changes() {
+    for (name, replacement, message) in [
+        ("missing", "", "exported Source requires redirects"),
+        (
+            "follow",
+            "redirects: follow",
+            "exported Source requires redirects to be `deny`",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let export = fixture.export(name, "lookup", "v1", &[]);
+        let source_path = "sources/lookup.yaml";
+        let source = fs::read_to_string(export.join(source_path))
+            .unwrap()
+            .replace("redirects: deny", replacement);
+        replace_export_artifact(&export, source_path, &source);
+        let before = snapshot(&fixture.project).unwrap();
+        let lock = ProjectLock::acquire(&fixture.project).unwrap();
+        let error = prepare(&lock, &[export], &BTreeMap::new())
+            .err()
+            .expect("missing or unsafe redirect policy is refused");
+        assert_eq!(error.to_string(), message);
+        assert_eq!(snapshot(&fixture.project).unwrap(), before);
+        assert!(!fixture.project.join(STATE_PATH).exists());
+        assert!(!fixture.project.join(JOURNAL_PATH).exists());
+    }
 }
 
 #[test]
