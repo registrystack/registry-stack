@@ -284,6 +284,47 @@ pub fn activate(
     package_digest: &str,
     document: &AuthorityDocument,
 ) -> Result<AuthoritySnapshot, AuthorityError> {
+    activate_with_sync(
+        root,
+        target,
+        config,
+        package_digest,
+        document,
+        &mut File::sync_all,
+    )
+}
+
+/// The committed file and every directory entry naming it must be durable
+/// before acknowledgement. Repeating this barrier is necessary on retries:
+/// an earlier rename can be visible even when its directory sync failed.
+fn sync_committed(
+    root: &Path,
+    directory: &File,
+    sync: &mut impl FnMut(&File) -> std::io::Result<()>,
+) -> Result<(), AuthorityError> {
+    let committed = crate::bundle::open_no_follow(&root.join(STATE_FILE))
+        .map_err(|_| AuthorityError::CommitFailed)?;
+    sync(&committed).map_err(|_| AuthorityError::CommitFailed)?;
+    sync(directory).map_err(|_| AuthorityError::CommitFailed)?;
+    // Activation may have created the store and ancestors. Syncing their
+    // parent entries also covers a retry after a previous incomplete barrier.
+    if let Some(parent) = root.parent() {
+        for ancestor in parent.ancestors() {
+            let parent = File::open(ancestor).map_err(|_| AuthorityError::CommitFailed)?;
+            sync(&parent).map_err(|_| AuthorityError::CommitFailed)?;
+        }
+    }
+    Ok(())
+}
+
+fn activate_with_sync(
+    root: &Path,
+    target: &str,
+    config: &EvidenceConfig,
+    package_digest: &str,
+    document: &AuthorityDocument,
+    sync: &mut impl FnMut(&File) -> std::io::Result<()>,
+) -> Result<AuthoritySnapshot, AuthorityError> {
     document.validate_for(target, config)?;
     if !is_sha256_label(package_digest) {
         return Err(AuthorityError::BindingMismatch);
@@ -323,9 +364,8 @@ pub fn activate(
             return Err(AuthorityError::BindingMismatch);
         }
         if active.package_digest == package_digest && active.authority_revision == revision {
-            return Ok(AuthoritySnapshot {
-                active: active.clone(),
-            });
+            sync_committed(root, &directory, sync)?;
+            return load(root, target, config, package_digest);
         }
     }
     if state.activations.len() >= MAX_ACTIVATIONS {
@@ -363,13 +403,9 @@ pub fn activate(
         output
             .write_all(&bytes)
             .map_err(|_| AuthorityError::CommitFailed)?;
-        output
-            .sync_all()
-            .map_err(|_| AuthorityError::CommitFailed)?;
+        sync(&output).map_err(|_| AuthorityError::CommitFailed)?;
         fs::rename(&temporary, root.join(STATE_FILE)).map_err(|_| AuthorityError::CommitFailed)?;
-        directory
-            .sync_all()
-            .map_err(|_| AuthorityError::CommitFailed)?;
+        sync_committed(root, &directory, sync)?;
         let captured = load(root, target, config, package_digest)?;
         if captured.revision() != active.authority_revision
             || captured.sequence() != active.sequence
@@ -451,6 +487,71 @@ mod tests {
                 .unwrap()
                 .revision(),
             next.revision()
+        );
+    }
+
+    #[test]
+    fn activation_retry_requires_durable_state_and_parent_entries() {
+        let (config, document, package) = fixture();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("new-parent/new-store");
+        let mut fail_directory_sync = |file: &File| {
+            if file.metadata()?.is_dir() {
+                Err(std::io::Error::other("injected directory sync failure"))
+            } else {
+                file.sync_all()
+            }
+        };
+        assert!(matches!(
+            activate_with_sync(
+                &root,
+                "local",
+                &config,
+                &package,
+                &document,
+                &mut fail_directory_sync
+            ),
+            Err(AuthorityError::CommitFailed)
+        ));
+        // The rename is visible but has not been acknowledged as durable.
+        assert_eq!(history(&root).unwrap().len(), 1);
+        assert!(
+            matches!(
+                activate_with_sync(
+                    &root,
+                    "local",
+                    &config,
+                    &package,
+                    &document,
+                    &mut fail_directory_sync
+                ),
+                Err(AuthorityError::CommitFailed)
+            ),
+            "an identical retry must not bypass the failed durability barrier"
+        );
+        let mut files_synced = 0;
+        let mut directories_synced = 0;
+        let mut sync = |file: &File| {
+            if file.metadata()?.is_dir() {
+                directories_synced += 1;
+            } else {
+                files_synced += 1;
+            }
+            file.sync_all()
+        };
+        let active =
+            activate_with_sync(&root, "local", &config, &package, &document, &mut sync).unwrap();
+        assert_eq!(active.sequence(), 1);
+        assert_eq!(history(&root).unwrap().len(), 1);
+        assert_eq!(files_synced, 1, "retry syncs the committed state file");
+        assert_eq!(
+            directories_synced,
+            root.ancestors().count(),
+            "store and every parent entry are durable before acknowledgement"
+        );
+        assert_eq!(
+            load(&root, "local", &config, &package).unwrap().revision(),
+            active.revision()
         );
     }
 
