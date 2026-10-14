@@ -25,21 +25,16 @@ pub mod derivation;
 pub mod finding;
 pub mod formats;
 pub mod layout;
-pub mod marker;
 pub mod openapi;
 pub mod project;
 #[cfg(feature = "schema")]
 pub mod schema;
 pub mod target;
-#[cfg(feature = "testing")]
-pub mod testing;
+pub mod types;
 pub mod validate;
 
 pub use derivation::{validate_derive_fact_reads, validate_function};
 pub use finding::{FieldPath, FieldStep, Finding};
-pub use marker::{
-    default_project_marker_document, parse_project_marker, ProjectMarker, PROJECT_MARKER_FILE,
-};
 pub use validate::{
     collection_pointers, valid_field_name, valid_local_identifier, validate_output_schema_document,
 };

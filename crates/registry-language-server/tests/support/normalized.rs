@@ -26,7 +26,7 @@ sources:
     response: {projection: [/active], shape: {type: object, required: [active], properties: {active: {type: boolean}}}, maximumBytes: 4096}
     extract: {function: extract-person}
     facts: {active: {type: boolean}}
-    limits: {timeoutMilliseconds: 2000, maximumConcurrency: 4}
+    limits: {attemptTimeoutMilliseconds: 2000, maximumConcurrency: 4}
 assertionDefinitions:
   active-status:
     question: Is the person active?

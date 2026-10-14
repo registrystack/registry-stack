@@ -46,6 +46,20 @@ fn parser() -> rhai::Engine {
     engine
 }
 
+/// The validated named entry point arity, without executing its program.
+pub(crate) fn function_arity(
+    source: &str,
+    interface: crate::project::FunctionInterface,
+) -> Option<usize> {
+    let ast = parser().compile(source).ok()?;
+    let (entry, arities) = interface.entry_point();
+    let mut functions = ast
+        .iter_functions()
+        .filter(|function| function.name == entry);
+    let arity = functions.next()?.params.len();
+    (functions.next().is_none() && arities.contains(&arity)).then_some(arity)
+}
+
 /// Validate the reviewed named Function against its one interface. The parser
 /// cannot load imports, print, or execute the supplied program.
 #[must_use]

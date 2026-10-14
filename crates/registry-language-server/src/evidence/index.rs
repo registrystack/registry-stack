@@ -3,8 +3,8 @@
 use crate::{
     evidence::diagnostics::reader_diagnostics,
     refs::{
-        DOCUMENT_START, EvidenceKind, IndexedDiagnostic, IndexedLocation, IndexedProject,
-        IndexedReference, IndexedSymbol, SymbolKey, SymbolQuery, bounded_message,
+        bounded_message, EvidenceKind, IndexedDiagnostic, IndexedLocation, IndexedProject,
+        IndexedReference, IndexedSymbol, SymbolKey, SymbolQuery, DOCUMENT_START,
     },
     yaml::{ParsedDocument, ScalarStyle, SourceMap, YamlScalar, YamlValue},
 };
@@ -299,14 +299,26 @@ pub(crate) fn build_index(
             continue;
         }
         let mut scope = None;
+        let mut catalog_kind = None;
         for (line_index, line) in code.split_inclusive('\n').enumerate() {
             if let Some((_, id)) = line.split_once("evidence-definition: ") {
                 scope = Some(id.trim().to_owned());
+                catalog_kind = None;
+                continue;
+            }
+            if line.contains("evidence-source: ") || line.contains("evidence-function: ") {
+                scope = None;
+                catalog_kind = Some(if line.contains("evidence-source: ") {
+                    EvidenceKind::Source
+                } else {
+                    EvidenceKind::Function
+                });
                 continue;
             }
             if line.contains("assertionDefinitions =") || line.starts_with("ASSERTION_DEFINITIONS:")
             {
                 scope = None;
+                catalog_kind = None;
             }
             for token in string_tokens(line) {
                 let token_end = token.1;
@@ -316,6 +328,22 @@ pub(crate) fn build_index(
                 let is_key = line[token_end + 1..].trim_start().starts_with(':');
                 if !is_key {
                     continue;
+                }
+                if let Some(kind) = catalog_kind {
+                    if builder
+                        .index
+                        .symbols
+                        .iter()
+                        .any(|symbol| symbol.key.kind == kind.into() && symbol.name == at.value)
+                    {
+                        builder.reference(
+                            SymbolQuery::global(kind, &at.value),
+                            generated_path,
+                            &at,
+                            None,
+                        );
+                        continue;
+                    }
                 }
                 let is_definition = scope.is_none() || line.trim_end().ends_with('{');
                 if is_definition

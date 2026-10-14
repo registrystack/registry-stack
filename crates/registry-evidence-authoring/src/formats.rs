@@ -22,14 +22,6 @@ use serde::de::DeserializeOwned;
 
 use crate::finding::Finding;
 
-/// The `apiVersion` of the project marker, `evidence-project.yaml`.
-pub const AUTHORING_PROJECT_API_VERSION: &str =
-    "id.registrystack.org/formats/evidence/authoring-project/v1alpha1";
-/// The `kind` of the project marker.
-pub const AUTHORING_PROJECT_KIND: &str = "EvidenceAuthoringProject";
-/// The published `$id` of the project marker's JSON Schema.
-pub const AUTHORING_PROJECT_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json";
 /// The published `$id` of a local access client's JSON Schema.
 pub const ACCESS_CLIENT_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/evidence/access-client/access-client.v1alpha1.schema.json";
@@ -38,22 +30,6 @@ pub const ACCESS_CLIENT_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/access-client/v1alpha1";
 /// The `kind` of a local access client.
 pub const ACCESS_CLIENT_KIND: &str = "EvidenceAccessClient";
-/// The `apiVersion` of a deployment target's `governance.yaml`.
-pub const TARGET_GOVERNANCE_API_VERSION: &str =
-    "id.registrystack.org/formats/evidence/target-governance/v1alpha1";
-/// The `kind` of a deployment target's governance.
-pub const TARGET_GOVERNANCE_KIND: &str = "EvidenceTargetGovernance";
-/// The `apiVersion` of a target's `settings.yaml`.
-pub const TARGET_SETTINGS_API_VERSION: &str =
-    "id.registrystack.org/formats/evidence/target-settings/v1alpha1";
-/// The `kind` of a target's settings.
-pub const TARGET_SETTINGS_KIND: &str = "EvidenceTargetSettings";
-/// The published `$id` of a target's `settings.yaml` JSON Schema.
-pub const TARGET_SETTINGS_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/evidence/target-settings/target-settings.v1alpha1.schema.json";
-/// The published `$id` of a target's `governance.yaml` JSON Schema.
-pub const TARGET_GOVERNANCE_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/evidence/target-governance/target-governance.v1alpha1.schema.json";
 /// The published `$id` of a materialized source mock plan's JSON Schema.
 pub const MOCK_PLAN_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/evidence/mock-plan/mock-plan.v1alpha1.schema.json";
@@ -63,25 +39,6 @@ pub const MOCK_PLAN_API_VERSION: &str = "id.registrystack.org/formats/evidence/m
 pub const MOCK_PLAN_KIND: &str = "EvidenceMockPlan";
 
 const NO_FORMAT_VERSION: &str = "Remove `version`; `apiVersion` names the format version.";
-
-/// The marker that anchors a directory as an Evidence authoring project.
-pub const AUTHORING_PROJECT: FormatSpec<'static> = FormatSpec {
-    kind: AUTHORING_PROJECT_KIND,
-    envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(AUTHORING_PROJECT_API_VERSION)],
-        retired_api_versions: &[],
-    },
-    removed_keys: &[
-        RemovedKey {
-            pointer: "/version",
-            replacement: NO_FORMAT_VERSION,
-        },
-        RemovedKey {
-            pointer: "/project",
-            replacement: "Remove `project`; `kind: EvidenceAuthoringProject` names the project.",
-        },
-    ],
-};
 
 /// One local access client.
 pub const ACCESS_CLIENT: FormatSpec<'static> = FormatSpec {
@@ -94,38 +51,6 @@ pub const ACCESS_CLIENT: FormatSpec<'static> = FormatSpec {
         pointer: "/version",
         replacement: NO_FORMAT_VERSION,
     }],
-};
-
-/// A deployment target's governance, compiled into the signed bundle.
-pub const TARGET_GOVERNANCE: FormatSpec<'static> = FormatSpec {
-    kind: TARGET_GOVERNANCE_KIND,
-    envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(TARGET_GOVERNANCE_API_VERSION)],
-        retired_api_versions: &[],
-    },
-    removed_keys: &[RemovedKey {
-        pointer: "/version",
-        replacement: NO_FORMAT_VERSION,
-    }],
-};
-
-/// A target's settings, from which `evidencectl target` writes the target.
-pub const TARGET_SETTINGS: FormatSpec<'static> = FormatSpec {
-    kind: TARGET_SETTINGS_KIND,
-    envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(TARGET_SETTINGS_API_VERSION)],
-        retired_api_versions: &[],
-    },
-    removed_keys: &[
-        RemovedKey {
-            pointer: "/formatVersion",
-            replacement: "Remove `formatVersion`; `apiVersion` names the format version.",
-        },
-        RemovedKey {
-            pointer: "/governance/version",
-            replacement: NO_FORMAT_VERSION,
-        },
-    ],
 };
 
 /// A materialized source mock plan.

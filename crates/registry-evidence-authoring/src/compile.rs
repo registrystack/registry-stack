@@ -26,10 +26,8 @@ pub fn compile(
     }
     let mut artifacts = BTreeMap::new();
     let mut functions = Vec::new();
-    for function in &project.functions {
-        let at = FieldPath::root()
-            .key("functions")
-            .map_key(function.id.to_string());
+    for (function_index, function) in project.functions.iter().enumerate() {
+        let at = FieldPath::root().key("functions").index(function_index);
         let Some(script) = scripts.get(&function.source) else {
             findings.push(Finding::new(
                 at.key("source"),
@@ -94,7 +92,7 @@ pub fn compile(
                 bindings.push(json!({"path":format!("/assertionDefinitions/{id}/derive"),"inputs":{"facts":definition.acquisition.source_ids().into_iter().map(|source|(source.to_string(),json!(project.sources[source].facts.iter().map(|(name,shape)|(name.to_string(),project::value_schema(shape))).collect::<Map<_,_>>()))).collect::<Map<_,_>>(),"selectors":definition.derive.selector_inputs,"parameters":definition.derive.parameters},"outputs":definition.outputs}));
             }
         }
-        functions.push(json!({"id": function.id, "interface": function.interface, "source": function.source, "label":function.label, "description":function.description, "capabilities": function.interface.capabilities(), "callSites": sites, "bindings":bindings}));
+        functions.push(json!({"id": function.id, "interface": function.interface, "arity": crate::derivation::function_arity(script,function.interface), "source": function.source, "label":function.label, "description":function.description, "capabilities": function.interface.capabilities(), "callSites": sites, "bindings":bindings}));
         let ordinary_source_call = project.sources.values().any(|source| {
             source.extract.function == function.id
                 || source
@@ -463,11 +461,22 @@ pub fn compile(
             .expect("model")
             .remove("maximumHolderBoundBatchSize");
     }
-    Ok(CompiledProject {
+    let mut compiled = CompiledProject {
         model,
         artifacts,
         functions,
-    })
+    };
+    // Inspection and declaration generation share the same typed ABI projection.
+    // The authored program returns local Output names; wrappers alone lower URIs.
+    let interfaces = project
+        .functions
+        .iter()
+        .map(|function| crate::types::function_shape(project, &compiled, function))
+        .collect::<Vec<_>>();
+    for (function, interface) in compiled.functions.iter_mut().zip(interfaces) {
+        function["abi"] = interface;
+    }
+    Ok(compiled)
 }
 fn artifact(artifacts: &mut BTreeMap<String, Vec<u8>>, path: &str, value: &Value) {
     artifacts.insert(

@@ -424,6 +424,12 @@ fn source_batches_compile_named_source_interfaces_and_package_gates() {
             .unwrap()
             .contains("fn extract_batch")
     );
+    let ts = project::typescript(&project, &compiled);
+    let py = project::python(&project, &compiled);
+    for text in [&ts, &py] {
+        assert!(text.contains("batch-prepare") && text.contains("batch-extract"));
+        assert!(text.contains("\"slots\"") && text.contains("\"slot\""));
+    }
     let mut invalid = project;
     invalid.acquisition_capabilities = Default::default();
     assert!(compile::compile(&invalid, &scripts).is_err());
@@ -448,5 +454,46 @@ fn empty_complete_target_authority_explicitly_revokes_every_profile() {
     value["kind"] = json!(target::AUTHORITY_KIND);
     assert!(
         target::read_authority("authority.yaml", value.to_string().as_bytes(), &project).is_err()
+    );
+}
+
+#[test]
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the test executes Python only to validate generated declarations; the pure library performs no I/O"
+)]
+fn generated_types_resolve_structured_schemas_and_exact_function_result_shapes() {
+    use std::io::Write as _;
+    let mut value = serde_json::to_value(project()).unwrap();
+    value["assertionDefinitions"]["active-status"]["outputs"]["details"] = json!({"concept":"urn:example:concept:details","type":"reviewed-structured-value","schema":"schemas/details.json","maximumSerializedBytes":2048});
+    value["assertionDefinitions"]["active-status"]["derive"]["selectorInputs"] = json!([{"role":"person","alternatives":[{"profile":"person-by-id","fields":["person-id"]}]}]);
+    let project: project::EvidenceProject = serde_json::from_value(value).unwrap();
+    let mut scripts = scripts();
+    scripts.insert("schemas/details.json".to_owned(),json!({"$id":"urn:example:schema:details","type":"object","required":["active"],"additionalProperties":false,"properties":{"active":{"type":"boolean"},"status":{"type":"string","enum":["current","expired"]},"count":{"type":"integer","minimum":0,"maximum":100}}}).to_string());
+    let compiled = compile::compile(&project, &scripts).unwrap();
+    let ts = project::typescript(&project, &compiled);
+    assert!(ts.contains("\"details\": { \"active\": boolean; \"count\"?: number; \"status\"?: \"current\" | \"expired\" }"),"{ts}");
+    assert!(ts.contains("ReadonlyArray<{ \"output\": \"active\"; \"value\": boolean } | { \"output\": \"details\""),"{ts}");
+    assert!(ts.contains("\"profile\": \"person-by-id\"; \"values\": { \"person-id\": string }"));
+    assert!(ts.contains("\"observed_at\": string") && ts.contains("\"parameters\": {"));
+    let py = project::python(&project, &compiled);
+    assert!(
+        py.contains("SourceResponses = TypedDict") && py.contains("FunctionBindings = TypedDict")
+    );
+    assert!(py.contains("NotRequired[Literal[\"current\", \"expired\"]]"));
+    assert!(py.contains("\"output\": Literal[\"details\"]"));
+    let mut child=std::process::Command::new("python3").args(["-c","import ast,sys; source=sys.stdin.read(); ast.parse(source); exec(compile(source,'generated-evidence-types','exec'), {})"]).stdin(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().expect("python3 syntax checker");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(py.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
