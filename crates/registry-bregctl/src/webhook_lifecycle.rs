@@ -11,13 +11,13 @@ use std::path::Path;
 use registry_breg::contract::{Crs84BboxSource, EventTrigger, FieldTypeSource};
 use registry_breg::model::CompiledRegistry;
 use registry_breg::webhook::{
-    MAX_WEBHOOK_STATUS_RESULTS, WebhookDeliveryStatus, WebhookDeliveryStatusKind,
-    WebhookOperatorError, WebhookOperatorService,
+    WebhookDeliveryStatus, WebhookDeliveryStatusKind, WebhookOperatorError, WebhookOperatorService,
+    MAX_WEBHOOK_STATUS_RESULTS,
 };
 use registry_platform_config::PackageDigestMismatch;
 use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
 use serde::Serialize;
-use serde_json::{Map, Number, Value, json};
+use serde_json::{json, Map, Number, Value};
 use uuid::Uuid;
 
 const SAMPLE_EVENT_ID: &str = "00000000-0000-4000-8000-000000000001";

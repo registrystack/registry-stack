@@ -86,11 +86,11 @@ mod descriptor {
     use std::path::{Component, Path};
 
     use rustix::fs::{
-        AtFlags, CWD, Dir, FileType, Mode, OFlags, RawMode, RenameFlags, linkat, mkdirat, openat,
-        renameat, renameat_with, statat, unlinkat,
+        linkat, mkdirat, openat, renameat, renameat_with, statat, unlinkat, AtFlags, Dir, FileType,
+        Mode, OFlags, RawMode, RenameFlags, CWD,
     };
 
-    use super::{MAX_REMOVE_TREE_DEPTH, SafePathError};
+    use super::{SafePathError, MAX_REMOVE_TREE_DEPTH};
 
     /// Flags every directory descriptor in a resolved chain is opened with. The
     /// kernel refuses a symbolic link component and refuses a non-directory.
@@ -797,7 +797,7 @@ mod descriptor {
 pub(crate) use descriptor::{EntryStat, SafeDir, SafeEntry};
 
 #[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
-pub(crate) use descriptor::{RaceHookGuard, install_listing_stat_hook, install_race_hook};
+pub(crate) use descriptor::{install_listing_stat_hook, install_race_hook, RaceHookGuard};
 
 /// The deterministic ancestor-swap fixture the race regressions share.
 ///
@@ -816,7 +816,7 @@ pub(crate) mod race_fixture {
 
     use tempfile::TempDir;
 
-    use super::{RaceHookGuard, install_race_hook};
+    use super::{install_race_hook, RaceHookGuard};
 
     pub(crate) struct RaceTree {
         _directory: TempDir,
@@ -961,7 +961,7 @@ mod tests {
 
     use super::race_fixture::race_tree;
     use super::{
-        MAX_REMOVE_TREE_DEPTH, SafeDir, SafeEntry, SafePathError, install_listing_stat_hook,
+        install_listing_stat_hook, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH,
     };
 
     #[test]
@@ -1220,11 +1220,9 @@ mod tests {
             .remove_tree(OsStr::new("staged"))
             .expect_err("a tree deeper than the bound is refused");
 
-        assert!(
-            refused
-                .to_string()
-                .contains("deeper than this tool removes")
-        );
+        assert!(refused
+            .to_string()
+            .contains("deeper than this tool removes"));
         assert!(tree.root().join("genuine/staged").exists());
     }
 

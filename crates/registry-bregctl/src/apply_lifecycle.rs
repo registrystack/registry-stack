@@ -6,19 +6,20 @@ use std::path::{Path, PathBuf};
 use registry_breg::audit::RegistryAudit;
 use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
-    ActivationDeployment, ActivationPlan, ActivationStatus, AppliedFieldEncryptionKeySource,
-    ApplyPrecondition, ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest,
-    DestructiveBackupEvidence, MigrationError, RecordedRegistryState, apply_verified_package,
-    bind_active_package, operator_reference_is_well_formed, plan_verified_package,
-    read_activation_status, read_recorded_registry_state, successor_plan_is_empty_for_predecessor,
+    apply_verified_package, bind_active_package, operator_reference_is_well_formed,
+    plan_verified_package, read_activation_status, read_recorded_registry_state,
+    successor_plan_is_empty_for_predecessor, ActivationDeployment, ActivationPlan,
+    ActivationStatus, AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles,
+    ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
+    RecordedRegistryState,
 };
 use registry_breg::package::{
-    MigrationInspectionSummary, PackageError, VerifiedPackage, VerifiedPredecessorPackage,
-    load_package,
+    load_package, MigrationInspectionSummary, PackageError, VerifiedPackage,
+    VerifiedPredecessorPackage,
 };
 use registry_breg::postgres::{ConnectionConfig, ExpectedRegistryIdentity};
 use registry_breg::proposal_retention::ProposalActivationCompatibilityInventory;
-use registry_breg::runtime_config::{RuntimeConfig, RuntimeConfigError, load_runtime_config};
+use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 
 #[derive(Debug)]
 pub(crate) enum ApplyLifecycleError {

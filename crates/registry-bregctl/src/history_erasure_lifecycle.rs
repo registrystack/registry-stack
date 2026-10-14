@@ -15,17 +15,17 @@ use std::time::Duration;
 
 use registry_breg::audit::RegistryAudit;
 use registry_breg::history_erasure::{
-    HistoryErasureError, HistoryErasureOutcome, HistoryErasureRequest, HistoryErasureTimeouts,
-    RecordHistoryErasureTarget, erase_record_history_with_connection,
+    erase_record_history_with_connection, HistoryErasureError, HistoryErasureOutcome,
+    HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
 };
 use registry_breg::package::PackageError;
 use registry_breg::postgres::RegistryLockKey;
-use registry_breg::runtime_config::{RuntimeConfigError, load_runtime_config};
+use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 use registry_platform_canonical_json::parse_json_strict;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::active_registry::{ActiveRegistryError, recorded_active_identity};
+use crate::active_registry::{recorded_active_identity, ActiveRegistryError};
 use crate::safe_path::SafeEntry;
 
 const MAX_ERASURE_REQUEST_BYTES: u64 = 16 * 1024;
@@ -278,9 +278,8 @@ mod tests {
         assert_eq!(parsed.entity_id, "membership");
         assert_eq!(parsed.erase_through_revision, 1);
 
-        assert!(
-            parse_erasure_request_bytes(
-                br#"{
+        assert!(parse_erasure_request_bytes(
+            br#"{
               "entityId":"membership",
               "recordId":"018feaa0-68f9-4a45-b9e3-58436df07af7",
               "eraseThroughRevision":1,
@@ -288,9 +287,8 @@ mod tests {
               "reason":"retention request",
               "extra":"refused"
             }"#,
-            )
-            .is_err()
-        );
+        )
+        .is_err());
     }
 
     #[cfg(unix)]

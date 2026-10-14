@@ -26,9 +26,9 @@ use registry_breg::Diagnostic;
 use registry_linkml::publicschema;
 
 use crate::{
+    artifact_report, compile, compiler_findings, diagnostic, init_media_type, tool_diagnostic,
     DiagnosticArtifact, DocumentRefusal, FailureReport, ProfileArg, Refusal, SuccessReport,
-    SuggestedAction, artifact_report, compile, compiler_findings, diagnostic, init_media_type,
-    tool_diagnostic,
+    SuggestedAction,
 };
 
 #[cfg(feature = "schema")]

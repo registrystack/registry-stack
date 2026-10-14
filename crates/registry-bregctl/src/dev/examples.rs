@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Bounded, explicitly initiated examples against this project's owned dev instance.
-use super::{Clients, MAX_BYTES, State, Status, config, private};
-use anyhow::{Context, Result, bail};
+use super::{config, private, Clients, State, Status, MAX_BYTES};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
 use registry_breg_client::*;
@@ -10,7 +10,7 @@ use registry_platform_yaml::{
     Reader, RemovedKey, Report, Severity, UniqueIdList,
 };
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -2071,14 +2071,12 @@ journeys:
                 .list_records(route, &BRegListRequest::default().options(options))
                 .await
                 .unwrap();
-            assert!(
-                records
-                    .value
-                    .value
-                    .items
-                    .iter()
-                    .all(|record| record.record_identifier != id)
-            );
+            assert!(records
+                .value
+                .value
+                .items
+                .iter()
+                .all(|record| record.record_identifier != id));
             let revisions = client
                 .record_revisions(route, id, Some("directory-editor"))
                 .await
@@ -2269,11 +2267,9 @@ journeys:
             &ports[2],
         ]);
         assert_ne!(std::env::current_dir().unwrap(), owned.project);
-        assert!(
-            attempts(&owned.project.join(".breg/dev/examples"))
-                .unwrap()
-                .is_empty()
-        );
+        assert!(attempts(&owned.project.join(".breg/dev/examples"))
+            .unwrap()
+            .is_empty());
         assert_eq!(observed_count(&owned.project), 0);
         child(&owned.project, "first-record", None, Some("create"));
         let interrupted = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
@@ -2300,12 +2296,10 @@ journeys:
             serde_json::to_vec(&changed).unwrap(),
         )
         .unwrap();
-        assert!(
-            run_example(test_args(&owned.project, "first-record"))
-                .unwrap_err()
-                .to_string()
-                .contains("input")
-        );
+        assert!(run_example(test_args(&owned.project, "first-record"))
+            .unwrap_err()
+            .to_string()
+            .contains("input"));
         fs::write(
             owned.project.join("examples/inputs/first-record.json"),
             original_input,
@@ -2327,13 +2321,11 @@ journeys:
         let mut invalid: Value = serde_json::from_slice(&sample_bytes).unwrap();
         invalid["hill-link"]["from"] = json!({"recordCapture":"river-link"});
         fs::write(&sample_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
-        assert!(
-            format!(
-                "{:#}",
-                run_example(test_args(&owned.project, "starter-data")).unwrap_err()
-            )
-            .contains("wrong target entity")
-        );
+        assert!(format!(
+            "{:#}",
+            run_example(test_args(&owned.project, "starter-data")).unwrap_err()
+        )
+        .contains("wrong target entity"));
         assert_eq!(
             observed_count(&owned.project),
             1,
@@ -2392,12 +2384,10 @@ journeys:
         distinct.new_attempt = true;
         run_example(distinct).unwrap();
         assert_eq!(observed_count(&owned.project), 5);
-        assert!(
-            run_example(test_args(&owned.project, "first-record"))
-                .unwrap_err()
-                .to_string()
-                .contains("multiple attempts")
-        );
+        assert!(run_example(test_args(&owned.project, "first-record"))
+            .unwrap_err()
+            .to_string()
+            .contains("multiple attempts"));
         let old_id = uuid::Uuid::parse_str(first["attempt"].as_str().unwrap()).unwrap();
         owned.succeed(&["stop", "--remove"]);
         owned.succeed(&[]);

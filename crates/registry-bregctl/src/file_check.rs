@@ -15,16 +15,16 @@ use std::process::ExitCode;
 use registry_breg::literal_text::{
     LiteralText, WRITE_THE_VALUE, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
 };
-use registry_breg::{CompiledRegistry, data, fixtures, migration_plan};
+use registry_breg::{data, fixtures, migration_plan, CompiledRegistry};
 use registry_platform_yaml::{
-    Diagnostic, Document, Expect, FormatSpec, MAXIMUM_DOCUMENT_BYTES, NodeValue, Reader, Report,
-    Severity, Source,
+    Diagnostic, Document, Expect, FormatSpec, NodeValue, Reader, Report, Severity, Source,
+    MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::Serialize;
 
 use crate::{
-    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, OutputFormat, data_lifecycle, dev,
-    init_from_model, test_lifecycle, write_ctl_report,
+    data_lifecycle, dev, init_from_model, test_lifecycle, write_ctl_report, OutputFormat,
+    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
 };
 
 /// What `bregctl check --file` was asked to check.

@@ -24,16 +24,16 @@ use registry_breg::package::PackageError;
 use registry_breg::runtime_config::check_runtime_config;
 use registry_breg::{CompiledRegistry, DiagnosticSeverity};
 use registry_platform_yaml::{
-    Diagnostic, Document, MAXIMUM_DOCUMENT_BYTES, Node, NodeValue, Report, Severity, Source,
-    escape_pointer_segment,
+    escape_pointer_segment, Diagnostic, Document, Node, NodeValue, Report, Severity, Source,
+    MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::Serialize;
 
 use super::{
-    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, OutputFormat, ProfileArg, SafeDir, SafeEntry,
-    SafePathError, capture_project_source, compile_captured_project, ensure_source_entry_identity,
-    file_check, has_parent_component, inspect_package_integrity, path_diagnostic,
-    read_module_directory_names, write_ctl_report,
+    capture_project_source, compile_captured_project, ensure_source_entry_identity, file_check,
+    has_parent_component, inspect_package_integrity, path_diagnostic, read_module_directory_names,
+    write_ctl_report, OutputFormat, ProfileArg, SafeDir, SafeEntry, SafePathError,
+    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
 };
 
 /// The registered kind of `registry.yaml`, named as the `artifact` of a
@@ -843,27 +843,18 @@ fn alternatives(steps: &[Step]) -> Vec<Vec<Step>> {
         vec![permission]
     };
     match steps {
-        [
-            Step::Member(entities),
-            Step::Select { value: entity, .. },
-            Step::Member(profiles),
-            Step::Select { value: profile, .. },
-            rest @ ..,
-        ] if entities == "recordTypes" && profiles == "accessProfiles" => {
+        [Step::Member(entities), Step::Select { value: entity, .. }, Step::Member(profiles), Step::Select { value: profile, .. }, rest @ ..]
+            if entities == "recordTypes" && profiles == "accessProfiles" =>
+        {
             under_profile("records", "recordType", entity, profile, rest)
         }
-        [
-            Step::Member(actions),
-            Step::Select { value: action, .. },
-            Step::Member(permissions),
-            Step::Select {
-                key,
-                value: profile,
-            },
-            rest @ ..,
-        ] if actions == "actions"
-            && permissions == "permissions"
-            && key.as_deref() == Some("profile") =>
+        [Step::Member(actions), Step::Select { value: action, .. }, Step::Member(permissions), Step::Select {
+            key,
+            value: profile,
+        }, rest @ ..]
+            if actions == "actions"
+                && permissions == "permissions"
+                && key.as_deref() == Some("profile") =>
         {
             under_profile("actions", "action", action, profile, rest)
         }

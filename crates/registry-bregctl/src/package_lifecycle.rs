@@ -8,11 +8,11 @@ use std::io::Read;
 use std::path::Path;
 
 use registry_breg::fixtures::{
-    FixtureError, SchemaTestReceipt, read_schema_test_receipt, validate_fixture_journeys,
-    validate_schema_test_receipt_for_package,
+    read_schema_test_receipt, validate_fixture_journeys, validate_schema_test_receipt_for_package,
+    FixtureError, SchemaTestReceipt,
 };
 use registry_breg::package::{
-    FIXTURE_JOURNEYS_PATH, PackageError, PackageFileRole, PreparedPackage,
+    PackageError, PackageFileRole, PreparedPackage, FIXTURE_JOURNEYS_PATH,
 };
 
 use crate::safe_path::{EntryStat, SafeDir, SafeEntry};

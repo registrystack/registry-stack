@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use registry_breg::{fixtures, migration_plan};
 use registry_platform_yaml::{EnvelopeRule, FormatSpec, VersionStatus};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 use crate::{dev, init_from_model, test_lifecycle};
 

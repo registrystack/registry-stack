@@ -26,17 +26,17 @@ use std::path::Path;
 
 use registry_breg::compiler::module_digest_with_assets;
 use registry_breg::contract::{FieldTypeSource, ModuleLockSource};
-use registry_breg::{Diagnostic, parse_module_yaml, parse_project_yaml};
+use registry_breg::{parse_module_yaml, parse_project_yaml, Diagnostic};
 use registry_platform_yaml::Reader;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::safe_path::{SafeDir, SafePathError};
 use crate::{
-    CapturedModuleSource, CapturedProjectSource, DiagnosticArtifact, FailureReport, ProfileArg,
-    SuccessReport, SuggestedAction, artifact_report, capture_project_source,
-    compile_captured_project, compiler_findings, diagnostic, first_diagnostic,
-    render_project_module_locks, tool_diagnostic, validate_project_directory,
-    write_project_registry, yaml_string,
+    artifact_report, capture_project_source, compile_captured_project, compiler_findings,
+    diagnostic, first_diagnostic, render_project_module_locks, tool_diagnostic,
+    validate_project_directory, write_project_registry, yaml_string, CapturedModuleSource,
+    CapturedProjectSource, DiagnosticArtifact, FailureReport, ProfileArg, SuccessReport,
+    SuggestedAction,
 };
 
 pub(crate) const COMMAND: &str = "module add consent";
@@ -1008,13 +1008,11 @@ mod tests {
     #[test]
     fn no_manifest_projection_or_a_populated_flow_list_is_refused() {
         assert!(append_manifest_projection_dataset("a: 1\n", DATASET_ITEM).is_none());
-        assert!(
-            append_manifest_projection_dataset(
-                "manifestProjection:\n  datasets: [{id: x}]\n",
-                DATASET_ITEM
-            )
-            .is_none()
-        );
+        assert!(append_manifest_projection_dataset(
+            "manifestProjection:\n  datasets: [{id: x}]\n",
+            DATASET_ITEM
+        )
+        .is_none());
     }
 
     #[test]

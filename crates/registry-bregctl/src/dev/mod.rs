@@ -15,12 +15,12 @@ mod purpose;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use config::{DEV_CLIENTS_FORMAT, check as check_clients};
+pub(crate) use config::{check as check_clients, DEV_CLIENTS_FORMAT};
 pub(crate) use prepare_source::{
-    PREPARED_SOURCE_FORMAT, SOURCE_TRANSITION_FORMAT, check_prepared, check_transition,
+    check_prepared, check_transition, PREPARED_SOURCE_FORMAT, SOURCE_TRANSITION_FORMAT,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;
 pub(crate) use config::ClientsRefused;
@@ -30,7 +30,7 @@ use registry_platform_yaml::{
     Severity, UniqueList,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -44,8 +44,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     thread,
     time::{Duration, Instant},
@@ -2582,7 +2582,7 @@ async fn token_async_with_claims(
     use registry_platform_httputil::TokenProvider;
 
     let root = state.root();
-    let resource = token_resource(state, credential_id)?;
+    token_resource(state, credential_id)?;
     let issuer = state.issuer_origin();
     let endpoint: url::Url = format!("{issuer}/oauth2/token")
         .parse()
@@ -3067,7 +3067,7 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
 }
 
 fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
-    use crate::data_lifecycle::{DataImportRequest, run_import};
+    use crate::data_lifecycle::{run_import, DataImportRequest};
     use crate::import_authority_lifecycle::ImportAuthorityCliError;
     use registry_breg::data::DataImportOperation;
     use registry_breg::import_authority::ImportAuthorityError;

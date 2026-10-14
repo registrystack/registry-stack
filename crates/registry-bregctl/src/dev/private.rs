@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Small owner-only filesystem boundary for retained local development state.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},

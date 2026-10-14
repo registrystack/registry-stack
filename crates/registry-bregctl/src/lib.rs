@@ -20,24 +20,24 @@ use registry_breg::compiler::module_digest_with_assets;
 use registry_breg::contract::{FieldTypeSource, ModuleAssetSource, ModuleLockSource};
 use registry_breg::migration_plan::{ReviewedMigrationError, ReviewedMigrationRecovery};
 use registry_breg::package::{
-    CompiledRegistryChangeClass, FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES,
-    MAX_RHAI_PLANNER_PATH_BYTES, MAX_RHAI_PLANNER_SOURCE_BYTES, MigrationInspectionPlanKind,
+    inspect_package_integrity, CompiledRegistryChangeClass, MigrationInspectionPlanKind,
     MigrationInspectionSummary, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSourceFile, PreparedPackage, inspect_package_integrity,
+    PackageModuleSource, PackageSourceFile, PreparedPackage, FIXTURE_JOURNEYS_PATH,
+    MAX_PACKAGE_SOURCE_FILE_BYTES, MAX_RHAI_PLANNER_PATH_BYTES, MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
 use registry_breg::postgres::{BaselineFingerprintDrift, MigrationRehearsalError};
 use registry_breg::runtime_config::RuntimeConfigError;
-use registry_breg::tooling::{CompiledRegistryDiff, DiffClassification, classify_registry_diff};
+use registry_breg::tooling::{classify_registry_diff, CompiledRegistryDiff, DiffClassification};
 use registry_breg::{
-    CompileFailure, CompileProfile, CompiledRegistry, Diagnostic, DiagnosticSeverity,
-    GeneratedArtifact, GeneratedArtifacts, RegistryModule, RegistryProject,
-    compile_project_with_assets, parse_module_yaml, parse_project_yaml,
+    compile_project_with_assets, parse_module_yaml, parse_project_yaml, CompileFailure,
+    CompileProfile, CompiledRegistry, Diagnostic, DiagnosticSeverity, GeneratedArtifact,
+    GeneratedArtifacts, RegistryModule, RegistryProject,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_config::PackageDigestMismatch;
 use registry_platform_hooks::HookHandlerSource;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 mod action_handler_test;
 mod active_registry;
@@ -93,8 +93,8 @@ use history_rebaseline_lifecycle::{
 use import_authority_lifecycle::ImportAuthorityCliError;
 use instance_claim_lifecycle::InstanceClaimCliError;
 use package_inspection::{
-    RuntimePackageInspectionError, inspect_baseline_package, inspect_baseline_rehearsal,
-    inspect_runtime_package, inspect_runtime_predecessor_rehearsal_baseline,
+    inspect_baseline_package, inspect_baseline_rehearsal, inspect_runtime_package,
+    inspect_runtime_predecessor_rehearsal_baseline, RuntimePackageInspectionError,
 };
 use package_lifecycle::PackageLifecycleError;
 use proposal_retention::{
@@ -108,7 +108,7 @@ use registry_breg::data::DataError;
 use registry_breg::migration_reconcile::{ReconcileError, ReconcileOutcome};
 use registry_breg_client::{BRegIngestionBlockedReason, BRegReleaseStatus, BRegWithdrawalReason};
 use review_recovery::{ReviewRecoveryCliError, ReviewRecoveryOperation, ReviewRecoveryOutcome};
-use safe_path::{EntryStat, MAX_REMOVE_TREE_DEPTH, SafeDir, SafeEntry, SafePathError};
+use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH};
 use statistics_lifecycle::{
     StatisticsLifecycleError, StatisticsPublishRequest, StatisticsWithdrawRequest,
 };
@@ -12815,25 +12815,21 @@ mod tests {
                 } else {
                     "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 7\r\nConnection: close\r\n\r\ninvalid".to_owned()
                 };
-                let server =
-                    std::thread::spawn(move || {
-                        let (mut stream, _) = listener.accept().unwrap();
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(5)))
-                            .unwrap();
-                        let mut request = vec![0; 8192];
-                        let count = stream.read(&mut request).unwrap();
-                        let request = String::from_utf8_lossy(&request[..count]);
-                        assert!(request.starts_with(
-                            "POST /v1/statistics/population/releases/2025-01/versions"
-                        ));
-                        assert!(
-                            request
-                                .to_ascii_lowercase()
-                                .contains("idempotency-key: statistics-retry-key")
-                        );
-                        stream.write_all(response.as_bytes()).unwrap();
-                    });
+                let server = std::thread::spawn(move || {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut request = vec![0; 8192];
+                    let count = stream.read(&mut request).unwrap();
+                    let request = String::from_utf8_lossy(&request[..count]);
+                    assert!(request
+                        .starts_with("POST /v1/statistics/population/releases/2025-01/versions"));
+                    assert!(request
+                        .to_ascii_lowercase()
+                        .contains("idempotency-key: statistics-retry-key"));
+                    stream.write_all(response.as_bytes()).unwrap();
+                });
                 let error = if withdraw {
                     statistics_lifecycle::withdraw(StatisticsWithdrawRequest {
                         breg_url: &url,
@@ -12864,12 +12860,10 @@ mod tests {
                 assert_eq!(rendered["diagnostics"][0]["code"], expected, "{rendered}");
                 assert!(!rendered.to_string().contains("statistics-token-canary"));
                 if reason.is_some() {
-                    assert!(
-                        rendered["diagnostics"][0]["message"]
-                            .as_str()
-                            .unwrap()
-                            .contains("publish after")
-                    );
+                    assert!(rendered["diagnostics"][0]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("publish after"));
                 }
                 // A key past its receipt horizon names the key and says the
                 // earlier request committed, so the operator reads rather than retries.
@@ -12878,12 +12872,10 @@ mod tests {
                         rendered["diagnostics"][0]["path"], "--idempotency-key",
                         "{rendered}"
                     );
-                    assert!(
-                        rendered["diagnostics"][0]["message"]
-                            .as_str()
-                            .unwrap()
-                            .contains("committed")
-                    );
+                    assert!(rendered["diagnostics"][0]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("committed"));
                 }
             }
         }
@@ -12973,10 +12965,8 @@ mod tests {
                     .unwrap();
                 let mut request = vec![0; 8192];
                 let count = stream.read(&mut request).unwrap();
-                assert!(
-                    String::from_utf8_lossy(&request[..count])
-                        .starts_with("POST /v1/statistics/population/releases/2025-01/versions")
-                );
+                assert!(String::from_utf8_lossy(&request[..count])
+                    .starts_with("POST /v1/statistics/population/releases/2025-01/versions"));
                 stream.write_all(response.as_bytes()).unwrap();
             });
             let error = if withdraw {
@@ -13010,44 +13000,40 @@ mod tests {
 
     #[test]
     fn statistics_withdraw_refuses_zero_version_in_the_parser() {
-        assert!(
-            Cli::try_parse_from([
-                "bregctl",
-                "statistics",
-                "withdraw",
-                "--breg-url",
-                "http://127.0.0.1:8080",
-                "--access-token-file",
-                "/tmp/token",
-                "--dataset",
-                "population",
-                "--period",
-                "2026-09",
-                "--version",
-                "0",
-                "--reason",
-                "disclosure-risk",
-                "--profile",
-                "publisher",
-                "--idempotency-key",
-                "withdraw-v0",
-            ])
-            .is_err()
-        );
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "statistics",
+            "withdraw",
+            "--breg-url",
+            "http://127.0.0.1:8080",
+            "--access-token-file",
+            "/tmp/token",
+            "--dataset",
+            "population",
+            "--period",
+            "2026-09",
+            "--version",
+            "0",
+            "--reason",
+            "disclosure-risk",
+            "--profile",
+            "publisher",
+            "--idempotency-key",
+            "withdraw-v0",
+        ])
+        .is_err());
     }
 
     #[test]
     fn init_template_conflicts_with_every_flag_that_shapes_a_derived_project() {
-        assert!(
-            Cli::try_parse_from([
-                "bregctl",
-                "init",
-                "project",
-                "--template",
-                "minimal-directory"
-            ])
-            .is_ok()
-        );
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "init",
+            "project",
+            "--template",
+            "minimal-directory"
+        ])
+        .is_ok());
         for conflicting in [
             vec!["--from", "publicschema"],
             vec!["--from", "publicschema", "--selection", "selection.yaml"],
@@ -13160,11 +13146,8 @@ mod tests {
         );
         let encoded = serde_json::to_string(&report).expect("report encodes");
         assert!(encoded.contains("review-recovery.submission.ineligible"));
-        assert!(
-            encoded.contains(
-                "reason request-erased, state failed, code result-poll-attempts-exhausted"
-            )
-        );
+        assert!(encoded
+            .contains("reason request-erased, state failed, code result-poll-attempts-exhausted"));
     }
 
     #[test]
@@ -13492,12 +13475,10 @@ mod tests {
             "data.export.checkpoint.missing"
         );
         assert_eq!(checkpoint["diagnostics"][0]["path"], "checkpoint");
-        assert!(
-            checkpoint["diagnostics"][0]["message"]
-                .as_str()
-                .expect("the message renders")
-                .contains("without the checkpoint")
-        );
+        assert!(checkpoint["diagnostics"][0]["message"]
+            .as_str()
+            .expect("the message renders")
+            .contains("without the checkpoint"));
 
         let output = serde_json::to_value(data_lifecycle_failure(
             "data export",
@@ -13510,12 +13491,10 @@ mod tests {
             "data.export.output.missing"
         );
         assert_eq!(output["diagnostics"][0]["path"], "output");
-        assert!(
-            output["diagnostics"][0]["message"]
-                .as_str()
-                .expect("the message renders")
-                .contains("without the output")
-        );
+        assert!(output["diagnostics"][0]["message"]
+            .as_str()
+            .expect("the message renders")
+            .contains("without the output"));
     }
 
     #[test]
@@ -13884,18 +13863,16 @@ mod tests {
         };
         assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
         assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
-        assert!(
-            Cli::try_parse_from([
-                "bregctl",
-                "history",
-                "rebaseline",
-                "--runtime-config",
-                "/tmp/runtime.yaml",
-                "--record-id",
-                "018feaa0-68f9-4a45-b9e3-58436df07af7",
-            ])
-            .is_err()
-        );
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "history",
+            "rebaseline",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--record-id",
+            "018feaa0-68f9-4a45-b9e3-58436df07af7",
+        ])
+        .is_err());
     }
 
     #[test]
@@ -13920,18 +13897,16 @@ mod tests {
         assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
         assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
         assert!(args.acknowledge_irreversible);
-        assert!(
-            Cli::try_parse_from([
-                "bregctl",
-                "history",
-                "erase",
-                "--runtime-config",
-                "/tmp/runtime.yaml",
-                "--record-id",
-                "018feaa0-68f9-4a45-b9e3-58436df07af7",
-            ])
-            .is_err()
-        );
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "history",
+            "erase",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--record-id",
+            "018feaa0-68f9-4a45-b9e3-58436df07af7",
+        ])
+        .is_err());
     }
 
     #[test]
@@ -14410,17 +14385,15 @@ accessProfiles:
             fs::read(destination.join("preserved.txt")).expect("existing destination is intact"),
             b"preserved"
         );
-        assert!(
-            fs::read_dir(&directory.path)
-                .expect("test directory is readable")
-                .all(|entry| {
-                    !entry
-                        .expect("test directory entry is readable")
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with(".bregctl-stage-")
-                })
-        );
+        assert!(fs::read_dir(&directory.path)
+            .expect("test directory is readable")
+            .all(|entry| {
+                !entry
+                    .expect("test directory entry is readable")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".bregctl-stage-")
+            }));
     }
 
     #[test]
@@ -15557,8 +15530,8 @@ fn help_requested_matches_bare_help_only_in_the_subcommand_position() {
 #[cfg(all(test, unix))]
 mod field_encryption_keygen_tests {
     use super::*;
-    use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
     use std::os::unix::fs::PermissionsExt as _;
 
     fn keygen_arguments(output: &Path) -> Vec<OsString> {
@@ -15727,20 +15700,18 @@ mod field_encryption_lifecycle_cli_tests {
         assert_eq!(args.package, PathBuf::from("/tmp/successor-package"));
         // The preflight names no records: its scope is the plan itself, and a
         // request file belongs to the erase-history command alone.
-        assert!(
-            Cli::try_parse_from([
-                "bregctl",
-                "field-encryption",
-                "preflight",
-                "--runtime-config",
-                "/tmp/runtime.yaml",
-                "--package",
-                "/tmp/successor-package",
-                "--request-file",
-                "/tmp/request.json",
-            ])
-            .is_err()
-        );
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "field-encryption",
+            "preflight",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--package",
+            "/tmp/successor-package",
+            "--request-file",
+            "/tmp/request.json",
+        ])
+        .is_err());
     }
 
     #[test]
@@ -15763,18 +15734,16 @@ mod field_encryption_lifecycle_cli_tests {
         };
         assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
         assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
-        assert!(
-            Cli::try_parse_from([
-                "bregctl",
-                "field-encryption",
-                "erase-history",
-                "--runtime-config",
-                "/tmp/runtime.yaml",
-                "--record-id",
-                "018feaa0-68f9-4a45-b9e3-58436df07af7",
-            ])
-            .is_err()
-        );
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "field-encryption",
+            "erase-history",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--record-id",
+            "018feaa0-68f9-4a45-b9e3-58436df07af7",
+        ])
+        .is_err());
     }
 
     fn sample_preflight_report() -> FieldEncryptionPreflightSuccessReport {

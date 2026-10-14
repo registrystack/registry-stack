@@ -19,21 +19,21 @@ use std::time::Duration;
 
 use registry_breg::audit::RegistryAudit;
 use registry_breg::field_encryption_backfill::{
-    FieldEncryptionBackfillPreflightError, FieldEncryptionBackfillPreflightReport,
-    FieldEncryptionBackfillPreflightRequest, FieldEncryptionBackfillTimeouts,
-    FieldEncryptionHistoryErasureError, FieldEncryptionHistoryErasureOutcome,
-    FieldEncryptionHistoryErasureRequest, erase_field_encryption_history_with_connection,
-    preflight_field_encryption_backfill_with_connection,
+    erase_field_encryption_history_with_connection,
+    preflight_field_encryption_backfill_with_connection, FieldEncryptionBackfillPreflightError,
+    FieldEncryptionBackfillPreflightReport, FieldEncryptionBackfillPreflightRequest,
+    FieldEncryptionBackfillTimeouts, FieldEncryptionHistoryErasureError,
+    FieldEncryptionHistoryErasureOutcome, FieldEncryptionHistoryErasureRequest,
 };
 use registry_breg::migration_plan::ReviewedMigrationStepDescriptor;
-use registry_breg::package::{PackageError, load_package};
+use registry_breg::package::{load_package, PackageError};
 use registry_breg::postgres::RegistryLockKey;
-use registry_breg::runtime_config::{RuntimeConfigError, load_runtime_config};
+use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 use registry_platform_canonical_json::parse_json_strict;
 use serde::{Deserialize, Serialize};
 
 use crate::active_registry::{
-    ActiveRegistryError, recorded_active_identity, recorded_identity_for_digest,
+    recorded_active_identity, recorded_identity_for_digest, ActiveRegistryError,
 };
 use crate::safe_path::SafeEntry;
 
@@ -342,17 +342,15 @@ mod tests {
                 .is_err()
         );
         assert!(parse_erase_request_bytes(br#"{}"#).is_err());
-        assert!(
-            parse_erase_request_bytes(
-                br#"{
+        assert!(parse_erase_request_bytes(
+            br#"{
               "operatorReference":"ops-ticket-1",
               "reason":"retention request",
               "entityId":"membership",
               "recordId":"018feaa0-68f9-4a45-b9e3-58436df07af7"
             }"#,
-            )
-            .is_err()
-        );
+        )
+        .is_err());
     }
 
     #[cfg(unix)]

@@ -13,8 +13,8 @@ use std::path::Path;
 use clap::builder::PossibleValuesParser;
 
 use crate::{
-    DiagnosticArtifact, FailureReport, ProfileArg, SuccessReport, SuggestedAction, artifact_report,
-    compile, compiler_findings, diagnostic, init_media_type, source_failure, tool_diagnostic,
+    artifact_report, compile, compiler_findings, diagnostic, init_media_type, source_failure,
+    tool_diagnostic, DiagnosticArtifact, FailureReport, ProfileArg, SuccessReport, SuggestedAction,
 };
 
 /// One starter's embedded files: the path it is written at, relative to the

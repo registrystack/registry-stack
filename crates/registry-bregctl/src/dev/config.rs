@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Authored local teaching identities and generated private service bindings.
 
-use super::{DATABASE_ID, MAX_BYTES, MIGRATION_ROLE, RUNTIME_ROLE, State, private};
-use anyhow::{Context, Result, bail};
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use super::{private, State, DATABASE_ID, MAX_BYTES, MIGRATION_ROLE, RUNTIME_ROLE};
+use anyhow::{bail, Context, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use p256::ecdsa::SigningKey;
 use registry_breg::literal_text::{
     LiteralText, WRITE_THE_VALUE, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
@@ -15,7 +15,7 @@ use registry_platform_yaml::{
 };
 use registry_platform_yaml::{ExternalId, LocalId, Url};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1680,7 +1680,7 @@ pub(super) fn issuer_description(
             ExchangeIssuer, ExchangeMapping, InteractiveApplication, Role, SessionIdentity,
             SyntheticUser, TokenExchangeClient,
         },
-        local::{TypedLocalClient, typed_local_description},
+        local::{typed_local_description, TypedLocalClient},
     };
     let local_clients = clients
         .clients

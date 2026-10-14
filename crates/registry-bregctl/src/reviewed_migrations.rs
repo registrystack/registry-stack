@@ -5,12 +5,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use registry_breg::Diagnostic;
 use registry_breg::migration_plan::{
-    ReviewedArtifactKind, ReviewedMigrationFile, ReviewedMigrationSource,
     read_migration_descriptor, read_rehearsal_receipt, reviewed_artifact_kind,
+    ReviewedArtifactKind, ReviewedMigrationFile, ReviewedMigrationSource,
 };
 use registry_breg::package::{MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES, MAX_PACKAGE_SOURCE_FILE_BYTES};
+use registry_breg::Diagnostic;
 use registry_platform_yaml::Report;
 
 #[derive(Debug)]

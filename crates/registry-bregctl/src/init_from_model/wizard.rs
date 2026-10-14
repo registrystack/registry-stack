@@ -27,8 +27,8 @@ use registry_linkml::{ClassDef, Model, Range, SlotDef};
 
 use super::resolve::{self, INLINE_VOCABULARY_THRESHOLD};
 use super::selection::{
-    API_VERSION, EntitySelection, KIND, ModelName, PropertySelection, RegistrySelection, Selection,
-    VocabularyMode, VocabularySelection,
+    EntitySelection, ModelName, PropertySelection, RegistrySelection, Selection, VocabularyMode,
+    VocabularySelection, API_VERSION, KIND,
 };
 use crate::diagnostic;
 
@@ -1174,11 +1174,9 @@ mod tests {
             )
         );
         assert_eq!(unconnected_line(&chosen[..2], &options), None);
-        assert!(
-            connector_options(model(), &chosen[2..])
-                .expect("computed")
-                .is_empty()
-        );
+        assert!(connector_options(model(), &chosen[2..])
+            .expect("computed")
+            .is_empty());
     }
 
     #[test]
@@ -1244,11 +1242,9 @@ mod tests {
             chosen("GroupMembership", &["group"]),
             chosen("Household", &["name"]),
         ];
-        assert!(
-            reference_questions(model(), &single)
-                .expect("the model resolves ranges")
-                .is_empty()
-        );
+        assert!(reference_questions(model(), &single)
+            .expect("the model resolves ranges")
+            .is_empty());
     }
 
     #[test]
