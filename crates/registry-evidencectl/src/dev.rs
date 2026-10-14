@@ -42,7 +42,7 @@ use crate::{
     access,
     authoring::{
         valid_local_audience, CompiledAccessProfile, CompiledConceptForm, CompiledDefinition,
-        LocalAdmission, LocalServicePorts, MAX_SOURCE_ARTIFACT_BYTES, SOURCES_DIRECTORY,
+        LocalAdmission, LocalServicePorts,
     },
     keygen, OutputFormat,
 };
@@ -385,7 +385,8 @@ struct AccessProfileState {
     digest: String,
     requester_tags: Vec<String>,
     definitions: Vec<String>,
-    actor_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    actor_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     task_grant: Option<TaskGrantBinding>,
 }
@@ -464,7 +465,7 @@ pub(crate) struct ReadyAccessProfile {
     pub(crate) digest: String,
     pub(crate) requester_tags: Vec<String>,
     pub(crate) definitions: Vec<String>,
-    pub(crate) actor_kind: String,
+    pub(crate) actor_kind: Option<String>,
     pub(crate) task_grant: Option<TaskGrantBinding>,
 }
 
@@ -1500,7 +1501,10 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
     } && state.caller.as_ref().is_none_or(|caller| {
         validate_closed_caller(caller, dev_root, &state.issuer_origin).is_ok()
             && state.access_profiles.iter().any(|profile| {
-                profile.actor_kind == "service"
+                profile
+                    .actor_kind
+                    .as_deref()
+                    .is_none_or(|kind| kind == "service")
                     && profile.task_grant.is_none()
                     && profile.requester_tags.contains(&caller.requester_tag)
             })
@@ -1548,7 +1552,10 @@ fn valid_access_profile_state(profile: &AccessProfileState, definitions: &BTreeS
             .all(|tag| valid_identity_tag(tag))
         && profile.requester_tags.iter().collect::<BTreeSet<_>>().len()
             == profile.requester_tags.len()
-        && matches!(profile.actor_kind.as_str(), "service" | "human" | "agent")
+        && profile
+            .actor_kind
+            .as_deref()
+            .is_none_or(|kind| matches!(kind, "service" | "human" | "agent"))
         && !profile.definitions.is_empty()
         && profile.definitions.len() <= 128
         && profile.definitions.windows(2).all(|pair| pair[0] < pair[1])
@@ -1557,7 +1564,10 @@ fn valid_access_profile_state(profile: &AccessProfileState, definitions: &BTreeS
             .iter()
             .all(|definition| definitions.contains(definition.as_str()))
         && profile.task_grant.as_ref().is_none_or(|task| {
-            profile.actor_kind == "agent"
+            profile
+                .actor_kind
+                .as_deref()
+                .is_none_or(|kind| kind == "agent")
                 && !task.requester_clients.is_empty()
                 && task
                     .requester_clients
@@ -1638,6 +1648,13 @@ fn valid_concept_state(concept: &ConceptState) -> bool {
         && matches!(
             concept.form.as_str(),
             "boolean"
+                | "controlled-code"
+                | "bounded-decimal"
+                | "date-bucket"
+                | "time-bucket"
+                | "audience-scoped-entity-reference"
+                | "controlled-code-list"
+                | "entity-reference-list"
                 | "controlled-category"
                 | "bounded-identifier"
                 | "bounded-integer"
@@ -1776,7 +1793,7 @@ fn state_matches_sealed_bundle(
                 .collect::<Vec<_>>();
             access::profile_digest(compiled).is_ok_and(|digest| digest == profile.digest)
                 && compiled["requesterTags"] == json!(profile.requester_tags)
-                && compiled["actorKind"] == profile.actor_kind
+                && compiled["actorKind"] == json!(profile.actor_kind)
                 && definitions == profile.definitions
                 && match &profile.task_grant {
                     Some(task) => {
@@ -2042,7 +2059,7 @@ fn refuse_unservable_project(project: &Path) -> Result<()> {
     Err(DevRefusal {
         operational: false,
         code: "evidence.dev.local-transport-refused",
-        path: format!("sources/{source_id}.yaml:/type"),
+        path: format!("evidence.yaml:/sources/{source_id}/type"),
         message: "Local serving does not bind SQLite extracts.".to_owned(),
         suggested_action: "Prove this editable project offline with `evidencectl test <dir>`, or re-author the source over an HTTP transport before `evidencectl dev start`."
             .to_owned(),
@@ -2055,37 +2072,23 @@ fn refuse_unservable_project(project: &Path) -> Result<()> {
 ///
 /// This read answers that one definition and no other: a document it cannot
 /// open, bound or parse is left to the compiler, which reads the same
-/// directory under the authoring form and states the diagnostic for it.
+/// normalized project under the authoring form and states the diagnostic for it.
 fn source_local_serving_cannot_bind(project: &Path) -> Option<String> {
-    let mut refused = BTreeSet::new();
-    let authored = fs::read_dir(project.join(SOURCES_DIRECTORY)).ok()?;
-    for entry in authored.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
-            continue;
-        }
-        let Some(source_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        let readable = fs::symlink_metadata(&path).is_ok_and(|metadata| {
-            metadata.is_file() && metadata.len() <= MAX_SOURCE_ARTIFACT_BYTES
-        });
-        if !readable {
-            continue;
-        }
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-        let Ok(source) = registry_evidence_authoring::formats::scan_authored(source_id, &bytes)
-            .map(crate::authored::node_value)
-        else {
-            continue;
-        };
-        if source.get("type").and_then(Value::as_str) == Some("sqlite-extract") {
-            refused.insert(source_id.to_owned());
-        }
-    }
-    refused.into_iter().next()
+    let bytes = crate::authored::read_authored_file(
+        &project.join(registry_evidence_authoring::project::PROJECT_FILE),
+        "Evidence project",
+    )
+    .ok()?;
+    let project = registry_evidence_authoring::project::read_project(
+        registry_evidence_authoring::project::PROJECT_FILE,
+        &bytes,
+    )
+    .ok()?
+    .value;
+    project.sources.into_iter().find_map(|(id, source)| {
+        (source.source_type == registry_evidence_authoring::project::SourceType::SqliteExtract)
+            .then(|| id.to_string())
+    })
 }
 
 /// The container name prefix a start uses: the one `--name-prefix` names, else
@@ -2479,15 +2482,20 @@ fn prepare_and_start(
         if owner.is_some() {
             bail!("--issuer-project requires explicit Evidence access profiles and active clients before the issuer owner starts");
         }
+        let service_profiles = access::service_caller_profiles(project)?;
         let eligible = compiled
             .access_profiles
             .iter()
             .filter(|profile| {
-                profile.actor_kind == "service"
+                profile
+                    .actor_kind
+                    .as_deref()
+                    .is_none_or(|kind| kind == "service")
+                    && service_profiles.contains(&profile.id)
                     && profile.task_grant.is_none()
                     && !compiled.access_profiles.iter().any(|other| {
                         other.id != profile.id
-                            && other.actor_kind == profile.actor_kind
+                            && service_profiles.contains(&other.id)
                             && other
                                 .requester_tags
                                 .iter()
@@ -3293,6 +3301,19 @@ impl From<&CompiledDefinition> for DefinitionState {
                     uri: concept.concept_uri.clone(),
                     form: match concept.concept_form {
                         CompiledConceptForm::Boolean => "boolean".to_owned(),
+                        CompiledConceptForm::ControlledCode => "controlled-code".to_owned(),
+                        CompiledConceptForm::BoundedDecimal => "bounded-decimal".to_owned(),
+                        CompiledConceptForm::DateBucket => "date-bucket".to_owned(),
+                        CompiledConceptForm::TimeBucket => "time-bucket".to_owned(),
+                        CompiledConceptForm::AudienceScopedEntityReference => {
+                            "audience-scoped-entity-reference".to_owned()
+                        }
+                        CompiledConceptForm::ControlledCodeList => {
+                            "controlled-code-list".to_owned()
+                        }
+                        CompiledConceptForm::EntityReferenceList => {
+                            "entity-reference-list".to_owned()
+                        }
                         CompiledConceptForm::ControlledCategory => "controlled-category".to_owned(),
                         CompiledConceptForm::BoundedIdentifier => "bounded-identifier".to_owned(),
                         CompiledConceptForm::BoundedInteger => "bounded-integer".to_owned(),
@@ -3768,8 +3789,17 @@ mod tests {
         let example = include_bytes!(
             "../../../products/evidence/examples/formats/dev-session/.evidence/dev/state.json"
         );
+        let mut retired: Value = serde_json::from_slice(example).expect("current state example");
+        let state = retired.as_object_mut().unwrap();
+        let profiles = state.remove("accessProfiles").expect("current profiles");
+        let definitions = state.remove("definitions").expect("current definitions");
+        state.insert("accessPolicies".to_owned(), profiles);
+        state.insert("questions".to_owned(), definitions);
         Reader::new("state.json")
-            .decode::<DevState>(example, &Expect::one(&DEV_STATE_FORMAT))
+            .decode::<DevState>(
+                &serde_json::to_vec(&retired).unwrap(),
+                &Expect::one(&DEV_STATE_FORMAT),
+            )
             .expect_err("retired profile state members are not accepted");
     }
 
@@ -3836,19 +3866,44 @@ mod tests {
         assert!(select_resource(None, Some("not-an-absolute-uri")).is_err());
     }
 
+    fn transport_test_project() -> Value {
+        registry_platform_yaml::Reader::new("evidence.yaml")
+            .scan(include_bytes!(
+                "../../../products/evidence/examples/standalone/evidence.yaml"
+            ))
+            .expect("normalized public project")
+            .expect("project document")
+            .to_json_value()
+    }
+
+    fn extract_test_source(document: &Value) -> Value {
+        let mut source = document["sources"]["person-record"].clone();
+        source.as_object_mut().unwrap().remove("connection");
+        source["type"] = json!("sqlite-extract");
+        source["extractProfile"] = json!("records");
+        source["maximumExtractAgeSeconds"] = json!(3600);
+        source["request"] = json!({
+            "statement":"queries/records.sql", "columns":[], "parameterBindings":{},
+            "maximumRows":2, "maximumCellBytes":1024, "maximumStatementSteps":1000
+        });
+        source
+    }
+
     #[test]
     fn a_project_read_from_a_sqlite_extract_is_refused_before_a_session_is_prepared() {
         let root = tempfile::tempdir().expect("tempdir");
-        let project = root.path();
-        let sources = project.join(SOURCES_DIRECTORY);
-        fs::create_dir(&sources).expect("sources directory");
-        fs::write(sources.join("records.yaml"), "type: sqlite-extract\n").expect("source");
+        let mut document = transport_test_project();
+        document["sources"]["records"] = extract_test_source(&document);
+        fs::write(
+            root.path().join("evidence.yaml"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .expect("normalized project");
 
-        let error = refuse_unservable_project(project).expect_err("unservable project");
-
+        let error = refuse_unservable_project(root.path()).expect_err("unservable project");
         let refusal = error.downcast_ref::<DevRefusal>().expect("typed refusal");
         assert_eq!(refusal.code, "evidence.dev.local-transport-refused");
-        assert_eq!(refusal.path, "sources/records.yaml:/type");
+        assert_eq!(refusal.path, "evidence.yaml:/sources/records/type");
         assert!(refusal.message.contains("does not bind SQLite extracts"));
         assert!(!refusal.operational);
     }
@@ -3857,20 +3912,25 @@ mod tests {
     fn a_project_a_local_service_can_bind_is_left_to_the_compiler() {
         let root = tempfile::tempdir().expect("tempdir");
         let project = root.path();
-        refuse_unservable_project(project).expect("a project without sources is not refused here");
+        refuse_unservable_project(project).expect("a missing project is left to the compiler");
+        let mut document = transport_test_project();
+        fs::write(
+            project.join("evidence.yaml"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .expect("normalized project");
+        fs::write(project.join("notes.txt"), "type: sqlite-extract\n").expect("other file");
+        refuse_unservable_project(project).expect("an HTTP project is not refused here");
 
-        let sources = project.join(SOURCES_DIRECTORY);
-        fs::create_dir(&sources).expect("sources directory");
-        fs::write(sources.join("people.yaml"), "type: http-json\n").expect("source");
-        fs::write(sources.join("notes.txt"), "type: sqlite-extract\n").expect("other file");
-        refuse_unservable_project(project).expect("an HTTP source is not refused here");
-
-        // Two extracts name the first by id, as the compiler's own reading of
-        // the same directory does.
+        // Named Sources are examined in the same stable order as the compiler.
         for id in ["records", "holders"] {
-            fs::write(sources.join(format!("{id}.yaml")), "type: sqlite-extract\n")
-                .expect("source");
+            document["sources"][id] = extract_test_source(&document);
         }
+        fs::write(
+            project.join("evidence.yaml"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .expect("normalized project");
         assert_eq!(
             source_local_serving_cannot_bind(project).as_deref(),
             Some("holders")
@@ -4272,7 +4332,7 @@ requirements:
             digest: access::profile_digest(&profile).unwrap(),
             requester_tags: vec!["local-caller".into()],
             definitions: vec!["adult-status".into()],
-            actor_kind: "service".into(),
+            actor_kind: Some("service".into()),
             task_grant: None,
         };
         let verified = registry_platform_config::verify_package(
@@ -4946,7 +5006,7 @@ requirements:
                 digest: format!("sha256:{}", "0".repeat(64)),
                 requester_tags: vec!["lot-tasks-tag".into()],
                 definitions: vec!["lot-status".into()],
-                actor_kind: "agent".into(),
+                actor_kind: Some("agent".into()),
                 task_grant: Some(TaskGrantBinding {
                     source_issuer: registry_platform_yaml::Url::new(source).expect("a URL"),
                     requester_clients: vec!["assistant".into()],
@@ -4957,7 +5017,7 @@ requirements:
                 digest: format!("sha256:{}", "1".repeat(64)),
                 requester_tags: vec!["portal-reads-tag".into()],
                 definitions: vec!["lot-status".into()],
-                actor_kind: "service".into(),
+                actor_kind: Some("service".into()),
                 task_grant: None,
             },
         ];

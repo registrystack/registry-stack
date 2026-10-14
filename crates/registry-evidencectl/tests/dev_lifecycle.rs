@@ -14,60 +14,6 @@ use std::{
     process::{Command, Output},
 };
 
-const OPENAPI: &str = r#"openapi: 3.1.0
-info: {title: Tutorial registry, version: 1.0.0}
-servers: [{url: 'http://127.0.0.1:8000'}]
-paths:
-  /people/{person_id}:
-    get:
-      operationId: getPerson
-      parameters:
-        - name: person_id
-          in: path
-          required: true
-          schema: {type: string}
-      responses:
-        '200':
-          description: A person
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [person_id, date_of_birth]
-                properties:
-                  person_id: {type: string}
-                  date_of_birth: {type: string, format: date}
-"#;
-
-const QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: adult-status
-question: Is the person at least 18 years old?
-purpose: age-check
-subject:
-  role: person
-  selector: person_id
-source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: is_adult
-    type: boolean
-derivation: derivations/adult-status.rhai
-disclosure:
-  allow: [is_adult]
-"#;
-
-const DERIVATION: &str = r#"fn answer(facts, selectors, context) {
-    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    #{is_adult: compare_dates(context.legal_local_date, add_calendar_years(born, 18)) >= 0}
-}
-"#;
-
 #[test]
 #[ignore = "exact gate: starts the pinned stock issuer container and real Evidence binary"]
 fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
@@ -139,10 +85,13 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
         .expect("authorization header prefix");
     let claims = decode_claims(compact);
     assert_eq!(claims["registry_actor_kind"], "service");
-    assert_eq!(claims["evidence_tags"], serde_json::json!(["local-caller"]));
+    assert_eq!(
+        claims["evidence_tags"],
+        serde_json::json!(["standalone-service"])
+    );
     assert_eq!(
         claims["evidence_audience"],
-        "urn:registrystack:evidence:local:caller"
+        "urn:example:audience:standalone-app"
     );
     assert_eq!(claims["aud"], "urn:registrystack:evidence:local:gateway");
     assert!(claims.get("registry_grant_id").is_none());
@@ -490,7 +439,7 @@ fn sqlite_extract_dev_start_refuses_local_serving_by_name_in_both_formats() {
     );
     assert!(error.contains("does not bind SQLite extracts"), "{error}");
     assert!(
-        error.contains("sources/record-status.yaml:/type"),
+        error.contains("evidence.yaml:/sources/record-status/type"),
         "{error}"
     );
     assert!(error.contains("evidencectl test"), "{error}");
@@ -510,7 +459,10 @@ fn sqlite_extract_dev_start_refuses_local_serving_by_name_in_both_formats() {
     assert_eq!(report["status"], "domain-refusal");
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], "evidence.dev.local-transport-refused");
-    assert_eq!(diagnostic["path"], "sources/record-status.yaml:/type");
+    assert_eq!(
+        diagnostic["path"],
+        "evidence.yaml:/sources/record-status/type"
+    );
     assert!(diagnostic["message"]
         .as_str()
         .expect("message")
@@ -547,7 +499,10 @@ fn sqlite_extract_dev_start_refuses_local_serving_without_docker_on_the_path() {
     assert_eq!(report["status"], "domain-refusal");
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], "evidence.dev.local-transport-refused");
-    assert_eq!(diagnostic["path"], "sources/record-status.yaml:/type");
+    assert_eq!(
+        diagnostic["path"],
+        "evidence.yaml:/sources/record-status/type"
+    );
     assert!(diagnostic["message"]
         .as_str()
         .expect("message")
@@ -583,7 +538,7 @@ fn sqlite_extract_bare_dev_refuses_local_serving_before_an_occupied_port() {
         "{error}"
     );
     assert!(
-        error.contains("sources/record-status.yaml:/type"),
+        error.contains("evidence.yaml:/sources/record-status/type"),
         "{error}"
     );
     assert!(!error.contains("evidence.dev.port-unavailable"), "{error}");
@@ -688,11 +643,9 @@ impl Project {
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
             .expect("tempdir mode");
         let root = temporary.path().join("tutorial");
-        fs::create_dir_all(root.join("questions")).expect("questions");
-        fs::create_dir(root.join("derivations")).expect("derivations");
-        fs::write(root.join("source.openapi.yaml"), OPENAPI).expect("OpenAPI");
-        fs::write(root.join("questions/adult-status.yaml"), QUESTION).expect("question");
-        fs::write(root.join("derivations/adult-status.rhai"), DERIVATION).expect("derivation");
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        copy_example(&example, &root);
         Self {
             _temporary: temporary,
             root,
@@ -700,7 +653,7 @@ impl Project {
     }
 
     fn generate_evidence_keys(&self) {
-        let secrets = self.root.join("secrets");
+        let secrets = self.root.join(".generated/secrets");
         assert_success(
             &evidencectl()
                 .args(["keygen", "signing", "--output-dir"])
@@ -719,6 +672,14 @@ impl Project {
                 "HMAC key",
             );
         }
+        assert_success(
+            &evidencectl()
+                .args(["keygen", "token", "--output"])
+                .arg(secrets.join("synthetic-source-token"))
+                .output()
+                .expect("source token"),
+            "source token",
+        );
     }
 
     /// Scaffold a second project beside this one whose only source is read
@@ -732,7 +693,7 @@ impl Project {
         assert_success(
             &evidencectl()
                 .args([
-                    "new",
+                    "init",
                     project.to_str().expect("UTF-8 project path"),
                     "--transport",
                     "sqlite-extract",
@@ -829,6 +790,21 @@ impl Project {
             .arg(&self.root)
             .output()
             .expect("dev clean")
+    }
+}
+
+fn copy_example(source: &Path, destination: &Path) {
+    fs::create_dir(destination).expect("example directory");
+    for entry in fs::read_dir(source).expect("public example files") {
+        let entry = entry.expect("public example entry");
+        let metadata = entry.file_type().expect("public example file type");
+        let output = destination.join(entry.file_name());
+        if metadata.is_dir() {
+            copy_example(&entry.path(), &output);
+        } else {
+            assert!(metadata.is_file(), "public examples contain ordinary files");
+            fs::copy(entry.path(), output).expect("copy public example");
+        }
     }
 }
 

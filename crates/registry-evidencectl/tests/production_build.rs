@@ -755,14 +755,15 @@ fn project_replacement_during_description_keeps_one_coherent_candidate() {
         &output,
         "the captured project stays coherent through delegation",
     );
-    let bundle: Value = serde_norway::from_str(
-        &fs::read_to_string(fixture.output.join("bundle/evidence.yaml")).unwrap(),
-    )
-    .unwrap();
-    let authority: Value = serde_norway::from_str(
-        &fs::read_to_string(fixture.output.join("compiled-authority.yaml")).unwrap(),
-    )
-    .unwrap();
+    let read_generated = |relative: &str| {
+        registry_platform_yaml::Reader::new(relative)
+            .scan(&fs::read(fixture.output.join(relative)).unwrap())
+            .expect("generated document parses")
+            .expect("generated document is nonempty")
+            .to_json_value()
+    };
+    let bundle = read_generated("bundle/evidence.yaml");
+    let authority = read_generated("compiled-authority.yaml");
     assert_eq!(
         bundle["requirements"][0]["uri"],
         "urn:example:requirements:answer:v1"

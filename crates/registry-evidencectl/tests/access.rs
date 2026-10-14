@@ -151,6 +151,206 @@ fn references_governed_profile_while_isolating_private_client_key() {
 }
 
 #[test]
+fn omitted_profile_actor_infers_a_single_bounded_local_client_actor() {
+    let fixture = tempfile::tempdir().unwrap();
+    let project = fixture.path();
+    write_project(project, "adult-status");
+    success(&declare_profile(project, "age-checks", &["adult-status"]));
+    let path = project.join("dev-authority.yaml");
+    let mut authority: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
+    authority["accessProfiles"]["age-checks"]
+        .as_object_mut()
+        .unwrap()
+        .remove("actorKind");
+    fs::write(&path, serde_norway::to_string(&authority).unwrap()).unwrap();
+    let before = fs::read(&path).unwrap();
+
+    success(&add_client(project, "bounded-client", &["age-checks"]));
+
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert!(
+        success(&evidencectl(project, &["access", "profile", "list"]))
+            .contains("age-checks\tdefinition ceilings\tadult-status")
+    );
+    assert!(
+        success(&evidencectl(project, &["access", "client", "list"]))
+            .contains("bounded-client\tactive\tage-checks")
+    );
+}
+
+#[test]
+fn omitted_profile_actor_requires_an_explicit_choice_when_local_actors_are_ambiguous() {
+    let fixture = tempfile::tempdir().unwrap();
+    let project = fixture.path();
+    write_project(project, "adult-status");
+    success(&declare_profile(project, "age-checks", &["adult-status"]));
+    let authority_path = project.join("dev-authority.yaml");
+    let mut authority: Value =
+        serde_norway::from_slice(&fs::read(&authority_path).unwrap()).unwrap();
+    authority["accessProfiles"]["age-checks"]
+        .as_object_mut()
+        .unwrap()
+        .remove("actorKind");
+    fs::write(
+        &authority_path,
+        serde_norway::to_string(&authority).unwrap(),
+    )
+    .unwrap();
+    let project_path = project.join("evidence.yaml");
+    let mut definition: Value =
+        serde_norway::from_slice(&fs::read(&project_path).unwrap()).unwrap();
+    definition["assertionDefinitions"]["adult-status"]["grantCeiling"]["actorKinds"] =
+        serde_json::json!(["service", "human"]);
+    fs::write(project_path, serde_norway::to_string(&definition).unwrap()).unwrap();
+
+    let ambiguous = evidencectl(
+        project,
+        &[
+            "access",
+            "client",
+            "add",
+            "ambiguous-client",
+            "--access-profile",
+            "age-checks",
+            "--generate-local-key",
+            "--first-party-bootstrap-scope",
+            "context:read",
+            "--first-party-bootstrap-resource",
+            "urn:example:context",
+            "--first-party-issuer",
+            "https://context.invalid",
+        ],
+    );
+    assert!(!ambiguous.status.success());
+    assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("--actor-kind"));
+    assert!(!project.join(".evidence/clients").exists());
+    let refused = evidencectl(
+        project,
+        &[
+            "access",
+            "client",
+            "add",
+            "outside-client",
+            "--access-profile",
+            "age-checks",
+            "--actor-kind",
+            "agent",
+            "--generate-local-key",
+        ],
+    );
+    assert!(!refused.status.success());
+    assert!(!project.join(".evidence/clients").exists());
+    success(&evidencectl(
+        project,
+        &[
+            "access",
+            "client",
+            "add",
+            "service-client",
+            "--access-profile",
+            "age-checks",
+            "--actor-kind",
+            "service",
+            "--generate-local-key",
+        ],
+    ));
+    let client: Value = serde_norway::from_slice(
+        &fs::read(project.join("access/clients/service-client.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(client["actorKind"], "service");
+    assert!(
+        success(&evidencectl(project, &["access", "client", "list"])).contains("service-client")
+    );
+}
+
+#[test]
+fn actorless_profile_can_serve_definitions_with_different_actor_ceilings() {
+    let fixture = tempfile::tempdir().unwrap();
+    let project = fixture.path();
+    write_project(project, "adult-status");
+    success(&declare_profile(
+        project,
+        "combined",
+        &["adult-status", "residence-region"],
+    ));
+    let path = project.join("dev-authority.yaml");
+    let mut authority: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
+    authority["accessProfiles"]["combined"]
+        .as_object_mut()
+        .unwrap()
+        .remove("actorKind");
+    fs::write(path, serde_norway::to_string(&authority).unwrap()).unwrap();
+    let path = project.join("evidence.yaml");
+    let mut document: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
+    document["assertionDefinitions"]["residence-region"]["grantCeiling"]["actorKinds"] =
+        serde_json::json!(["human"]);
+    fs::write(path, serde_norway::to_string(&document).unwrap()).unwrap();
+    success(&evidencectl(
+        project,
+        &[
+            "access",
+            "client",
+            "add",
+            "service",
+            "--access-profile",
+            "combined",
+            "--actor-kind",
+            "service",
+            "--generate-local-key",
+        ],
+    ));
+    success(&evidencectl(
+        project,
+        &[
+            "access",
+            "client",
+            "add",
+            "human",
+            "--access-profile",
+            "combined",
+            "--actor-kind",
+            "human",
+            "--generate-local-key",
+            "--first-party-bootstrap-scope",
+            "context:read",
+            "--first-party-bootstrap-resource",
+            "urn:example:context",
+            "--first-party-issuer",
+            "https://context.invalid",
+        ],
+    ));
+    let clients = success(&evidencectl(project, &["access", "client", "list"]));
+    assert!(clients.contains("service\tactive\tcombined"));
+    assert!(clients.contains("human\tactive\tcombined"));
+}
+
+#[test]
+fn explicit_profile_actor_cannot_be_overridden_by_local_client_choice() {
+    let fixture = tempfile::tempdir().unwrap();
+    let project = fixture.path();
+    write_project(project, "adult-status");
+    success(&declare_profile(project, "age-checks", &["adult-status"]));
+    let refused = evidencectl(
+        project,
+        &[
+            "access",
+            "client",
+            "add",
+            "outside-client",
+            "--access-profile",
+            "age-checks",
+            "--actor-kind",
+            "agent",
+            "--generate-local-key",
+        ],
+    );
+    assert!(!refused.status.success());
+    assert!(!project.join(".evidence/clients").exists());
+    assert!(!project.join("access/clients").exists());
+}
+
+#[test]
 fn unknown_profile_fails_before_generating_or_publishing_client_state() {
     let fixture = tempfile::tempdir().expect("tempdir");
     write_project(fixture.path(), "adult-status");
@@ -402,92 +602,101 @@ fn public_clients_without_local_keys_can_be_added_alongside_and_revoked() {
 
 #[test]
 fn institutional_exchange_keeps_bootstrap_binding_explicit_and_preserves_it_on_revocation() {
-    let fixture = tempfile::tempdir().expect("tempdir");
-    let project = fixture.path();
-    write_project(project, "adult-status");
-    success(&declare_profile(project, "age-checks", &["adult-status"]));
-    let project_path = project.join("evidence.yaml");
-    let mut config: Value = serde_norway::from_slice(&fs::read(&project_path).unwrap()).unwrap();
-    config["assertionDefinitions"]["adult-status"]["grantCeiling"]["actorKinds"] =
-        serde_json::json!(["agent"]);
-    config["assertionDefinitions"]["adult-status"]["grantCeiling"]["valueOrigins"] =
-        serde_json::json!(["authenticated-grant"]);
-    fs::write(project_path, serde_norway::to_string(&config).unwrap()).unwrap();
-    let authority_path = project.join("dev-authority.yaml");
-    let mut authority: Value =
-        serde_norway::from_slice(&fs::read(&authority_path).unwrap()).unwrap();
-    let profile = &mut authority["accessProfiles"]["age-checks"];
-    profile["actorKind"] = serde_json::json!("agent");
-    profile["requesterClients"] = serde_json::json!(["task-checker", "default-task-checker"]);
-    profile["grantSourceIssuer"] = serde_json::json!("https://casework.invalid");
-    profile["grants"][0]["subjects"][0]["valueOrigin"] = serde_json::json!("authenticated-grant");
-    profile["grants"][0]["subjects"][0]["valueClaims"] =
-        serde_json::json!({"record-id":"grant.record_id"});
-    fs::write(authority_path, serde_norway::to_string(&authority).unwrap()).unwrap();
+    for actor in [Some("agent"), None] {
+        let fixture = tempfile::tempdir().expect("tempdir");
+        let project = fixture.path();
+        write_project(project, "adult-status");
+        success(&declare_profile(project, "age-checks", &["adult-status"]));
+        let project_path = project.join("evidence.yaml");
+        let mut config: Value =
+            serde_norway::from_slice(&fs::read(&project_path).unwrap()).unwrap();
+        config["assertionDefinitions"]["adult-status"]["grantCeiling"]["actorKinds"] =
+            serde_json::json!(["agent"]);
+        config["assertionDefinitions"]["adult-status"]["grantCeiling"]["valueOrigins"] =
+            serde_json::json!(["authenticated-grant"]);
+        fs::write(project_path, serde_norway::to_string(&config).unwrap()).unwrap();
+        let authority_path = project.join("dev-authority.yaml");
+        let mut authority: Value =
+            serde_norway::from_slice(&fs::read(&authority_path).unwrap()).unwrap();
+        let profile = &mut authority["accessProfiles"]["age-checks"];
+        if let Some(actor) = actor {
+            profile["actorKind"] = serde_json::json!(actor);
+        } else {
+            profile.as_object_mut().unwrap().remove("actorKind");
+        }
+        profile["requesterClients"] = serde_json::json!(["task-checker", "default-task-checker"]);
+        profile["grantSourceIssuer"] = serde_json::json!("https://casework.invalid");
+        profile["grants"][0]["subjects"][0]["valueOrigin"] =
+            serde_json::json!("authenticated-grant");
+        profile["grants"][0]["subjects"][0]["valueClaims"] =
+            serde_json::json!({"record-id":"grant.record_id"});
+        fs::write(authority_path, serde_norway::to_string(&authority).unwrap()).unwrap();
 
-    success(&evidencectl(
-        project,
-        &[
-            "access",
-            "client",
-            "add",
-            "task-checker",
-            "--access-profile",
-            "age-checks",
-            "--generate-local-key",
-            "--grant-bootstrap-scope",
-            "tasks:assert",
-            "--grant-bootstrap-resource",
-            "urn:local:task-authority",
-        ],
-    ));
-    let path = project.join("access/clients/task-checker.yaml");
-    let document: Value =
-        serde_norway::from_slice(&fs::read(&path).expect("client")).expect("yaml");
-    assert_eq!(
-        document["exchange"],
-        serde_json::json!({
-            "kind": "institutional-grant", "bootstrapScope": "tasks:assert",
-            "bootstrapResource": "urn:local:task-authority",
-        })
-    );
-    assert_eq!(
-        document["evidenceAudience"],
-        "urn:example:audience:standalone-app"
-    );
-    let key_directory = project.join(".evidence/clients/task-checker");
-    success(&evidencectl(project, &["access", "client", "list"]));
-    success(&evidencectl(
-        project,
-        &["access", "client", "revoke", "task-checker"],
-    ));
-    let revoked: Value = serde_norway::from_slice(&fs::read(path).expect("client")).expect("yaml");
-    assert_eq!(revoked["status"], "revoked");
-    assert_eq!(revoked["exchange"], document["exchange"]);
-    assert!(
-        !key_directory.exists(),
-        "revocation removes the local private key state"
-    );
+        success(&evidencectl(
+            project,
+            &[
+                "access",
+                "client",
+                "add",
+                "task-checker",
+                "--access-profile",
+                "age-checks",
+                "--generate-local-key",
+                "--grant-bootstrap-scope",
+                "tasks:assert",
+                "--grant-bootstrap-resource",
+                "urn:local:task-authority",
+            ],
+        ));
+        let path = project.join("access/clients/task-checker.yaml");
+        let document: Value =
+            serde_norway::from_slice(&fs::read(&path).expect("client")).expect("yaml");
+        assert_eq!(
+            document["exchange"],
+            serde_json::json!({
+                "kind": "institutional-grant", "bootstrapScope": "tasks:assert",
+                "bootstrapResource": "urn:local:task-authority",
+            })
+        );
+        assert_eq!(
+            document["evidenceAudience"],
+            "urn:example:audience:standalone-app"
+        );
+        let key_directory = project.join(".evidence/clients/task-checker");
+        success(&evidencectl(project, &["access", "client", "list"]));
+        success(&evidencectl(
+            project,
+            &["access", "client", "revoke", "task-checker"],
+        ));
+        let revoked: Value =
+            serde_norway::from_slice(&fs::read(path).expect("client")).expect("yaml");
+        assert_eq!(revoked["status"], "revoked");
+        assert_eq!(revoked["exchange"], document["exchange"]);
+        assert!(
+            !key_directory.exists(),
+            "revocation removes the local private key state"
+        );
 
-    success(&evidencectl(
-        project,
-        &[
-            "access",
-            "client",
-            "add",
-            "default-task-checker",
-            "--access-profile",
-            "age-checks",
-            "--generate-local-key",
-            "--grant-bootstrap-scope",
-            "tasks:assert",
-        ],
-    ));
-    let default: Value = serde_norway::from_slice(
-        &fs::read(project.join("access/clients/default-task-checker.yaml")).expect("client"),
-    )
-    .expect("yaml");
-    assert!(default["exchange"]["bootstrapResource"].is_null());
+        success(&evidencectl(
+            project,
+            &[
+                "access",
+                "client",
+                "add",
+                "default-task-checker",
+                "--access-profile",
+                "age-checks",
+                "--generate-local-key",
+                "--grant-bootstrap-scope",
+                "tasks:assert",
+            ],
+        ));
+        let default: Value = serde_norway::from_slice(
+            &fs::read(project.join("access/clients/default-task-checker.yaml")).expect("client"),
+        )
+        .expect("yaml");
+        assert!(default["exchange"]["bootstrapResource"].is_null());
+    }
 }
 
 #[test]

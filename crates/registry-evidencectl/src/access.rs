@@ -19,7 +19,7 @@ use clap::{Args, Subcommand};
 use registry_evidence_authoring::formats::{
     decode_authored, envelope_lines, ACCESS_CLIENT, ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND,
 };
-use registry_evidence_authoring::target::AccessProfile;
+use registry_evidence_authoring::{project::ActorKind, target::AccessProfile};
 use registry_platform_crypto::{PrivateJwk, PublicJwk};
 use registry_platform_yaml::FormatSpec;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -46,7 +46,7 @@ pub enum AccessCommand {
     Profile(ProfileCommand),
     /// Register and revoke local Evidence Gateway clients.
     #[command(subcommand)]
-    Client(ClientCommand),
+    Client(Box<ClientCommand>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -82,6 +82,9 @@ pub struct ClientAddArgs {
     /// Audience inside every selected definition ceiling. Inferred when exactly one fits.
     #[arg(long)]
     evidence_audience: Option<String>,
+    /// Actor permitted by the selected profiles. Inferred when exactly one fits.
+    #[arg(long, value_parser = ["human", "agent", "service"])]
+    actor_kind: Option<String>,
     /// Generate an owner-only P-256 key for local client authentication.
     #[arg(long, required = true)]
     generate_local_key: bool,
@@ -134,6 +137,7 @@ struct LoadedProfile {
     profile: AccessProfile,
     digest: String,
     audiences: BTreeSet<String>,
+    actors: BTreeSet<String>,
 }
 
 pub(crate) fn profile_digest(profile: &Value) -> Result<String> {
@@ -159,6 +163,8 @@ struct ClientDocument {
     access_profiles: Vec<String>,
     principal: String,
     evidence_audience: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actor_kind: Option<ActorKind>,
     keys: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exchange: Option<ActiveClientExchange>,
@@ -243,9 +249,11 @@ pub fn run(command: AccessCommand, format: OutputFormat) -> Result<ExitCode> {
         AccessCommand::Profile(ProfileCommand::List(args)) => {
             list_access_profiles(&args.project, format)
         }
-        AccessCommand::Client(ClientCommand::Add(args)) => add_client(&args, format),
-        AccessCommand::Client(ClientCommand::List(args)) => list_clients(&args.project, format),
-        AccessCommand::Client(ClientCommand::Revoke(args)) => revoke_client(&args, format),
+        AccessCommand::Client(command) => match *command {
+            ClientCommand::Add(args) => add_client(&args, format),
+            ClientCommand::List(args) => list_clients(&args.project, format),
+            ClientCommand::Revoke(args) => revoke_client(&args, format),
+        },
     }
 }
 
@@ -269,7 +277,14 @@ fn list_access_profiles(project: &Path, format: OutputFormat) -> Result<ExitCode
                 .into_iter()
                 .collect::<Vec<_>>()
                 .join(", ");
-            println!("{id}\t{}\t{definitions}", loaded.profile.actor_kind);
+            println!(
+                "{id}\t{}\t{definitions}",
+                loaded
+                    .profile
+                    .actor_kind
+                    .as_ref()
+                    .map_or("definition ceilings", |actor| actor.as_str())
+            );
         }
     } else {
         crate::print_report(&crate::command_report(
@@ -284,6 +299,12 @@ fn list_access_profiles(project: &Path, format: OutputFormat) -> Result<ExitCode
 }
 
 fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
+    let actor_kind: Option<ActorKind> = args
+        .actor_kind
+        .as_ref()
+        .map(|actor| serde_json::from_value(json!(actor)))
+        .transpose()
+        .context("client actor kind must be human, agent or service")?;
     let project = canonical_project(&args.project)?;
     validate_identifier(&args.client, "client")?;
     if !args.generate_local_key {
@@ -350,6 +371,7 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
             access_profiles: profile_ids.clone(),
             principal: local_client_uri(&args.client),
             evidence_audience: evidence_audience.clone(),
+            actor_kind,
             keys: Vec::new(),
             exchange: exchange.clone(),
         },
@@ -398,6 +420,7 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
         access_profiles: profile_ids,
         principal: format!("urn:registrystack:evidence:local:client:{}", args.client),
         evidence_audience,
+        actor_kind,
         keys: vec![public_key],
         exchange,
     };
@@ -634,10 +657,7 @@ pub(crate) fn load_active_clients(
             client_id: document.client_id.clone(),
             public_jwks: serde_json::to_string(&json!({"keys":document.keys}))?,
             requester_tags,
-            actor_kind: profiles[&document.access_profiles[0]]
-                .profile
-                .actor_kind
-                .clone(),
+            actor_kind: resolved_client_actor(document, &profiles)?,
             evidence_audience: document.evidence_audience.clone(),
             exchange: document.exchange.clone(),
         });
@@ -647,6 +667,13 @@ pub(crate) fn load_active_clients(
 
 /// Public, editable client admission for local bundle compilation. Private
 /// keys are checked separately when `dev` registers the issuer generation.
+pub(crate) fn service_caller_profiles(project: &Path) -> Result<BTreeSet<String>> {
+    Ok(load_access_profiles(project)?
+        .into_iter()
+        .filter_map(|(id, profile)| profile.actors.contains("service").then_some(id))
+        .collect())
+}
+
 pub(crate) fn generated_caller_audience(project: &Path, profile: &str) -> Result<String> {
     let profiles = load_access_profiles(project)?;
     let allowed = profile_audiences(&[profile.to_owned()], &profiles)?;
@@ -672,13 +699,16 @@ fn validate_client_profiles(
     }
     let mut shapes = BTreeSet::new();
     let mut tags = BTreeSet::new();
-    let mut actors = BTreeSet::new();
+    let mut actors: Option<BTreeSet<String>> = None;
     for id in ids {
         validate_identifier(id, "access profile")?;
         let loaded = profiles
             .get(id)
             .with_context(|| format!("unknown target access profile {id}"))?;
-        actors.insert(loaded.profile.actor_kind.as_str());
+        actors = Some(match actors {
+            None => loaded.actors.clone(),
+            Some(current) => current.intersection(&loaded.actors).cloned().collect(),
+        });
         tags.extend(loaded.profile.requester_tags.iter().map(String::as_str));
         for grant in &loaded.profile.grants {
             let subjects = grant
@@ -691,8 +721,9 @@ fn validate_client_profiles(
             }
         }
     }
-    if actors.len() != 1 {
-        bail!("one local client must use one actor kind across its access profiles");
+    let actors = actors.unwrap_or_default();
+    if actors.is_empty() {
+        bail!("one local client needs a common actor kind across its access profiles");
     }
     for (id, loaded) in profiles {
         if loaded
@@ -700,7 +731,7 @@ fn validate_client_profiles(
             .requester_tags
             .iter()
             .all(|tag| tags.contains(tag.as_str()))
-            && actors.contains(loaded.profile.actor_kind.as_str())
+            && !actors.is_disjoint(&loaded.actors)
             && !ids.contains(id)
         {
             bail!("selected profile tags also match unassigned access profile {id}; use distinct identity tags");
@@ -730,6 +761,45 @@ fn profile_audiences(
     Ok(audiences)
 }
 
+/// A local credential has one concrete actor. Optional target actor constraints
+/// remain bounded by the selected profiles and per-request definition ceilings.
+fn resolved_client_actor(
+    document: &ClientDocument,
+    profiles: &BTreeMap<String, LoadedProfile>,
+) -> Result<String> {
+    let mut actors: Option<BTreeSet<String>> = None;
+    for id in &document.access_profiles {
+        let profile = profiles
+            .get(id)
+            .context("client names an unknown target access profile")?;
+        actors = Some(match actors {
+            None => profile.actors.clone(),
+            Some(current) => current.intersection(&profile.actors).cloned().collect(),
+        });
+    }
+    let mut actors = actors.unwrap_or_default();
+    actors.retain(
+        |actor| match document.exchange.as_ref().map(|exchange| exchange.kind) {
+            Some(ActiveClientExchangeKind::InstitutionalGrant) => actor == "agent",
+            Some(ActiveClientExchangeKind::FirstParty) => {
+                matches!(actor.as_str(), "human" | "service")
+            }
+            None => matches!(actor.as_str(), "service" | "agent"),
+        },
+    );
+    match &document.actor_kind {
+        Some(actor) if actors.contains(actor.as_str()) => Ok(actor.as_str().to_owned()),
+        Some(_) => {
+            bail!("client actor kind is outside a selected definition ceiling or exchange mode")
+        }
+        None if actors.len() == 1 => Ok(actors.first().expect("one actor").clone()),
+        None if actors.is_empty() => {
+            bail!("selected profiles and exchange mode have no common actor kind")
+        }
+        None => bail!("choose --actor-kind from the selected definitions' common actor ceiling"),
+    }
+}
+
 fn validate_client_identity(
     document: &ClientDocument,
     profiles: &BTreeMap<String, LoadedProfile>,
@@ -739,13 +809,14 @@ fn validate_client_identity(
     {
         bail!("client audience is outside a selected definition ceiling");
     }
+    let actor = resolved_client_actor(document, profiles)?;
     for id in &document.access_profiles {
         let profile = &profiles[id].profile;
         let task = profile.grants.iter().any(|grant| {
             grant
                 .subjects
                 .iter()
-                .any(|subject| subject.value_origin == "authenticated-grant")
+                .any(|subject| subject.value_origin.as_str() == "authenticated-grant")
         });
         if task
             && (profile
@@ -757,17 +828,15 @@ fn validate_client_identity(
             bail!("task client must be explicitly named by the target profile and trusted source issuer");
         }
         match document.exchange.as_ref().map(|exchange| exchange.kind) {
-            Some(ActiveClientExchangeKind::InstitutionalGrant)
-                if !task || profile.actor_kind != "agent" =>
-            {
+            Some(ActiveClientExchangeKind::InstitutionalGrant) if !task || actor != "agent" => {
                 bail!("institutional exchange requires an assigned agent task-grant profile")
             }
             Some(ActiveClientExchangeKind::FirstParty)
-                if task || !matches!(profile.actor_kind.as_str(), "service" | "human") =>
+                if task || !matches!(actor.as_str(), "service" | "human") =>
             {
                 bail!("first-party exchange cannot replace task-grant authority")
             }
-            None if task || !matches!(profile.actor_kind.as_str(), "service" | "agent") => bail!(
+            None if task || !matches!(actor.as_str(), "service" | "agent") => bail!(
                 "human and task-grant profiles require their explicit signed-context exchange"
             ),
             _ => {}
@@ -834,6 +903,7 @@ fn load_access_profiles(project: &Path) -> Result<BTreeMap<String, LoadedProfile
         .into_iter()
         .map(|(id, profile)| {
             let mut audiences: Option<BTreeSet<String>> = None;
+            let mut actors = BTreeSet::new();
             for grant in &profile.grants {
                 let allowed = project_doc.assertion_definitions[&grant.definition]
                     .grant_ceiling
@@ -845,6 +915,25 @@ fn load_access_profiles(project: &Path) -> Result<BTreeMap<String, LoadedProfile
                     None => allowed,
                     Some(current) => current.intersection(&allowed).cloned().collect(),
                 });
+                let allowed_actors = project_doc.assertion_definitions[&grant.definition]
+                    .grant_ceiling
+                    .actor_kinds
+                    .iter()
+                    .map(|actor| actor.as_str().to_owned())
+                    .collect::<BTreeSet<_>>();
+                actors.extend(allowed_actors);
+            }
+            if let Some(actor) = &profile.actor_kind {
+                actors.retain(|candidate| candidate == actor.as_str());
+            } else if !profile.grants.iter().any(|grant| {
+                grant
+                    .subjects
+                    .iter()
+                    .any(|subject| subject.value_origin.as_str() == "authenticated-grant")
+            }) {
+                // Ordinary agents require an explicitly agent-bound profile;
+                // task grants have their own complete signed-context profile.
+                actors.remove("agent");
             }
             let digest = profile_digest(&compiled["accessProfiles"][id.as_str()])?;
             Ok((
@@ -853,6 +942,7 @@ fn load_access_profiles(project: &Path) -> Result<BTreeMap<String, LoadedProfile
                     profile,
                     digest,
                     audiences: audiences.unwrap_or_default(),
+                    actors,
                 },
             ))
         })
