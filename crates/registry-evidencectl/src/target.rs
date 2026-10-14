@@ -48,6 +48,8 @@ pub(crate) struct ExplainArgs {
     /// Normalized target.yaml, or a directory containing target.yaml.
     pub target: PathBuf,
     /// Evidence project directory.
+    ///
+    /// This command needs an editable project holding evidence.yaml.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
     /// Emit one machine-readable JSON report.
