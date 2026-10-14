@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -438,6 +438,32 @@ test('the work directory is removed after a journey, even where it made a direct
     const { code, output } = await run([page], { TMPDIR: temp });
     assert.equal(code, 0, output);
     assert.deepEqual(await readdir(temp), []);
+  });
+});
+
+test('--keep-failed retains private diagnostics after stopping owned sessions', async () => {
+  const body = '## Fail\n\n' + fence('sh', 'mkdir -p project/.breg/dev\necho {} >project/.breg/dev/state.json\necho startup-category >diagnostic.log\nfalse');
+  await withPage(body, async ({ dir, page }) => {
+    const temp = join(dir, 'tmp');
+    await mkdir(temp);
+    const stopped = join(dir, 'stopped.log');
+    await writeFile(join(dir, 'breg'), '#!/bin/sh\n');
+    await writeFile(join(dir, 'bregctl'), `#!/bin/sh\nprintf '%s\\n' "$*" >'${stopped}'\n`);
+    await chmod(join(dir, 'breg'), 0o755);
+    await chmod(join(dir, 'bregctl'), 0o755);
+    const { code, output } = await run(['--keep-failed', '--toolset', 'breg', page], {
+      TMPDIR: temp,
+      BREG_BIN: join(dir, 'breg'),
+      BREGCTL_BIN: join(dir, 'bregctl'),
+    });
+    assert.equal(code, 1, output);
+    assert.match(output, /failed journey artifacts retained/u);
+    assert.match(await readFile(stopped, 'utf8'), /^dev stop \/\S+\/project --remove$/mu);
+    const roots = await readdir(temp);
+    assert.equal(roots.length, 1);
+    const retained = join(temp, roots[0]);
+    assert.equal((await stat(retained)).mode & 0o777, 0o700);
+    assert.equal(await readFile(join(retained, 'reader/diagnostic.log'), 'utf8'), 'startup-category\n');
   });
 });
 

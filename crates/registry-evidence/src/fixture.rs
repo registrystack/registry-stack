@@ -3,8 +3,8 @@
 //! synthetic cases a requirement is proven against offline.
 //!
 //! The bundle loader reads each referenced fixture through the shared
-//! configuration reader and checks that it is synthetic and covers every
-//! required case category. The offline runner interprets the cases. Every
+//! configuration reader and checks that it is synthetic. Production and
+//! evidence-grade bundles also require every case category. The offline runner interprets the cases. Every
 //! refusal names the file, the member, its line and column, and the fix, and
 //! none repeats a value from the file (CFG-SEC-3).
 
@@ -16,7 +16,7 @@ use registry_platform_yaml::{
 };
 use serde_json::Value;
 
-use crate::config::BundleExpressions;
+use crate::config::{AssuranceProfile, BundleExpressions};
 
 /// The kind of an Evidence fixture document.
 pub const EVIDENCE_FIXTURE_KIND: &str = "EvidenceFixture";
@@ -41,20 +41,25 @@ pub const EVIDENCE_FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
 /// The most cases one fixture holds.
 pub const MAXIMUM_CASES: usize = 256;
 
-/// Read one fixture file and check that it is synthetic and covers every
-/// case category. `file` is the name the diagnostics carry.
+/// Read one synthetic fixture file. Local bundles may use focused suites;
+/// production and evidence-grade bundles require every case category. `file` is the name the diagnostics carry.
 /// `declared_unresolved` says whether the requirement's initial source
 /// declares an unresolved outcome a case may replay.
 ///
 /// The value returned is the document without its envelope, for the offline
 /// runner.
-pub fn read_fixture(file: &str, bytes: &[u8], declared_unresolved: bool) -> Result<Value, Report> {
+pub fn read_fixture(
+    file: &str,
+    bytes: &[u8],
+    declared_unresolved: bool,
+    assurance_profile: AssuranceProfile,
+) -> Result<Value, Report> {
     let mut hook = BundleExpressions;
     let document = Reader::new(file)
         .with_hook(&mut hook)
         .read(bytes, &Expect::one(&EVIDENCE_FIXTURE_FORMAT))?;
     let mut value = document.to_json_value();
-    check_coverage(&document, &value, declared_unresolved)
+    check_coverage(&document, &value, declared_unresolved, assurance_profile)
         .map_err(|diagnostic| Report::new(vec![*diagnostic]))?;
     if let Some(body) = value.as_object_mut() {
         body.remove("apiVersion");
@@ -69,6 +74,7 @@ fn check_coverage(
     document: &Document,
     root: &Value,
     declared_unresolved: bool,
+    assurance_profile: AssuranceProfile,
 ) -> Result<(), Refusal> {
     // A member the rule concerns that is not written is placed at the
     // nearest member that is.
@@ -148,7 +154,7 @@ fn check_coverage(
         };
         categories.observe(id, case_declares_unresolved);
     }
-    if !categories.complete() {
+    if assurance_profile != AssuranceProfile::Local && !categories.complete() {
         return Err(refuse(
             "evidence.fixture.incomplete-coverage",
             "/cases",
@@ -227,8 +233,13 @@ mod tests {
     }
 
     fn refusal(text: &str, declared_unresolved: bool) -> registry_platform_yaml::Diagnostic {
-        let report = read_fixture("fixtures/cases.yaml", text.as_bytes(), declared_unresolved)
-            .expect_err("the fixture is refused");
+        let report = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            declared_unresolved,
+            AssuranceProfile::EvidenceGrade,
+        )
+        .expect_err("the fixture is refused");
         assert!(
             !report.render_human().contains(CANARY),
             "the refusal repeats no value"
@@ -240,11 +251,85 @@ mod tests {
     #[test]
     fn reads_a_complete_fixture_without_its_envelope() {
         let text = format!("{HEADER}synthetic_only: true\ncases:\n{}", complete_cases());
-        let value = read_fixture("fixtures/cases.yaml", text.as_bytes(), false)
-            .expect("a complete fixture");
+        let value = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            false,
+            AssuranceProfile::EvidenceGrade,
+        )
+        .expect("a complete fixture");
         assert_eq!(value.get("apiVersion"), None);
         assert_eq!(value.get("kind"), None);
         assert_eq!(value["cases"].as_array().map(Vec::len), Some(8));
+    }
+
+    #[test]
+    fn focused_coverage_is_local_only() {
+        let text = format!("{HEADER}synthetic_only: true\ncases:\n  - {{id: positive}}\n");
+        let value = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            false,
+            AssuranceProfile::Local,
+        )
+        .expect("local focused fixture");
+        assert_eq!(value["cases"].as_array().map(Vec::len), Some(1));
+        for profile in [
+            AssuranceProfile::Production,
+            AssuranceProfile::EvidenceGrade,
+        ] {
+            let report = read_fixture("fixtures/cases.yaml", text.as_bytes(), false, profile)
+                .expect_err("strict profiles require complete coverage");
+            assert_eq!(
+                report.diagnostics()[0].code,
+                "evidence.fixture.incomplete-coverage"
+            );
+        }
+        let complete = format!("{HEADER}synthetic_only: true\ncases:\n{}", complete_cases());
+        read_fixture(
+            "fixtures/cases.yaml",
+            complete.as_bytes(),
+            false,
+            AssuranceProfile::Local,
+        )
+        .expect("complete local fixtures remain valid");
+    }
+
+    #[test]
+    fn focused_local_coverage_preserves_structural_and_private_refusals() {
+        for (body, code) in [
+            (
+                "synthetic_only: false\ncases: [{id: positive}]\n".to_owned(),
+                "evidence.fixture.not-synthetic",
+            ),
+            (
+                "synthetic_only: true\ncases: []\n".to_owned(),
+                "evidence.fixture.invalid-case-count",
+            ),
+            (
+                "synthetic_only: true\ncases: [{id: positive}, {id: positive}]\n".to_owned(),
+                "evidence.fixture.invalid-case-id",
+            ),
+            (
+                format!("synthetic_only: true\ncases: [{{id: {CANARY}}}]\n"),
+                "evidence.fixture.invalid-case-id",
+            ),
+            (
+                "synthetic_only: true\ncases: [{id: unresolved, declaredUnresolved: true}]\n"
+                    .to_owned(),
+                "evidence.fixture.unresolved-not-declared",
+            ),
+        ] {
+            let report = read_fixture(
+                "fixtures/cases.yaml",
+                format!("{HEADER}{body}").as_bytes(),
+                false,
+                AssuranceProfile::Local,
+            )
+            .expect_err("local coverage changes no structural boundary");
+            assert_eq!(report.diagnostics()[0].code, code);
+            assert!(!report.render_human().contains(CANARY));
+        }
     }
 
     #[test]
@@ -253,8 +338,13 @@ mod tests {
             "fixture: registry.evidence.reference.{CANARY}/v1\nsynthetic_only: true\ncases:\n{}",
             complete_cases()
         );
-        let report = read_fixture("fixtures/cases.yaml", text.as_bytes(), false)
-            .expect_err("the fixture is refused");
+        let report = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            false,
+            AssuranceProfile::EvidenceGrade,
+        )
+        .expect_err("the fixture is refused");
         assert!(
             !report.render_human().contains(CANARY),
             "the refusal repeats no value"
@@ -354,8 +444,13 @@ mod tests {
                 "{HEADER}synthetic_only: true\ncases:\n{cases}  - {{id: unresolved, declaredUnresolved: {marker}}}\n"
             )
         };
-        read_fixture("fixtures/cases.yaml", fixture("true").as_bytes(), true)
-            .expect("the declared unresolved case covers no-match and ambiguity");
+        read_fixture(
+            "fixtures/cases.yaml",
+            fixture("true").as_bytes(),
+            true,
+            AssuranceProfile::EvidenceGrade,
+        )
+        .expect("the declared unresolved case covers no-match and ambiguity");
 
         // The marker counts only when the requirement declares the collapse,
         // and only as `true`; either other way the hidden categories stay
@@ -364,8 +459,13 @@ mod tests {
             ("true", false, "evidence.fixture.unresolved-not-declared"),
             ("false", true, "evidence.fixture.invalid-unresolved-marker"),
         ] {
-            let report = read_fixture("fixtures/cases.yaml", fixture(marker).as_bytes(), declared)
-                .expect_err("the hidden lookup categories stay uncovered");
+            let report = read_fixture(
+                "fixtures/cases.yaml",
+                fixture(marker).as_bytes(),
+                declared,
+                AssuranceProfile::EvidenceGrade,
+            )
+            .expect_err("the hidden lookup categories stay uncovered");
             assert!(
                 report
                     .diagnostics()

@@ -1,11 +1,11 @@
 ---
 title: Return a governed value
-description: Add a controlled non-boolean answer to the first Evidence Gateway project and verify the signed result.
+description: Request a controlled value from the normalized Evidence project and verify it before use.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-03"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -18,237 +18,116 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting this
-tutorial. You will add a governed age-bracket question to that project while keeping its adult
-status question. The same date of birth can then answer either question without disclosing the
-date or exact age.
+Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting.
+You will reuse that normalized project to return a controlled region value. The project declares
+the complete set of possible values, so a Function cannot invent a new category at runtime.
 
 <QuickstartMeta
-  outcome="A verified assertion containing one controlled age-bracket value."
+  outcome="A verified residence-region assertion whose value is one reviewed category."
   time="About 10 minutes"
   level="Local development with synthetic data"
   prerequisites={[
-    'The completed first Evidence Gateway assertion tutorial',
-    'Its adult-status project and materialized source mock',
-    'Python 3',
-    'A shell with curl',
+    'The completed first Evidence assertion tutorial',
+    'Its normalized standalone project',
+    'Python 3 and curl',
   ]}
 />
 
-## Choose the minimum useful answer
+## Review the governed boundary
 
-Adult status answers a yes-or-no criterion. A service that selects different paths for children,
-young adults, and older adults needs more information, but still does not need a date of birth or
-exact age.
-
-This tutorial permits four answers:
-
-- `under-18`
-- `18-to-24`
-- `25-to-64`
-- `65-or-older`
-
-The provider reviews this closed list. The caller cannot request a narrower bracket or an exact
-age.
-
-## Restart the source mock
-
-In one terminal, return to the `first-evidence-assertion` directory and serve the same checked cases again:
-
-```sh test-cwd="first-evidence-assertion" test-background="http://127.0.0.1:4010/people/person-123"
-evidencectl source mock serve --config adult-status/mocks/source.yaml
-```
-
-Leave the source mock running. It still returns each synthetic person's identifier, name, and
-date of birth. This tutorial will use the child record, `person-456`, to exercise a different
-registry lookup from the first tutorial.
-
-## Add the age-bracket question
-
-In another terminal, enter the existing project:
+Enter the copied project:
 
 ```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
-### `questions/age-bracket.yaml`
+`evidence.yaml` already declares the `residence-region` definition. Its `region` output is a
+`controlled-category` restricted to `north` or `south`. The named `derive-residence-region`
+Function may choose only one of those values. The `standalone-service` target profile grants the
+complete request shape: definition, purpose, audience source, representation, subject role,
+selector profile, and value origin.
 
-Create a second question definition alongside `questions/adult-status.yaml`:
-
-```yaml title="questions/age-bracket.yaml" test-file
-apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: age-bracket
-question: Which age bracket does this person belong to?
-purpose: service-path-selection
-subject:
-  role: person
-  selector: person_id
-source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: age_bracket
-    type: controlled-category
-    values: [under-18, 18-to-24, 25-to-64, 65-or-older]
-derivation: derivations/age-bracket.rhai
-disclosure:
-  allow: [age_bracket]
-```
-
-The new question uses the same OpenAPI operation, projected fact, and subject mapping as adult
-status. `values` defines the complete category list. The local compiler turns that list into the
-codelist enforced by the Evidence Gateway runtime.
-
-### `derivations/age-bracket.rhai`
-
-Create this new derivation alongside `derivations/adult-status.rhai`:
-
-```rhai title="derivations/age-bracket.rhai" test-file
-fn answer(facts, selectors, context) {
-    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    if compare_dates(context.legal_local_date, add_calendar_years(born, 18)) < 0 {
-        #{age_bracket: "under-18"}
-    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) < 0 {
-        #{age_bracket: "18-to-24"}
-    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 65)) < 0 {
-        #{age_bracket: "25-to-64"}
-    } else {
-        #{age_bracket: "65-or-older"}
-    }
-}
-```
-
-The script chooses one category from the reviewed list. Evidence Gateway rejects any other return value
-before constructing or signing an assertion.
-
-## Start the updated project
-
-Capture the edited project in a new immutable local generation:
+Prove the unchanged project and target before running them:
 
 ```sh
-evidencectl dev start .
+evidencectl check . --target local-target.yaml
+evidencectl test . --target local-target.yaml
+```
+
+## Start the local boundary
+
+In another terminal, start the synthetic source from the project directory:
+
+```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
+python3 serve-source.py \
+  --port 8081 \
+  --token-file .generated/secrets/synthetic-source-token
+```
+
+Back in the first terminal, start a fresh generation on the alternate Evidence port:
+
+```sh
+evidencectl dev start . \
+  --target local-target.yaml \
+  --evidence-port 18080 \
+  --issuer-port 8082
 ```
 
 ```text test-excerpt
-Evidence ready at http://127.0.0.1:8080
-Issuer ready at http://127.0.0.1:8081
+Evidence ready at http://127.0.0.1:18080
 ```
 
-The command compiles both files in `questions/` into the same local Evidence Gateway service. The adult
-status question remains available. Authentication, source bounds, signing, verification, and audit
-apply to both questions.
+## Request the controlled value
 
-## Request and verify the bracket
-
-Prepare a request for the updated question:
+Prepare the request with the existing tutorial client and the definition's declared purpose:
 
 ```sh
-evidencectl request prepare age-bracket \
-  --purpose service-path-selection \
-  --subject person_id=person-456 \
-  --name age-bracket
+evidencectl request prepare residence-region \
+  --client tutorial-client \
+  --purpose residence-check \
+  --subject subject:record-id=adult \
+  --name residence-region
 ```
 
-Send the prepared request across the real HTTP boundary:
+Send the request, then verify the signed response before inspecting it:
 
 ```sh
-curl --silent --show-error \
-  --config .evidence/requests/age-bracket/authorization.curl \
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/residence-region/authorization.curl \
   --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
+  --url http://127.0.0.1:18080/v1/evidence \
   --header 'Content-Type: application/json' \
   --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/age-bracket/request.json \
-  --output age-bracket.jws.json
-```
+  --data-binary @.evidence/requests/residence-region/request.json \
+  --output residence-region.jws.json
 
-Verify the response before reading the category:
-
-```sh
-evidencectl verify age-bracket.jws.json \
-  --context .evidence/requests/age-bracket/verification.json \
-  --output age-bracket.verified.json
+evidencectl verify residence-region.jws.json \
+  --context .evidence/requests/residence-region/verification.json \
+  --output residence-region.verified.json
 ```
 
 ```text test-expect
 VERIFIED
 ```
 
-Inspect the verified payload:
+The synthetic adult record produces `north`. Read that value only from
+`residence-region.verified.json`. The assertion excludes the source record's birth date and private
+address canary because neither is an output of this definition.
+
+## Clean up
 
 ```sh
-python3 -m json.tool age-bracket.verified.json
-```
-
-The relevant supported value has this shape:
-
-```json test-excerpt
-{
-  "providesValueFor": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
-  "value": "under-18"
-}
-```
-
-The source value `2012-05-20` is currently in the `under-18` category. The verified assertion
-does not include the date of birth, exact age, name, or `person_id`.
-
-Minimum disclosure is relative to the authorized purpose. A boolean was enough for the first
-question. A controlled category is enough for this service-path decision. Evidence Gateway protects both
-without treating boolean answers as the only minimized form.
-
-## Inspect the audit and clean up
-
-Stop the local Evidence Gateway services:
-
-```sh
-evidencectl dev stop
-```
-
-Inspect the last verified operation:
-
-```sh
+evidencectl dev stop .
 evidencectl audit show --last-operation
+evidencectl dev clean .
 ```
 
-```text test-expect
-ACCESS AUTHORIZED age-bracket service-path-selection requester=<pseudonym>
-DISCLOSURE RELEASED age_bracket
-```
-
-The audit names the disclosed concept, not the category value or source fact.
-
-Remove the stopped generated runtime while preserving the editable project and request artifacts:
-
-```sh
-evidencectl dev clean
-```
-
-Return to the registry terminal and press `Ctrl+C`.
-
-## If the local services refuse to start
-
-`evidencectl dev start .` refuses a project that still holds a local session, reporting
-`local development state already exists and is not a completed stopped session`. That happens when
-the first tutorial's services were left running. Stop and remove that session, then start the new
-generation:
-
-```sh test-skip="recovers a session the first tutorial left running; the replay stopped it"
-evidencectl dev stop
-evidencectl dev clean
-```
-
-If ports `8080` or `8081` belong to something else, pass `--evidence-port` and `--issuer-port` with
-two unused ports, as [your first assertion](../first-evidence-assertion/) describes.
+The audit view records that the controlled output was released without printing its value or the
+selector. The tutorial runner stops the synthetic source. If you started it by hand, press
+`Ctrl+C` in its terminal.
 
 ## Next
 
-- [Control which applications can request Evidence Gateway](../control-who-can-request-evidence/)
+- [Control who can request Evidence](../control-who-can-request-evidence/)
 - [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
-- [Bind two people to one relationship assertion](../assert-a-role-bound-relationship/)
-- [Configure Evidence Gateway](../../configure/evidence/)
-- [Review the Evidence Gateway security model](../../security/evidence/)
+- [Connect an institution source](../connect-an-institution-source/)

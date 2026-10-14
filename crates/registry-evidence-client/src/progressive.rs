@@ -23,18 +23,42 @@ pub const SUBJECT_BINDING_RECEIPT_SCHEMA_V1: &str = "registry.evidence-subject-b
 /// The small, application-authored input for one progressive request.
 #[derive(Clone)]
 pub struct AudienceScopedRequest {
-    pub(crate) requirement: String,
+    selection: DefinitionSelection,
     pub(crate) selectors: BTreeMap<String, SelectorValue>,
     pub(crate) subjects: Option<BTreeMap<String, BTreeMap<String, SelectorValue>>>,
     pub(crate) response_format: EvidenceResponseFormat,
     pub(crate) binding_receipt: Option<SubjectBindingReceipt>,
 }
 
+#[derive(Clone, Debug)]
+enum DefinitionSelection {
+    Handle(String),
+    RequirementUri(String),
+}
+
 impl AudienceScopedRequest {
     #[must_use]
     pub fn new(requirement: impl Into<String>, selectors: BTreeMap<String, SelectorValue>) -> Self {
         Self {
-            requirement: requirement.into(),
+            selection: DefinitionSelection::Handle(requirement.into()),
+            selectors,
+            subjects: None,
+            response_format: EvidenceResponseFormat::SignedJws,
+            binding_receipt: None,
+        }
+    }
+
+    /// Select one complete definition by its public Requirement URI.
+    ///
+    /// Local handles are not accepted through this constructor. The selected
+    /// definition must still match the application's independent verifier pins.
+    #[must_use]
+    pub fn for_requirement_uri(
+        requirement: impl Into<String>,
+        selectors: BTreeMap<String, SelectorValue>,
+    ) -> Self {
+        Self {
+            selection: DefinitionSelection::RequirementUri(requirement.into()),
             selectors,
             subjects: None,
             response_format: EvidenceResponseFormat::SignedJws,
@@ -68,7 +92,7 @@ impl std::fmt::Debug for AudienceScopedRequest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("AudienceScopedRequest")
-            .field("requirement", &self.requirement)
+            .field("selection", &self.selection)
             .field(
                 "subject_count",
                 &self.subjects.as_ref().map_or(1, BTreeMap::len),
@@ -312,10 +336,13 @@ pub(crate) fn select_definition<'a>(
         .definitions
         .iter()
         .filter(|definition| {
-            definition.handle == request.requirement
-                && definition.subject_binding_mode.unwrap_or(
-                    registry_evidence_verifier::model::SubjectBindingMode::AudienceScoped,
-                ) == registry_evidence_verifier::model::SubjectBindingMode::AudienceScoped
+            (match &request.selection {
+                DefinitionSelection::Handle(handle) => definition.handle == *handle,
+                DefinitionSelection::RequirementUri(uri) => definition.requirement == *uri,
+            }) && definition
+                .subject_binding_mode
+                .unwrap_or(registry_evidence_verifier::model::SubjectBindingMode::AudienceScoped)
+                == registry_evidence_verifier::model::SubjectBindingMode::AudienceScoped
                 && definition
                     .response_formats
                     .iter()
@@ -633,6 +660,29 @@ mod tests {
             ]),
         );
         assert!(select_definition(&definitions, &extra_field).is_err());
+    }
+
+    #[test]
+    fn public_requirement_uri_selection_refuses_local_handles_and_ambiguous_shapes() {
+        let mut definitions = definitions();
+        let selectors =
+            BTreeMap::from([("person_id".to_owned(), SelectorValue::from("person-123"))]);
+        let uri_request = AudienceScopedRequest::for_requirement_uri(
+            "urn:example:requirement:status",
+            selectors.clone(),
+        );
+        assert_eq!(
+            select_definition(&definitions, &uri_request)
+                .unwrap()
+                .handle,
+            "status-check"
+        );
+        let handle_request = AudienceScopedRequest::for_requirement_uri("status-check", selectors);
+        assert!(select_definition(&definitions, &handle_request).is_err());
+        let mut sibling = definitions.definitions[0].clone();
+        sibling.handle = "other-check".to_owned();
+        definitions.definitions.push(sibling);
+        assert!(select_definition(&definitions, &uri_request).is_err());
     }
 
     #[test]

@@ -15,8 +15,8 @@ common:
   observed_at: "2026-08-02T00:00:00Z"
   selectors:
     subject:
-      profile: record-reference-v1
-      values: {record_reference: REC-0001}
+      profile: record-reference
+      values: {record-reference: REC-0001}
   extract: |
     CREATE TABLE evidence_extract (
       published_at TEXT NOT NULL,
@@ -59,25 +59,25 @@ cases:
   - id: positive
     selectors:
       subject:
-        profile: record-reference-v1
-        values: {record_reference: REC-0001}
+        profile: record-reference
+        values: {record-reference: REC-0001}
     expected:
       lookup: match
       derivationRuns: true
       signed: true
-      facts: {qualifying_record_count: 1}
+      facts: {record-count: 1}
       value: true
 
   - id: negative-false-is-success
     selectors:
       subject:
-        profile: record-reference-v1
-        values: {record_reference: REC-0002}
+        profile: record-reference
+        values: {record-reference: REC-0002}
     expected:
       lookup: match
       derivationRuns: true
       signed: true
-      facts: {qualifying_record_count: 0}
+      facts: {record-count: 0}
       value: false
 
   # No match and ambiguity are reported to a caller identically, so neither
@@ -85,8 +85,8 @@ cases:
   - id: no-match
     selectors:
       subject:
-        profile: record-reference-v1
-        values: {record_reference: REC-0099}
+        profile: record-reference
+        values: {record-reference: REC-0099}
     expected:
       lookup: no_match
       publicProblem: evidence.unavailable
@@ -96,8 +96,8 @@ cases:
   - id: ambiguous
     selectors:
       subject:
-        profile: record-reference-v1
-        values: {record_reference: REC-0003}
+        profile: record-reference
+        values: {record-reference: REC-0003}
     expected:
       lookup: ambiguous
       publicProblem: evidence.unavailable
@@ -109,8 +109,8 @@ cases:
   - id: result-past-row-bound
     selectors:
       subject:
-        profile: record-reference-v1
-        values: {record_reference: REC-0004}
+        profile: record-reference
+        values: {record-reference: REC-0004}
     expected:
       publicProblem: source.unavailable
       signed: false
@@ -120,8 +120,8 @@ cases:
     observed_at: "2026-08-08T00:00:00Z"
     selectors:
       subject:
-        profile: record-reference-v1
-        values: {record_reference: REC-0001}
+        profile: record-reference
+        values: {record-reference: REC-0001}
     expected:
       lookup: match
       derivationRuns: true
@@ -132,8 +132,8 @@ cases:
     observed_at: "2026-08-08T00:00:01Z"
     selectors:
       subject:
-        profile: record-reference-v1
-        values: {record_reference: REC-0001}
+        profile: record-reference
+        values: {record-reference: REC-0001}
     expected:
       publicProblem: source.unavailable
       signed: false
@@ -163,7 +163,7 @@ cases:
   - id: hostile-reference-remains-data
     selectorOverrides:
       subject:
-        values: {record_reference: "X' OR '1'='1"}
+        values: {record-reference: "X' OR '1'='1"}
     expected:
       sourceRequestCount: 1
       expectedTransport:
@@ -184,9 +184,10 @@ cases:
 # strings are unrelated source values, present so that a leak of the whole row
 # fails a case instead of passing quietly.
 privacyExpectation:
-  evidenceContains: [urn:example:concept:record-condition-satisfied:v1]
+  evidenceContains: [urn:example:concept:record-status:v1]
   evidenceExcludes:
     - qualifying_record_count
+    - record-reference
     - record_reference
     - REC-0001
     - ROW-0001

@@ -56,7 +56,7 @@ const RELATIONSHIP_REQUIREMENT: &str = "urn:example:requirements:parent-relation
 const RELATIONSHIP_CONCEPT: &str = "urn:example:concepts:relationship-confirmed";
 
 #[test]
-#[ignore = "needs current authoring/target fixtures; opt-in requires real Evidence, local HTTPS issuer and source"]
+#[ignore = "opt-in starts real Evidence with a local HTTPS issuer, source, and Transit signer"]
 fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -70,7 +70,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
             .arg("check")
             .arg(&fixture.project)
             .arg("--target")
-            .arg(&fixture.target)
+            .arg(fixture.target.join("target.yaml"))
             .arg("--production")
             .env("EVIDENCE_BIN", evidence)
             .output()
@@ -94,9 +94,14 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
         first_bytes,
         "identical inputs and output binding must reproduce every candidate file byte"
     );
-    assert!(!fixture.candidate.join("runtime.yaml").exists());
+    assert!(fixture.candidate.join("runtime.yaml").is_file());
+    assert!(fixture.candidate.join("compiled-authority.yaml").is_file());
+    fixture.activate_candidate_bundle();
+    fixture.activate_target_authority(evidence);
 
     fixture.provision_target_secrets();
+    let mut https = fixture.start_https();
+    fixture.wait_for_https(&mut https);
     let audit_secret = fixture.secrets.join("audit-hmac-key");
     let audit_secret_bytes = fs::read(&audit_secret).expect("audit secret");
     fs::remove_file(&audit_secret).expect("temporarily remove audit secret");
@@ -105,6 +110,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
         .arg("--runtime-config")
         .arg(fixture.target_runtime.clone())
         .env("EVIDENCE_BIN", evidence)
+        .env("SSL_CERT_FILE", &fixture.ca)
         .output()
         .expect("runtime doctor with unavailable secret starts");
     assert_eq!(
@@ -123,6 +129,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
             .arg("--runtime-config")
             .arg(&fixture.target_runtime)
             .env("EVIDENCE_BIN", evidence)
+            .env("SSL_CERT_FILE", &fixture.ca)
             .output()
             .expect("doctor starts"),
         "target-host doctor",
@@ -132,7 +139,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
             .arg("test")
             .arg(&fixture.project)
             .arg("--target")
-            .arg(&fixture.target)
+            .arg(fixture.target.join("target.yaml"))
             .env("EVIDENCE_BIN", evidence)
             .output()
             .expect("fixture driver starts"),
@@ -140,8 +147,6 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     );
     fixture.assert_compose_package_identity(evidence, &revision);
 
-    let mut https = fixture.start_https();
-    fixture.wait_for_https(&mut https);
     assert_success(
         evidencectl()
             .arg("doctor")
@@ -276,7 +281,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
 }
 
 #[test]
-#[ignore = "needs current authoring/target fixtures; opt-in requires exact-source Evidence package check"]
+#[ignore = "opt-in builds exact-source Evidence for an independent package check"]
 fn production_package_accepts_the_real_package_check_digest() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -288,32 +293,27 @@ fn production_package_accepts_the_real_package_check_digest() {
     let output = fixture.package(evidence);
     let revision = package_digest(&output);
     assert!(revision.starts_with("sha256:"));
-    assert!(fixture.candidate.join("evidence.yaml").is_file());
+    assert!(fixture.candidate.join("bundle/evidence.yaml").is_file());
 }
 
 #[test]
-#[ignore = "needs current authoring/target fixtures; opt-in requires exact-source Evidence bundle check"]
+#[ignore = "opt-in builds exact-source Evidence for an independent target closure check"]
 fn offline_production_check_closes_without_target_host_mounts() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
     fixture.stage_authoring_project();
-    fs::write(
-        fixture.project.join("evidence-project.yaml"),
-        "version: 1\nproject: evidence-authoring\n",
-    )
-    .expect("Evidence project marker");
     fixture.stage_target();
 
     assert!(!fixture.candidate.exists());
     assert!(!fixture.secrets.exists());
-    assert!(!fixture.project.join("secrets").exists());
+    assert!(!fixture.project.join(".generated/secrets").exists());
     assert!(!fixture.audit_path.exists());
     let output = assert_success(
         evidencectl()
             .args(["--format", "json", "check"])
             .arg(&fixture.project)
             .arg("--target")
-            .arg(&fixture.target)
+            .arg(fixture.target.join("target.yaml"))
             .arg("--production")
             .env("EVIDENCE_BIN", evidence)
             .output()
@@ -322,30 +322,34 @@ fn offline_production_check_closes_without_target_host_mounts() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("check JSON report");
     assert_eq!(report["status"], "complete");
-    assert_eq!(report["proof"], "deployment-closure");
-    assert_eq!(report["assuranceProfile"], "production");
-    assert_eq!(report["fixtureProof"], false);
+    assert_eq!(report["proof"], "compiled-target");
+    assert_eq!(report["offline"], true);
     assert_eq!(report["networkAccess"], false);
     assert_eq!(report["secretResolution"], false);
-    assert_eq!(report["targetHostPathChecks"], false);
+    assert_eq!(report["fixtureExecution"], false);
+    assert!(report["packageDigest"]
+        .as_str()
+        .is_some_and(|digest| digest.starts_with("sha256:")));
+    assert_eq!(
+        report["definitionRevisions"]
+            .as_array()
+            .expect("definition revisions")
+            .len(),
+        1
+    );
     assert!(!fixture.candidate.exists());
     assert!(!fixture.secrets.exists());
-    assert!(!fixture.project.join("secrets").exists());
+    assert!(!fixture.project.join(".generated/secrets").exists());
     assert!(!fixture.audit_path.exists());
 }
 
 #[test]
-#[ignore = "needs current authoring fixtures; opt-in requires exact-source Evidence bundle check"]
+#[ignore = "opt-in builds exact-source Evidence for an independent authoring check"]
 fn offline_project_check_needs_no_disposable_signing_state() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
     fixture.stage_authoring_project();
-    fs::write(
-        fixture.project.join("evidence-project.yaml"),
-        "version: 1\nproject: evidence-authoring\n",
-    )
-    .expect("Evidence project marker");
-    assert!(!fixture.project.join("secrets").exists());
+    assert!(!fixture.project.join(".generated/secrets").exists());
 
     let output = assert_success(
         evidencectl()
@@ -359,53 +363,40 @@ fn offline_project_check_needs_no_disposable_signing_state() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("check JSON report");
     assert_eq!(report["status"], "complete");
     assert_eq!(report["proof"], "authoring");
-    assert_eq!(report["fixtureProof"], false);
-    assert!(!fixture.project.join("secrets").exists());
+    assert!(report.get("fixtureProof").is_none());
+    assert!(!fixture.project.join(".generated/secrets").exists());
 
     fixture.stage_target();
-    let governance_path = fixture.target.join("governance.yaml");
-    let governance = fs::read_to_string(&governance_path).expect("target governance");
-    let stricter_governance = governance.replace(
-        "maximumAssertionValiditySeconds: 86400",
-        "maximumAssertionValiditySeconds: 300",
-    );
-    assert_ne!(
-        stricter_governance, governance,
-        "the target validity ceiling mutation must apply"
-    );
-    fs::write(&governance_path, stricter_governance).expect("stricter target governance");
+    edit_json_document(&fixture.target.join("authority.yaml"), |authority| {
+        authority["accessProfiles"]["statutory-caseworker-v1"]["grants"][0]["purpose"] =
+            json!("outside-definition-ceiling");
+    });
     let target_check = evidencectl()
         .args(["--format", "json", "check"])
         .arg(&fixture.project)
         .arg("--target")
-        .arg(&fixture.target)
+        .arg(fixture.target.join("target.yaml"))
         .env("EVIDENCE_BIN", evidence)
         .output()
         .expect("target-bound offline check starts");
     assert_eq!(
         target_check.status.code(),
         Some(1),
-        "the selected target must retain its stricter validity ceiling: {}",
+        "the selected target must enforce the AssertionDefinition grant ceiling: {}",
         String::from_utf8_lossy(&target_check.stdout)
     );
 }
 
 #[test]
-#[ignore = "needs current authoring fixtures and report assertions; opt-in requires real compiler and bundle schema"]
+#[ignore = "opt-in builds exact-source Evidence to inspect compiler diagnostics"]
 fn explain_refuses_unknown_source_members_without_disclosing_values() {
     const CANARY: &str = "SOURCE_SECRET_CANARY";
     let fixture = Fixture::new();
     let evidence = evidence_binary();
     fixture.stage_authoring_project();
-    fs::write(
-        fixture.project.join("evidence-project.yaml"),
-        "version: 1\nproject: evidence-authoring\n",
-    )
-    .expect("Evidence project marker");
-    let source_path = fixture.project.join("sources/people.yaml");
-    let mut source = fs::read_to_string(&source_path).expect("authored source");
-    source.push_str(&format!("\nunknownSourceMember: {CANARY}\n"));
-    fs::write(&source_path, source).expect("invalid authored source");
+    edit_json_document(&fixture.project.join("evidence.yaml"), |project| {
+        project["sources"]["people"]["unknownSourceMember"] = json!(CANARY);
+    });
 
     let output = evidencectl()
         .args(["--format", "json", "explain"])
@@ -418,38 +409,47 @@ fn explain_refuses_unknown_source_members_without_disclosing_values() {
         .stdout
         .windows(CANARY.len())
         .any(|part| part == CANARY.as_bytes()));
+    assert!(!output
+        .stderr
+        .windows(CANARY.len())
+        .any(|part| part == CANARY.as_bytes()));
     let report: Value = serde_json::from_slice(&output.stdout).expect("refusal JSON report");
-    assert!(report["findings"]
+    assert_eq!(report["status"], "refused");
+    assert!(report["diagnostics"]
         .as_array()
-        .unwrap()
+        .expect("diagnostics array")
         .iter()
-        .any(|finding| {
-            finding["code"] == "evidence.source.member-unknown"
-                && finding["path"] == "sources/people.yaml:/unknownSourceMember"
+        .any(|diagnostic| {
+            diagnostic["path"]
+                .as_str()
+                .is_some_and(|path| path.contains("/sources/people/unknownSourceMember"))
         }));
 }
 
 #[test]
-#[ignore = "needs current authoring/target fixtures and a shell-safe Mac loader; opt-in requires real offline checker"]
+#[ignore = "opt-in uses the macOS loader to verify private staging under a permissive umask"]
 fn offline_check_makes_private_staging_under_umask_022() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
     fixture.stage_authoring_project();
-    fs::write(
-        fixture.project.join("evidence-project.yaml"),
-        "version: 1\nproject: evidence-authoring\n",
-    )
-    .expect("Evidence project marker");
     fixture.stage_target();
 
+    let runtime_library_path = std::env::var("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH")
+        .or_else(|_| std::env::var("DYLD_FALLBACK_LIBRARY_PATH"))
+        .unwrap_or_default();
     let output = assert_success(
-        Command::new("sh")
-            .args(["-c", "umask 022\nexec \"$@\"", "evidencectl-check"])
+        Command::new("/bin/sh")
+            .args([
+                "-c",
+                "umask 022\nexport DYLD_FALLBACK_LIBRARY_PATH=\"${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}\"\nexec \"$@\"",
+                "evidencectl-check",
+            ])
+            .env("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH", runtime_library_path)
             .arg(env!("CARGO_BIN_EXE_evidencectl"))
             .args(["--format", "json", "check"])
             .arg(&fixture.project)
             .arg("--target")
-            .arg(&fixture.target)
+            .arg(fixture.target.join("target.yaml"))
             .arg("--production")
             .env("EVIDENCE_BIN", evidence)
             .output()
@@ -458,63 +458,46 @@ fn offline_check_makes_private_staging_under_umask_022() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("check JSON report");
     assert_eq!(report["status"], "complete");
-    assert_eq!(report["proof"], "deployment-closure");
+    assert_eq!(report["proof"], "compiled-target");
 }
 
 #[test]
-#[ignore = "needs current authoring/target fixtures and report assertions; opt-in requires real compiler"]
+#[ignore = "opt-in builds exact-source Evidence to verify evidence-grade target rules"]
 fn explicit_evidence_grade_target_applies_its_own_strict_source_rules() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
     fixture.stage_authoring_project();
-    fs::write(
-        fixture.project.join("evidence-project.yaml"),
-        "version: 1\nproject: evidence-authoring\n",
-    )
-    .expect("Evidence project marker");
     fixture.stage_target();
-    let governance_path = fixture.target.join("governance.yaml");
-    let governance = fs::read_to_string(&governance_path)
-        .expect("target governance")
-        .replace(
-            "assuranceProfile: production",
-            "assuranceProfile: evidence-grade",
-        );
-    fs::write(&governance_path, governance).expect("evidence-grade governance");
-    let source_path = fixture.project.join("sources/people.yaml");
-    let original_source = fs::read_to_string(&source_path).expect("authored source");
-    let source = original_source.replace("baseUrl: https://", "baseUrl: http://");
-    assert_ne!(
-        source, original_source,
-        "the strict-source mutation must apply"
-    );
-    assert!(source.contains("baseUrl: http://"));
-    fs::write(&source_path, source).expect("insecure authored source");
+    edit_json_document(&fixture.target.join("target.yaml"), |target| {
+        target["assuranceProfile"] = json!("evidence-grade");
+        target["connections"]["people"]["origin"] = json!("http://registry.invalid");
+    });
 
     let output = evidencectl()
         .args(["--format", "json", "check"])
         .arg(&fixture.project)
         .arg("--target")
-        .arg(&fixture.target)
+        .arg(fixture.target.join("target.yaml"))
         .env("EVIDENCE_BIN", evidence)
         .output()
         .expect("evidence-grade check starts");
     assert_eq!(output.status.code(), Some(1));
     let report: Value = serde_json::from_slice(&output.stdout).expect("refusal JSON report");
-    assert_eq!(report["status"], "refused");
-    assert!(report["findings"]
+    assert_eq!(report["status"], "domain-refusal");
+    assert!(report["diagnostics"]
         .as_array()
-        .unwrap()
+        .expect("diagnostics array")
         .iter()
-        .any(|finding| {
-            finding["severity"] == "error"
-                && finding["code"] == "evidence.source.production-channel"
-                && finding["path"] == "sources/people.yaml:/baseUrl"
+        .any(|diagnostic| {
+            diagnostic["severity"] == "error"
+                && diagnostic["path"]
+                    .as_str()
+                    .is_some_and(|path| path.contains("/connections/people/origin"))
         }));
 }
 
 #[test]
-#[ignore = "needs current authoring/target fixtures; opt-in requires real compiler across all four shapes"]
+#[ignore = "opt-in builds exact-source Evidence and evaluates all four assertion shapes"]
 fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -526,6 +509,8 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
 
     let output = fixture.package(evidence);
     let revision = package_digest(&output);
+    fixture.activate_candidate_bundle();
+    fixture.activate_target_authority(evidence);
     fixture.provision_target_secrets();
     let checked_revision = check_package(
         evidence,
@@ -535,7 +520,7 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
     assert_eq!(checked_revision, revision);
 
     let bundle: Value = serde_norway::from_slice(
-        &fs::read(fixture.candidate.join("evidence.yaml")).expect("four-shape bundle"),
+        &fs::read(fixture.candidate.join("bundle/evidence.yaml")).expect("four-shape bundle"),
     )
     .expect("four-shape bundle parses");
     assert_eq!(bundle["assuranceProfile"], "production");
@@ -560,15 +545,12 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
     assert_requirement_forms(
         &requirements,
         IMMUNIZATION_REQUIREMENT,
-        &["boolean", "bounded-integer"],
+        &["bounded-integer", "boolean"],
         1,
     );
     assert_requirement_forms(&requirements, RELATIONSHIP_REQUIREMENT, &["boolean"], 2);
     assert_eq!(requirements[REQUIREMENT]["handle"], "adult-status");
-    assert_eq!(
-        requirements[REQUIREMENT]["concepts"][0]["handle"],
-        "is_adult"
-    );
+    assert_eq!(requirements[REQUIREMENT]["concepts"][0]["handle"], "adult");
     for fixture_path in [
         "adult-status.yaml",
         "age-bracket.yaml",
@@ -578,7 +560,7 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
         assert!(
             fixture
                 .candidate
-                .join("fixtures")
+                .join("bundle/fixtures")
                 .join(fixture_path)
                 .is_file(),
             "the production candidate must capture fixture {fixture_path}"
@@ -588,13 +570,17 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
         .as_str()
         .expect("compiled controlled-category codelist path");
     assert!(
-        fixture.candidate.join(age_codelist).is_file(),
+        fixture
+            .candidate
+            .join("bundle")
+            .join(age_codelist)
+            .is_file(),
         "the governed controlled-category codelist must be captured"
     );
 }
 
 #[test]
-#[ignore = "needs current authoring/target fixtures; opt-in requires real Evidence and pinned issuer"]
+#[ignore = "opt-in starts the local issuer and Evidence services through Docker"]
 fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
@@ -608,7 +594,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
 
     assert_success(
         evidencectl()
-            .arg("new")
+            .arg("init")
             .arg(&fixture.project)
             .arg("--openapi")
             .arg(&retained_openapi)
@@ -618,11 +604,11 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
         "public new",
     );
     assert!(!fixture.project.join(".evidence").exists());
-    fixture.stage_local_project_without_governance();
+    fixture.stage_local_project();
     assert_success(
         evidencectl()
             .args(["keygen", "token", "--output"])
-            .arg(fixture.project.join("secrets/source-token"))
+            .arg(fixture.project.join(".generated/secrets/source-token"))
             .output()
             .expect("local source token keygen starts"),
         "local source token keygen",
@@ -630,7 +616,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
 
     let started = assert_success(
         evidencectl()
-            .args(["dev", "--detach", "--project"])
+            .args(["dev", "start"])
             .arg(&fixture.project)
             .arg("--evidence-bin")
             .arg(evidence)
@@ -641,7 +627,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
             .args(["--ready-timeout-seconds", "20"])
             .output()
             .expect("public dev starts"),
-        "public dev with omitted governance",
+        "public dev with complete local authority",
     );
     let mut stop_guard = DevStopGuard::new(&fixture.project);
     let started_stdout = String::from_utf8(started.stdout).expect("dev stdout");
@@ -655,15 +641,12 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
     )));
     let dev_root = fixture.project.join(".evidence/dev");
     let local_bundle = fs::read(dev_root.join("bundle/evidence.yaml")).expect("local dev bundle");
-    assert!(
-        local_bundle
-            .windows(b"urn:registrystack:evidence:local:".len())
-            .any(|part| part == b"urn:registrystack:evidence:local:"),
-        "the governance-free dev generation must use disposable local identifiers"
-    );
+    assert!(local_bundle
+        .windows(REQUIREMENT.len())
+        .any(|part| part == REQUIREMENT.as_bytes()));
     assert_success(
         evidencectl()
-            .args(["dev", "stop", "--project"])
+            .args(["dev", "stop"])
             .arg(&fixture.project)
             .output()
             .expect("public dev stop starts"),
@@ -675,14 +658,14 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
 
     fixture.stage_authoring_project();
     fixture.stage_target();
-    let governed_question = fs::read_to_string(fixture.project.join("questions/adult-status.yaml"))
-        .expect("governed question");
-    assert!(governed_question.contains(&format!("  requirement: {REQUIREMENT}")));
-    assert!(governed_question.contains(&format!("    uri: {CONCEPT}")));
+    let governed_project = fs::read_to_string(fixture.project.join("evidence.yaml"))
+        .expect("governed EvidenceProject");
+    assert!(governed_project.contains(REQUIREMENT));
+    assert!(governed_project.contains(CONCEPT));
     assert!(fixture.project.join("fixtures/adult-status.yaml").is_file());
 
-    let local_source_token =
-        fs::read(fixture.project.join("secrets/source-token")).expect("local source token");
+    let local_source_token = fs::read(fixture.project.join(".generated/secrets/source-token"))
+        .expect("local source token");
     let build = fixture.package(evidence);
     package_digest(&build);
     assert_eq!(
@@ -699,13 +682,6 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
         );
         assert!(
             !bytes
-                .windows(b"urn:registrystack:evidence:local:".len())
-                .any(|part| part == b"urn:registrystack:evidence:local:"),
-            "production candidate retained a disposable local identifier in {}",
-            path.display()
-        );
-        assert!(
-            !bytes
                 .windows(local_source_token.len())
                 .any(|part| part == local_source_token),
             "production candidate copied local secret material into {}",
@@ -713,17 +689,17 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
         );
     }
     let production_bundle =
-        fs::read(fixture.candidate.join("evidence.yaml")).expect("production bundle");
+        fs::read(fixture.candidate.join("bundle/evidence.yaml")).expect("production bundle");
     assert!(
         production_bundle
             .windows(REQUIREMENT.len())
             .any(|part| part == REQUIREMENT.as_bytes()),
-        "production candidate must use the newly added stable governance"
+        "production candidate must use the normalized stable definition"
     );
 
     assert_success(
         evidencectl()
-            .args(["dev", "clean", "--project"])
+            .args(["dev", "clean"])
             .arg(&fixture.project)
             .output()
             .expect("public dev clean starts"),
@@ -753,7 +729,7 @@ impl Drop for DevStopGuard {
     fn drop(&mut self) {
         if self.active {
             let _ = evidencectl()
-                .args(["dev", "stop", "--project"])
+                .args(["dev", "stop"])
                 .arg(&self.project)
                 .output();
         }
@@ -820,7 +796,7 @@ impl Fixture {
         let secrets = root.join("production-secrets");
         let ports = free_ports(3);
         Self {
-            target_runtime: target.join("runtime.yaml"),
+            target_runtime: candidate.join("runtime.yaml"),
             first_candidate: root.join("first-candidate"),
             audit_path: root.join("audit/evidence.jsonl"),
             ca: root.join("tls/ca.pem"),
@@ -879,147 +855,80 @@ impl Fixture {
     }
 
     fn stage_authoring_project(&self) {
-        let source_origin = format!("https://127.0.0.1:{}", self.https_port);
-        let source_files = [
-            (
-                "selectors/person-reference-v1.yaml",
-                "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
-kind: EvidenceSelector
-maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n".to_owned(),
-            ),
-            (
-                "sources/people.yaml",
-                format!(
-                    r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
-kind: EvidenceSource
-type: http-json
-baseUrl: {source_origin}
-posture: field-projected
-authentication: {{type: static-authorization, tokenRef: 'secret:file/source-token'}}
-request:
-  method: POST
-  path: /v1/facts
-  fixedHeaders: [{{name: Accept, value: application/json}}]
-  selectorInputs:
-    - role: subject
-      alternatives:
-        - {{profile: person-reference-v1, fields: [person_id]}}
-  prepareScript: adapters/people-prepare.rhai
-  adapterParameters: {{requestedFields: [date_of_birth], resultLimit: 2}}
-  adapterParametersSchema: schemas/people-parameters.schema.yaml
-  preparationLimits: {{query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}}
-  projection: [/total, /date_of_birth]
-  redirects: deny
-  attemptTimeoutMilliseconds: 3000
-  maximumResponseBytes: 65536
-  maximumConcurrency: 8
-responseSchema: schemas/people-response.schema.yaml
-extractScript: adapters/people-extract.rhai
-factSchema: schemas/people-facts.schema.yaml
-"#
-                ),
-            ),
-            (
-                "adapters/people-prepare.rhai",
-                r#"fn prepare(selectors, context) {
+        fs::create_dir_all(self.project.join("functions")).expect("Function directory");
+        fs::create_dir_all(self.project.join("fixtures")).expect("fixture directory");
+        let project = json!({
+            "apiVersion":"id.registrystack.org/formats/evidence/project/v1alpha1",
+            "kind":"EvidenceProject",
+            "id":"production-handoff",
+            "selectorProfiles":{"person-reference-v1":{"maximumAggregateBytes":200,"fields":{"person-id":{"type":"string","minimumBytes":1,"maximumBytes":200}}}},
+            "functions":[
+                {"id":"people-prepare","interface":"source-prepare/v1","source":"functions/people-prepare.rhai"},
+                {"id":"people-extract","interface":"source-extract/v1","source":"functions/people-extract.rhai"},
+                {"id":"adult-status-derive","interface":"assertion-derive/v1","source":"functions/adult-status-derive.rhai"}
+            ],
+            "sources":{"people":{
+                "type":"http-json","connection":"people","acquisitionPosture":"field-projected",
+                "selectors":[{"role":"subject","profiles":["person-reference-v1"]}],
+                "request":{"method":"POST","path":"/v1/facts","fixedHeaders":[{"name":"Accept","value":"application/json"}]},
+                "prepare":{"function":"people-prepare"},
+                "adapterParameters":{"requestedFields":["date_of_birth"],"resultLimit":2},
+                "adapterParametersSchema":{"type":"object","additionalProperties":false,"required":["requestedFields","resultLimit"],"properties":{"requestedFields":{"const":["date_of_birth"]},"resultLimit":{"const":2}}},
+                "preparationLimits":{"query":"forbidden","jsonBody":"required","maximumJsonDepth":8,"maximumCollectionItems":16,"maximumStringBytes":256,"maximumNormalizedBytes":4096},
+                "response":{"projection":["/total","/date_of_birth"],"shape":{"type":"object","additionalProperties":false,"required":["total"],"properties":{"total":{"type":"bounded-integer","minimum":0,"maximum":1000000},"date_of_birth":{"type":"date"}}},"maximumBytes":65536},
+                "extract":{"function":"people-extract"},
+                "facts":{"date-of-birth":{"type":"date"}},
+                "limits":{"attemptTimeoutMilliseconds":3000,"maximumConcurrency":8}
+            }},
+            "assertionDefinitions":{"adult-status": assertion_definition(AssertionDefinitionInput {
+                question: "Is the person at least 18 years old?",
+                requirement: REQUIREMENT,
+                kind: "criterion",
+                evidence_type: EVIDENCE_TYPE,
+                purpose: PURPOSE,
+                source: "people",
+                derive: "adult-status-derive",
+                output: "adult",
+                concept: CONCEPT,
+                output_constraints: json!({"type":"boolean"}),
+                subjects: vec![("subject", "person-reference-v1")],
+                fixture: "fixtures/adult-status.yaml",
+            })}
+        });
+        write_json_document(&self.project.join("evidence.yaml"), &project);
+        fs::write(self.project.join("functions/people-prepare.rhai"), r#"fn prepare(selectors, context) {
     let parameters = context["parameters"];
-    #{
-        query: [],
-        body: #{
-            lookup: #{person_id: selectors["subject"]["values"]["person_id"]},
-            fields: parameters["requestedFields"],
-            limit: parameters["resultLimit"]
-        }
-    }
+    let lookup = #{"person_id": selectors["subject"]["values"]["person-id"]};
+    #{"query": [], "body": #{"lookup": lookup, "fields": parameters["requestedFields"], "limit": parameters["resultLimit"]}}
 }
-"#
-                .to_owned(),
-            ),
-            (
-                "adapters/people-extract.rhai",
-                r#"fn extract(source_response, context) {
+"#).expect("people prepare Function");
+        fs::write(
+            self.project.join("functions/people-extract.rhai"),
+            r#"fn extract(source_response, context) {
     let total = source_response["total"];
     if total == 0 { return #{outcome: "no_match"}; }
     if total > 1 { return #{outcome: "ambiguous"}; }
     let value = get_path(source_response, "/date_of_birth");
     if is_missing(value) { return #{outcome: "match", facts: #{}}; }
-    #{outcome: "match", facts: #{date_of_birth: value}}
+    #{outcome: "match", facts: #{"date-of-birth": value}}
 }
-"#
-                .to_owned(),
-            ),
-            (
-                "schemas/people-parameters.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [requestedFields, resultLimit]\nproperties:\n  requestedFields: {const: [date_of_birth]}\n  resultLimit: {const: 2}\n".to_owned(),
-            ),
-            (
-                "schemas/people-response.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [total]\nproperties:\n  total: {type: integer, minimum: 0, maximum: 1000000}\n  date_of_birth: {type: string, format: date}\n".to_owned(),
-            ),
-            (
-                "schemas/people-facts.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [date_of_birth]\nproperties:\n  date_of_birth: {type: string, format: date}\n".to_owned(),
-            ),
-        ]
-        .into_iter()
-        .map(
-            |(path, contents)| registry_evidence_authoring::testing::ProjectFile {
-                path: path.to_owned(),
-                contents,
-            },
+"#,
         )
-        .collect::<Vec<_>>();
-
-        let question = format!(
-            r#"id: adult-status
-question: Is the person at least 18 years old?
-purpose: {PURPOSE}
-subject:
-  role: subject
-  selector: person_id
-  profile: person-reference-v1
-source:
-  ref: people
-answers:
-  - concept: is_adult
-    uri: {CONCEPT}
-    type: boolean
-derivation: derivations/adult-status.rhai
-disclosure:
-  allow: [is_adult]
-governance:
-  requirement: {REQUIREMENT}
-  kind: criterion
-  referenceFrameworks: [urn:example:frameworks:adult-status:v1]
-  evidenceType: {EVIDENCE_TYPE}
-  validitySeconds: 86400
-  observationTimezone: Asia/Bangkok
-  fixtures: fixtures/adult-status.yaml
-  disclosureFamilies: [urn:example:disclosure-families:adult-status]
-"#
-        );
-        let derivation = r#"fn answer(facts, selectors, context) {
-    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    #{is_adult: compare_dates(context.legal_local_date, add_calendar_years(born, 18)) >= 0}
+        .expect("people extract Function");
+        fs::write(self.project.join("functions/adult-status-derive.rhai"), r#"fn derive(facts, selectors, context) {
+    let born = parse_date(required(facts["date-of-birth"], "date_of_birth_missing"));
+    [#{output: "adult", value: compare_dates(context.legal_local_date, add_calendar_years(born, 18)) >= 0}]
 }
-"#;
-        let fixture = format!(
-            r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+"#).expect("adult derivation Function");
+        fs::write(self.project.join("fixtures/adult-status.yaml"), format!(r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
 coequal_acceptance_definition: true
 synthetic_only: true
 common:
   observed_at: '2026-08-02T00:00:00Z'
   legal_local_date: '2026-08-02'
-  selector: {{person_id: {SELECTOR_CANARY}}}
   selectors:
-    subject: {{profile: person-reference-v1, values: {{person_id: {SELECTOR_CANARY}}}}}
-  expectedRequestParts:
-    query: []
-    body: {{lookup: {{person_id: {SELECTOR_CANARY}}}, fields: [date_of_birth], limit: 2}}
-  expectedTransport:
-    path: /v1/facts
-    fixedHeaders: [{{name: Accept, value: application/json}}]
+    subject: {{profile: person-reference-v1, values: {{person-id: {SELECTOR_CANARY}}}}}
 cases:
   - {{id: positive, source: {{total: 1, date_of_birth: '2000-01-01'}}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}}
   - {{id: negative-false-is-success, source: {{total: 1, date_of_birth: '2010-01-01'}}, expected_value: false, expected_lookup: match, derivation_runs: true, signed_success: true}}
@@ -1032,365 +941,178 @@ cases:
   - {{id: anti-reconstruction, companion_bundle: threshold-ladder, expected: bundle-rejection}}
 privacy_expectation:
   evidence_contains: [{CONCEPT}]
-  evidence_excludes: [date_of_birth, person_id]
+  evidence_excludes: [date_of_birth, person-id]
   diagnostics_exclude: [{SELECTOR_CANARY}, fixture-source-canary]
-"#
-        );
-
-        for file in registry_evidence_authoring::testing::referenced_form_project(
-            "openapi: 3.1.0\ninfo: {title: Acceptance source, version: 1.0.0}\npaths: {}\n",
-            "adult-status",
-            &question,
-            derivation,
-            Some(&fixture),
-            &source_files,
-        ) {
-            let path = self.project.join(&file.path);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).expect("authoring directory");
-            }
-            fs::write(&path, file.contents).expect("authoring project file");
-        }
+"#)).expect("adult fixture");
     }
 
-    fn stage_local_project_without_governance(&self) {
+    fn stage_local_project(&self) {
         self.stage_authoring_project();
-        let question_path = self.project.join("questions/adult-status.yaml");
-        let question = fs::read_to_string(&question_path).expect("governed adult question");
-        let governance = question
-            .find("governance:\n")
-            .expect("adult question governance block");
-        let question = question[..governance].replace(&format!("    uri: {CONCEPT}\n"), "");
-        fs::write(&question_path, question).expect("governance-free local question");
-        fs::remove_file(self.project.join("fixtures/adult-status.yaml"))
-            .expect("withhold production fixture during local dev");
-        assert!(
-            !fs::read_to_string(question_path)
-                .expect("local question")
-                .contains("governance:"),
-            "local dev must begin before stable governance exists"
+        edit_json_document(&self.project.join("local-target.yaml"), |target| {
+            target["project"] = json!("production-handoff");
+            target["connections"]["people"] = json!({
+                "origin": format!("https://127.0.0.1:{}", self.https_port),
+                "authentication": {"type":"bearer", "tokenRef":"secret:file/source-token"}
+            });
+        });
+        write_json_document(
+            &self.project.join("dev-authority.yaml"),
+            &json!({
+                "apiVersion":"id.registrystack.org/formats/evidence/target-authority/v1alpha1",
+                "kind":"EvidenceTargetAuthority",
+                "target":"local",
+                "project":"production-handoff",
+                "accessProfiles":{
+                    "statutory-caseworker-v1":{
+                        "authority":"statutory",
+                        "actorKind":"service",
+                        "requesterTags":["local-evidence-client"],
+                        "grants":[authority_grant(
+                            "adult-status",
+                            PURPOSE,
+                            vec![("subject", "person-reference-v1")],
+                        )]
+                    }
+                }
+            }),
         );
     }
 
     fn stage_four_shape_project(&self) {
-        for (profile, field) in [
-            ("child-reference-v1", "child_id"),
-            ("candidate-reference-v1", "candidate_id"),
+        edit_json_document(&self.project.join("evidence.yaml"), |project| {
+            project["selectorProfiles"]["child-reference-v1"] = json!({"maximumAggregateBytes":200,"fields":{"child-id":{"type":"string","minimumBytes":1,"maximumBytes":200}}});
+            project["selectorProfiles"]["candidate-reference-v1"] = json!({"maximumAggregateBytes":200,"fields":{"candidate-id":{"type":"string","minimumBytes":1,"maximumBytes":200}}});
+            for function in [
+                json!({"id":"immunizations-prepare","interface":"source-prepare/v1","source":"functions/immunizations-prepare.rhai"}),
+                json!({"id":"immunizations-extract","interface":"source-extract/v1","source":"functions/immunizations-extract.rhai"}),
+                json!({"id":"relationships-prepare","interface":"source-prepare/v1","source":"functions/relationships-prepare.rhai"}),
+                json!({"id":"relationships-extract","interface":"source-extract/v1","source":"functions/relationships-extract.rhai"}),
+                json!({"id":"age-bracket-derive","interface":"assertion-derive/v1","source":"functions/age-bracket-derive.rhai"}),
+                json!({"id":"immunization-summary-derive","interface":"assertion-derive/v1","source":"functions/immunization-summary-derive.rhai"}),
+                json!({"id":"parent-relationship-derive","interface":"assertion-derive/v1","source":"functions/parent-relationship-derive.rhai"}),
+            ] {
+                project["functions"].as_array_mut().unwrap().push(function);
+            }
+            project["sources"]["immunizations"] = http_source(
+                "/v1/immunizations",
+                "immunizations-prepare",
+                "immunizations-extract",
+                "dose_count",
+                json!({"type":"bounded-integer","minimum":0,"maximum":20}),
+                vec![("subject", "person-reference-v1")],
+            );
+            project["sources"]["relationships"] = http_source(
+                "/v1/relationships",
+                "relationships-prepare",
+                "relationships-extract",
+                "relationship_confirmed",
+                json!({"type":"boolean"}),
+                vec![
+                    ("child", "child-reference-v1"),
+                    ("candidate-parent", "candidate-reference-v1"),
+                ],
+            );
+            project["assertionDefinitions"]["age-bracket"] = assertion_definition(
+                AssertionDefinitionInput {
+                    question: "Which governed age bracket contains this person?",
+                    requirement: AGE_REQUIREMENT,
+                    kind: "information-requirement",
+                    evidence_type: "urn:example:evidence-types:age-bracket:v1",
+                    purpose: "service-path-selection",
+                    source: "people",
+                    derive: "age-bracket-derive",
+                    output: "age-bracket",
+                    concept: AGE_CONCEPT,
+                    output_constraints: json!({"type":"controlled-category","values":["under-18","18-to-24","25-to-64","65-or-older"]}),
+                    subjects: vec![("subject", "person-reference-v1")],
+                    fixture: "fixtures/age-bracket.yaml",
+                },
+            );
+            project["assertionDefinitions"]["immunization-summary"] =
+                assertion_definition(AssertionDefinitionInput {
+                    question: "Is the schedule complete, and how many doses are recorded?",
+                    requirement: IMMUNIZATION_REQUIREMENT,
+                    kind: "information-requirement",
+                    evidence_type: "urn:example:evidence-types:immunization-summary:v1",
+                    purpose: "care-coordination",
+                    source: "immunizations",
+                    derive: "immunization-summary-derive",
+                    output: "schedule-complete",
+                    concept: SCHEDULE_CONCEPT,
+                    output_constraints: json!({"type":"boolean"}),
+                    subjects: vec![("subject", "person-reference-v1")],
+                    fixture: "fixtures/immunization-summary.yaml",
+                });
+            project["assertionDefinitions"]["immunization-summary"]["outputs"]["dose-count"] = json!({"concept":DOSE_COUNT_CONCEPT,"type":"bounded-integer","minimum":0,"maximum":20});
+            project["assertionDefinitions"]["parent-relationship"] =
+                assertion_definition(AssertionDefinitionInput {
+                    question: "Is the candidate registered as a parent of the child?",
+                    requirement: RELATIONSHIP_REQUIREMENT,
+                    kind: "criterion",
+                    evidence_type: "urn:example:evidence-types:parent-relationship:v1",
+                    purpose: "relationship-check",
+                    source: "relationships",
+                    derive: "parent-relationship-derive",
+                    output: "relationship-confirmed",
+                    concept: RELATIONSHIP_CONCEPT,
+                    output_constraints: json!({"type":"boolean"}),
+                    subjects: vec![
+                        ("child", "child-reference-v1"),
+                        ("candidate-parent", "candidate-reference-v1"),
+                    ],
+                    fixture: "fixtures/parent-relationship.yaml",
+                });
+        });
+        for (name, script) in [
+            (
+                "immunizations-prepare",
+                r#"fn prepare(selectors, context) {
+    let lookup = #{"person_id": selectors["subject"]["values"]["person-id"]};
+    #{"query": [], "body": #{"lookup": lookup, "fields": ["dose_count"], "limit": 2}}
+}"#,
+            ),
+            (
+                "immunizations-extract",
+                r#"fn extract(source_response, context) { let total = source_response["total"]; if total == 0 { return #{outcome:"no_match"}; } if total > 1 { return #{outcome:"ambiguous"}; } #{outcome:"match", facts: #{dose_count: source_response["dose_count"]}} }"#,
+            ),
+            (
+                "relationships-prepare",
+                r#"fn prepare(selectors, context) {
+    let lookup = #{"child_id": selectors["child"]["values"]["child-id"], "candidate_id": selectors["candidate-parent"]["values"]["candidate-id"]};
+    #{"query": [], "body": #{"lookup": lookup, "fields": ["relationship_confirmed"], "limit": 2}}
+}"#,
+            ),
+            (
+                "relationships-extract",
+                r#"fn extract(source_response, context) { let total = source_response["total"]; if total == 0 { return #{outcome:"no_match"}; } if total > 1 { return #{outcome:"ambiguous"}; } #{outcome:"match", facts: #{relationship_confirmed: source_response["relationship_confirmed"]}} }"#,
+            ),
+            (
+                "age-bracket-derive",
+                r#"fn derive(facts, selectors, context) {
+    let born = parse_date(required(facts["date-of-birth"], "date_of_birth_missing"));
+    let value = "under-18";
+    if compare_dates(context.legal_local_date, add_calendar_years(born, 18)) >= 0 { value = "18-to-24"; }
+    if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) >= 0 { value = "25-to-64"; }
+    if compare_dates(context.legal_local_date, add_calendar_years(born, 65)) >= 0 { value = "65-or-older"; }
+    [#{output:"age-bracket", value:value}]
+}"#,
+            ),
+            (
+                "immunization-summary-derive",
+                r#"fn derive(facts, selectors, context) { let count = required(facts["dose_count"], "dose_count_missing"); [#{output:"schedule-complete", value:count >= 3}, #{output:"dose-count", value:count}] }"#,
+            ),
+            (
+                "parent-relationship-derive",
+                r#"fn derive(facts, selectors, context) { [#{output:"relationship-confirmed", value:required(facts["relationship_confirmed"], "relationship_missing")}] }"#,
+            ),
         ] {
             fs::write(
-                self.project.join(format!("selectors/{profile}.yaml")),
-                format!(
-                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
-kind: EvidenceSelector
-maximumAggregateBytes: 200\nfields:\n  {field}: {{type: string, minimumBytes: 1, maximumBytes: 200}}\n"
-                ),
+                self.project.join(format!("functions/{name}.rhai")),
+                format!("{script}\n"),
             )
-            .expect("role-bound selector");
+            .expect("four-shape Function");
         }
-
-        let source_origin = format!("https://127.0.0.1:{}", self.https_port);
-        fs::write(
-            self.project.join("sources/immunizations.yaml"),
-            format!(
-                r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
-kind: EvidenceSource
-type: http-json
-baseUrl: {source_origin}
-posture: field-projected
-authentication: {{type: static-authorization, tokenRef: 'secret:file/source-token'}}
-request:
-  method: POST
-  path: /v1/immunizations
-  fixedHeaders: [{{name: Accept, value: application/json}}]
-  selectorInputs:
-    - role: subject
-      alternatives:
-        - {{profile: person-reference-v1, fields: [person_id]}}
-  prepareScript: adapters/immunizations-prepare.rhai
-  adapterParameters: {{requestedFields: [dose_count], resultLimit: 2}}
-  adapterParametersSchema: schemas/immunizations-parameters.schema.yaml
-  preparationLimits: {{query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}}
-  projection: [/total, /dose_count]
-  redirects: deny
-  attemptTimeoutMilliseconds: 3000
-  maximumResponseBytes: 65536
-  maximumConcurrency: 8
-responseSchema: schemas/immunizations-response.schema.yaml
-extractScript: adapters/immunizations-extract.rhai
-factSchema: schemas/immunizations-facts.schema.yaml
-"#
-            ),
-        )
-        .expect("immunization source");
-        fs::write(
-            self.project.join("sources/relationships.yaml"),
-            format!(
-                r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
-kind: EvidenceSource
-type: http-json
-baseUrl: {source_origin}
-posture: field-projected
-authentication: {{type: static-authorization, tokenRef: 'secret:file/source-token'}}
-request:
-  method: POST
-  path: /v1/relationships
-  fixedHeaders: [{{name: Accept, value: application/json}}]
-  selectorInputs:
-    - role: child
-      alternatives:
-        - {{profile: child-reference-v1, fields: [child_id]}}
-    - role: candidate-parent
-      alternatives:
-        - {{profile: candidate-reference-v1, fields: [candidate_id]}}
-  prepareScript: adapters/relationships-prepare.rhai
-  adapterParameters: {{requestedFields: [relationship_confirmed], resultLimit: 2}}
-  adapterParametersSchema: schemas/relationships-parameters.schema.yaml
-  preparationLimits: {{query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}}
-  projection: [/total, /relationship_confirmed]
-  redirects: deny
-  attemptTimeoutMilliseconds: 3000
-  maximumResponseBytes: 65536
-  maximumConcurrency: 8
-responseSchema: schemas/relationships-response.schema.yaml
-extractScript: adapters/relationships-extract.rhai
-factSchema: schemas/relationships-facts.schema.yaml
-"#
-            ),
-        )
-        .expect("relationship source");
-
-        for (path, contents) in [
-            (
-                "adapters/immunizations-prepare.rhai",
-                r#"fn prepare(selectors, context) {
-    let parameters = context["parameters"];
-    #{
-        query: [],
-        body: #{
-            lookup: #{person_id: selectors["subject"]["values"]["person_id"]},
-            fields: parameters["requestedFields"],
-            limit: parameters["resultLimit"]
-        }
-    }
-}
-"#,
-            ),
-            (
-                "adapters/immunizations-extract.rhai",
-                r#"fn extract(source_response, context) {
-    let total = source_response["total"];
-    if total == 0 { return #{outcome: "no_match"}; }
-    if total > 1 { return #{outcome: "ambiguous"}; }
-    let value = get_path(source_response, "/dose_count");
-    if is_missing(value) { return #{outcome: "match", facts: #{}}; }
-    #{outcome: "match", facts: #{dose_count: value}}
-}
-"#,
-            ),
-            (
-                "adapters/relationships-prepare.rhai",
-                r#"fn prepare(selectors, context) {
-    let parameters = context["parameters"];
-    #{
-        query: [],
-        body: #{
-            lookup: #{
-                child_id: selectors["child"]["values"]["child_id"],
-                candidate_id: selectors["candidate-parent"]["values"]["candidate_id"]
-            },
-            fields: parameters["requestedFields"],
-            limit: parameters["resultLimit"]
-        }
-    }
-}
-"#,
-            ),
-            (
-                "adapters/relationships-extract.rhai",
-                r#"fn extract(source_response, context) {
-    let total = source_response["total"];
-    if total == 0 { return #{outcome: "no_match"}; }
-    if total > 1 { return #{outcome: "ambiguous"}; }
-    let value = get_path(source_response, "/relationship_confirmed");
-    if is_missing(value) { return #{outcome: "match", facts: #{}}; }
-    #{outcome: "match", facts: #{relationship_confirmed: value}}
-}
-"#,
-            ),
-            (
-                "schemas/immunizations-parameters.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [requestedFields, resultLimit]\nproperties:\n  requestedFields: {const: [dose_count]}\n  resultLimit: {const: 2}\n",
-            ),
-            (
-                "schemas/immunizations-response.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [total]\nproperties:\n  total: {type: integer, minimum: 0, maximum: 1000000}\n  dose_count: {type: integer, minimum: 0, maximum: 20}\n",
-            ),
-            (
-                "schemas/immunizations-facts.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [dose_count]\nproperties:\n  dose_count: {type: integer, minimum: 0, maximum: 20}\n",
-            ),
-            (
-                "schemas/relationships-parameters.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [requestedFields, resultLimit]\nproperties:\n  requestedFields: {const: [relationship_confirmed]}\n  resultLimit: {const: 2}\n",
-            ),
-            (
-                "schemas/relationships-response.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [total]\nproperties:\n  total: {type: integer, minimum: 0, maximum: 1000000}\n  relationship_confirmed: {type: boolean}\n",
-            ),
-            (
-                "schemas/relationships-facts.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [relationship_confirmed]\nproperties:\n  relationship_confirmed: {type: boolean}\n",
-            ),
-        ] {
-            fs::write(self.project.join(path), contents).expect("four-shape source artifact");
-        }
-
-        self.stage_four_shape_questions();
         self.stage_four_shape_fixtures();
-    }
-
-    fn stage_four_shape_questions(&self) {
-        for (path, contents) in [
-            (
-                "questions/age-bracket.yaml",
-                format!(
-                    r#"id: age-bracket
-question: Which governed age bracket contains this person?
-purpose: service-path-selection
-subject:
-  role: subject
-  selector: person_id
-  profile: person-reference-v1
-source:
-  ref: people
-answers:
-  - concept: age_bracket
-    uri: {AGE_CONCEPT}
-    type: controlled-category
-    values: [under-18, 18-to-24, 25-to-64, 65-or-older]
-derivation: derivations/age-bracket.rhai
-disclosure:
-  allow: [age_bracket]
-governance:
-  requirement: {AGE_REQUIREMENT}
-  kind: information-requirement
-  referenceFrameworks: [urn:example:frameworks:age-bracket:v1]
-  evidenceType: urn:example:evidence-types:age-bracket:v1
-  validitySeconds: 86400
-  observationTimezone: Asia/Bangkok
-  fixtures: fixtures/age-bracket.yaml
-  disclosureFamilies: [urn:example:disclosure-families:age-bracket]
-"#
-                ),
-            ),
-            (
-                "questions/immunization-summary.yaml",
-                format!(
-                    r#"id: immunization-summary
-question: Is the schedule complete, and how many doses are recorded?
-purpose: care-coordination
-subject:
-  role: subject
-  selector: person_id
-  profile: person-reference-v1
-source:
-  ref: immunizations
-answers:
-  - concept: schedule_complete
-    uri: {SCHEDULE_CONCEPT}
-    type: boolean
-  - concept: dose_count
-    uri: {DOSE_COUNT_CONCEPT}
-    type: bounded-integer
-    minimum: 0
-    maximum: 20
-derivation: derivations/immunization-summary.rhai
-disclosure:
-  allow: [schedule_complete, dose_count]
-governance:
-  requirement: {IMMUNIZATION_REQUIREMENT}
-  kind: information-requirement
-  referenceFrameworks: [urn:example:frameworks:immunization-summary:v1]
-  evidenceType: urn:example:evidence-types:immunization-summary:v1
-  validitySeconds: 86400
-  observationTimezone: Asia/Bangkok
-  fixtures: fixtures/immunization-summary.yaml
-  disclosureFamilies: [urn:example:disclosure-families:immunization-summary]
-"#
-                ),
-            ),
-            (
-                "questions/parent-relationship.yaml",
-                format!(
-                    r#"id: parent-relationship
-question: Is the candidate registered as a parent of the child?
-purpose: relationship-check
-subjects:
-  - role: child
-    selector: child_id
-    profile: child-reference-v1
-  - role: candidate-parent
-    selector: candidate_id
-    profile: candidate-reference-v1
-source:
-  ref: relationships
-answers:
-  - concept: relationship_confirmed
-    uri: {RELATIONSHIP_CONCEPT}
-    type: boolean
-derivation: derivations/parent-relationship.rhai
-disclosure:
-  allow: [relationship_confirmed]
-governance:
-  requirement: {RELATIONSHIP_REQUIREMENT}
-  kind: criterion
-  referenceFrameworks: [urn:example:frameworks:parent-relationship:v1]
-  evidenceType: urn:example:evidence-types:parent-relationship:v1
-  validitySeconds: 86400
-  observationTimezone: Asia/Bangkok
-  fixtures: fixtures/parent-relationship.yaml
-  disclosureFamilies: [urn:example:disclosure-families:parent-relationship]
-"#
-                ),
-            ),
-        ] {
-            fs::write(self.project.join(path), contents).expect("four-shape question");
-        }
-        for (path, contents) in [
-            (
-                "derivations/age-bracket.rhai",
-                r#"fn answer(facts, selectors, context) {
-    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    if compare_dates(context.legal_local_date, add_calendar_years(born, 18)) < 0 {
-        #{age_bracket: "under-18"}
-    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) < 0 {
-        #{age_bracket: "18-to-24"}
-    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 65)) < 0 {
-        #{age_bracket: "25-to-64"}
-    } else {
-        #{age_bracket: "65-or-older"}
-    }
-}
-"#,
-            ),
-            (
-                "derivations/immunization-summary.rhai",
-                r#"fn answer(facts, selectors, context) {
-    let dose_count = required(facts.dose_count, "dose_count_missing");
-    #{schedule_complete: dose_count >= 3, dose_count: dose_count}
-}
-"#,
-            ),
-            (
-                "derivations/parent-relationship.rhai",
-                r#"fn answer(facts, selectors, context) {
-    #{relationship_confirmed: required(facts.relationship_confirmed, "relationship_missing")}
-}
-"#,
-            ),
-        ] {
-            fs::write(self.project.join(path), contents).expect("four-shape derivation");
-        }
     }
 
     fn stage_four_shape_fixtures(&self) {
@@ -1404,9 +1126,8 @@ synthetic_only: true
 common:
   observed_at: '2026-08-02T00:00:00Z'
   legal_local_date: '2026-08-02'
-  selector: {{person_id: {SELECTOR_CANARY}}}
   selectors:
-    subject: {{profile: person-reference-v1, values: {{person_id: {SELECTOR_CANARY}}}}}
+    subject: {{profile: person-reference-v1, values: {{person-id: {SELECTOR_CANARY}}}}}
   expectedRequestParts:
     query: []
     body: {{lookup: {{person_id: {SELECTOR_CANARY}}}, fields: [date_of_birth], limit: 2}}
@@ -1441,9 +1162,8 @@ coequal_acceptance_definition: true
 synthetic_only: true
 common:
   observed_at: '2026-08-02T00:00:00Z'
-  selector: {{person_id: {SELECTOR_CANARY}}}
   selectors:
-    subject: {{profile: person-reference-v1, values: {{person_id: {SELECTOR_CANARY}}}}}
+    subject: {{profile: person-reference-v1, values: {{person-id: {SELECTOR_CANARY}}}}}
   expectedRequestParts:
     query: []
     body: {{lookup: {{person_id: {SELECTOR_CANARY}}}, fields: [dose_count], limit: 2}}
@@ -1498,8 +1218,8 @@ synthetic_only: true
 common:
   observed_at: '2026-08-02T00:00:00Z'
   selectors:
-    child: {{profile: child-reference-v1, values: {{child_id: synthetic-child-001}}}}
-    candidate-parent: {{profile: candidate-reference-v1, values: {{candidate_id: synthetic-parent-001}}}}
+    child: {{profile: child-reference-v1, values: {{child-id: synthetic-child-001}}}}
+    candidate-parent: {{profile: candidate-reference-v1, values: {{candidate-id: synthetic-parent-001}}}}
   expectedRequestParts:
     query: []
     body:
@@ -1641,92 +1361,54 @@ privacy_expectation:
         )
         .expect("publish governed Evidence public JWK to deployment target");
         let identity = format!("https://127.0.0.1:{}", self.https_port);
-        fs::write(
-            self.target.join("governance.yaml"),
-            format!(
-                r#"version: 1
-assuranceProfile: production
-service: {{providerId: urn:example:providers:evidence, trustDomain: urn:example:trust-domains:acceptance, publicOrigin: https://evidence.example.test}}
-issuer: {{uri: urn:example:issuers:evidence}}
-authentication:
-  oidc:
-    issuer: {identity}
-    audience: {TOKEN_AUDIENCE}
-    jwksSource: {{type: uri, uri: {identity}/.well-known/jwks.json}}
-    tokenTypes: [at+jwt]
-    algorithms: [ES256]
-    principalClaim: sub
-    requesterTagsClaim: evidence_tags
-    evidenceAudienceClaim: evidence_audience
-    allowedClients: unrestricted
-    requiredScopes: unrestricted
-    maximumTokenLifetimeSeconds: 300
-    revokedKeyIds: []
-audit: {{hashKeyRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1}}
-subjectBinding: {{secretRef: 'secret:file/subject-binding-hmac-key', keyVersion: 1}}
-rateLimits: {{requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}}
-signing:
-  format: flattened-jws-json
-  algorithm: ES256
-  activePublicJwkFile: public-keys/{governed_public_name}
-  publishedPublicJwkFiles: []
-  revokedKeyIds: []
-  jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 86400
-  verifierClockSkewSeconds: 30
-responseFormats: [signed-jws]
-authorityProfiles:
-  statutory-caseworker-v1:
-    kind: statutory
-    requesterTags: [fixture-agency]
-    grants:
-      - requirement: {REQUIREMENT}
-        purpose: {PURPOSE}
-        audienceFrom: authenticated-requester
-        responseFormats: [signed-jws]
-        subjects: [{{role: subject, selectorProfile: person-reference-v1, valueOrigin: request}}]
-"#
-            ),
-        )
-        .expect("governance");
-        fs::write(
-            &self.target_runtime,
-            format!(
-                "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 5000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  type: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  attemptTimeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
-                bundle = self.candidate.clone().display(),
-                port = self.evidence_port,
-                secrets = self.secrets.display(),
-                transit_socket = self.root.join("transit-proxy.sock").display(),
-                audit = self.audit_path.display(),
-            ),
-        )
-        .expect("runtime");
+        let target = json!({
+            "apiVersion":"id.registrystack.org/formats/evidence/target/v1alpha1", "kind":"EvidenceTarget",
+            "id":"production", "project":"production-handoff", "authority":"authority.yaml", "assuranceProfile":"production",
+            "package":{"root":self.root.join("activated/bundle")},
+            "service":{"providerId":"urn:example:providers:evidence","issuer":"urn:example:issuers:evidence","publicOrigin":"https://evidence.example.test","trustDomain":"urn:example:trust-domains:acceptance"},
+            "authentication":{"oidc":{"issuer":identity,"audience":TOKEN_AUDIENCE,"jwksSource":{"type":"uri","uri":format!("{identity}/.well-known/jwks.json")},"tokenTypes":["at+jwt"],"algorithms":["ES256"],"principalClaim":"sub","requesterTagsClaim":"evidence_tags","evidenceAudienceClaim":"evidence_audience","allowedClients":"unrestricted","requiredScopes":"unrestricted","maximumTokenLifetimeSeconds":300,"revokedKeyIds":[]}},
+            "connections":{"people":{"origin":format!("https://127.0.0.1:{}",self.https_port),"authentication":{"type":"bearer","tokenRef":"secret:file/source-token"}}},
+            "secretProviders":{"file":{"root":self.secrets}},
+            "signer":{"type":"transit","algorithm":"ES256","publicJwkFile":format!("public-keys/{governed_public_name}"),"unixSocketPath":self.root.join("transit-proxy.sock"),"mount":"transit","keyName":"evidence-signing","keyVersion":1,"attemptTimeoutMilliseconds":2000},
+            "listener":{"bind":format!("127.0.0.1:{}",self.evidence_port),"tlsTermination":"operator-controlled-upstream","trustProxyIdentityHeaders":false,"maximumRequestBytes":65536,"maximumConcurrentRequests":64,"requestTimeoutMilliseconds":10000,"shutdownGraceMilliseconds":5000},
+            "audit":{"path":self.audit_path,"hashKeyRef":"secret:file/audit-hmac-key","hashKeyVersion":1},
+            "subjectBinding":{"secretRef":"secret:file/subject-binding-hmac-key","keyVersion":1},
+            "rateLimits":{"requestsPerPrincipalPerMinute":60,"burstPerPrincipal":16,"failedSelectorAttemptsPerPrincipalAuthorityPerMinute":10},
+            "responseFormats":["signed-jws"], "outboundTls":{"systemRoots":true,"trustProfiles":{}}
+        });
+        write_json_document(&self.target.join("target.yaml"), &target);
+        let authority = json!({
+            "apiVersion":"id.registrystack.org/formats/evidence/target-authority/v1alpha1", "kind":"EvidenceTargetAuthority",
+            "target":"production", "project":"production-handoff",
+            "accessProfiles":{"statutory-caseworker-v1":{"authority":"statutory","actorKind":"service","requesterTags":["fixture-agency"],"grants":[authority_grant("adult-status", PURPOSE, vec![("subject","person-reference-v1")])]}}
+        });
+        write_json_document(&self.target.join("authority.yaml"), &authority);
     }
 
     fn authorize_four_shapes(&self) {
-        let path = self.target.join("governance.yaml");
-        let mut governance = fs::read_to_string(&path).expect("deployment governance");
-        governance.push_str(&format!(
-            r#"      - requirement: {AGE_REQUIREMENT}
-        purpose: service-path-selection
-        audienceFrom: authenticated-requester
-        responseFormats: [signed-jws]
-        subjects: [{{role: subject, selectorProfile: person-reference-v1, valueOrigin: request}}]
-      - requirement: {IMMUNIZATION_REQUIREMENT}
-        purpose: care-coordination
-        audienceFrom: authenticated-requester
-        responseFormats: [signed-jws]
-        subjects: [{{role: subject, selectorProfile: person-reference-v1, valueOrigin: request}}]
-      - requirement: {RELATIONSHIP_REQUIREMENT}
-        purpose: relationship-check
-        audienceFrom: authenticated-requester
-        responseFormats: [signed-jws]
-        subjects:
-          - {{role: child, selectorProfile: child-reference-v1, valueOrigin: request}}
-          - {{role: candidate-parent, selectorProfile: candidate-reference-v1, valueOrigin: request}}
-"#
-        ));
-        fs::write(path, governance).expect("four-shape deployment governance");
+        edit_json_document(&self.target.join("authority.yaml"), |authority| {
+            let grants = authority["accessProfiles"]["statutory-caseworker-v1"]["grants"]
+                .as_array_mut()
+                .unwrap();
+            grants.push(authority_grant(
+                "age-bracket",
+                "service-path-selection",
+                vec![("subject", "person-reference-v1")],
+            ));
+            grants.push(authority_grant(
+                "immunization-summary",
+                "care-coordination",
+                vec![("subject", "person-reference-v1")],
+            ));
+            grants.push(authority_grant(
+                "parent-relationship",
+                "relationship-check",
+                vec![
+                    ("child", "child-reference-v1"),
+                    ("candidate-parent", "candidate-reference-v1"),
+                ],
+            ));
+        });
     }
 
     fn package(&self, evidence: &Path) -> Output {
@@ -1734,13 +1416,31 @@ authorityProfiles:
             .arg("package")
             .arg(&self.project)
             .arg("--target")
-            .arg(&self.target)
+            .arg(self.target.join("target.yaml"))
             .arg("--output")
             .arg(&self.candidate)
             .env("EVIDENCE_BIN", evidence)
             .output()
             .expect("package starts");
         assert_success(output, "production package")
+    }
+
+    fn activate_candidate_bundle(&self) {
+        let deployed = self.root.join("activated/bundle");
+        copy_tree(&self.candidate.join("bundle"), &deployed);
+    }
+
+    fn activate_target_authority(&self, evidence: &Path) {
+        assert_success(
+            Command::new(evidence)
+                .args(["authority", "activate", "--runtime-config"])
+                .arg(&self.target_runtime)
+                .arg("--document")
+                .arg(self.candidate.join("compiled-authority.yaml"))
+                .output()
+                .expect("target authority activation starts"),
+            "target authority activation",
+        );
     }
 
     fn provision_target_secrets(&self) {
@@ -1782,10 +1482,10 @@ authorityProfiles:
 
     fn active_evidence_public_jwk(&self) -> PathBuf {
         let bundle: Value = serde_norway::from_slice(
-            &fs::read(self.candidate.join("evidence.yaml")).expect("candidate bundle"),
+            &fs::read(self.candidate.join("bundle/evidence.yaml")).expect("candidate bundle"),
         )
         .expect("candidate bundle parses");
-        self.candidate.clone().join(
+        self.candidate.join("bundle").join(
             bundle["signing"]["activePublicJwkFile"]
                 .as_str()
                 .expect("active public JWK file"),
@@ -1815,14 +1515,15 @@ authorityProfiles:
         fs::write(
             &runtime,
             format!(
-                "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  type: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  attemptTimeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
+                "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  type: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  attemptTimeoutMilliseconds: 2000\naudit:\n  path: {audit}\nauthority:\n  root: {authority_root}\n  target: production\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
                 // This absolute host path stands for the unchanged read-only
                 // candidate package mount in the container execution context.
-                bundle = self.candidate.clone().display(),
+                bundle = self.candidate.join("bundle").display(),
                 port = free_port(),
                 secrets = self.secrets.display(),
                 transit_socket = self.root.join("transit-proxy.sock").display(),
                 audit = compose.join("persistent-audit/evidence.jsonl").display(),
+                authority_root = self.target.join(".generated/authority").display(),
             ),
         )
         .expect("Compose runtime");
@@ -1927,6 +1628,8 @@ authorityProfiles:
             .as_str()
             .expect("accepted transaction subject binding");
         let policy = json!({
+            "apiVersion": "id.registrystack.org/formats/evidence/verification-policy/v1",
+            "kind": "EvidenceVerificationPolicy",
             "expectedAssuranceProfile": "production",
             "issuedBy": "urn:example:issuers:evidence",
             "providedBy": "urn:example:providers:evidence",
@@ -1940,7 +1643,7 @@ authorityProfiles:
             // first transaction. Every other expectation is independently
             // controlled by the target and retained request in this fixture.
             "expectedSubjects": [{"role":"subject","binding":binding}],
-            "expectedOutputs": [{"concept":CONCEPT,"form":{"type":"boolean"}}],
+            "expectedOutputs": [{"handle":"adult","concept":CONCEPT,"required":true,"form":{"type":"boolean"}}],
             "revokedKeyIds": [],
             "maximumAssertionLifetimeSeconds": 86400,
             "clockSkewSeconds": 30,
@@ -2165,6 +1868,177 @@ fn transit_public_pem(private: &Value) -> Result<String, &'static str> {
     ))
 }
 
+fn read_json_document(path: &Path) -> Value {
+    serde_norway::from_slice(
+        &fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
+    )
+    .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
+}
+
+fn write_json_document(path: &Path, document: &Value) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|error| panic!("create {}: {error}", parent.display()));
+    }
+    let mut bytes = serde_json::to_vec_pretty(document).expect("serialize synthetic document");
+    bytes.push(b'\n');
+    fs::write(path, bytes).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+fn edit_json_document(path: &Path, edit: impl FnOnce(&mut Value)) {
+    let mut document = read_json_document(path);
+    edit(&mut document);
+    write_json_document(path, &document);
+}
+
+struct AssertionDefinitionInput<'a> {
+    question: &'a str,
+    requirement: &'a str,
+    kind: &'a str,
+    evidence_type: &'a str,
+    purpose: &'a str,
+    source: &'a str,
+    derive: &'a str,
+    output: &'a str,
+    concept: &'a str,
+    output_constraints: Value,
+    subjects: Vec<(&'a str, &'a str)>,
+    fixture: &'a str,
+}
+
+fn assertion_definition(input: AssertionDefinitionInput<'_>) -> Value {
+    let AssertionDefinitionInput {
+        question,
+        requirement,
+        kind,
+        evidence_type,
+        purpose,
+        source,
+        derive,
+        output,
+        concept,
+        output_constraints,
+        subjects,
+        fixture,
+    } = input;
+    let mut governed_output = json!({"concept": concept});
+    governed_output
+        .as_object_mut()
+        .expect("output object")
+        .extend(
+            output_constraints
+                .as_object()
+                .expect("output constraints")
+                .clone(),
+        );
+    json!({
+        "question":question,
+        "semantics":{
+            "requirement":requirement,
+            "kind":kind,
+            "evidenceType":evidence_type,
+            "referenceFrameworks":["urn:example:frameworks:production-handoff:v1"]
+        },
+        "purpose":purpose,
+        "grantCeiling":{
+            "authorities":["statutory"],
+            "actorKinds":["service"],
+            "valueOrigins":["request"],
+            "audiences":[EVIDENCE_AUDIENCE]
+        },
+        "subjects":subjects.iter().map(|(role, profile)| {
+            json!({"role":role, "selectors":[profile]})
+        }).collect::<Vec<_>>(),
+        "acquisition":{"type":"single", "source":source},
+        "derive":{"function":derive},
+        "outputs":{output:governed_output},
+        "validitySeconds":300,
+        "subjectBinding":"audience-scoped",
+        "representations":["signed-jws"],
+        "observationTimezone":"Asia/Bangkok",
+        "fixtures":fixture,
+        "disclosureGuard":{"families":[format!("{requirement}:release")]},
+        "existenceDisclosure":"collapse-unresolved"
+    })
+}
+
+fn http_source(
+    path: &str,
+    prepare: &str,
+    extract: &str,
+    fact_name: &str,
+    fact_shape: Value,
+    subjects: Vec<(&str, &str)>,
+) -> Value {
+    let requested_fields = vec![fact_name];
+    let mut response_properties = serde_json::Map::new();
+    response_properties.insert(
+        "total".to_owned(),
+        json!({"type":"bounded-integer", "minimum":0, "maximum":1_000_000}),
+    );
+    response_properties.insert(fact_name.to_owned(), fact_shape.clone());
+    let mut facts = serde_json::Map::new();
+    facts.insert(fact_name.to_owned(), fact_shape);
+    json!({
+        "type":"http-json",
+        "connection":"people",
+        "acquisitionPosture":"field-projected",
+        "selectors":subjects.iter().map(|(role, profile)| {
+            json!({"role":role, "profiles":[profile]})
+        }).collect::<Vec<_>>(),
+        "request":{
+            "method":"POST",
+            "path":path,
+            "fixedHeaders":[{"name":"Accept", "value":"application/json"}]
+        },
+        "prepare":{"function":prepare},
+        "adapterParameters":{"requestedFields":requested_fields, "resultLimit":2},
+        "adapterParametersSchema":{
+            "type":"object",
+            "additionalProperties":false,
+            "required":["requestedFields", "resultLimit"],
+            "properties":{
+                "requestedFields":{"const":requested_fields},
+                "resultLimit":{"const":2}
+            }
+        },
+        "preparationLimits":{
+            "query":"forbidden",
+            "jsonBody":"required",
+            "maximumJsonDepth":8,
+            "maximumCollectionItems":16,
+            "maximumStringBytes":256,
+            "maximumNormalizedBytes":4096
+        },
+        "response":{
+            "projection":["/total", format!("/{fact_name}")],
+            "shape":{
+                "type":"object",
+                "additionalProperties":false,
+                "required":["total"],
+                "properties":response_properties
+            },
+            "maximumBytes":65536
+        },
+        "extract":{"function":extract},
+        "facts":facts,
+        "limits":{"attemptTimeoutMilliseconds":3000, "maximumConcurrency":8}
+    })
+}
+
+fn authority_grant(definition: &str, purpose: &str, subjects: Vec<(&str, &str)>) -> Value {
+    json!({
+        "definition":definition,
+        "purpose":purpose,
+        "audienceFrom":"authenticated-requester",
+        "representations":["signed-jws"],
+        "subjectBinding":"audience-scoped",
+        "subjects":subjects.iter().map(|(role, profile)| {
+            json!({"role":role, "selectorProfile":profile, "valueOrigin":"request"})
+        }).collect::<Vec<_>>()
+    })
+}
+
 fn evidencectl() -> Command {
     Command::new(env!("CARGO_BIN_EXE_evidencectl"))
 }
@@ -2235,6 +2109,35 @@ fn check_package(evidence: &Path, runtime: &Path, label: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>();
     fields.get(2).expect("package digest").to_string()
+}
+
+fn copy_tree(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination)
+        .unwrap_or_else(|error| panic!("create {}: {error}", destination.display()));
+    let mut entries = fs::read_dir(source)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source.display()))
+        .map(|entry| entry.expect("bundle entry").path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    for source_path in entries {
+        let destination_path = destination.join(source_path.file_name().expect("bundle file name"));
+        if source_path.is_dir() {
+            copy_tree(&source_path, &destination_path);
+        } else {
+            fs::copy(&source_path, &destination_path).unwrap_or_else(|error| {
+                panic!(
+                    "copy {} to {}: {error}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            });
+        }
+    }
+    fs::set_permissions(
+        destination,
+        fs::metadata(source).expect("bundle metadata").permissions(),
+    )
+    .expect("copy bundle directory mode");
 }
 
 fn snapshot_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -2331,7 +2234,7 @@ fn post_evidence(port: u16, token: &str, nonce: &str) -> (u16, Vec<u8>) {
             "role": "subject",
             "selector": {
                 "profile": "person-reference-v1",
-                "values": {"person_id": SELECTOR_CANARY},
+                "values": {"person-id": SELECTOR_CANARY},
             },
         }],
     }))

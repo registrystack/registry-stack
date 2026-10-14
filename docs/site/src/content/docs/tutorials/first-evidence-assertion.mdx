@@ -1,11 +1,11 @@
 ---
 title: Get your first Evidence Gateway assertion
-description: Run a local source mock and verify one adult-status answer as signed JWS and SD-JWT VC without copying the source record.
+description: Run a normalized Evidence project, request one minimum-disclosure assertion, and verify it offline.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-03"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -13,633 +13,179 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: evidence
+  checkout: true
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Evidence Gateway reads an authorized source record, answers a
-[preconfigured question](../../reference/glossary/#bounded-question), and signs only the governed
-answer. In this tutorial, you will ask "Is this person an adult?" without returning the
-person's name or date of birth.
+Run the reviewed standalone project that ships with the same Registry Stack release as your
+`evidence` and `evidencectl` binaries. You will start a synthetic source, request one adult-status
+assertion, verify it offline, and inspect the privacy-safe audit view.
 
 <QuickstartMeta
-  outcome="One governed adult-status answer verified as signed JWS and SD-JWT VC, without the source record."
-  time="About 20 minutes"
+  outcome="A signed adult-status assertion verified before its Boolean value is read."
+  time="About 15 minutes after the Evidence Gateway toolset is installed"
   level="Local development with synthetic data"
-  prerequisites={['Python 3', 'A shell with curl', 'An editor']}
+  prerequisites={[
+    'Matching evidence and evidencectl binaries on PATH',
+    'The Registry Stack source archive for the same release',
+    'Python 3',
+    'Docker',
+    'A shell with curl',
+  ]}
 />
 
-## Understand the flow
+## Confirm the toolset
 
-```mermaid
-%%{init: {"sequence": {"mirrorActors": false}}}%%
-sequenceDiagram
-    participant C as Tutorial caller
-    participant E as Evidence Gateway
-    participant R as Tutorial registry
+Run both binaries from one release. `evidencectl` refuses to compile or start a project with an
+`evidence` binary from another version.
 
-    C->>E: Authorized request<br/>adult-status, person_id=person-123
-    E->>R: GET /people/person-123
-    R-->>E: person_id, name, date_of_birth
-    E->>E: Extract date_of_birth<br/>Derive and sign is_adult: true
-    E-->>C: Signed assertion with is_adult: true<br/>and an opaque subject binding
-    Note over C,E: The assertion contains no person_id,<br/>name, or date_of_birth
-```
-
-Before the request, the pinned local issuer gives the tutorial caller short-lived local authorization.
-Evidence Gateway and the registry process the identifier and date of birth to answer the question, but the
-released assertion contains only the governed answer and an opaque subject binding.
-
-## Install Evidence Gateway
-
-Install the latest Evidence Gateway toolset:
-
-```sh test-skip="installs the released toolset; the replay serves the binaries under test"
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+```sh
+evidence --version
 evidencectl --version
 ```
 
-The installer provides `evidencectl` and the local Evidence Gateway runtime used later
-in the tutorial. The platforms those binaries cover, and the C library floor they need, are in
-[platform support](../../explanation/known-limitations/#platform-support).
+The two commands print the same version.
 
-The command pipes a script from GitHub straight into `bash`, so replace `| bash` with `| less` first if you
-would rather read it before it runs. On a tutorial machine that is your own call, but before these binaries
-reach a host that serves anyone else, check them against the signed `SHA256SUMS` chain described in
-[OpenSSF and release trust](../../security/openssf-evidence/).
+## Copy the normalized project
 
-## Preview a synthetic source
-
-Create a working directory:
+From the root of the matching Registry Stack source archive, copy the standalone example into a
+writable tutorial directory. The copy keeps generated keys, client credentials, requests, and
+responses out of the source tree.
 
 ```sh
 mkdir first-evidence-assertion
-cd first-evidence-assertion
+cp -R products/evidence/examples/standalone first-evidence-assertion/adult-status
+cd first-evidence-assertion/adult-status
 ```
 
-Open `tutorial-source.openapi.yaml` in your editor and add this OpenAPI description:
+The project has one normalized `evidence.yaml`, named Functions under `functions/`, a disposable
+`local-target.yaml`, and complete local grants in `dev-authority.yaml`. The project file fixes
+assertion semantics and source behavior. The target binds local ports, keys, secrets, and source
+connections. The authority grants one complete request shape at a time.
 
-```yaml title="tutorial-source.openapi.yaml" test-file
-openapi: 3.1.0
-info:
-  title: Tutorial registry
-  version: 1.0.0
-servers:
-  - url: http://127.0.0.1:4010
-paths:
-  /people/{person_id}:
-    get:
-      operationId: getPerson
-      parameters:
-        - name: person_id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: A synthetic person record
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required: [person_id, name, date_of_birth]
-                properties:
-                  person_id:
-                    type: string
-                    minLength: 1
-                    maxLength: 64
-                    x-evidencectl-mock:
-                      fromRequest:
-                        pathParameter: person_id
-                  name:
-                    type: string
-                    minLength: 1
-                    maxLength: 100
-                    x-evidencectl-mock:
-                      faker:
-                        kind: person.fullName
-                  date_of_birth:
-                    type: string
-                    format: date
-                    x-evidencectl-mock:
-                      distribution:
-                        kind: age
-                        min: 18
-                        max: 90
+Generate disposable local material, then prove the project and its synthetic fixtures.
+
+```sh
+umask 077
+evidencectl keygen signing --output-dir .generated/secrets
+evidencectl keygen secret --output .generated/secrets/audit-hmac-key
+evidencectl keygen secret --output .generated/secrets/subject-binding-hmac-key
+evidencectl keygen token --output .generated/secrets/synthetic-source-token
+evidencectl check . --target local-target.yaml
+evidencectl test . --target local-target.yaml
+evidencectl access client add tutorial-client \
+  --access-profile standalone-service \
+  --generate-local-key
 ```
 
-Three details connect this contract to Evidence Gateway:
+`check` compiles the normalized project and target without contacting the source. `test` exercises
+the fixed source, extraction, derivation, output, and privacy boundaries with synthetic fixtures.
+The client command assigns an existing complete access profile; client registration does not create
+authority.
 
-- `/people/{person_id}` returns a complete person record.
-- `getPerson` is the OpenAPI operation that the Evidence Gateway question will select.
-- The mock hints echo the requested ID, create a plausible name, and keep generated ages between 18 and 90.
+## Start the synthetic source
 
-Start a write-free preview directly from the OpenAPI description:
+In another terminal, run the bounded synthetic source from the project directory:
 
-```sh test-background="http://127.0.0.1:4010/people/person-123"
-evidencectl source mock serve --openapi tutorial-source.openapi.yaml
+```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
+python3 serve-source.py \
+  --port 8081 \
+  --token-file .generated/secrets/synthetic-source-token
+```
+
+Leave this terminal running. Its public health route exposes no record data. Every record route
+requires the bearer token referenced by the target. The source authenticates Evidence Gateway but
+does not decide who may request an assertion.
+
+## Start Evidence Gateway
+
+Use port `18080` because another local service may already own the default Evidence port. The
+issuer remains on the example's configured port `8082`.
+
+```sh
+evidencectl dev start . \
+  --target local-target.yaml \
+  --evidence-port 18080 \
+  --issuer-port 8082
 ```
 
 ```text test-excerpt
-Source mock ready: mode=ephemeral origin=http://127.0.0.1:4010 contract=evidencectl-source-mock-v1 seed=0 asOf=2025-01-01 digest=sha256:<digest> served=1 skipped=0
-Next: evidencectl source mock generate --openapi <file>
+Evidence ready at http://127.0.0.1:18080
+Issuer ready at http://127.0.0.1:8082
 ```
 
-This mode writes nothing. It checks the compatible `GET` operation, generates schema-valid synthetic
-responses deterministically, and binds only to numeric loopback.
+`dev start` retains one generated package and authority snapshot. A later edit takes effect only in
+a new generation.
 
-In another terminal, return to `first-evidence-assertion` and inspect the source shape:
+## Prepare, send, and verify one request
 
-```sh
-curl -s http://127.0.0.1:4010/people/person-123 | python3 -c \
-  'import json,sys; print(sorted(json.load(sys.stdin)))'
-```
-
-```text test-expect
-['date_of_birth', 'name', 'person_id']
-```
-
-The preview generated one complete record with the documented fields. The verified assertion will contain
-none of those source values. Return to the first terminal and press `Ctrl+C` to stop the ephemeral preview.
-
-## Create the Evidence Gateway project
-
-Create a local project from the source's OpenAPI description:
-
-```sh
-evidencectl init adult-status \
-  --openapi tutorial-source.openapi.yaml \
-  --profile local
-cd adult-status
-```
-
-`--profile local` creates a loopback-only development project, not a production deployment.
-The command creates owner-only local keys for signing, subject binding, and audit pseudonyms.
-OpenAPI describes the source, but you still decide the question and what the answer may disclose.
-
-The new project separates those decisions from the retained API description:
-
-```text
-adult-status/
-├── evidence-project.yaml
-├── source.openapi.yaml
-├── selectors/
-├── sources/
-├── adapters/
-├── schemas/
-├── questions/
-├── derivations/
-├── fixtures/
-└── secrets/
-```
-
-This first question uses the compact OpenAPI form, so you will add only a question and its
-derivation. Evidence Gateway keeps the source-mock hints out of the narrowed authoring schema.
-Later institution integrations use the reusable source, selector, adapter, and schema directories.
-
-`evidencectl init` prints a next step, `evidencectl source suggest`, that drafts an editable source file
-in `sources/`. This tutorial does not use it: the compact form names the operation inside the
-question, so there is no source file to draft. Use `source suggest` when you build the reusable
-form for a later integration.
-
-### `questions/adult-status.yaml`
-
-Open `questions/adult-status.yaml` in your editor and add the question definition:
-
-```yaml title="questions/adult-status.yaml" test-file
-apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: adult-status
-question: Is the person at least 18 years old?
-purpose: age-check
-subject:
-  role: person
-  selector: person_id
-source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: is_adult
-    type: boolean
-responseFormats: [signed-jws, sd-jwt-vc]
-derivation: derivations/adult-status.rhai
-disclosure:
-  allow: [is_adult]
-```
-
-The definition closes five decisions:
-
-- `subject` says that `person_id` selects the person in `/people/{person_id}`.
-- `source` selects `getPerson` and allows only `date_of_birth` to reach the derivation. It does not
-  change the complete record returned by the registry.
-- `answers` declares one permitted result, a boolean named `is_adult`.
-- `responseFormats` keeps signed JWS as the default and also permits the same answer to be returned
-  as SD-JWT VC.
-- `disclosure` is the explicit release boundary. It must name exactly the answers returned by the
-  derivation.
-
-`combine: exactly-one` rejects a missing or repeated `date_of_birth`. `collectionBounds: {}` is
-empty because this fact does not traverse a collection. The request purpose must be `age-check`,
-matching the purpose declared here.
-
-### `derivations/adult-status.rhai`
-
-Open `derivations/adult-status.rhai` in your editor and add the answer logic. Rhai is the bounded
-scripting language Evidence Gateway uses for requirement-specific derivations:
-
-```rhai title="derivations/adult-status.rhai" test-file
-fn answer(facts, selectors, context) {
-    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    let adult_on = add_calendar_years(born, 18);
-    #{is_adult: compare_dates(context.legal_local_date, adult_on) >= 0}
-}
-```
-
-The derivation performs four operations:
-
-1. Require and parse the selected date of birth.
-2. Calculate the eighteenth birthday using calendar arithmetic.
-3. Compare it with `context.legal_local_date`, which Evidence Gateway derives from the observation instant
-   in the configured timezone.
-4. Return a map containing exactly the declared `is_adult` answer.
-
-Evidence Gateway validates the returned name and boolean form before signing.
-
-If you run `evidencectl check .` now, it exits 0 with the status `incomplete` and two warnings:
-`evidence.question.governance-missing` and `evidence.answer.stable-id-missing`. Both are expected.
-The project is a local authoring project with no deployment assurance claim, and a question gains
-its governance and a stable concept `uri` for the answer only when you author it for a deployment.
-This tutorial does not deploy, so leave both warnings.
-
-## Keep exact cases for the tutorial
-
-The ephemeral preview is the shortest route from OpenAPI to a running source. The remaining tutorials
-need three exact records that stay unchanged between runs, so materialize a small reviewed plan instead.
-
-Create its directory:
-
-```sh
-mkdir -p mocks/cases
-```
-
-Open `mocks/source.yaml` and add the three request cases:
-
-```yaml title="mocks/source.yaml" test-file
-apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1
-kind: EvidenceMockPlan
-openapi: ../source.openapi.yaml
-operations:
-  - method: GET
-    path: /people/{person_id}
-    operationId: getPerson
-    response:
-      status: 200
-      mediaType: application/json
-    cases:
-      - name: person-123
-        request:
-          pathParameters: {person_id: person-123}
-        body: cases/person-123.json
-      - name: person-456
-        request:
-          pathParameters: {person_id: person-456}
-        body: cases/person-456.json
-      - name: person-789
-        request:
-          pathParameters: {person_id: person-789}
-        body: cases/person-789.json
-```
-
-Add the exact synthetic bodies.
-
-### `mocks/cases/person-123.json`
-
-```json title="mocks/cases/person-123.json" test-file
-{
-  "person_id": "person-123",
-  "name": "Amina Example",
-  "date_of_birth": "2000-01-01"
-}
-```
-
-### `mocks/cases/person-456.json`
-
-```json title="mocks/cases/person-456.json" test-file
-{
-  "person_id": "person-456",
-  "name": "Mateo Example",
-  "date_of_birth": "2012-05-20"
-}
-```
-
-### `mocks/cases/person-789.json`
-
-```json title="mocks/cases/person-789.json" test-file
-{
-  "person_id": "person-789",
-  "name": "Noor Example",
-  "date_of_birth": "1988-11-03"
-}
-```
-
-Check the plan and every authored body offline:
-
-```sh
-evidencectl source mock check --config mocks/source.yaml
-```
-
-```text test-expect
-Mock plan valid: operations=1 cases=3
-```
-
-The check does not bind a port or rewrite a file. For another API, start an editable case with
-`evidencectl source mock generate . --operation "GET /path/{id}" --case adult-positive` and add one
-`--path-parameter id=<value>` for each path parameter. Generation creates an initial plan and response
-body without overwriting an existing mock directory. Edit the body, run `check`, and serve those exact
-checked bytes.
-
-Start the materialized source and leave it running:
-
-```sh test-background="http://127.0.0.1:4010/people/person-123"
-evidencectl source mock serve --config mocks/source.yaml
-```
-
-```text test-excerpt
-Source mock ready: mode=materialized origin=http://127.0.0.1:4010 served=3 skipped=0
-```
-
-Start Evidence Gateway and the pinned local issuer:
-
-```sh
-evidencectl dev start .
-```
-
-```text test-excerpt
-Evidence ready at http://127.0.0.1:8080
-Issuer ready at http://127.0.0.1:8081
-```
-
-This command starts Evidence Gateway and its local issuer only. The source mock remains the process you started in
-the first terminal. If either port is already taken, the start refuses before it starts a new
-generation and names the port and the flag that moves the session: `free 127.0.0.1:8080, or start
-this session with --evidence-port <port>`. Use
-[If local ports are already in use](#if-local-ports-are-already-in-use) before continuing.
-
-## Request an assertion
-
-Prepare the request, local access, and verification expectations:
+Preparation closes the request nonce, expected definition, signing keys, configuration revision,
+subject binding, and output form before the response exists. It sends nothing.
 
 ```sh
 evidencectl request prepare adult-status \
+  --client tutorial-client \
   --purpose age-check \
-  --subject person_id=person-123 \
-  --name first-assertion
+  --subject subject:record-id=adult \
+  --name adult-status
 ```
 
-The Evidence client prepares the request and closes its pinned verification expectations locally,
-before a response exists. `evidencectl` separately asks the local issuer for short-lived
-authorization. It sends no HTTP request to Evidence Gateway and does not contact the registry. The
-command creates exactly these owner-only artifacts:
-
-```text test-expect
-Prepared request: .evidence/requests/first-assertion/request.json
-Prepared verification context: .evidence/requests/first-assertion/verification.json
-Prepared authorization: .evidence/requests/first-assertion/authorization.curl
-```
-
-The artifacts have separate responsibilities:
-
-- `request.json` contains the question, purpose, fresh request nonce, and `person-123` selector.
-- `verification.json` records what a valid response must satisfy before the response exists.
-- `authorization.curl` contains only the short-lived local authorization header.
-
-Send the request yourself:
+Send the prepared body with the owner-only authorization file:
 
 ```sh
 curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/first-assertion/authorization.curl \
+  --config .evidence/requests/adult-status/authorization.curl \
   --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
+  --url http://127.0.0.1:18080/v1/evidence \
   --header 'Content-Type: application/json' \
   --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/first-assertion/request.json \
-  --output assertion.jws.json \
-  --write-out 'HTTP %{http_code}\n'
+  --data-binary @.evidence/requests/adult-status/request.json \
+  --output adult-status.jws.json
 ```
 
-```text test-expect
-HTTP 200
-```
-
-`curl` made the one `POST /v1/evidence` assertion request, Evidence Gateway called the registry, and
-the HTTP response is a signed flattened JSON Web Signature (JWS). A successful HTTP response is not
-yet a trusted assertion. Preparation made zero Evidence Gateway HTTP requests, and the verification
-step below is offline, so one assertion requires one request to Evidence Gateway rather than two.
-
-## Verify before reading
-
-Verify the response against the expectations recorded before the request. Verification checks the
-signature and exact issuer, question, purpose, audience, request nonce, subject binding, answer
-shape, and validity period:
+Verify the exact response offline before reading its value:
 
 ```sh
-evidencectl verify assertion.jws.json \
-  --context .evidence/requests/first-assertion/verification.json \
-  --output verified.json
+umask 077
+verification_at="$(python3 -c \
+  'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+evidencectl verify adult-status.jws.json \
+  --context .evidence/requests/adult-status/verification.json \
+  --output adult-status.verified.json
+printf '%s\n' "$verification_at" \
+  > .evidence/requests/adult-status/verified-at.txt
 ```
 
 ```text test-expect
 VERIFIED
 ```
 
-Only after the command prints `VERIFIED`, inspect the verified payload:
+The verified assertion contains one Boolean adult-status output. The owner-only `verified-at.txt`
+records the start of that successful verification and is published only after success. The
+assertion excludes the birth date, residence, source token, and address canary used by the
+synthetic source.
+
+## Inspect the audit and clean up
+
+Stop the retained generation before reading its audit view:
 
 ```sh
-python3 -m json.tool verified.json
-```
-
-The verified document contains generated identifiers, timestamps, and a pseudonymous subject
-binding. The fields relevant to this question look like this excerpt:
-
-```json test-excerpt
-{
-  "assuranceProfile": "local",
-  "purpose": "age-check",
-  "subjects": [
-    {
-      "binding": "urn:evidence:subject:v1_<binding>",
-      "role": "person"
-    }
-  ],
-  "supportedValues": [
-    {
-      "providesValueFor": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-      "value": true
-    }
-  ],
-  "supportsRequirement": "urn:registrystack:evidence:local:requirement:adult-status"
-}
-```
-
-`supportsRequirement` names the requirement that the question you authored under `questions/`
-compiles to, which is the unit the deployed configuration and the audit record.
-
-The verified payload does not include `person_id`, `name`, or `date_of_birth`. The assertion
-answers the authored question without becoming another copy of the registry record.
-
-The owner-only `request.json` still records that this transaction concerned `person-123`, while
-`verification.json` records the expected opaque subject binding and request nonce. Retain those
-files with the signed response when you need to [verify Evidence Gateway later as a
-consumer](../verify-an-assertion-as-a-consumer/). The identifier cannot be recovered from the
-assertion alone.
-
-## Try the SD-JWT VC serialization
-
-Prepare a second request for the same governed question, this time recording SD-JWT VC as the
-expected response format:
-
-```sh
-evidencectl request prepare adult-status \
-  --purpose age-check \
-  --subject person_id=person-123 \
-  --response-format sd-jwt-vc \
-  --name first-vc
-```
-
-```text test-expect
-Prepared request: .evidence/requests/first-vc/request.json
-Prepared verification context: .evidence/requests/first-vc/verification.json
-Prepared authorization: .evidence/requests/first-vc/authorization.curl
-```
-
-Send the request with the exact SD-JWT VC media type:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/first-vc/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:8080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/dc+sd-jwt' \
-  --data-binary @.evidence/requests/first-vc/request.json \
-  --output assertion.sd-jwt \
-  --write-out 'HTTP %{http_code}\n'
-```
-
-```text test-expect
-HTTP 200
-```
-
-Treat the compact credential as opaque until verification succeeds:
-
-```sh
-evidencectl verify assertion.sd-jwt \
-  --context .evidence/requests/first-vc/verification.json \
-  --output verified-vc.json
-```
-
-```text test-expect
-VERIFIED
-```
-
-Now inspect the verified Evidence payload:
-
-```sh
-python3 -m json.tool verified-vc.json
-```
-
-It has the same governed `is_adult: true` answer and minimum-disclosure boundary as the signed JWS
-response. Only the serialization changed. This is a stateless credential response, not a wallet
-issuance, revocation, or presentation workflow.
-
-Continue with [Explore SD-JWT VC locally](../request-evidence-as-sd-jwt-vc/) to inspect disclosures,
-issuer metadata, tamper refusal, and structured-field projection.
-
-## Stop the local services
-
-Stop Evidence Gateway and the local issuer before reading the completed audit log:
-
-```sh
-evidencectl dev stop
-```
-
-```text test-expect
-Local Evidence stopped
-```
-
-## Inspect the audit entry
-
-Show the last operation in the completed audit log:
-
-```sh
+evidencectl dev stop .
 evidencectl audit show --last-operation
+evidencectl dev clean .
 ```
 
-```text test-expect
-ACCESS AUTHORIZED adult-status age-check requester=<pseudonym>
-DISCLOSURE RELEASED is_adult
-```
+The view names the requester pseudonym, definition, purpose, and released output. It does not print
+selector values, source facts, tokens, or the returned Boolean. `dev clean` removes generated runtime
+state while preserving the editable project, registered client, and request artifacts.
 
-The requester value changes on each fresh project. The view identifies the question, purpose,
-requester pseudonym, authorization decision, and disclosed concept. It does not repeat the source
-record or access token.
-
-## If local ports are already in use
-
-Choose two different unused ports when you start the local services:
-
-```sh test-skip="the alternative for busy ports; the replay uses the default ports"
-evidencectl dev --evidence-port 8180 --issuer-port 8181 start .
-```
-
-Evidence Gateway uses the selected ports consistently in its runtime, issuer authorization, readiness
-checks, and generated request artifacts. Send the assertion request to the selected Evidence Gateway port,
-such as `http://127.0.0.1:8180/v1/evidence`.
-
-The source mock separately uses `127.0.0.1:4010`, the origin retained in `source.openapi.yaml`. If that
-port is unavailable, change the OpenAPI server URL before creating the project and pass the same origin
-with `source mock serve --http-addr`.
-
-The development profile binds both services to loopback in the environment where the command
-runs. If that environment is a Docker container, run the tutorial's `curl` commands in the same
-container. Use the operator deployment configuration when the service must listen beyond
-loopback.
-
-## Clean up
-
-Remove the stopped local generation, including the sealed bundle that Evidence Gateway used:
-
-```sh
-evidencectl dev clean
-```
-
-```text test-expect
-Removed stopped local Evidence state
-```
-
-This preserves your editable questions, derivations, keys, and request artifacts. It removes
-`.evidence/dev`, whose runtime files are deliberately read-only while a generation exists. Run
-`dev stop` and then `dev clean` instead of changing those permissions by hand. The command refuses
-to remove a running or unrecognized generation. A start that never reached readiness keeps its logs
-at `.evidence/failed-start` and prints that path with the failure; the cleanup leaves that directory
-alone, so the record of the failed start outlives the generation that produced it.
-
-Return to the first terminal and press `Ctrl+C` to stop the source mock.
-
-Keep the tutorial directory to continue with the governed-value tutorial. If you do not plan to
-continue, you can remove the complete directory with ordinary file commands.
+The tutorial runner stops the synthetic source. If you started it by hand, press `Ctrl+C` in its
+terminal.
 
 ## Next
 
-- [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
-- [Explore SD-JWT VC locally](../request-evidence-as-sd-jwt-vc/)
 - [Return a governed value](../return-a-governed-value/)
-- [Bind two people to one relationship assertion](../assert-a-role-bound-relationship/)
-- [Review the Evidence Gateway overview](../../start/evidence-quickstart/)
-- [What you need to run Evidence Gateway](../../operate/evidence-requirements/)
+- [Request Evidence from your application](../request-evidence-from-an-application/)
+- [Explore SD-JWT VC locally](../request-evidence-as-sd-jwt-vc/)
+- [See Evidence Gateway refuse an unauthorized request](../refuse-unsafe-evidence-requests/)

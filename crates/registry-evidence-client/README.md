@@ -159,3 +159,10 @@ against a server that enforces the grant.
 ## License
 
 Apache-2.0.
+
+Requests select the public Requirement URI. The local discovery handle is for
+application code and cannot replace that URI on the wire. The client sends its
+independent `configuration_revision` expectation as `expectedConfigurationRevision`
+for early stale-contract refusal and retains the same expectation for signature
+verification. Raw URI-only requests may omit that wire pin; the runtime returns
+the active per-definition revision in the assertion.

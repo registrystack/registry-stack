@@ -12,6 +12,31 @@
 // `super::` finds here.
 use registry_evidence_authoring::openapi::types;
 
+#[derive(Debug)]
+struct SafeCliFailure {
+    operational: bool,
+    code: String,
+    artifact: String,
+    path: String,
+    message: String,
+    suggested_action: String,
+    cause: Option<String>,
+}
+
+impl std::fmt::Display for SafeCliFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SafeCliFailure {}
+
+fn safe_failure(error: &anyhow::Error) -> &SafeCliFailure {
+    error
+        .downcast_ref::<SafeCliFailure>()
+        .expect("typed safe CLI failure")
+}
+
 #[path = "../src/suggest/fetch.rs"]
 mod fetch;
 #[path = "../src/suggest/load.rs"]
@@ -64,11 +89,9 @@ fn plain_http_to_a_host_that_is_not_loopback_is_refused() {
         "http://localhost:3000/openapi.yaml",
     ] {
         let error = fetch::spec_source(url).unwrap_err();
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("loopback"),
-            "`{url}` message was: {message}"
-        );
+        let failure = safe_failure(&error);
+        assert_eq!(failure.code, "evidence.openapi.url-insecure");
+        assert!(failure.message.contains("loopback"), "`{url}`: {failure:?}");
     }
 }
 
@@ -90,11 +113,17 @@ fn plain_http_to_a_numeric_loopback_host_is_accepted() {
 fn a_url_carrying_credentials_is_refused_without_echoing_them() {
     let error =
         fetch::spec_source("https://reader:hunter2@api.example.test/openapi.yaml").unwrap_err();
-    let message = format!("{error:#}");
-    assert!(message.contains("credentials"), "message was: {message}");
+    let failure = safe_failure(&error);
+    assert_eq!(failure.code, "evidence.openapi.url-credentials");
+    assert_eq!(failure.artifact, "OpenAPI input");
+    assert_eq!(failure.path, "--openapi");
+    assert!(!failure.operational);
+    assert!(failure.cause.is_none());
+    let rendered = format!("{} {}", failure.message, failure.suggested_action);
+    assert!(failure.message.contains("credentials"), "{failure:?}");
     assert!(
-        !message.contains("hunter2") && !message.contains("reader"),
-        "the refusal echoed the credential: {message}"
+        !rendered.contains("hunter2") && !rendered.contains("reader"),
+        "the refusal echoed the credential: {rendered}"
     );
 }
 
@@ -111,14 +140,17 @@ fn a_query_or_fragment_is_refused_without_echoing_its_value() {
         ),
     ] {
         let error = fetch::spec_source(url).unwrap_err();
-        let message = format!("{error:#}");
+        let failure = safe_failure(&error);
+        assert_eq!(failure.code, "evidence.openapi.url-components");
+        assert!(failure.message.contains("query or fragment"), "{failure:?}");
         assert!(
-            message.contains("query or fragment") && message.contains("local file"),
-            "message was: {message}"
+            failure.suggested_action.contains("local file"),
+            "{failure:?}"
         );
+        let rendered = format!("{} {}", failure.message, failure.suggested_action);
         assert!(
-            !message.contains(sensitive) && !message.contains(url),
-            "the refusal echoed the unsafe URL component: {message}"
+            !rendered.contains(sensitive) && !rendered.contains(url),
+            "the refusal echoed the unsafe URL component: {rendered}"
         );
     }
 }
@@ -130,10 +162,11 @@ fn a_scheme_that_is_not_http_is_refused() {
         "file:///tmp/openapi.yaml",
     ] {
         let error = fetch::spec_source(url).unwrap_err();
-        let message = format!("{error:#}");
+        let failure = safe_failure(&error);
+        assert_eq!(failure.code, "evidence.openapi.url-scheme");
         assert!(
-            message.contains("not fetched"),
-            "`{url}` message was: {message}"
+            failure.message.contains("does not fetch"),
+            "`{url}`: {failure:?}"
         );
     }
 }
@@ -172,10 +205,13 @@ fn a_non_success_status_is_reported_with_its_code() {
     });
 
     let error = load::open(&url_source(address, "/openapi.yaml")).unwrap_err();
-    let message = format!("{error:#}");
+    let failure = safe_failure(&error);
+    assert_eq!(failure.code, "evidence.openapi.http-status");
+    assert!(failure.operational);
+    assert!(failure.message.contains("401"), "{failure:?}");
     assert!(
-        message.contains("401") && message.contains("authentication"),
-        "message was: {message}"
+        failure.suggested_action.contains("authentication"),
+        "{failure:?}"
     );
 }
 

@@ -308,6 +308,9 @@ enum SourceTransport {
 
 struct HttpTransport {
     resources: Arc<HttpConnectionResources>,
+    /// A package source keeps its own ceiling even when its target connection
+    /// shares a larger admission pool with other source operations.
+    source_concurrency: Option<Semaphore>,
     request: RequestPlan,
     operation_timeout: Duration,
     batch_projection: Option<ProjectionNode>,
@@ -1170,6 +1173,9 @@ impl HttpTransport {
         let concurrency = usize::try_from(configured_request.maximum_concurrency.get())
             .map_err(|_| SourceError::InvalidPlan)?;
         let base_url = validate_url(configured_base_url, true)?;
+        let source_concurrency = shared_resources
+            .as_ref()
+            .map(|_| Semaphore::new(concurrency));
         let resources = if let Some(resources) = shared_resources {
             resources
         } else {
@@ -1200,6 +1206,7 @@ impl HttpTransport {
             .transpose()?;
         Ok(Self {
             resources,
+            source_concurrency,
             request,
             operation_timeout: timeout,
             batch_projection,
@@ -1261,9 +1268,19 @@ impl HttpTransport {
             (true, None) => return Err(SourceError::InvalidPlan),
             (false, _) => None,
         };
+        // Both ceilings use one admission deadline. Holding a source slot
+        // while waiting for the shared connection is bounded, and cancellation
+        // releases both permits before any later request can acquire them.
+        let admission_deadline = tokio::time::Instant::now() + self.resources.admission_timeout;
+        let _source_permit = match &self.source_concurrency {
+            Some(semaphore) => {
+                Some(acquire_source_slot(semaphore, self.resources.admission_timeout).await?)
+            }
+            None => None,
+        };
         let _permit = acquire_source_slot(
             &self.resources.concurrency,
-            self.resources.admission_timeout,
+            admission_deadline.saturating_duration_since(tokio::time::Instant::now()),
         )
         .await?;
         let method = match self.request.method {
@@ -1797,22 +1814,21 @@ pub(crate) fn trust_profile_roots(
 fn conservative_selector_sets(
     source: &SourceConfig,
 ) -> Result<Vec<SourceSelectorSet>, SourceError> {
-    let mut sets = vec![Vec::new()];
-    for input in source.selector_inputs() {
-        if input.alternatives.is_empty() {
-            return Err(SourceError::InvalidPlan);
-        }
-        let mut next = Vec::new();
-        for set in &sets {
-            for alternative in &input.alternatives {
-                let mut candidate = set.clone();
-                candidate.push((input.role.clone(), alternative.profile.clone()));
-                next.push(candidate);
-            }
-        }
-        sets = next;
-    }
-    Ok(sets)
+    let choices = source
+        .selector_inputs()
+        .iter()
+        .map(|input| {
+            (
+                input.role.clone(),
+                input
+                    .alternatives
+                    .iter()
+                    .map(|alternative| alternative.profile.clone())
+                    .collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    crate::config::selector_combinations(&choices).map_err(|_| SourceError::InvalidPlan)
 }
 
 fn compile_request(
@@ -3526,6 +3542,155 @@ mod tests {
             SourceTransport::Http(http) => &http.resources,
             _ => panic!("expected HTTP"),
         }
+    }
+
+    #[test]
+    fn normalized_source_plans_compile_without_grants_and_after_target_narrowing() {
+        use crate::config::{AuthorityKind, GrantCeiling, ValueOrigin};
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        ))
+        .unwrap();
+        config.project = Some("portable-source-plans".to_owned());
+        for definition in &mut config.requirements {
+            definition.grant_ceiling = Some(GrantCeiling {
+                authorities: vec![AuthorityKind::Statutory],
+                actor_kinds: vec![registry_platform_oidc::ActorKind::Service],
+                value_origins: vec![ValueOrigin::Request],
+                audiences: vec!["urn:example:audience:test".to_owned()],
+            });
+            definition.representations = Some(config.response_formats.clone());
+        }
+        for authority in config.authority_profiles.values_mut() {
+            authority.actor_kind = Some(registry_platform_oidc::ActorKind::Service);
+        }
+        let selected = config.requirements[0].id.clone();
+        for authority in config.authority_profiles.values_mut() {
+            authority
+                .grants
+                .retain(|grant| grant.requirement == selected);
+            if !authority.grants.iter().any(|grant| {
+                grant
+                    .subjects
+                    .iter()
+                    .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant)
+            }) {
+                authority.requester_clients = registry_platform_yaml::UniqueList::default();
+                authority.grant_source_issuer = None;
+            }
+        }
+        let mut profiles = serde_json::to_value(&config.authority_profiles).unwrap();
+        profiles
+            .as_object_mut()
+            .unwrap()
+            .retain(|_, profile| !profile["grants"].as_array().unwrap().is_empty());
+        config.authority_profiles = serde_json::from_value(profiles).unwrap();
+        let check = |config: &EvidenceConfig| {
+            config
+                .validate()
+                .expect("portable model and narrower complete grants validate");
+            let secrets =
+                Arc::new(SecretResolver::new([crate::secrets::SecretProvider::File], "/").unwrap());
+            for (source_id, source) in config.sources.iter() {
+                let sets = config.source_selector_sets(source_id);
+                assert!(
+                    !sets.is_empty(),
+                    "every declared source retains package-owned shapes"
+                );
+                for set in &sets {
+                    assert_eq!(
+                        set.iter()
+                            .map(|(role, _)| role)
+                            .collect::<BTreeSet<_>>()
+                            .len(),
+                        set.len(),
+                        "one profile per role in each tuple"
+                    );
+                }
+                SourceExecutor::new_for_offline_fixture(source, &sets, None, Arc::clone(&secrets))
+                    .expect("ungranted definitions cannot prevent source-plan compilation");
+            }
+        };
+        check(&config);
+        config.authority_profiles = crate::config::OrderedMap::default();
+        check(&config);
+    }
+
+    #[tokio::test]
+    async fn connected_sources_keep_package_and_target_concurrency_ceilings() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(2))
+                    .set_body_json(json!({"results": []})),
+            )
+            .mount(&server)
+            .await;
+        let root = tempfile::tempdir().unwrap();
+        let secrets = Arc::new(
+            SecretResolver::new([crate::secrets::SecretProvider::File], root.path()).unwrap(),
+        );
+        let mut config = connection_test_config(&server.uri(), json!({"type":"none"}));
+        for connection in config.source_connections.values_mut() {
+            connection.maximum_concurrency = registry_platform_yaml::BoundedU32::new(2).unwrap();
+        }
+        let executors = connection_test_executors(&config, Arc::clone(&secrets));
+        let request = prepared_batch_request();
+        let mut pending = Box::pin(executors[0].execute_batch(&request));
+        tokio::select! { result = &mut pending => panic!("unexpected completion: {result:?}"),
+        _ = tokio::time::sleep(Duration::from_millis(30)) => {} }
+        assert_eq!(
+            http_resources(&executors[0])
+                .concurrency
+                .available_permits(),
+            1
+        );
+        assert_eq!(
+            executors[0].execute_batch(&request).await,
+            Err(SourceError::Timeout),
+            "a larger connection cannot widen this source's package ceiling"
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        drop(pending);
+        assert_eq!(
+            http_resources(&executors[0])
+                .concurrency
+                .available_permits(),
+            2
+        );
+
+        for connection in config.source_connections.values_mut() {
+            connection.maximum_concurrency = registry_platform_yaml::BoundedU32::new(1).unwrap();
+        }
+        for source in config.sources.values_mut() {
+            if let SourceConfig::HttpJson { request, .. } = source {
+                request.maximum_concurrency = registry_platform_yaml::BoundedU32::new(2).unwrap();
+            }
+        }
+        let executors = connection_test_executors(&config, secrets);
+        let mut pending = Box::pin(executors[0].execute_batch(&request));
+        tokio::select! { result = &mut pending => panic!("unexpected completion: {result:?}"),
+        _ = tokio::time::sleep(Duration::from_millis(30)) => {} }
+        assert_eq!(
+            http_resources(&executors[0])
+                .concurrency
+                .available_permits(),
+            0
+        );
+        assert_eq!(
+            executors[1].execute_batch(&request).await,
+            Err(SourceError::Timeout),
+            "the narrower shared target ceiling applies across sources"
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        drop(pending);
+        assert_eq!(
+            http_resources(&executors[0])
+                .concurrency
+                .available_permits(),
+            1
+        );
     }
 
     #[tokio::test]

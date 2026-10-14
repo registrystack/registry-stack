@@ -759,7 +759,7 @@ async fn a_resource_the_client_may_not_address_is_refused() {
     assert!(matches!(
         credentials.bearer_token().await,
         Err(TokenError::Refused {
-            code: OAuthErrorCode::Other
+            code: OAuthErrorCode::InvalidTarget
         })
     ));
     let (status, body) = post_form(

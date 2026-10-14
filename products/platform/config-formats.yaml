@@ -3035,180 +3035,231 @@ formats:
       idList: /cases
     securityMembers: []
     restrictingMembers: []
-  - id: evidence/authoring-project
+  - id: evidence/project
     product: evidence
-    title: Evidence authoring project marker
-    files: [evidence-project.yaml]
+    title: Evidence project
+    files: [evidence.yaml]
     syntax: yaml
     audience: authored
     stability: unpromised
     current:
-      apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1
-      kind: EvidenceAuthoringProject
+      apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
+      kind: EvidenceProject
       checkedBy:
-        file: crates/registry-evidence-authoring/src/formats.rs
-        symbol: AUTHORING_PROJECT_API_VERSION
+        file: crates/registry-evidence-authoring/src/project.rs
+        symbol: PROJECT_API_VERSION
     target:
-      apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1
-      kind: EvidenceAuthoringProject
+      apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
+      kind: EvidenceProject
     schema:
-      path: crates/registry-evidencectl/schemas/authoring/project-marker.schema.json
-      id: https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json
+      path: crates/registry-evidencectl/schemas/authoring/project.schema.json
+      id: https://id.registrystack.org/schemas/evidence/project/project.v1alpha1.schema.json
       origin: generated
       generator: cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
       driftCheck: products/evidence/scripts/check-authoring-schema.sh
     reader:
       crate: registry-evidence-authoring
-      file: crates/registry-evidence-authoring/src/marker.rs
-      function: parse_project_marker
-      type: ProjectMarker
+      file: crates/registry-evidence-authoring/src/project.rs
+      function: read_project
+      type: EvidenceProject
     check: evidencectl check {project}
-    example: products/evidence/reference/authoring-projects/example/evidence-project.yaml
+    example: products/evidence/examples/standalone/evidence.yaml
     conformance:
-      requiredText: none
-      optionalText: none
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
-    notes: The Evidence top-level authored file is the bundle (CFG-ENV-6); this marker kind ends in Project without being a project format.
-  - id: evidence/question
-    product: evidence
-    title: Evidence authoring question
-    files: [questions/*.yaml]
-    syntax: yaml
-    audience: authored
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-      kind: EvidenceQuestion
-      checkedBy:
-        file: crates/registry-evidence-authoring/src/formats.rs
-        symbol: QUESTION_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-      kind: EvidenceQuestion
-    schema:
-      path: crates/registry-evidencectl/schemas/authoring/question.schema.json
-      id: https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json
-      origin: generated
-      generator: cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
-      driftCheck: products/evidence/scripts/check-authoring-schema.sh
-    reader:
-      crate: registry-evidencectl
-      file: crates/registry-evidencectl/src/authoring.rs
-      function: read_inputs
-      type: Question
-    check: evidencectl check {project}
-    example: crates/registry-evidencectl/templates/sqlite-extract/questions/record-status.yaml
-    conformance:
-      requiredText: /question
-      optionalText: /subject/role
-      integer: /governance/validitySeconds
+      requiredText: /id
+      optionalText: /assertionDefinitions/adult-status/fixtures
+      integer: /selectorProfiles/record-by-id/maximumAggregateBytes
       boolean: none
       idList: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: evidence/source
+      set: /assertionDefinitions/adult-status/representations
+      reference: /assertionDefinitions/adult-status/acquisition/source
+      relativePath: /functions/0/source
+    securityMembers:
+      - pointer: /assertionDefinitions/*/grantCeiling/authorities
+        whenOmitted: refused
+      - pointer: /assertionDefinitions/*/grantCeiling/actorKinds
+        whenOmitted: refused
+      - pointer: /assertionDefinitions/*/grantCeiling/valueOrigins
+        whenOmitted: refused
+      - pointer: /assertionDefinitions/*/grantCeiling/audiences
+        whenOmitted: refused
+      - pointer: /assertionDefinitions/*/representations
+        whenOmitted: refused
+      - pointer: /assertionDefinitions/*/outputs
+        whenOmitted: refused
+    restrictingMembers: [/assertionDefinitions/*/grantCeiling/authorities, /assertionDefinitions/*/grantCeiling/actorKinds, /assertionDefinitions/*/grantCeiling/valueOrigins, /assertionDefinitions/*/grantCeiling/audiences, /assertionDefinitions/*/representations, /assertionDefinitions/*/outputs]
+  - id: evidence/target
     product: evidence
-    title: Evidence authoring source
-    files: [sources/*.yaml]
+    title: Evidence target
+    files: ['*-target.yaml']
     syntax: yaml
-    audience: authored
+    audience: operator
     stability: unpromised
     current:
-      apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
-      kind: EvidenceSource
+      apiVersion: id.registrystack.org/formats/evidence/target/v1alpha1
+      kind: EvidenceTarget
       checkedBy:
-        file: crates/registry-evidence-authoring/src/formats.rs
-        symbol: SOURCE_API_VERSION
+        file: crates/registry-evidence-authoring/src/target.rs
+        symbol: TARGET_API_VERSION
     target:
-      apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
-      kind: EvidenceSource
+      apiVersion: id.registrystack.org/formats/evidence/target/v1alpha1
+      kind: EvidenceTarget
     schema:
-      path: crates/registry-evidencectl/schemas/authoring/source.schema.json
-      id: https://id.registrystack.org/schemas/evidence/source/source.v1alpha1.schema.json
+      path: crates/registry-evidencectl/schemas/authoring/target.schema.json
+      id: https://id.registrystack.org/schemas/evidence/target/target.v1alpha1.schema.json
       origin: generated
-      generator: cargo run -p registry-evidencectl --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+      generator: cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
       driftCheck: products/evidence/scripts/check-authoring-schema.sh
     reader:
       crate: registry-evidence-authoring
-      file: crates/registry-evidence-authoring/src/formats.rs
-      function: read_envelope_body
-      type: untyped
-    check: evidencectl check {project}
-    example: crates/registry-evidencectl/templates/sqlite-extract/sources/record-status.yaml
+      file: crates/registry-evidence-authoring/src/target.rs
+      function: read_target
+      type: EvidenceTarget
+    check: evidencectl check {project} --target {file}
+    example: products/evidence/examples/standalone/local-target.yaml
     conformance:
-      requiredText: none
+      requiredText: /id
       optionalText: none
       integer: none
       boolean: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: evidence/selector
+      idList: none
+    securityMembers:
+      - pointer: /authentication
+        whenOmitted: refused
+      - pointer: /connections
+        whenOmitted: refused
+      - pointer: /signer
+        whenOmitted: refused
+      - pointer: /subjectBinding
+        whenOmitted: refused
+      - pointer: /audit
+        whenOmitted: refused
+    restrictingMembers: [/authentication, /connections, /signer, /subjectBinding, /audit]
+  - id: evidence/target-authority
     product: evidence
-    title: Evidence authoring selector
-    files: [selectors/*.yaml]
+    title: Evidence target authority
+    files: ['*-authority.yaml']
     syntax: yaml
-    audience: authored
+    audience: operator
     stability: unpromised
     current:
-      apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
-      kind: EvidenceSelector
+      apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+      kind: EvidenceTargetAuthority
       checkedBy:
-        file: crates/registry-evidence-authoring/src/formats.rs
-        symbol: SELECTOR_API_VERSION
+        file: crates/registry-evidence-authoring/src/target.rs
+        symbol: AUTHORITY_API_VERSION
     target:
-      apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
-      kind: EvidenceSelector
+      apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+      kind: EvidenceTargetAuthority
     schema:
-      path: crates/registry-evidencectl/schemas/authoring/selector.schema.json
-      id: https://id.registrystack.org/schemas/evidence/selector/selector.v1alpha1.schema.json
+      path: crates/registry-evidencectl/schemas/authoring/target-authority.schema.json
+      id: https://id.registrystack.org/schemas/evidence/target-authority/target-authority.v1alpha1.schema.json
       origin: generated
-      generator: cargo run -p registry-evidencectl --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+      generator: cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
       driftCheck: products/evidence/scripts/check-authoring-schema.sh
     reader:
       crate: registry-evidence-authoring
-      file: crates/registry-evidence-authoring/src/formats.rs
-      function: read_envelope_body
-      type: untyped
-    check: evidencectl check {project}
-    example: crates/registry-evidencectl/templates/sqlite-extract/selectors/record-reference-v1.yaml
+      file: crates/registry-evidence-authoring/src/target.rs
+      function: read_authority
+      type: EvidenceTargetAuthority
+    check: evidencectl check {project} --target {project}/local-target.yaml
+    example: products/evidence/examples/standalone/dev-authority.yaml
     conformance:
-      requiredText: none
+      requiredText: /project
       optionalText: none
       integer: none
       boolean: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: evidence/authoring-schema
+      idList: none
+      set: /accessProfiles/standalone-service/requesterTags
+      reference: /accessProfiles/standalone-service/grants/0/definition
+    securityMembers:
+      - pointer: /accessProfiles/*/authority
+        whenOmitted: refused
+      - pointer: /accessProfiles/*/actorKind
+        whenOmitted: refused
+      - pointer: /accessProfiles/*/requesterTags
+        whenOmitted: refused
+      - pointer: /accessProfiles/*/grants
+        whenOmitted: refused
+    restrictingMembers: [/accessProfiles/*/authority, /accessProfiles/*/actorKind, /accessProfiles/*/requesterTags, /accessProfiles/*/grants]
+  - id: evidence/compiled-target-authority
     product: evidence
-    title: Evidence authoring data schema
-    files: [schemas/*.schema.yaml]
+    title: Compiled Evidence target authority
+    files: [compiled-authority.yaml]
     syntax: yaml
-    audience: authored
+    audience: generated
     stability: unpromised
-    exceptionClass: external-format
+    buildArtifact: true
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
-    target: none
+      apiVersion: id.registrystack.org/formats/evidence/compiled-target-authority/v1alpha1
+      kind: EvidenceCompiledTargetAuthority
+      checkedBy:
+        file: crates/registry-evidence/src/authority.rs
+        symbol: AUTHORITY_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/compiled-target-authority/v1alpha1
+      kind: EvidenceCompiledTargetAuthority
     schema: none
     reader:
-      crate: registry-evidencectl
-      file: crates/registry-evidencectl/src/authoring.rs
-      function: read_named_objects
-      type: untyped
+      crate: registry-evidence
+      file: crates/registry-evidence/src/authority.rs
+      function: parse
+      type: AuthorityDocument
     check: none
-    example: none
+    example: products/evidence/testdata/normalized-authority/compiled-authority.yaml
     conformance:
-      requiredText: none
+      requiredText: /project
       optionalText: none
       integer: none
       boolean: none
-    securityMembers: []
-    restrictingMembers: []
+      set: /accessProfiles/standalone-service/requesterTags
+    securityMembers:
+      - pointer: /accessProfiles/*/kind
+        whenOmitted: refused
+      - pointer: /accessProfiles/*/requesterTags
+        whenOmitted: refused
+      - pointer: /accessProfiles/*/grants
+        whenOmitted: refused
+    restrictingMembers: [/accessProfiles/*/kind, /accessProfiles/*/requesterTags, /accessProfiles/*/grants]
+  - id: evidence/authority-state
+    product: evidence
+    title: Activated Evidence authority state
+    files: [authority-state.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    buildArtifact: true
+    current:
+      apiVersion: id.registrystack.org/formats/evidence/authority-state/v1alpha1
+      kind: EvidenceAuthorityState
+      checkedBy:
+        file: crates/registry-evidence/src/authority.rs
+        symbol: STATE_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/authority-state/v1alpha1
+      kind: EvidenceAuthorityState
+    schema: none
+    reader:
+      crate: registry-evidence
+      file: crates/registry-evidence/src/authority.rs
+      function: read_state
+      type: AuthorityState
+    check: none
+    example: products/evidence/testdata/normalized-authority/authority-state.json
+    conformance:
+      requiredText: /activations/0/activatedAt
+      optionalText: none
+      integer: /activations/0/sequence
+      boolean: none
+    securityMembers:
+      - pointer: /activations/*/authorityRevision
+        whenOmitted: refused
+      - pointer: /activations/*/authorityDigest
+        whenOmitted: refused
+      - pointer: /activations/*/packageDigest
+        whenOmitted: refused
+      - pointer: /activations/*/document/accessProfiles
+        whenOmitted: refused
+    restrictingMembers: [/activations/*/authorityRevision, /activations/*/authorityDigest, /activations/*/packageDigest, /activations/*/document/accessProfiles]
   - id: evidence/source-openapi
     product: evidence
     title: Retained source OpenAPI description
@@ -3232,42 +3283,6 @@ formats:
     example: none
     conformance:
       requiredText: none
-      optionalText: none
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: evidence/access-policy
-    product: evidence
-    title: Evidence access policy
-    files: [access/policies/*.yaml]
-    syntax: yaml
-    audience: authored
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1
-      kind: EvidenceAccessPolicy
-      checkedBy:
-        file: crates/registry-evidence-authoring/src/formats.rs
-        symbol: ACCESS_POLICY_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1
-      kind: EvidenceAccessPolicy
-    schema:
-      path: crates/registry-evidencectl/schemas/authoring/access-policy.schema.json
-      id: https://id.registrystack.org/schemas/evidence/access-policy/access-policy.v1alpha1.schema.json
-      origin: generated
-      generator: cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
-      driftCheck: products/evidence/scripts/check-authoring-schema.sh
-    reader:
-      crate: registry-evidencectl
-      file: crates/registry-evidencectl/src/access.rs
-      function: load_policy_documents
-      type: AccessPolicy
-    check: evidencectl check {project}
-    example: products/evidence/reference/authoring-projects/example/access/policies/record-status-readers.yaml
-    conformance:
-      requiredText: /id
       optionalText: none
       integer: none
       boolean: none
@@ -3304,78 +3319,6 @@ formats:
     example: products/evidence/reference/authoring-projects/example/access/clients/example-caller.yaml
     conformance:
       requiredText: /clientId
-      optionalText: none
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: evidence/target-governance
-    product: evidence
-    title: Evidence deployment target governance
-    files: [governance.yaml]
-    syntax: yaml
-    audience: operator
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
-      kind: EvidenceTargetGovernance
-      checkedBy:
-        file: crates/registry-evidence-authoring/src/formats.rs
-        symbol: TARGET_GOVERNANCE_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
-      kind: EvidenceTargetGovernance
-    schema:
-      path: crates/registry-evidencectl/schemas/authoring/target-governance.schema.json
-      id: https://id.registrystack.org/schemas/evidence/target-governance/target-governance.v1alpha1.schema.json
-      origin: generated
-      generator: cargo run -p registry-evidencectl --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
-      driftCheck: products/evidence/scripts/check-authoring-schema.sh
-    reader:
-      crate: registry-evidencectl
-      file: crates/registry-evidencectl/src/build.rs
-      function: read_target_documents
-      type: TargetGovernance
-    check: evidencectl check {project} --target {target}
-    example: products/evidence/reference/deployment-targets/environments/local/evidence/governance.yaml
-    conformance:
-      requiredText: none
-      optionalText: none
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: evidence/target-settings
-    product: evidence
-    title: Evidence deployment target settings
-    files: [targets/*/settings.yaml]
-    syntax: yaml
-    audience: operator
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
-      kind: EvidenceTargetSettings
-      checkedBy:
-        file: crates/registry-evidence-authoring/src/formats.rs
-        symbol: TARGET_SETTINGS_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
-      kind: EvidenceTargetSettings
-    schema:
-      path: crates/registry-evidencectl/schemas/authoring/target-settings.schema.json
-      id: https://id.registrystack.org/schemas/evidence/target-settings/target-settings.v1alpha1.schema.json
-      origin: generated
-      generator: cargo run -p registry-evidencectl --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
-      driftCheck: products/evidence/scripts/check-authoring-schema.sh
-    reader:
-      crate: registry-evidencectl
-      file: crates/registry-evidencectl/src/target.rs
-      function: new
-      type: TargetSettings
-    check: evidencectl check {project}
-    example: products/evidence/reference/authoring-projects/example/targets/local/settings.yaml
-    conformance:
-      requiredText: none
       optionalText: none
       integer: none
       boolean: none

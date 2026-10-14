@@ -1,0 +1,21 @@
+apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+kind: EvidenceTargetAuthority
+target: local
+project: operator-evidence
+accessProfiles:
+  facility-service:
+    authority: organizational
+    actorKind: service
+    requesterTags:
+    - facility-service
+    grants:
+    - definition: operator-active
+      purpose: facility-administration
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: operator
+        selectorProfile: operator-by-id
+        valueOrigin: request

@@ -295,6 +295,33 @@ pub(crate) fn generate_signing_keypair(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Fill missing disposable assets without replacing any existing private key.
+/// A source token may already have created the secret directory.
+pub(crate) fn ensure_local_key_material(out_dir: &Path) -> Result<()> {
+    ensure_private_dir(out_dir)?;
+    let private = out_dir.join(SIGNING_PRIVATE_FILENAME);
+    let public = out_dir.join(SIGNING_PUBLIC_FILENAME);
+    match (private.try_exists()?, public.try_exists()?) {
+        (false, false) => generate_signing_keypair(out_dir)?,
+        (true, false) => {
+            let bytes = crate::authored::read_authored_file(&private, "existing local signing key")?;
+            let text = Zeroizing::new(String::from_utf8(bytes).context("local signing key must be UTF-8")?);
+            let key = PrivateJwk::parse(&text).map_err(|_| anyhow::anyhow!("the existing local signing key is invalid"))?;
+            let public_bytes = serde_json::to_vec_pretty(&key.public())?;
+            write_owner_file(&public, &public_bytes, PUBLIC_FILE_MODE)?;
+        }
+        (false, true) => bail!("the local signing public key has no private key; restore the matching private key or select a new explicit target key"),
+        (true, true) => {}
+    }
+    for filename in [AUDIT_HMAC_FILENAME, SUBJECT_BINDING_HMAC_FILENAME] {
+        let output = out_dir.join(filename);
+        if !output.try_exists()? {
+            run_secret_impl(&SecretArgs { output }, GenerationReport::Silent)?;
+        }
+    }
+    Ok(())
+}
+
 /// Generate one private development keypair without reporting key material or
 /// paths. Both halves remain owner-only because the pair lives in ephemeral
 /// private supervisor state rather than in a public JWKS artifact.
@@ -705,4 +732,50 @@ fn write_owner_file(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
     file.sync_all()
         .with_context(|| format!("failed to persist {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod local_material_tests {
+    use super::*;
+    #[test]
+    fn missing_local_material_is_filled_independently_and_never_replaces_keys() {
+        let root = tempfile::tempdir().unwrap();
+        let secrets = root.path().join("secrets");
+        fs::create_dir(&secrets).unwrap();
+        fs::write(secrets.join("source-token"), b"synthetic-token").unwrap();
+        ensure_local_key_material(&secrets).unwrap();
+        let paths = [
+            SIGNING_PRIVATE_FILENAME,
+            SIGNING_PUBLIC_FILENAME,
+            AUDIT_HMAC_FILENAME,
+            SUBJECT_BINDING_HMAC_FILENAME,
+            "source-token",
+        ];
+        let captured = paths
+            .iter()
+            .map(|name| fs::read(secrets.join(name)).unwrap())
+            .collect::<Vec<_>>();
+        fs::remove_file(secrets.join(AUDIT_HMAC_FILENAME)).unwrap();
+        ensure_local_key_material(&secrets).unwrap();
+        for (index, name) in paths
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| **name != AUDIT_HMAC_FILENAME)
+        {
+            assert!(
+                fs::read(secrets.join(name)).unwrap() == captured[index],
+                "existing material changed"
+            );
+        }
+        assert!(secrets.join(AUDIT_HMAC_FILENAME).is_file());
+        fs::remove_file(secrets.join(SIGNING_PUBLIC_FILENAME)).unwrap();
+        ensure_local_key_material(&secrets).unwrap();
+        let regenerated = fs::read_to_string(secrets.join(SIGNING_PUBLIC_FILENAME)).unwrap();
+        let original = std::str::from_utf8(&captured[1]).unwrap();
+        assert_eq!(
+            PublicJwk::parse(&regenerated).unwrap().kid,
+            PublicJwk::parse(original).unwrap().kid
+        );
+        assert!(fs::read(secrets.join(SIGNING_PRIVATE_FILENAME)).unwrap() == captured[0]);
+    }
 }

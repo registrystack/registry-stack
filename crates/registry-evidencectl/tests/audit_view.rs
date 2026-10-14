@@ -107,6 +107,139 @@ fn successful_view_delegates_to_stopped_core_and_prints_only_aliases() {
 }
 
 #[test]
+fn normalized_authority_view_preserves_minimized_output_and_refuses_incoherent_context() {
+    let fixture = Fixture::new();
+    let mut view = successful_view();
+    let revision = format!("sha256:{}", "a".repeat(64));
+    let grant = format!("sha256:{}", "b".repeat(64));
+    for event in view["events"].as_array_mut().expect("events") {
+        event["authorityRevision"] = json!(revision);
+        event["effectiveGrantDigest"] = json!(grant);
+    }
+    fixture.write_core_json(&view);
+    let output = fixture.show();
+    assert_success(&output);
+    let human = String::from_utf8_lossy(&output.stdout);
+    assert!(!human.contains(&revision));
+    assert!(!human.contains(&grant));
+    assert_success(&fixture.show_json());
+
+    for (pointer, replacement) in [
+        ("/events/0/authorityRevision", Value::Null),
+        ("/events/0/effectiveGrantDigest", json!("source-canary")),
+        (
+            "/events/1/authorityRevision",
+            json!(format!("sha256:{}", "c".repeat(64))),
+        ),
+        (
+            "/events/1/effectiveGrantDigest",
+            json!(format!("sha256:{}", "d".repeat(64))),
+        ),
+    ] {
+        let mut invalid = view.clone();
+        *invalid.pointer_mut(pointer).expect("context field") = replacement;
+        fixture.write_core_json(&invalid);
+        assert_closed_failure(&fixture.show(), "invalid authority context");
+    }
+    let mut partial = view;
+    partial["events"][0]
+        .as_object_mut()
+        .expect("access")
+        .remove("effectiveGrantDigest");
+    fixture.write_core_json(&partial);
+    assert_closed_failure(&fixture.show(), "partial authority context");
+}
+
+#[test]
+fn coherent_unsigned_release_uses_the_same_minimized_audit_view() {
+    let fixture = Fixture::new();
+    let mut view = successful_view();
+    for event in view["events"].as_array_mut().expect("events") {
+        event["responseProtection"] = json!("unsigned");
+    }
+    fixture.write_core_json(&view);
+    let output = fixture.show();
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\nDISCLOSURE RELEASED is_adult\n")
+    );
+    assert_success(&fixture.show_json());
+}
+
+#[test]
+fn holder_bound_batch_view_accepts_only_the_complete_bounded_release_set() {
+    let fixture = Fixture::new();
+    let mut view = successful_view();
+    for event in view["events"].as_array_mut().expect("events") {
+        event["responseProtection"] = json!("sd-jwt-vc");
+    }
+    view["events"][1]
+        .as_object_mut()
+        .expect("release")
+        .remove("evidenceId");
+    view["events"][1]["evidenceIds"] =
+        json!(["urn:example:assertion:one", "urn:example:assertion:two"]);
+    fixture.write_core_json(&view);
+    assert_success(&fixture.show());
+
+    for identifiers in [
+        json!(["urn:example:assertion:one"]),
+        json!(["urn:example:assertion:one", "urn:example:assertion:one"]),
+        json!(["urn:example:assertion:one", "source-canary"]),
+        json!((0..17)
+            .map(|index| format!("urn:example:assertion:{index}"))
+            .collect::<Vec<_>>()),
+    ] {
+        let mut invalid = view.clone();
+        invalid["events"][1]["evidenceIds"] = identifiers;
+        fixture.write_core_json(&invalid);
+        assert_closed_failure(&fixture.show(), "invalid released set");
+    }
+    let mut unprotected = view.clone();
+    for event in unprotected["events"].as_array_mut().expect("events") {
+        event["responseProtection"] = json!("signed");
+    }
+    fixture.write_core_json(&unprotected);
+    assert_closed_failure(&fixture.show(), "batch without SD-JWT protection");
+    view["events"][1]["evidenceId"] = json!("urn:example:assertion:one");
+    fixture.write_core_json(&view);
+    assert_closed_failure(&fixture.show(), "singular and batch release together");
+}
+
+#[test]
+fn audit_aliases_accept_every_retained_output_form() {
+    for form in registry_evidence_authoring::output::TYPES {
+        let fixture = Fixture::new();
+        let state_path = fixture.root.join(".evidence/dev/state.json");
+        let mut state: Value =
+            serde_json::from_slice(&fs::read(&state_path).expect("state")).expect("state JSON");
+        state["definitions"][1]["concepts"][0]["form"] = json!(form);
+        fs::write(
+            &state_path,
+            serde_json::to_vec(&state).expect("state renders"),
+        )
+        .expect("state writes");
+        let bundle_path = fixture.root.join(".evidence/dev/bundle/evidence.yaml");
+        let mut bundle: Value = serde_norway::from_slice(&fs::read(&bundle_path).expect("bundle"))
+            .expect("bundle YAML");
+        bundle["requirements"][1]["concepts"][0]["type"] = json!(form);
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o600))
+            .expect("open fixture bundle");
+        fs::write(
+            &bundle_path,
+            serde_norway::to_string(&bundle).expect("bundle renders"),
+        )
+        .expect("bundle writes");
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
+            .expect("seal fixture bundle");
+        refresh_package_envelope(&fixture.root.join(".evidence/dev/bundle"));
+        fixture.write_core_json(&successful_view());
+        assert_success(&fixture.show());
+    }
+}
+
+#[test]
 fn access_only_view_prints_authorized_without_claiming_release() {
     let fixture = Fixture::new();
     let mut view = successful_view();
@@ -184,7 +317,7 @@ fn structured_sd_jwt_release_uses_the_same_minimized_audit_view() {
     let state_path = fixture.root.join(".evidence/dev/state.json");
     let mut state: Value =
         serde_json::from_slice(&fs::read(&state_path).expect("state")).expect("state JSON");
-    state["questions"][1]["concepts"][0]["form"] = json!("reviewed-structured-value");
+    state["definitions"][1]["concepts"][0]["form"] = json!("reviewed-structured-value");
     fs::write(
         &state_path,
         serde_json::to_vec(&state).expect("state renders"),
@@ -228,7 +361,7 @@ fn multi_concept_release_requires_and_prints_the_exact_declared_list() {
     let state_path = fixture.root.join(".evidence/dev/state.json");
     let mut state: Value =
         serde_json::from_slice(&fs::read(&state_path).expect("state")).expect("state JSON");
-    state["questions"][1]["concepts"] = json!([
+    state["definitions"][1]["concepts"] = json!([
         {
             "alias": "is_adult",
             "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
@@ -701,7 +834,7 @@ impl Fixture {
         private_directory(&root.join(".evidence/dev/bundle"));
         private_file(&root.join(".evidence/dev/runtime.yaml"), b"runtime", 0o400);
         let canonical = fs::canonicalize(&root).expect("canonical project");
-        let state = json!({
+        let mut state = json!({
             "apiVersion": "id.registrystack.org/formats/evidence/dev-state/v6",
             "kind": "EvidenceDevState",
             "status": "stopped",
@@ -713,8 +846,8 @@ impl Fixture {
             "namePrefix": "evidence-dev",
             "tokenUrl": "http://127.0.0.1:8081/oauth2/token",
             "accessTokenAudience": "urn:registrystack:evidence:local:gateway",
-            "accessPolicies": [],
-            "questions": [
+            "accessProfiles": [],
+            "definitions": [
                 {
                     "alias": "age-bracket",
                     "requirementUri": "urn:registrystack:evidence:local:requirement:age-bracket",
@@ -745,12 +878,7 @@ impl Fixture {
                 }
             ]
         });
-        private_file(
-            &root.join(".evidence/dev/state.json"),
-            &serde_json::to_vec(&state).expect("state renders"),
-            0o600,
-        );
-        let bundle = json!({
+        let mut bundle = json!({
             "selectorProfiles": {
                 "local-subject-age-bracket-v1": {
                     "fields": {"person_id": {"type": "string"}}
@@ -816,6 +944,51 @@ impl Fixture {
                 }
             ]
         });
+        // The stopped presentation state binds the same complete profile and
+        // exact package as normalized local development. The core audit view
+        // remains a substituted child so these tests isolate its safe rendering.
+        bundle["project"] = json!("audit-view-fixture");
+        let mut profile = bundle["authorityProfiles"]["local-caller"].take();
+        profile["kind"] = json!("organizational");
+        profile["actorKind"] = json!("service");
+        for grant in profile["grants"].as_array_mut().expect("complete grants") {
+            grant["subjectBindingModes"] = json!(["audience-scoped"]);
+        }
+        bundle["authorityProfiles"] = json!({});
+        let profile_bytes = registry_platform_crypto::canonicalize_json(&profile)
+            .expect("canonical complete profile");
+        state["accessProfiles"] = json!([{
+            "id":"local-caller",
+            "digest":registry_platform_config::sha256_uri(&profile_bytes),
+            "requesterTags":["local-caller"],
+            "definitions":["adult-status","age-bracket"],
+            "actorKind":"service"
+        }]);
+        private_file(
+            &root.join(".evidence/dev/state.json"),
+            &serde_json::to_vec(&state).expect("state renders"),
+            0o600,
+        );
+        private_directory(&root.join(".evidence/dev/authority"));
+        let document = json!({"project":"audit-view-fixture","target":"local","accessProfiles":{"local-caller":profile}});
+        let bytes = registry_platform_crypto::canonicalize_json(&document)
+            .expect("canonical authority document");
+        let authority = json!({
+            "apiVersion":"id.registrystack.org/formats/evidence/authority-state/v1alpha1",
+            "kind":"EvidenceAuthorityState",
+            "activations":[{
+                "sequence":1,
+                "activatedAt":"2026-08-04T00:00:00Z",
+                "authorityDigest":registry_platform_config::sha256_uri(&bytes),
+                "authorityRevision":format!("sha256:{}", hex::encode(registry_platform_crypto::domain_separated_sha256(b"registry.evidence.target-authority/v1\0", &bytes))),
+                "document":document
+            }]
+        });
+        private_file(
+            &root.join(".evidence/dev/authority/authority-state.json"),
+            &serde_json::to_vec(&authority).expect("authority state renders"),
+            0o600,
+        );
         private_file(
             &root.join(".evidence/dev/bundle/evidence.yaml"),
             serde_norway::to_string(&bundle)
@@ -900,7 +1073,7 @@ fn refresh_package_envelope(root: &Path) {
     if sum_file.exists() {
         fs::remove_file(&sum_file).expect("remove stale package sum file");
     }
-    registry_platform_config::write_sum_file(
+    let package = registry_platform_config::write_sum_file(
         root,
         None,
         &registry_platform_config::PackageLimits {
@@ -913,6 +1086,19 @@ fn refresh_package_envelope(root: &Path) {
         "evidencectl package",
     )
     .expect("publish local test package");
+    let authority_path = root
+        .parent()
+        .expect("local dev root")
+        .join("authority/authority-state.json");
+    let mut authority: Value =
+        serde_json::from_slice(&fs::read(&authority_path).expect("authority state reads"))
+            .expect("authority state parses");
+    authority["activations"][0]["packageDigest"] = json!(package.digest());
+    fs::write(
+        &authority_path,
+        serde_json::to_vec(&authority).expect("authority state renders"),
+    )
+    .expect("rebind changed test package");
     fs::set_permissions(sum_file, fs::Permissions::from_mode(0o400))
         .expect("seal package sum file");
     fs::set_permissions(root, fs::Permissions::from_mode(0o500)).expect("seal package directory");

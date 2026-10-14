@@ -1,0 +1,5 @@
+.generated/
+.evidence/
+*.verified.json
+*.sd-jwt
+__pycache__/

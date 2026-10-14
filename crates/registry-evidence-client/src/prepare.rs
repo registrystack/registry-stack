@@ -106,6 +106,8 @@ pub struct EvidenceRequestSpec {
     pub evidence_type: String,
     pub issued_by: String,
     pub provided_by: String,
+    /// Independent verifier expectation, also sent as expectedConfigurationRevision
+    /// so a stale contract refuses before authority resolution or source effects.
     pub configuration_revision: String,
     pub expected_assurance_profile: AssuranceProfile,
     pub subjects: Vec<SubjectRequest>,
@@ -160,6 +162,8 @@ pub struct HolderBoundRequestSpec {
     pub evidence_type: String,
     pub issued_by: String,
     pub provided_by: String,
+    /// Independent verifier expectation, also sent as expectedConfigurationRevision
+    /// so a stale contract refuses before authority resolution or source effects.
     pub configuration_revision: String,
     pub expected_assurance_profile: AssuranceProfile,
     pub subjects: Vec<SubjectRequest>,
@@ -286,6 +290,7 @@ impl PreparedEvidenceRequest {
         let body = request_body(
             &nonce,
             spec.requirement.clone(),
+            spec.configuration_revision.clone(),
             spec.purpose.clone(),
             spec.subjects,
             spec.holder_keys,
@@ -451,6 +456,7 @@ impl PreparedHolderBoundRequest {
         let body = request_body(
             &nonce,
             spec.requirement,
+            spec.configuration_revision,
             spec.purpose,
             spec.subjects,
             spec.holder_keys,
@@ -528,6 +534,7 @@ impl std::fmt::Debug for PreparedHolderBoundRequest {
 fn request_body(
     nonce: &RequestNonce,
     requirement: String,
+    configuration_revision: String,
     purpose: String,
     subjects: Vec<SubjectRequest>,
     holder_keys: Vec<HolderPublicKey>,
@@ -550,6 +557,7 @@ fn request_body(
     EvidenceRequestBody {
         request_nonce: nonce.as_str().to_owned(),
         requirement,
+        expected_configuration_revision: Some(configuration_revision),
         purpose,
         subjects,
         holder_keys,
@@ -714,6 +722,16 @@ fn validate_shared(spec: &SharedRequestFacts<'_>) -> Result<(), EvidenceClientEr
         if identifier.is_empty() || identifier.len() > MAXIMUM_IDENTIFIER_BYTES {
             return Err(EvidenceClientError::configuration(reason));
         }
+    }
+    if spec.configuration_revision.len() != 71
+        || !spec.configuration_revision.starts_with("sha256:")
+        || !spec.configuration_revision.as_bytes()[7..]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(EvidenceClientError::configuration(
+            "the configuration revision must be a canonical SHA-256 revision",
+        ));
     }
     if !is_purpose(spec.purpose) {
         return Err(EvidenceClientError::configuration(
@@ -982,7 +1000,8 @@ mod tests {
             evidence_type: "urn:example:client:evidence-type:status:v1".to_owned(),
             issued_by: "urn:example:client:issuer".to_owned(),
             provided_by: "urn:example:client:provider".to_owned(),
-            configuration_revision: "sha256:00".to_owned(),
+            configuration_revision:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
             expected_assurance_profile: AssuranceProfile::Local,
             subjects: vec![SubjectRequest {
                 role: "subject".to_owned(),
@@ -1106,6 +1125,10 @@ mod tests {
             serde_json::from_slice(&prepared.request_json().expect("the request serializes"))
                 .expect("the request parses");
         assert_eq!(body["requestNonce"], prepared.request_nonce());
+        assert_eq!(
+            body["expectedConfigurationRevision"],
+            prepared.policy_document().configuration_revision
+        );
 
         let policy = serde_json::to_value(prepared.policy_document())
             .expect("the policy document serializes");
@@ -1121,7 +1144,7 @@ mod tests {
                 "evidenceType": "urn:example:client:evidence-type:status:v1",
                 "purpose": "example-decision",
                 "audience": "urn:example:client:audience:relying-party",
-                "configurationRevision": "sha256:00",
+                "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                 "requestNonce": prepared.request_nonce(),
                 "expectedSubjects": [{"role": "subject", "binding": "y0KMdWluZGluZw"}],
                 "expectedOutputs": [{
@@ -1231,6 +1254,10 @@ mod tests {
             (
                 "an empty configuration revision",
                 Box::new(|spec| spec.configuration_revision = String::new()),
+            ),
+            (
+                "a noncanonical configuration revision",
+                Box::new(|spec| spec.configuration_revision = "sha256:00".to_owned()),
             ),
             (
                 "an oversized requirement",
@@ -1780,6 +1807,10 @@ mod tests {
             serde_json::from_slice(&serialized).expect("the request parses");
 
         assert_eq!(body["requestNonce"], prepared.request_nonce());
+        assert_eq!(
+            body["expectedConfigurationRevision"],
+            holder_bound_spec().configuration_revision
+        );
         assert_eq!(
             body["holderKeys"],
             serde_json::to_value([holder_key(0)]).expect("the key serializes")

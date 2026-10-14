@@ -31,13 +31,6 @@ pub(crate) const EVIDENCE_BUNDLE_API_VERSION: &str =
 /// The `kind` of the bundle the matching `evidence` binary reads.
 pub(crate) const EVIDENCE_BUNDLE_KIND: &str = "EvidenceBundle";
 
-/// The `apiVersion` of a codelist the matching `evidence` binary reads.
-pub(crate) const EVIDENCE_CODELIST_API_VERSION: &str =
-    "id.registrystack.org/formats/evidence/codelist/v1alpha1";
-
-/// The `kind` of a codelist the matching `evidence` binary reads.
-pub(crate) const EVIDENCE_CODELIST_KIND: &str = "EvidenceCodelist";
-
 /// How long a delegated `evidence` run may take before evidencectl stops it.
 ///
 /// Compilation and fixture evaluation are local, bounded work against a bundle

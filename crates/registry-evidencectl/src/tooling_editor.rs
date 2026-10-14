@@ -42,10 +42,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use clap::Args;
-use registry_evidence_authoring::{
-    layout::{OPENAPI_FILE, QUESTIONS_DIRECTORY},
-    PROJECT_MARKER_FILE,
-};
+use registry_evidence_authoring::project::PROJECT_FILE;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -100,18 +97,30 @@ struct EditorSchema {
 // type stands behind. The other authored parts of a project (derivations,
 // answer schemas) get no mapping, because a schema written by hand for one of
 // them would drift from the checks the moment either moved.
-const EDITOR_SCHEMA_CATALOG: [EditorSchema; 9] = [
+const EDITOR_SCHEMA_CATALOG: [EditorSchema; 6] = [
+    EditorSchema {
+        name: "project",
+        filename: "project.schema.json",
+        file_glob: "evidence.yaml",
+        document: include_str!("../schemas/authoring/project.schema.json"),
+    },
+    EditorSchema {
+        name: "target",
+        filename: "target.schema.json",
+        file_glob: "*-target.yaml",
+        document: include_str!("../schemas/authoring/target.schema.json"),
+    },
+    EditorSchema {
+        name: "target-authority",
+        filename: "target-authority.schema.json",
+        file_glob: "*-authority.yaml",
+        document: include_str!("../schemas/authoring/target-authority.schema.json"),
+    },
     EditorSchema {
         name: "access-client",
         filename: "access-client.schema.json",
         file_glob: "access/clients/*.yaml",
         document: include_str!("../schemas/authoring/access-client.schema.json"),
-    },
-    EditorSchema {
-        name: "access-policy",
-        filename: "access-policy.schema.json",
-        file_glob: "access/policies/*.yaml",
-        document: include_str!("../schemas/authoring/access-policy.schema.json"),
     },
     EditorSchema {
         name: "fixture",
@@ -125,44 +134,13 @@ const EDITOR_SCHEMA_CATALOG: [EditorSchema; 9] = [
         file_glob: "mocks/source.yaml",
         document: include_str!("../schemas/authoring/mock-plan.schema.json"),
     },
-    EditorSchema {
-        name: "project-marker",
-        filename: "project-marker.schema.json",
-        file_glob: "evidence-project.yaml",
-        document: include_str!("../schemas/authoring/project-marker.schema.json"),
-    },
-    EditorSchema {
-        name: "question",
-        filename: "question.schema.json",
-        file_glob: "questions/*.yaml",
-        document: include_str!("../schemas/authoring/question.schema.json"),
-    },
-    EditorSchema {
-        name: "selector",
-        filename: "selector.schema.json",
-        file_glob: "selectors/*.yaml",
-        document: include_str!("../schemas/authoring/selector.schema.json"),
-    },
-    EditorSchema {
-        name: "source",
-        filename: "source.schema.json",
-        file_glob: "sources/*.yaml",
-        document: include_str!("../schemas/authoring/source.schema.json"),
-    },
-    EditorSchema {
-        name: "target-settings",
-        filename: "target-settings.schema.json",
-        file_glob: "targets/*/settings.yaml",
-        document: include_str!("../schemas/authoring/target-settings.schema.json"),
-    },
 ];
 
 #[derive(Debug, Args)]
 pub struct EditorArgs {
     /// Evidence project directory; defaults to the current directory.
     ///
-    /// This command needs an editable project: one holding questions/ and
-    /// sources/ beside evidence-project.yaml.
+    /// This command needs an editable project holding evidence.yaml.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
 
@@ -384,36 +362,25 @@ fn canonical_root(root: &Path) -> Result<PathBuf> {
 /// questions, because a project the compiler accepts must not have to be
 /// migrated before an editor will read it.
 fn require_authoring_project_root(root: &Path) -> Result<()> {
-    let path = root.join(PROJECT_MARKER_FILE);
+    let path = root.join(PROJECT_FILE);
     match fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            bail!("project root must contain a regular non-symlink {PROJECT_MARKER_FILE}")
+            bail!("project root must contain a regular non-symlink {PROJECT_FILE}")
         }
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            let bytes = crate::authored::read_authored_file(&path, "EvidenceProject")?;
+            registry_evidence_authoring::project::read_project(PROJECT_FILE, &bytes)?;
+            Ok(())
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if carries_authored_pair(root) {
-                Ok(())
-            } else {
-                bail!("project root must contain a regular {PROJECT_MARKER_FILE}, or the {OPENAPI_FILE} and {QUESTIONS_DIRECTORY} directory an authoring project carries; run `evidencectl init` first")
-            }
+            bail!(
+                "project root must contain a regular {PROJECT_FILE}; run `evidencectl init` first"
+            )
         }
         Err(error) => {
             Err(error).with_context(|| format!("failed to stat project marker {}", path.display()))
         }
     }
-}
-
-/// Whether a root carries the authored pair an Evidence project has held since
-/// before the marker existed.
-///
-/// A symbolic link at either name declares nothing, whatever it points at: a
-/// link is how a directory borrows a shape it does not have, and a borrowed
-/// shape must not anchor a root this command then writes files into.
-fn carries_authored_pair(root: &Path) -> bool {
-    fs::symlink_metadata(root.join(OPENAPI_FILE))
-        .is_ok_and(|metadata| metadata.file_type().is_file())
-        && fs::symlink_metadata(root.join(QUESTIONS_DIRECTORY))
-            .is_ok_and(|metadata| metadata.file_type().is_dir())
 }
 
 #[cfg(test)]
@@ -1200,20 +1167,17 @@ fn display_paths(paths: &BTreeSet<PathBuf>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_evidence_authoring::default_project_marker_document;
+    use registry_evidence_authoring::layout::OPENAPI_FILE;
 
     /// The complete set of files one run owns, as an author would list them.
-    const MANAGED_FILES: [&str; 13] = [
+    const MANAGED_FILES: [&str; 10] = [
         ".evidence-editor/manifest.json",
         ".evidence-editor/schemas/access-client.schema.json",
-        ".evidence-editor/schemas/access-policy.schema.json",
         ".evidence-editor/schemas/fixture.schema.json",
         ".evidence-editor/schemas/mock-plan.schema.json",
-        ".evidence-editor/schemas/project-marker.schema.json",
-        ".evidence-editor/schemas/question.schema.json",
-        ".evidence-editor/schemas/selector.schema.json",
-        ".evidence-editor/schemas/source.schema.json",
-        ".evidence-editor/schemas/target-settings.schema.json",
+        ".evidence-editor/schemas/project.schema.json",
+        ".evidence-editor/schemas/target-authority.schema.json",
+        ".evidence-editor/schemas/target.schema.json",
         ".vscode/extensions.json",
         ".vscode/settings.json",
         ".zed/settings.json",
@@ -1223,8 +1187,8 @@ mod tests {
         let project = temporary.path().join("authoring-project");
         fs::create_dir(&project).expect("project directory creates");
         fs::write(
-            project.join(PROJECT_MARKER_FILE),
-            default_project_marker_document(),
+            project.join(PROJECT_FILE),
+            include_str!("../../../products/evidence/examples/standalone/evidence.yaml"),
         )
         .expect("project marker writes");
         project
@@ -1271,16 +1235,16 @@ mod tests {
             &zed["lsp"]["yaml-language-server"]["settings"]["yaml"]["schemas"]
         );
         assert_eq!(
-            mappings["./.evidence-editor/schemas/question.schema.json"],
-            "authoring-project/questions/*.yaml"
+            mappings["./.evidence-editor/schemas/project.schema.json"],
+            "authoring-project/evidence.yaml"
         );
         assert_eq!(
             mappings["./.evidence-editor/schemas/fixture.schema.json"],
             "authoring-project/fixtures/*.yaml"
         );
         assert_eq!(
-            mappings["./.evidence-editor/schemas/project-marker.schema.json"],
-            "authoring-project/evidence-project.yaml"
+            mappings["./.evidence-editor/schemas/target.schema.json"],
+            "authoring-project/*-target.yaml"
         );
         for location in mappings.as_object().unwrap().keys() {
             assert!(workspace.join(location).is_file());
@@ -1295,7 +1259,7 @@ mod tests {
     }
 
     fn age_editor_installation(root: &Path) {
-        let schema_path = root.join(EDITOR_ROOT).join("schemas/question.schema.json");
+        let schema_path = root.join(EDITOR_ROOT).join("schemas/project.schema.json");
         let mut prior_schema = fs::read(&schema_path).unwrap();
         prior_schema.push(b'\n');
         fs::write(&schema_path, &prior_schema).unwrap();
@@ -1303,7 +1267,7 @@ mod tests {
         let mut manifest: EditorManifest =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         manifest.evidencectl_version = "0.9.0".to_owned();
-        manifest.schemas.retain(|schema| schema.kind == "question");
+        manifest.schemas.retain(|schema| schema.kind == "project");
         manifest.schemas[0].sha256 = schema_hash(&prior_schema);
         for file in editor_configuration_files_at(&manifest.schemas, "").unwrap() {
             fs::write(root.join(file.relative_path), file.bytes).unwrap();
@@ -1374,8 +1338,8 @@ mod tests {
             "no files were changed",
             "Keep existing settings",
             "evidencectl tooling editor '",
-            "authoring-project/questions/*.yaml",
-            "./authoring-project/.evidence-editor/schemas/question.schema.json",
+            "authoring-project/evidence.yaml",
+            "./authoring-project/.evidence-editor/schemas/project.schema.json",
             ".vscode/settings.json",
             ".zed/settings.json",
         ] {
@@ -1440,7 +1404,7 @@ mod tests {
         );
         assert!(diagnostic.contains("customized"), "{diagnostic}");
         assert!(
-            diagnostic.contains("authoring-project/questions/*.yaml"),
+            diagnostic.contains("authoring-project/evidence.yaml"),
             "{diagnostic}"
         );
         assert_eq!(
@@ -1521,8 +1485,8 @@ mod tests {
             .iter()
             .map(|entry| entry.file_glob)
             .collect::<Vec<_>>();
-        assert!(globs.contains(&PROJECT_MARKER_FILE));
-        assert!(globs.contains(&format!("{QUESTIONS_DIRECTORY}/*.yaml").as_str()));
+        assert!(globs.contains(&PROJECT_FILE));
+        assert!(globs.contains(&"*-target.yaml"));
         assert!(globs.contains(&"fixtures/*.yaml"));
     }
 
@@ -1661,7 +1625,7 @@ mod tests {
         prior_manifest.evidencectl_version = "0.9.0".to_string();
         prior_manifest
             .schemas
-            .retain(|schema| schema.kind == "question");
+            .retain(|schema| schema.kind == "project");
         for file in editor_configuration_files(&prior_manifest.schemas)
             .expect("prior configuration renders")
         {
@@ -1673,12 +1637,8 @@ mod tests {
             pretty_json(&prior_manifest).expect("manifest serializes"),
         )
         .expect("prior manifest writes");
-        fs::remove_file(
-            project
-                .join(EDITOR_ROOT)
-                .join("schemas/project-marker.schema.json"),
-        )
-        .expect("the aged installation drops the schema it never had");
+        fs::remove_file(project.join(EDITOR_ROOT).join("schemas/target.schema.json"))
+            .expect("the aged installation drops the schema it never had");
 
         let report = setup_project_editor(&project).expect("a smaller prior catalog refreshes");
         assert_eq!(report.status, "configured");
@@ -1773,31 +1733,20 @@ mod tests {
         fs::create_dir(&bare).expect("bare directory creates");
 
         let error = setup_project_editor(&bare).expect_err("a bare directory is not a project");
-        assert!(format!("{error:#}").contains(PROJECT_MARKER_FILE));
+        assert!(format!("{error:#}").contains(PROJECT_FILE));
         assert!(!bare.join(EDITOR_ROOT).exists());
         assert!(!bare.join(".vscode").exists());
     }
 
     #[test]
-    fn a_root_carrying_the_authored_pair_without_a_marker_is_configured() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let project = temporary.path().join("unmarked-project");
-        fs::create_dir(&project).expect("project directory creates");
-        fs::write(project.join(OPENAPI_FILE), "openapi: 3.1.0\n").expect("description writes");
-        fs::create_dir(project.join(QUESTIONS_DIRECTORY)).expect("question directory creates");
-
-        let report = setup_project_editor(&project).expect("editor setup passes");
-
-        assert_eq!(report.status, "configured");
-        let mut written = report.files.clone();
-        written.sort();
-        assert_eq!(written, MANAGED_FILES);
-        for relative in MANAGED_FILES {
-            assert!(
-                project.join(relative).is_file(),
-                "{relative} was not written"
-            );
-        }
+    fn a_retired_authored_pair_does_not_substitute_for_an_evidence_project() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("retired-project");
+        fs::create_dir(&project).unwrap();
+        fs::write(project.join(OPENAPI_FILE), "openapi: 3.1.0\n").unwrap();
+        fs::create_dir(project.join("questions")).unwrap();
+        assert!(setup_project_editor(&project).is_err());
+        assert!(!project.join(EDITOR_ROOT).exists());
     }
 
     #[cfg(unix)]
@@ -1810,11 +1759,11 @@ mod tests {
         fs::create_dir(&borrower).expect("bare directory creates");
         std::os::unix::fs::symlink(&described, borrower.join(OPENAPI_FILE))
             .expect("symlinked description");
-        fs::create_dir(borrower.join(QUESTIONS_DIRECTORY)).expect("question directory creates");
+        fs::create_dir(borrower.join("questions")).expect("question directory creates");
 
         let error =
             setup_project_editor(&borrower).expect_err("a borrowed description declares nothing");
-        assert!(format!("{error:#}").contains(PROJECT_MARKER_FILE));
+        assert!(format!("{error:#}").contains(PROJECT_FILE));
         assert!(!borrower.join(EDITOR_ROOT).exists());
         assert!(!borrower.join(".vscode").exists());
     }
@@ -1853,7 +1802,7 @@ mod tests {
         // aged bytes rather than the current ones.
         let schema_path = project
             .join(EDITOR_ROOT)
-            .join("schemas/question.schema.json");
+            .join("schemas/project.schema.json");
         let mut prior_schema = fs::read(&schema_path).expect("question schema reads");
         prior_schema.extend_from_slice(b"\n");
         fs::write(&schema_path, &prior_schema).expect("prior schema writes");
@@ -1865,7 +1814,7 @@ mod tests {
         let aged = prior_manifest
             .schemas
             .iter_mut()
-            .find(|schema| schema.kind == "question")
+            .find(|schema| schema.kind == "project")
             .expect("the catalog holds the question schema");
         aged.sha256 = schema_hash(&prior_schema);
         fs::write(
@@ -1962,7 +1911,7 @@ mod tests {
         let project = project(&temporary);
         setup_project_editor(&project).expect("initial editor setup passes");
 
-        let relative = PathBuf::from(EDITOR_ROOT).join("schemas/question.schema.json");
+        let relative = PathBuf::from(EDITOR_ROOT).join("schemas/project.schema.json");
         let schema_path = project.join(&relative);
         let mut prior_schema = fs::read(&schema_path).expect("question schema reads");
         prior_schema.extend_from_slice(b"\n");
@@ -1975,7 +1924,7 @@ mod tests {
         let aged = prior_manifest
             .schemas
             .iter_mut()
-            .find(|schema| schema.kind == "question")
+            .find(|schema| schema.kind == "project")
             .expect("the catalog holds the question schema");
         aged.sha256 = schema_hash(&prior_schema);
         let prior_manifest_bytes = pretty_json(&prior_manifest).expect("manifest serializes");
@@ -2011,7 +1960,7 @@ mod tests {
 
         let schema_path = project
             .join(EDITOR_ROOT)
-            .join("schemas/question.schema.json");
+            .join("schemas/project.schema.json");
         let mut prior_schema = fs::read(&schema_path).expect("question schema reads");
         prior_schema.extend_from_slice(b"\n");
         fs::write(&schema_path, &prior_schema).expect("prior schema writes");
@@ -2023,7 +1972,7 @@ mod tests {
         let aged = prior_manifest
             .schemas
             .iter_mut()
-            .find(|schema| schema.kind == "question")
+            .find(|schema| schema.kind == "project")
             .expect("the catalog holds the question schema");
         aged.sha256 = schema_hash(&prior_schema);
         let prior_manifest_bytes = pretty_json(&prior_manifest).expect("manifest serializes");

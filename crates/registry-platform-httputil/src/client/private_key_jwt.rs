@@ -1287,7 +1287,7 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
-/// The error response of RFC 6749 section 5.2.
+/// The error response of RFC 6749 section 5.2 and RFC 8707 section 2.
 ///
 /// Only the code is read. `error_description` and `error_uri` are server-authored
 /// text about a failed authentication attempt, so they stay in the buffer this
@@ -1326,13 +1326,14 @@ fn assertion_refusal(error: ClientAssertionError) -> TokenError {
 
 /// Map a refused token request onto the code it reported.
 ///
-/// RFC 6749 section 5.2 puts a decision about the client at 400, and an
-/// authentication failure at 401. Any other status is the server reporting
-/// something about itself, which is not a statement this client can act on as a
-/// refusal. A body is read as a refusal only when it arrives in the media type
-/// the request asked for; an intermediary answering in some other media type,
-/// or none at all, never reached the authorization server's own refusal logic,
-/// so it is reported as a protocol failure instead.
+/// RFC 6749 section 5.2 and RFC 8707 section 2 put token request refusals at
+/// 400, while an RFC 6749 client-authentication failure may use 401. Any other
+/// status is the server reporting something about itself, which is not a
+/// statement this client can act on as a refusal. A body is read as a refusal
+/// only when it arrives in the media type the request asked for; an intermediary
+/// answering in some other media type, or none at all, never reached the
+/// authorization server's own refusal logic, so it is reported as a protocol
+/// failure instead.
 fn declined(status: u16, media_type: Option<&str>, body: &[u8]) -> TokenError {
     if !matches!(status, 400 | 401)
         || !media_type.is_some_and(|value| essence(value).eq_ignore_ascii_case(JSON_MEDIA_TYPE))
@@ -2568,11 +2569,11 @@ mod tests {
         );
     }
 
-    /// A declined request reports the registered code and nothing else. The
-    /// description is server-authored text about a failed authentication, so it
-    /// must not reach the caller's diagnostic.
+    /// A declined request reports a supported code and nothing else. Descriptions
+    /// and unknown code spellings are server-authored text, so they must not reach
+    /// the caller's diagnostic.
     #[tokio::test]
-    async fn a_declined_token_request_reports_only_the_registered_code() {
+    async fn a_declined_token_request_reports_only_the_supported_code() {
         let cases = [
             (
                 400,
@@ -2589,6 +2590,18 @@ mod tests {
                 JSON_MEDIA_TYPE,
                 TokenError::Refused {
                     code: OAuthErrorCode::InvalidClient,
+                },
+            ),
+            (
+                400,
+                json!({
+                    "error": "invalid_target",
+                    "error_description": "canary resource detail"
+                })
+                .to_string(),
+                JSON_MEDIA_TYPE,
+                TokenError::Refused {
+                    code: OAuthErrorCode::InvalidTarget,
                 },
             ),
             (

@@ -32,9 +32,12 @@ client's offline request preparation and verifier with governed trust pins.
   supporting service. Evidence has no runtime dependency on it. Reuse platform
   primitives where their contracts fit directly.
 
-The immutable governed bundle owns definitions, authority, scripts, source
-plans, schemas, codelists, and signing identity. The separate closed runtime
-file binds process-local resources and cannot override governed semantics.
+The immutable governed bundle owns definition behavior, grant ceilings, scripts,
+source plans, schemas, codelists and signing identity. Separately activated target
+authority may narrow the package ceilings and has its own revision, digest and
+durable history. The closed runtime file binds process-local resources and cannot
+override governed semantics. One process retains its resolved authority snapshot;
+live task-grant validity and release gates still apply.
 Rust owns authentication, authorization, selector minimization, credentials,
 fixed source execution, script limits, output validation, signing, and audit.
 Rhai performs bounded preparation, extraction, and derivation through the
@@ -87,7 +90,7 @@ changed normative contract and generated artifacts aligned; use the security
 matrix's enforcement points and negative tests for affected trust boundaries.
 The initial phase schedule is historical, not a maintenance gate.
 
-For adopter-facing changes, exercise the actual authoring/check/build/fixture
+For adopter-facing changes, exercise the actual authoring/check/package/fixture
 path or client-to-source journey. Reuse the existing fixed HTTP adapter and
 shared authoring diagnostics so a new institutional source does not require a
 product fork, a new service, or repeated configuration.

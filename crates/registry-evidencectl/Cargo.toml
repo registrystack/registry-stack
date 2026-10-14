@@ -69,5 +69,5 @@ name = "authoring-schema"
 required-features = ["schema"]
 
 [dev-dependencies]
-registry-evidence-authoring = { workspace = true, features = ["testing"] }
+registry-evidence-authoring.workspace = true
 tower.workspace = true

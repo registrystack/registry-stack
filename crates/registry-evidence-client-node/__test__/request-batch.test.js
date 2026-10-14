@@ -172,6 +172,7 @@ test('a live two-item request batch has the exact wire shape and verifies in ord
     assert.equal(stub.requests[0].headers.accept, BATCH_MEDIA_TYPE);
     assert.deepEqual(JSON.parse(stub.requests[0].body.toString('utf8')), {
       requirement: spec.requirement,
+      expectedConfigurationRevision: spec.configurationRevision,
       purpose: spec.purpose,
       items: [
         {

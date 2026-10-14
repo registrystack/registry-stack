@@ -11,6 +11,7 @@ entry there.
 from __future__ import annotations
 
 import pathlib
+import json
 import sys
 import unittest
 
@@ -49,6 +50,10 @@ class OneSendGuardTest(unittest.TestCase):
 
         client.send(prepared)
         self.assertEqual(len(self.server.requests), 1)
+        self.assertEqual(
+            json.loads(self.server.requests[0].body)["expectedConfigurationRevision"],
+            fixtures.request_spec()["configuration_revision"],
+        )
 
         with self.assertRaises(revc.ConfigurationError) as raised:
             client.send(prepared)

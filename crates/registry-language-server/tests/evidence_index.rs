@@ -1,1263 +1,210 @@
 // SPDX-License-Identifier: Apache-2.0
-//! One test per edge an Evidence authoring project draws between two documents.
-//!
-//! Each edge is checked three ways, because an editor that gets any one of them wrong is worse than
-//! one that offers nothing: the reference goes to the definition, the definition lists the
-//! reference, and a name with nothing behind it is reported.
-//!
-//! Every reported edge is also paired with the sentence `registry-evidencectl` refuses the same
-//! project with, cited beside the test. The editor is allowed to be earlier than the compiler and is
-//! not allowed to be stricter, so a rule with no refusal behind it does not ship as a diagnostic.
+#[path = "support/normalized.rs"]
+mod normalized;
+use normalized::*;
 
-mod support;
-
-use std::path::PathBuf;
-
-use registry_evidence_authoring::{
-    formats::check_question, layout::MAX_QUESTION_BYTES, testing::ProjectFile,
-};
 use registry_language_server::{EvidenceKind, SymbolKind};
-use support::{
-    adult_status_project, file, question_with_plural_subjects, replacing, without, without_cursors,
-    EvidenceProject, ACCESS_POLICY, ACCESS_POLICY_PATH, DERIVATION_PATH, FIXTURE_PATH, QUESTION,
-    QUESTION_PATH, SCHEMA, SCHEMA_JSON, SELECTOR_PATH, SOURCE, SOURCE_PATH,
-};
-
-/// The worked project the compiler accepts is a project the editor reports nothing about. This is
-/// the guard the rest of the file leans on: every test below breaks exactly one thing, so a
-/// diagnostic that appears there is the one the test broke.
 #[test]
-fn the_worked_project_reports_nothing() {
-    let project = EvidenceProject::new(&adult_status_project());
-    let index = project.index();
-
+fn normalized_project_is_accepted_by_the_shared_reader_and_editor() {
+    registry_evidence_authoring::project::read_project(PROJECT, SOURCE.as_bytes()).unwrap();
+    let p = Project::new(SOURCE);
     assert!(
-        index.diagnostics().is_empty(),
-        "the referenced form the compiler accepts reports nothing: {:?}",
-        index.diagnostics()
+        p.index().diagnostics().is_empty(),
+        "{:?}",
+        p.index().diagnostics()
     );
 }
-
-/// Every test in this file reads "the compiler accepts this project" off the shared fixture, so the
-/// part of that claim the authoring library can settle is settled here rather than asserted in
-/// prose. `registry-evidencectl` reads and judges a question with `check_question`, so a fixture
-/// question that drifts out of the authoring form fails here instead of
-/// quietly turning every test below into a test about a document the compiler refuses.
-///
-/// The source, selector, and access policy documents are paired by citation instead: the rules that
-/// judge them live in the compiler, and an editor must not depend on adopter tooling to be tested.
 #[test]
-fn the_shared_fixture_questions_are_ones_the_authoring_form_accepts() {
-    for (form, document) in [
-        ("subject", without_cursors(QUESTION)),
-        (
-            "subjects",
-            without_cursors(&question_with_plural_subjects()),
-        ),
-        (
-            "structured answer",
-            without_cursors(&structured_answer_question()),
-        ),
-    ] {
-        if let Err(report) = check_question(QUESTION_PATH, document.as_bytes()) {
-            panic!("the {form} form is a question the form accepts: {report:?}");
-        }
-    }
-}
-
-/// Edge 1: a question document defines the question its `id` names, and the name has to be the file
-/// stem. Paired with `crates/registry-evidencectl/src/authoring.rs`, which refuses a question whose
-/// `id` does not match its file name.
-#[test]
-fn a_question_defines_the_identifier_it_writes() {
-    let project = EvidenceProject::new(&adult_status_project());
-    let index = project.index();
-    let identifier = project.cursor(QUESTION_PATH, "id");
-
-    let symbol = index
-        .document_symbols(&project.path(QUESTION_PATH))
-        .into_iter()
-        .find(|symbol| symbol.kind == SymbolKind::Evidence(EvidenceKind::Question))
-        .expect("the question document defines a question");
-    assert_eq!(symbol.name, "adult-status");
-    assert_eq!(symbol.location.range.start, identifier);
-
-    // The access policy names the question, so the definition knows one use of itself.
-    let uses = index.references_at(&project.path(QUESTION_PATH), identifier, false);
+fn named_sources_navigate_in_both_directions() {
+    let p = Project::new(SOURCE);
+    let index = p.index();
+    let at = p.at(PROJECT, "person:\n");
+    let reference = after(SOURCE, "acquisition: {type: single, source: ");
     assert_eq!(
-        uses.iter()
-            .map(|use_| use_.path.clone())
-            .collect::<Vec<_>>(),
-        vec![project.path(ACCESS_POLICY_PATH)]
+        index.definitions_at(&p.path(PROJECT), reference)[0]
+            .range
+            .start,
+        at
     );
-}
-
-/// A name the author wrote as a block scalar is still the name the compiler reads, so the project
-/// is one it accepts and the editor has nothing to say about it. The claim is settled in the test:
-/// the document goes through the reader and the checks `registry-evidencectl` reads a question with
-/// before any diagnostic is asked for.
-#[test]
-fn names_written_as_block_scalars_are_read_as_the_compiler_reads_them() {
-    let document = without_cursors(QUESTION)
-        .replace("id: adult-status", "id: |-\n  adult-status")
-        .replace("  ref: people", "  ref: |-\n    people");
-    let question = check_question(QUESTION_PATH, document.as_bytes())
-        .expect("a question may write its names as block scalars");
-    assert_eq!(question.value.id.as_str(), "adult-status");
-
-    let project = EvidenceProject::new(&replacing(
-        &adult_status_project(),
-        QUESTION_PATH,
-        &document,
-    ));
-    let index = project.index();
-
     assert!(
-        index.diagnostics().is_empty(),
-        "the compiler accepts this question: {:?}",
-        index.diagnostics()
-    );
-}
-
-#[test]
-fn a_question_identifier_that_is_not_the_file_name_is_reported() {
-    let project = EvidenceProject::new(&replacing(
-        &adult_status_project(),
-        QUESTION_PATH,
-        &QUESTION.replace("id: <|id|>adult-status", "id: <|id|>adult_status"),
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(diagnostic.range.start, project.cursor(QUESTION_PATH, "id"));
-    assert_eq!(
-        diagnostic.message,
-        "Question 'adult_status' does not match its file name; \
-         rename the identifier or the file so both read 'adult-status'"
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.question.file-name")
-    );
-}
-
-/// Edge 2: `derivation:` names the Rhai file that computes the answer. Paired with
-/// `crates/registry-evidencectl/src/authoring.rs`, which reads the derivation at
-/// `derivations/<name>.rhai` and fails the build when it is not there.
-#[test]
-fn a_question_refers_to_its_derivation_file() {
-    let project = EvidenceProject::new(&adult_status_project());
-    let index = project.index();
-    let reference = project.cursor(QUESTION_PATH, "derivation");
-
-    assert_eq!(
-        definition_paths(&index, &project, QUESTION_PATH, "derivation"),
-        vec![project.path(DERIVATION_PATH)]
-    );
-    assert_eq!(
         index
-            .references_at(&project.path(QUESTION_PATH), reference, false)
-            .into_iter()
-            .map(|location| location.path)
-            .collect::<Vec<_>>(),
-        vec![project.path(QUESTION_PATH)]
+            .references_at(&p.path(PROJECT), at, false)
+            .iter()
+            .any(|x| x.range.start == reference)
     );
 }
-
 #[test]
-fn a_derivation_file_that_is_not_there_is_reported() {
-    let project = EvidenceProject::new(&without(&adult_status_project(), DERIVATION_PATH));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
+fn named_functions_and_their_assets_navigate() {
+    let p = Project::new(SOURCE);
+    let index = p.index();
+    let function = after(SOURCE, "derive: {function: ");
+    let declaration = after(SOURCE, "- {id: derive-status");
     assert_eq!(
-        diagnostic.range.start,
-        project.cursor(QUESTION_PATH, "derivation")
+        index.definitions_at(&p.path(PROJECT), function)[0]
+            .range
+            .start,
+        at(SOURCE, "derive-status, interface")
     );
+    let asset = p.at(PROJECT, DERIVE);
     assert_eq!(
-        diagnostic.message,
-        "Unknown derivation file reference 'derivations/adult-status.rhai'"
+        index.definitions_at(&p.path(PROJECT), asset)[0].path,
+        p.path(DERIVE)
     );
+    let _ = declaration;
+}
+#[test]
+fn selector_profiles_resolve_subjects_sources_and_bindings() {
+    let p = Project::new(SOURCE);
+    let index = p.index();
+    let declared = p.at(PROJECT, "person-by-id:");
     assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-derivation-file")
+        index.references_at(&p.path(PROJECT), declared, false).len(),
+        3
     );
 }
-
-/// Edge 3: `source.ref` names a source document by its file stem. Paired with
-/// `crates/registry-evidencectl/src/authoring.rs`: "the source this ref names has no file under sources/".
 #[test]
-fn a_question_refers_to_the_source_it_reads() {
-    let project = EvidenceProject::new(&adult_status_project());
-    let index = project.index();
-
+fn release_output_references_resolve_to_definition_owned_outputs() {
+    let p = Project::new(SOURCE);
+    let index = p.index();
+    let release = p.at(DERIVE, "active\"");
+    let declared = at(SOURCE, "active: {concept:");
     assert_eq!(
-        definition_paths(&index, &project, QUESTION_PATH, "source-ref"),
-        vec![project.path(SOURCE_PATH)]
+        index.definitions_at(&p.path(DERIVE), release)[0]
+            .range
+            .start,
+        declared
     );
-
-    // From the source, the question that reads it is one of its uses.
-    let source = project.path(SOURCE_PATH);
-    let definition = index
-        .document_symbols(&source)
-        .into_iter()
-        .find(|symbol| symbol.kind == SymbolKind::Evidence(EvidenceKind::Source))
-        .expect("the source document defines a source")
-        .location
-        .range
-        .start;
-    assert!(index
-        .references_at(&source, definition, false)
-        .into_iter()
-        .any(|location| location.path == project.path(QUESTION_PATH)));
-}
-
-#[test]
-fn a_source_that_is_not_there_is_reported() {
-    let project = EvidenceProject::new(&without(&adult_status_project(), SOURCE_PATH));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(QUESTION_PATH, "source-ref")
-    );
-    assert_eq!(diagnostic.message, "Unknown source reference 'people'");
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-source")
-    );
-}
-
-/// Edge 4: a structured answer's `schema` names a file under `schemas/`. Paired with
-/// `crates/registry-evidencectl/src/authoring.rs`, which resolves the answer schema by file stem
-/// against the schemas it read.
-#[test]
-fn an_answer_refers_to_the_schema_it_is_checked_against() {
-    let project = EvidenceProject::new(&structured_answer_project());
-    let index = project.index();
-
-    assert_eq!(
-        definition_paths(&index, &project, QUESTION_PATH, "answer-schema"),
-        vec![project.path("schemas/person-record.yaml")]
-    );
-    assert_eq!(
-        index
-            .references_at(
-                &project.path(QUESTION_PATH),
-                project.cursor(QUESTION_PATH, "answer-schema"),
-                false
-            )
-            .into_iter()
-            .map(|location| location.path)
-            .collect::<Vec<_>>(),
-        vec![project.path(QUESTION_PATH)]
-    );
-}
-
-#[test]
-fn an_answer_schema_that_is_not_there_is_reported() {
-    let project = EvidenceProject::new(&without(
-        &structured_answer_project(),
-        "schemas/person-record.yaml",
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(QUESTION_PATH, "answer-schema")
-    );
-    assert_eq!(
-        diagnostic.message,
-        "Unknown schema file reference 'schemas/person-record.yaml'"
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-schema-file")
-    );
-}
-
-/// Edge 5: `governance.fixtures` names a file under `fixtures/`. Paired with
-/// `crates/registry-evidencectl/src/authoring.rs`, which requires the fixture path to be
-/// `fixtures/<name>.yaml` and reads it.
-#[test]
-fn a_question_refers_to_the_fixtures_that_exercise_it() {
-    let project = EvidenceProject::new(&adult_status_project());
-    let index = project.index();
-
-    assert_eq!(
-        definition_paths(&index, &project, QUESTION_PATH, "fixtures"),
-        vec![project.path(FIXTURE_PATH)]
-    );
-    assert_eq!(
-        index
-            .references_at(
-                &project.path(QUESTION_PATH),
-                project.cursor(QUESTION_PATH, "fixtures"),
-                false
-            )
-            .into_iter()
-            .map(|location| location.path)
-            .collect::<Vec<_>>(),
-        vec![project.path(QUESTION_PATH)]
-    );
-}
-
-#[test]
-fn a_fixture_file_that_is_not_there_is_reported() {
-    let project = EvidenceProject::new(&without(&adult_status_project(), FIXTURE_PATH));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(QUESTION_PATH, "fixtures")
-    );
-    assert_eq!(
-        diagnostic.message,
-        "Unknown fixture file reference 'fixtures/adult-status.yaml'"
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-fixture-file")
-    );
-}
-
-/// Edge 6: a subject's `profile` names a selector profile by its file stem. Paired with
-/// `crates/registry-evidencectl/src/authoring.rs`: "referenced source question uses missing
-/// selectors/<profile>.yaml".
-#[test]
-fn a_subject_refers_to_the_selector_profile_that_picks_it() {
-    let project = EvidenceProject::new(&adult_status_project());
-    let index = project.index();
-
-    assert_eq!(
-        definition_paths(&index, &project, QUESTION_PATH, "subject-profile"),
-        vec![project.path(SELECTOR_PATH)]
-    );
-
-    // The question and the source both name the profile, so its definition knows two uses.
-    let selector = project.path(SELECTOR_PATH);
-    let definition = index
-        .document_symbols(&selector)
-        .into_iter()
-        .find(|symbol| symbol.kind == SymbolKind::Evidence(EvidenceKind::SelectorProfile))
-        .expect("the selector document defines a profile")
-        .location
-        .range
-        .start;
-    assert_eq!(
-        index
-            .references_at(&selector, definition, false)
-            .into_iter()
-            .map(|location| location.path)
-            .collect::<Vec<_>>(),
-        vec![project.path(QUESTION_PATH), project.path(SOURCE_PATH)]
-    );
-}
-
-#[test]
-fn a_selector_profile_that_is_not_there_is_reported() {
-    let project = EvidenceProject::new(&without(&adult_status_project(), SELECTOR_PATH));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(QUESTION_PATH, "subject-profile")
-    );
-    assert_eq!(
-        diagnostic.message,
-        "Unknown selector profile reference 'person-reference-v1'"
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-selector-profile")
-    );
-}
-
-#[test]
-fn alternative_subject_profiles_navigate_and_report_missing_profiles() {
-    let question = QUESTION.replace(
-        "  selector: person_id\n  profile: <|subject-profile|>person-reference-v1\n",
-        "  profiles: [<|subject-profile|>person-reference-v1, <|missing-profile|>missing-profile]\n",
-    );
-    let project = EvidenceProject::new(&replacing(
-        &adult_status_project(),
-        QUESTION_PATH,
-        &question,
-    ));
-    let index = project.index();
-    assert_eq!(
-        definition_paths(&index, &project, QUESTION_PATH, "subject-profile"),
-        vec![project.path(SELECTOR_PATH)]
-    );
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(QUESTION_PATH, "missing-profile")
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-selector-profile")
-    );
-}
-
-/// The same edge from the plural declaration. `question_subjects` in `registry-evidence-authoring`
-/// reads `subject:` and `subjects:` as one form, so a question written either way names a selector
-/// profile per subject and `crates/registry-evidencectl/src/authoring.rs` resolves every one of
-/// them against `selectors/<profile>.yaml`.
-#[test]
-fn every_subject_of_a_plural_declaration_refers_to_the_profile_that_picks_it() {
-    let project = EvidenceProject::new(&plural_subjects_project());
-    let index = project.index();
-
     assert!(
-        index.diagnostics().is_empty(),
-        "the plural form the compiler accepts reports nothing: {:?}",
-        index.diagnostics()
-    );
-    for cursor in ["subject-profile", "guardian-profile"] {
-        assert_eq!(
-            definition_paths(&index, &project, QUESTION_PATH, cursor),
-            vec![project.path(SELECTOR_PATH)],
-            "{cursor}"
-        );
-    }
-
-    // Both subjects and the source name the profile, so its definition knows all three uses.
-    let selector = project.path(SELECTOR_PATH);
-    let definition = index
-        .document_symbols(&selector)
-        .into_iter()
-        .find(|symbol| symbol.kind == SymbolKind::Evidence(EvidenceKind::SelectorProfile))
-        .expect("the selector document defines a profile")
-        .location
-        .range
-        .start;
-    assert_eq!(
         index
-            .references_at(&selector, definition, false)
-            .into_iter()
-            .map(|location| (location.path, location.range.start))
-            .collect::<Vec<_>>(),
-        vec![
-            (
-                project.path(QUESTION_PATH),
-                project.cursor(QUESTION_PATH, "subject-profile")
-            ),
-            (
-                project.path(QUESTION_PATH),
-                project.cursor(QUESTION_PATH, "guardian-profile")
-            ),
-            (
-                project.path(SOURCE_PATH),
-                project.cursor(SOURCE_PATH, "alternative-profile")
-            ),
-        ]
+            .references_at(&p.path(PROJECT), declared, false)
+            .iter()
+            .any(|x| x.path == p.path(DERIVE))
     );
 }
-
 #[test]
-fn a_plural_subject_naming_a_selector_profile_that_is_not_there_is_reported() {
-    let project = EvidenceProject::new(&replacing(
-        &plural_subjects_project(),
-        QUESTION_PATH,
-        &question_with_plural_subjects().replace(
-            "profile: <|guardian-profile|>person-reference-v1",
-            "profile: <|guardian-profile|>person-reference-v2",
-        ),
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(QUESTION_PATH, "guardian-profile")
-    );
-    assert_eq!(
-        diagnostic.message,
-        "Unknown selector profile reference 'person-reference-v2'"
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-selector-profile")
-    );
-}
-
-/// Edge 7: an answer defines the concept it answers, scoped to its own question, and
-/// `disclosure.allow` names those concepts. Paired with `registry_evidence_authoring::validate`'s
-/// `disclosure-allow` finding, which refuses an allowed name that no answer produces.
-#[test]
-fn an_answer_defines_the_concept_disclosure_allows() {
-    let project = EvidenceProject::new(&adult_status_project());
-    let index = project.index();
-    let concept = project.cursor(QUESTION_PATH, "concept");
-
-    assert_eq!(
-        index
-            .definitions_at(
-                &project.path(QUESTION_PATH),
-                project.cursor(QUESTION_PATH, "allow")
-            )
-            .into_iter()
-            .map(|location| location.range.start)
-            .collect::<Vec<_>>(),
-        vec![concept]
-    );
-    assert_eq!(
-        index
-            .references_at(&project.path(QUESTION_PATH), concept, false)
-            .into_iter()
-            .map(|location| location.range.start)
-            .collect::<Vec<_>>(),
-        vec![project.cursor(QUESTION_PATH, "allow")]
-    );
-}
-
-/// A disclosed name no answer produces is one mistake, and the authoring library already has a
-/// sentence for it. The index resolves `disclosure.allow` so navigation works, and stays quiet when
-/// the name resolves to nothing so the author reads one error rather than two.
-#[test]
-fn a_disclosed_concept_no_answer_produces_is_reported_once_by_the_authoring_library() {
-    let project = EvidenceProject::new(&replacing(
-        &adult_status_project(),
-        QUESTION_PATH,
-        &QUESTION.replace("allow: [<|allow|>is_adult]", "allow: [<|allow|>is_minor]"),
-    ));
-    let index = project.index();
-
-    let reported = index.diagnostics();
-    assert_eq!(reported.len(), 1, "{reported:?}");
-    assert_eq!(
-        reported[0].code.as_deref(),
-        Some("evidence.question.disclosure-allow")
-    );
-    assert_eq!(
-        reported[0].message,
-        "disclosure.allow must contain exactly the declared answer concepts"
-    );
-    assert_eq!(reported[0].path, project.path(QUESTION_PATH));
-}
-
-/// Two questions may answer the same concept, so a concept name belongs to the question that
-/// answers it. Neither question's disclosure may reach the other's answer.
-#[test]
-fn one_question_s_concept_does_not_answer_another_question_s_disclosure() {
-    const MINOR_PATH: &str = "questions/minor-status.yaml";
-    let mut files = adult_status_project();
-    files.push(file(
-        MINOR_PATH,
-        &QUESTION
-            .replace("id: <|id|>adult-status", "id: minor-status")
-            .replace("<|concept|>is_adult", "is_minor")
-            .replace(
-                "derivation: <|derivation|>derivations/adult-status.rhai",
-                "derivation: derivations/minor-status.rhai",
-            ),
-    ));
-    files.push(file("derivations/minor-status.rhai", support::DERIVATION));
-    let project = EvidenceProject::new(&files);
-    let index = project.index();
-
-    assert_eq!(
-        index.definitions_at(
-            &project.path(MINOR_PATH),
-            project.cursor(MINOR_PATH, "allow")
-        ),
-        vec![],
-        "the concept the other question answers is not this question's to disclose"
-    );
-    assert_eq!(
-        index
-            .definitions_at(
-                &project.path(QUESTION_PATH),
-                project.cursor(QUESTION_PATH, "allow")
-            )
-            .into_iter()
-            .map(|location| (location.path, location.range.start))
-            .collect::<Vec<_>>(),
-        vec![(
-            project.path(QUESTION_PATH),
-            project.cursor(QUESTION_PATH, "concept")
-        )],
-        "each question's disclosure reaches its own answer"
-    );
-
-    let reported = index.diagnostics();
-    assert_eq!(reported.len(), 1, "{reported:?}");
-    assert_eq!(
-        reported[0].code.as_deref(),
-        Some("evidence.question.disclosure-allow")
-    );
-    assert_eq!(reported[0].path, project.path(MINOR_PATH));
-}
-
-/// Edge 8: an access policy names the questions it admits. Paired with
-/// `crates/registry-evidencectl/src/authoring.rs`: "access policy names a question that does not
-/// exist in this project".
-#[test]
-fn an_access_policy_refers_to_the_questions_it_admits() {
-    let project = EvidenceProject::new(&adult_status_project());
-    let index = project.index();
-
-    assert_eq!(
-        definition_paths(&index, &project, ACCESS_POLICY_PATH, "policy-question"),
-        vec![project.path(QUESTION_PATH)]
-    );
-    assert_eq!(
-        index
-            .references_at(
-                &project.path(ACCESS_POLICY_PATH),
-                project.cursor(ACCESS_POLICY_PATH, "policy-question"),
-                false
-            )
-            .into_iter()
-            .map(|location| location.path)
-            .collect::<Vec<_>>(),
-        vec![project.path(ACCESS_POLICY_PATH)]
-    );
-}
-
-#[test]
-fn an_admitted_question_that_is_not_there_is_reported() {
-    let project = EvidenceProject::new(&without(&adult_status_project(), QUESTION_PATH));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, ACCESS_POLICY_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(ACCESS_POLICY_PATH, "policy-question")
-    );
-    assert_eq!(
-        diagnostic.message,
-        "Unknown question reference 'adult-status'"
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-question")
-    );
-}
-
-/// An access policy is named by its file too. Paired with
-/// `crates/registry-evidencectl/src/authoring.rs`, which refuses a policy whose `id` is not its file
-/// stem.
-#[test]
-fn an_access_policy_identifier_that_is_not_the_file_name_is_reported() {
-    let project = EvidenceProject::new(&replacing(
-        &adult_status_project(),
-        ACCESS_POLICY_PATH,
-        &ACCESS_POLICY.replace(
-            "id: <|policy-id|>adult-checks",
-            "id: <|policy-id|>adult-check",
-        ),
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, ACCESS_POLICY_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(ACCESS_POLICY_PATH, "policy-id")
-    );
-    assert_eq!(
-        diagnostic.message,
-        "Access policy 'adult-check' does not match its file name; \
-         rename the identifier or the file so both read 'adult-checks'"
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.access-policy.file-name")
-    );
-}
-
-/// Edge 9: a source's selector inputs offer alternatives, each naming a selector profile. Paired
-/// with `crates/registry-evidencectl/src/authoring.rs`, which resolves the alternative a question
-/// selects against `selectors/<profile>.yaml`.
-#[test]
-fn a_source_selector_input_refers_to_the_profiles_it_offers() {
-    let project = EvidenceProject::new(&adult_status_project());
-    let index = project.index();
-
-    assert_eq!(
-        definition_paths(&index, &project, SOURCE_PATH, "alternative-profile"),
-        vec![project.path(SELECTOR_PATH)]
-    );
-}
-
-#[test]
-fn a_source_selector_input_offering_a_profile_that_is_not_there_is_reported() {
-    let project = EvidenceProject::new(&replacing(
-        &adult_status_project(),
-        SOURCE_PATH,
-        &SOURCE.replace(
-            "profile: <|alternative-profile|>person-reference-v1",
-            "profile: <|alternative-profile|>person-reference-v2",
-        ),
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, SOURCE_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(SOURCE_PATH, "alternative-profile")
-    );
-    assert_eq!(
-        diagnostic.message,
-        "Unknown selector profile reference 'person-reference-v2'"
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-selector-profile")
-    );
-}
-
-/// Edge 10: a source names the schemas its parameters, response, and facts are checked against.
-/// Paired with `crates/registry-evidencectl/src/authoring.rs`, which reads each of the source's own
-/// artifact pointers and fails the build when one is missing.
-#[test]
-fn a_source_refers_to_the_schemas_it_is_checked_against() {
-    let project = EvidenceProject::new(&adult_status_project());
-    let index = project.index();
-
-    for (cursor, schema) in [
-        ("parameters-schema", "schemas/people-parameters.schema.yaml"),
-        ("response-schema", "schemas/people-response.schema.yaml"),
-        ("fact-schema", "schemas/people-facts.schema.yaml"),
-    ] {
-        assert_eq!(
-            definition_paths(&index, &project, SOURCE_PATH, cursor),
-            vec![project.path(schema)],
-            "{cursor}"
-        );
-        assert_eq!(
-            index
-                .references_at(
-                    &project.path(SOURCE_PATH),
-                    project.cursor(SOURCE_PATH, cursor),
-                    false
-                )
-                .into_iter()
-                .map(|location| location.path)
-                .collect::<Vec<_>>(),
-            vec![project.path(SOURCE_PATH)],
-            "{cursor}"
-        );
-    }
-}
-
-#[test]
-fn a_source_schema_that_is_not_there_is_reported() {
-    let project = EvidenceProject::new(&without(
-        &adult_status_project(),
-        "schemas/people-facts.schema.yaml",
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, SOURCE_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(SOURCE_PATH, "fact-schema")
-    );
-    assert_eq!(
-        diagnostic.message,
-        "Unknown schema file reference 'schemas/people-facts.schema.yaml'"
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-schema-file")
-    );
-}
-
-/// A source's own artifacts are read by where they sit, not by what they are called.
-/// `validate_bundle_relative_artifact` in `crates/registry-evidencectl/src/authoring.rs` accepts
-/// `adapters/<file>` or `schemas/<file>` for every one of them and imposes no extension, because
-/// the file is copied into the bundle byte for byte rather than parsed. The editor resolves them by
-/// that rule, or it draws an error over a project the build accepts.
-#[test]
-fn a_source_artifact_resolves_from_either_directory_the_compiler_reads() {
-    let project = EvidenceProject::new(&relocated_source_artifacts_project());
-    let index = project.index();
-
-    assert!(
-        index.diagnostics().is_empty(),
-        "the compiler reads both spellings: {:?}",
-        index.diagnostics()
-    );
-    for (cursor, artifact) in [
-        ("parameters-schema", "adapters/people-parameters.yaml"),
-        ("response-schema", "schemas/people-response.json"),
-    ] {
-        assert_eq!(
-            definition_paths(&index, &project, SOURCE_PATH, cursor),
-            vec![project.path(artifact)],
-            "{cursor}"
-        );
-    }
-}
-
-/// The same rule down to the leading dot, which is the one place the editor's own layout rule and
-/// the compiler's disagree.
-///
-/// The loader refuses a dot-prefixed name because a project keeps generated tooling state under one,
-/// and the editor must not read a file an author never wrote. That is a rule about reading, and this
-/// pointer reads nothing: `validate_bundle_relative_artifact` asks only for `adapters/<file>` or
-/// `schemas/<file>`, says nothing about how the file is named, and the bundle writer copies whatever
-/// sits there. Applying the loader's rule to the pointer would put `Unknown schema file reference`
-/// over a project the build accepts, so the pointer is resolved by the compiler's rule and the
-/// containment walk stays the thing that decides which files the server may point at.
-#[test]
-fn a_dot_named_source_artifact_resolves_because_the_compiler_copies_it() {
-    let files = replacing(
-        &adult_status_project(),
-        SOURCE_PATH,
-        &SOURCE.replace(
-            "factSchema: <|fact-schema|>schemas/people-facts.schema.yaml",
-            "factSchema: <|fact-schema|>adapters/.people-facts.json",
-        ),
-    );
-    let project = EvidenceProject::new(&replacing(
-        &files,
-        "adapters/.people-facts.json",
-        SCHEMA_JSON,
-    ));
-    let index = project.index();
-
-    assert!(
-        index.diagnostics().is_empty(),
-        "the build copies the file the pointer names: {:?}",
-        index.diagnostics()
-    );
-    assert_eq!(
-        definition_paths(&index, &project, SOURCE_PATH, "fact-schema"),
-        vec![project.path("adapters/.people-facts.json")]
-    );
-}
-
-/// The same rule from the other side: a two-component path is not enough, the first component has
-/// to be one of the two directories the compiler reads a source's artifacts from. A file really
-/// sits at this one and the build still refuses it.
-#[test]
-fn a_source_artifact_outside_those_directories_is_reported() {
-    let files = replacing(
-        &adult_status_project(),
-        SOURCE_PATH,
-        &SOURCE.replace(
-            "factSchema: <|fact-schema|>schemas/people-facts.schema.yaml",
-            "factSchema: <|fact-schema|>fixtures/people-facts.schema.yaml",
-        ),
-    );
-    let project = EvidenceProject::new(&replacing(
-        &files,
-        "fixtures/people-facts.schema.yaml",
-        SCHEMA,
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, SOURCE_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(SOURCE_PATH, "fact-schema")
-    );
-    assert_eq!(
-        diagnostic.message,
-        "Unknown schema file reference 'fixtures/people-facts.schema.yaml'"
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-schema-file")
-    );
-}
-
-/// A source no question reads is never compiled: `read_named_objects` in
-/// `crates/registry-evidencectl/src/authoring.rs` loads every `sources/<name>.yaml` and checks only
-/// that it is an object under an identifier, and `compile_plan` walks the questions alone. So a
-/// half-written source beside a project that builds is a document the build says nothing about, and
-/// the editor says nothing about it either. Its names still resolve for navigation, because an
-/// author reading a source they have not wired up yet is the reason the index exists.
-#[test]
-fn a_source_no_question_reads_reports_nothing_and_still_navigates() {
-    let project = EvidenceProject::new(&unread_second_source_project());
-    let index = project.index();
-
-    assert!(
-        index.diagnostics().is_empty(),
-        "the build ignores an unread source: {:?}",
-        index.diagnostics()
-    );
-    assert_eq!(
-        definition_paths(&index, &project, SECOND_SOURCE_PATH, "response-schema"),
-        vec![project.path("schemas/people-response.schema.yaml")]
-    );
-    assert_eq!(
-        definition_paths(&index, &project, SECOND_SOURCE_PATH, "fact-schema"),
-        Vec::<PathBuf>::new()
-    );
-}
-
-/// The same document, once a question names it. `compile_referenced_question` pulls the source out
-/// of `sources[source_ref]` and `referenced_source_artifacts` then reads all five of its pointers,
-/// so the missing schema becomes a hard error and the editor draws it.
-#[test]
-fn the_same_source_is_reported_once_a_question_reads_it() {
-    let project = EvidenceProject::new(&replacing(
-        &unread_second_source_project(),
-        QUESTION_PATH,
-        &QUESTION.replace(
-            "ref: <|source-ref|>people",
-            "ref: <|source-ref|>registry-lookup",
-        ),
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, SECOND_SOURCE_PATH);
-    assert_eq!(index.diagnostics().len(), 1, "{:?}", index.diagnostics());
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(SECOND_SOURCE_PATH, "fact-schema")
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-schema-file")
-    );
-}
-
-/// A source is opened for a question the form accepts, not for any document that spells its name.
-///
-/// `read_inputs` in `crates/registry-evidencectl/src/authoring.rs` reads the questions through
-/// `read_questions`, which gathers what `check_question` reports for a refused question and leaves
-/// that question out of the ones it returns, and the build stops at the gathered errors before a
-/// single source is compiled, so a question whose shape the form refuses never reaches
-/// `compile_referenced_question` and the source it names is never read for its artifacts. The
-/// editor answers that one malformed document with the one sentence that holds its departure, and
-/// says nothing in a file the author has not touched.
-#[test]
-fn a_source_named_only_by_a_question_the_form_refuses_is_left_alone() {
-    let missing_schema = without(&adult_status_project(), "schemas/people-facts.schema.yaml");
-    let refused = EvidenceProject::new(&replacing(
-        &missing_schema,
-        QUESTION_PATH,
-        &QUESTION.replace("    type: boolean\n", "    type: mystery\n"),
-    ));
-    let quiet = refused.index();
-
-    assert_eq!(
-        only_diagnostic_in(&quiet, &refused, QUESTION_PATH)
-            .code
-            .as_deref(),
-        Some("config.unknown-variant")
-    );
-    assert_eq!(quiet.diagnostics().len(), 1, "{:?}", quiet.diagnostics());
-
-    // The source is still the source its file names, and the names it spells still resolve, so an
-    // author reading either document navigates while the shape is what they fix.
-    assert_eq!(
-        definition_paths(&quiet, &refused, QUESTION_PATH, "source-ref"),
-        vec![refused.path(SOURCE_PATH)]
-    );
-    assert_eq!(
-        definition_paths(&quiet, &refused, SOURCE_PATH, "response-schema"),
-        vec![refused.path("schemas/people-response.schema.yaml")]
-    );
-
-    // The reading is the gate, not the check. The same project with the question it started as
-    // reports the schema that is missing, which is `a_source_schema_that_is_not_there_is_reported`.
-    let accepted = EvidenceProject::new(&missing_schema);
-    let reported = accepted.index();
-    assert_eq!(
-        only_diagnostic_in(&reported, &accepted, SOURCE_PATH)
-            .code
-            .as_deref(),
-        Some("evidence.project.unknown-schema-file")
-    );
-}
-
-/// The gate is one question's own reading, not the state of the project as a whole.
-///
-/// `compile_plan` walks the questions and pulls each one's source out of the set it loaded, so a
-/// source a question the form accepts reads is a source the build opens. A second question that is
-/// malformed is a sentence about that second document, and silencing the source it also names would
-/// hide a schema the build really refuses this project for.
-#[test]
-fn a_source_an_accepted_question_reads_keeps_its_checks_beside_a_refused_one() {
-    let project = EvidenceProject::new(&second_question_naming_one_source_project());
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, SOURCE_PATH);
-    assert_eq!(
-        diagnostic.range.start,
-        project.cursor(SOURCE_PATH, "fact-schema")
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-schema-file")
-    );
-    assert_eq!(
-        only_diagnostic_in(&index, &project, SECOND_QUESTION_PATH)
-            .code
-            .as_deref(),
-        Some("config.unknown-variant")
-    );
-    assert_eq!(index.diagnostics().len(), 2, "{:?}", index.diagnostics());
-}
-
-/// `request.prepareScript` and `extractScript` are edges the compiler enforces:
-/// `referenced_source_artifacts` reads both, and the bundle writer copies what they name. The index
-/// walks neither, because the reference vocabulary has no kind for an authored script and naming
-/// one of them a schema or a derivation would put a wrong word in front of the author. This pins
-/// the silence so it stays a gap with a test on it rather than an omission nobody can see.
-#[test]
-fn a_source_script_is_left_to_the_compiler() {
-    let project = EvidenceProject::new(&without(
-        &adult_status_project(),
-        "adapters/people-prepare.rhai",
-    ));
-    let index = project.index();
-
-    assert!(
-        index.diagnostics().is_empty(),
-        "the missing script is the compiler's to report: {:?}",
-        index.diagnostics()
-    );
-    for cursor in ["prepare-script", "extract-script"] {
-        assert_eq!(
-            definition_paths(&index, &project, SOURCE_PATH, cursor),
-            Vec::<PathBuf>::new(),
-            "{cursor}"
-        );
-    }
-}
-
-/// A file reference is resolved by where it points, not by what happens to be readable there. A
-/// path outside the authoring form's layout resolves to nothing even when a file sits at it.
-#[test]
-fn a_file_reference_outside_the_project_layout_is_reported() {
-    let project = EvidenceProject::new(&replacing(
-        &adult_status_project(),
-        QUESTION_PATH,
-        &QUESTION.replace(
-            "derivation: <|derivation|>derivations/adult-status.rhai",
-            "derivation: <|derivation|>../derivations/adult-status.rhai",
-        ),
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.unknown-derivation-file")
-    );
-    assert_eq!(
-        diagnostic.message,
-        "Unknown derivation file reference '../derivations/adult-status.rhai'"
-    );
-}
-
-/// A question that stops parsing still defines what it has written, so the rest of the project
-/// keeps resolving against it while the author types.
-///
-/// The half-written document reports where it stops and nothing else, with the code and sentence the
-/// shared reader gives `evidencectl check`: every other sentence about it is read from text the
-/// author has not finished. The access policy that admits it is a different document, and it still
-/// finds the question it names.
-#[test]
-fn a_question_that_stops_parsing_still_answers_the_access_policy() {
-    let project = EvidenceProject::new(&replacing(
-        &adult_status_project(),
-        QUESTION_PATH,
-        &QUESTION.replace("purpose: fixture-eligibility", "purpose: [unclosed"),
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(diagnostic.code.as_deref(), Some("yaml.syntax"));
-    assert_eq!(index.diagnostics().len(), 1, "{:?}", index.diagnostics());
-    assert_eq!(
-        definition_paths(&index, &project, ACCESS_POLICY_PATH, "policy-question"),
-        vec![project.path(QUESTION_PATH)]
-    );
-}
-
-/// A question the loader could not read is still a question the project holds, and the documents
-/// that name it still find it.
-///
-/// A question past the byte ceiling the authoring form sets for one is dropped with a sentence of
-/// its own, and that sentence is the whole of what the author has to act on. Reporting every access
-/// policy that admits it as naming an unknown question would send them to documents that are
-/// correct, and in a project where the question is widely admitted the second sentence would
-/// outnumber the first. A question is named by its file, so the name is still there to resolve
-/// against once the text is gone.
-#[test]
-fn a_question_the_loader_could_not_read_still_answers_for_its_name() {
-    let project = EvidenceProject::new(&replacing(
-        &adult_status_project(),
-        QUESTION_PATH,
-        &question_past_its_ceiling(),
-    ));
-    let index = project.index();
-
-    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(
-        diagnostic.message,
-        format!("This question exceeds the {MAX_QUESTION_BYTES}-byte limit the editor indexes")
-    );
-    assert_eq!(
-        diagnostic.code.as_deref(),
-        Some("evidence.project.document-ceiling"),
-        "the sentence the author acts on names its rule, like every other sentence here"
-    );
-    assert_eq!(index.diagnostics().len(), 1, "{:?}", index.diagnostics());
-    assert_eq!(
-        definition_paths(&index, &project, ACCESS_POLICY_PATH, "policy-question"),
-        vec![project.path(QUESTION_PATH)]
-    );
-}
-
-/// A question exactly at its ceiling is one the reader accepts, so the editor indexes it and has
-/// nothing to say about it: the bound refuses only what is past it.
-#[test]
-fn a_question_exactly_at_its_ceiling_is_read_like_any_other() {
-    let mut written = without_cursors(QUESTION);
-    written.push('#');
-    let padding = MAX_QUESTION_BYTES as usize - written.len() - 1;
-    written.push_str(&" ".repeat(padding));
-    written.push('\n');
-    assert_eq!(written.len() as u64, MAX_QUESTION_BYTES);
-    check_question(QUESTION_PATH, written.as_bytes()).expect("the reader accepts the bound itself");
-
-    let project =
-        EvidenceProject::new(&replacing(&adult_status_project(), QUESTION_PATH, &written));
-    let index = project.index();
-
+fn authority_grants_use_normalized_definitions_and_selectors() {
+    let p = Project::new(SOURCE);
+    let file = "targets/local/authority.yaml";
+    p.write(file, AUTHORITY);
+    let index = p.index();
     assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
-}
-
-/// The shared question grown past the ceiling the authoring form sets for a question, which is the
-/// shared reader's one-mebibyte bound.
-fn question_past_its_ceiling() -> String {
-    let mut written = QUESTION.to_owned();
-    written.push('#');
-    written.push_str(&" ".repeat(MAX_QUESTION_BYTES as usize));
-    written
-}
-
-/// The shared question with a structured answer, which is the only answer kind that names a schema.
-fn structured_answer_question() -> String {
-    QUESTION
-        .replace(
-            "    type: boolean\n",
-            "    type: reviewed-structured-value\n    \
-             schema: <|answer-schema|>schemas/person-record.yaml\n    \
-             maximumSerializedBytes: 4096\n",
-        )
-        .replace("<|derivation|>", "")
-}
-
-/// The same project with that question and the schema it names.
-fn structured_answer_project() -> Vec<ProjectFile> {
-    let files = replacing(
-        &adult_status_project(),
-        QUESTION_PATH,
-        &structured_answer_question(),
-    );
-    replacing(&files, "schemas/person-record.yaml", SCHEMA)
-}
-
-/// The same project with the source's parameters schema moved under `adapters/` and its response
-/// schema written as JSON, both spellings the compiler reads.
-fn relocated_source_artifacts_project() -> Vec<ProjectFile> {
-    let files = replacing(
-        &adult_status_project(),
-        SOURCE_PATH,
-        &SOURCE
-            .replace(
-                "adapterParametersSchema: <|parameters-schema|>schemas/people-parameters.schema.yaml",
-                "adapterParametersSchema: <|parameters-schema|>adapters/people-parameters.yaml",
-            )
-            .replace(
-                "responseSchema: <|response-schema|>schemas/people-response.schema.yaml",
-                "responseSchema: <|response-schema|>schemas/people-response.json",
-            ),
-    );
-    let files = replacing(&files, "adapters/people-parameters.yaml", SCHEMA);
-    replacing(&files, "schemas/people-response.json", SCHEMA_JSON)
-}
-
-const SECOND_SOURCE_PATH: &str = "sources/registry-lookup.yaml";
-
-/// The same project with a second source beside the one the question reads: the same document but
-/// for the schema its facts are checked against, which the project does not hold.
-fn unread_second_source_project() -> Vec<ProjectFile> {
-    replacing(
-        &adult_status_project(),
-        SECOND_SOURCE_PATH,
-        &SOURCE.replace(
-            "factSchema: <|fact-schema|>schemas/people-facts.schema.yaml",
-            "factSchema: <|fact-schema|>schemas/registry-facts.schema.yaml",
-        ),
-    )
-}
-
-const SECOND_QUESTION_PATH: &str = "questions/registry-status.yaml";
-
-/// The same project short of the schema the source's facts are checked against, with a second
-/// question beside the one that reads that source: the same document under its own name, with an
-/// answer type the deserializer refuses, naming the same source.
-fn second_question_naming_one_source_project() -> Vec<ProjectFile> {
-    let files = without(&adult_status_project(), "schemas/people-facts.schema.yaml");
-    replacing(
-        &files,
-        SECOND_QUESTION_PATH,
-        &QUESTION
-            .replace("id: <|id|>adult-status", "id: registry-status")
-            .replace("    type: boolean\n", "    type: mystery\n"),
-    )
-}
-
-/// The same project with the shared question's subject written in the plural form. The second
-/// subject is declared for the derivation rather than offered by a selector input, which is the
-/// shape `crates/registry-evidencectl/src/authoring.rs` requires of a subject the source does not
-/// carry.
-fn plural_subjects_project() -> Vec<ProjectFile> {
-    replacing(
-        &adult_status_project(),
-        QUESTION_PATH,
-        &question_with_plural_subjects(),
-    )
-}
-
-/// The only diagnostic one document reports, with the whole project's diagnostics in the failure
-/// message when there is more than one.
-fn only_diagnostic_in<'index>(
-    index: &'index registry_language_server::ProjectIndex,
-    project: &EvidenceProject,
-    relative: &str,
-) -> &'index registry_language_server::IndexedDiagnostic {
-    let path = project.path(relative);
-    let reported = index
-        .diagnostics()
-        .iter()
-        .filter(|diagnostic| diagnostic.path == path)
-        .collect::<Vec<_>>();
     assert_eq!(
-        reported.len(),
-        1,
-        "{relative} reports one problem: {:?}",
-        index.diagnostics()
+        index.definitions_at(&p.path(file), p.at(file, "active-status"))[0]
+            .range
+            .start,
+        p.at(PROJECT, "active-status:")
     );
-    reported[0]
+    assert_eq!(
+        index.definitions_at(&p.path(file), p.at(file, "person-by-id"))[0]
+            .range
+            .start,
+        p.at(PROJECT, "person-by-id:")
+    );
+}
+#[test]
+fn output_schema_and_fixture_assets_navigate() {
+    let source=SOURCE.replace("type: boolean}\n    validitySeconds", "type: boolean, schema: schemas/output.json}\n    fixtures: fixtures/cases.yaml\n    validitySeconds");
+    let p = Project::new(&source);
+    p.write("fixtures/cases.yaml", "cases: []\n");
+    p.write("schemas/output.json", "{}\n");
+    let index = p.index();
+    assert_eq!(
+        index.definitions_at(&p.path(PROJECT), p.at(PROJECT, "schemas/output.json"))[0].path,
+        p.path("schemas/output.json")
+    );
+    assert_eq!(
+        index.definitions_at(&p.path(PROJECT), p.at(PROJECT, "fixtures/cases.yaml"))[0].path,
+        p.path("fixtures/cases.yaml")
+    );
+}
+#[test]
+fn assertion_definitions_and_outputs_are_distinct_symbol_kinds() {
+    let p = Project::new(SOURCE);
+    let index = p.index();
+    assert!(
+        index
+            .symbols()
+            .iter()
+            .any(|x| x.kind == SymbolKind::Evidence(EvidenceKind::AssertionDefinition))
+    );
+    assert!(
+        index
+            .symbols()
+            .iter()
+            .any(|x| x.kind == SymbolKind::Evidence(EvidenceKind::Output)
+                && x.container_name.as_deref() == Some("active-status"))
+    );
+}
+#[test]
+fn canonical_standalone_project_uses_the_same_editor_model() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/evidence/examples/standalone");
+    let index = registry_language_server::ProjectIndex::load_evidence(&root).unwrap();
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    assert!(
+        index
+            .workspace_symbols("adult-status")
+            .iter()
+            .any(|x| x.kind == SymbolKind::Evidence(EvidenceKind::AssertionDefinition))
+    );
+}
+#[test]
+fn missing_function_schema_and_fixture_files_report_at_their_paths() {
+    let source=SOURCE.replace("type: boolean}\n    validitySeconds", "type: boolean, schema: schemas/missing.yaml}\n    fixtures: fixtures/missing.yaml\n    validitySeconds");
+    let p = Project::new(&source);
+    std::fs::remove_file(p.path(DERIVE)).unwrap();
+    let index = p.index();
+    for name in [DERIVE, "schemas/missing.yaml", "fixtures/missing.yaml"] {
+        assert!(
+            index
+                .diagnostics()
+                .iter()
+                .any(|x| x.path == p.path(PROJECT) && x.range.start == at(&source, name)),
+            "missing {name}: {:?}",
+            index.diagnostics()
+        );
+    }
+}
+#[test]
+fn symlink_and_hard_link_function_assets_never_navigate() {
+    let p = Project::new(SOURCE);
+    std::fs::remove_file(p.path(DERIVE)).unwrap();
+    p.write("private/function.rhai", "fn derive(a,b,c) {}\n");
+    std::fs::hard_link(p.path("private/function.rhai"), p.path(DERIVE)).unwrap();
+    assert!(
+        p.index()
+            .definitions_at(&p.path(PROJECT), at(SOURCE, DERIVE))
+            .is_empty()
+    );
+    #[cfg(unix)]
+    {
+        std::fs::remove_file(p.path(DERIVE)).unwrap();
+        std::os::unix::fs::symlink(p.path("private/function.rhai"), p.path(DERIVE)).unwrap();
+        assert!(
+            p.index()
+                .definitions_at(&p.path(PROJECT), at(SOURCE, DERIVE))
+                .is_empty()
+        );
+    }
 }
 
-/// Where the reference under a named cursor is defined.
-fn definition_paths(
-    index: &registry_language_server::ProjectIndex,
-    project: &EvidenceProject,
-    relative: &str,
-    cursor: &str,
-) -> Vec<PathBuf> {
-    index
-        .definitions_at(&project.path(relative), project.cursor(relative, cursor))
-        .into_iter()
-        .map(|location| location.path)
-        .collect()
+#[test]
+fn a_shared_named_derivation_resolves_each_calling_definition_output() {
+    let project = registry_evidence_authoring::project::read_project(PROJECT, SOURCE.as_bytes())
+        .unwrap()
+        .value;
+    let mut value = serde_json::to_value(project).unwrap();
+    let mut other = value["assertionDefinitions"]["active-status"].clone();
+    other["semantics"]["requirement"] = serde_json::json!("urn:example:requirement:other");
+    value["assertionDefinitions"]["other-status"] = other;
+    value["apiVersion"] =
+        serde_json::json!(registry_evidence_authoring::project::PROJECT_API_VERSION);
+    value["kind"] = serde_json::json!(registry_evidence_authoring::project::PROJECT_KIND);
+    let source = serde_norway::to_string(&value).unwrap();
+    let p = Project::new(&source);
+    let index = p.index();
+    let release = p.at(DERIVE, "active\"");
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    assert_eq!(index.definitions_at(&p.path(DERIVE), release).len(), 2);
+    assert_eq!(labels(&index, &p.path(DERIVE), release), vec!["active"]);
 }

@@ -17,8 +17,9 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use registry_evidence_authoring::formats::{SOURCE_API_VERSION, SOURCE_KIND};
-use serde_json::Value;
+use registry_evidence_authoring::project::{self, Function, FunctionInterface, Source};
+use registry_platform_yaml::LocalId;
+use serde_json::{json, Value};
 
 use super::types::{
     BoundKind, BoundNeed, BoundValues, DraftArtifacts, DraftFile, NarrowOutcome, OperationKey,
@@ -157,24 +158,12 @@ pub fn draft(inputs: &EmitInputs) -> Result<DraftArtifacts> {
 
     let files = vec![
         DraftFile {
-            bundle_relative_path: format!("adapters/{}-prepare.rhai", inputs.source_id),
+            bundle_relative_path: format!("functions/{}-prepare.rhai", inputs.source_id),
             contents: render_prepare_script(),
         },
         DraftFile {
-            bundle_relative_path: format!("schemas/{}-parameters.schema.yaml", inputs.source_id),
-            contents: render_parameters_schema(),
-        },
-        DraftFile {
-            bundle_relative_path: format!("schemas/{}-response.schema.yaml", inputs.source_id),
-            contents: render_response_schema(inputs),
-        },
-        DraftFile {
-            bundle_relative_path: format!("adapters/{}-extract.rhai", inputs.source_id),
+            bundle_relative_path: format!("functions/{}-extract.rhai", inputs.source_id),
             contents: render_extract_script(inputs, &get_paths),
-        },
-        DraftFile {
-            bundle_relative_path: format!("schemas/{}-facts.schema.yaml", inputs.source_id),
-            contents: render_facts_schema(&inputs.source_id),
         },
     ];
 
@@ -194,19 +183,6 @@ fn render_prepare_script() -> String {
     // TODO(evidencectl): bind only reviewed selector fields and fixed parameters.
     #{query: [], body: ()}
 }
-"#
-    .to_owned()
-}
-
-fn render_parameters_schema() -> String {
-    r#"# TODO(evidencectl): replace with the closed schema for this transport:
-# http-json source's own reviewed adapter parameters, if it needs any. The
-# closed Version 1 schema subset allows an empty adapter-parameters object,
-# so leave this as is when the fixed request needs no per-call selectors.
-type: object
-additionalProperties: false
-required: []
-properties: {}
 "#
     .to_owned()
 }
@@ -238,16 +214,15 @@ fn request_path(inputs: &EmitInputs) -> String {
     format!("{prefix}{}", inputs.operation.path)
 }
 
-/// Write every draft file under `<project>/bundle/`, creating parent
+/// Write every named Function asset under `<project>/`, creating parent
 /// directories as needed. Refuses to overwrite any existing file: if any
 /// target already exists, nothing is written and the error lists every
 /// collision so the caller can resolve them all at once.
 #[allow(dead_code)]
 pub fn write_into_project(project: &Path, files: &[DraftFile]) -> Result<Vec<PathBuf>> {
-    let bundle_directory = project.join("bundle");
     let targets: Vec<PathBuf> = files
         .iter()
-        .map(|file| bundle_directory.join(&file.bundle_relative_path))
+        .map(|file| project.join(&file.bundle_relative_path))
         .collect();
 
     let collisions: Vec<String> = targets
@@ -282,27 +257,71 @@ pub fn write_into_authoring_project(
     project: &Path,
     artifacts: &DraftArtifacts,
 ) -> Result<Vec<PathBuf>> {
-    for directory in ["sources", "adapters", "schemas"] {
-        let path = project.join(directory);
-        let metadata = fs::symlink_metadata(&path)
-            .with_context(|| format!("inspecting authoring directory {}", path.display()))?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            bail!(
-                "authoring directory {} must be a plain directory created by `evidencectl init`",
-                path.display()
-            );
-        }
+    let functions = project.join("functions");
+    let metadata = fs::symlink_metadata(&functions)
+        .with_context(|| format!("inspecting authoring directory {}", functions.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "authoring directory {} must be a plain directory created by `evidencectl init`",
+            functions.display()
+        );
     }
-    let source_path = project
-        .join("sources")
-        .join(format!("{}.yaml", artifacts.source_id));
-    let mut targets = vec![source_path];
-    targets.extend(
-        artifacts
-            .files
-            .iter()
-            .map(|file| project.join(&file.bundle_relative_path)),
-    );
+    let project_path = project.join(project::PROJECT_FILE);
+    let project_bytes =
+        fs::read(&project_path).with_context(|| format!("reading {}", project_path.display()))?;
+    let mut document = project::read_project(project::PROJECT_FILE, &project_bytes)?.value;
+    let source_id = LocalId::new(artifacts.source_id.clone())?;
+    if document.sources.contains_key(&source_id) {
+        bail!(
+            "EvidenceProject already defines Source `{}`",
+            artifacts.source_id
+        );
+    }
+    let source: Source = serde_json::from_str(&artifacts.authoring_source)
+        .context("decoding the generated normalized Source")?;
+    let prepare_id = LocalId::new(format!("{}-prepare", artifacts.source_id))?;
+    let extract_id = LocalId::new(format!("{}-extract", artifacts.source_id))?;
+    if document
+        .functions
+        .iter()
+        .any(|function| function.id == prepare_id || function.id == extract_id)
+    {
+        bail!(
+            "EvidenceProject already defines a generated Function for Source `{}`",
+            artifacts.source_id
+        );
+    }
+    document.functions.extend([
+        Function {
+            id: prepare_id,
+            label: None,
+            description: None,
+            interface: FunctionInterface::SourcePrepare,
+            source: format!("functions/{}-prepare.rhai", artifacts.source_id),
+        },
+        Function {
+            id: extract_id,
+            label: None,
+            description: None,
+            interface: FunctionInterface::SourceExtract,
+            source: format!("functions/{}-extract.rhai", artifacts.source_id),
+        },
+    ]);
+    document.sources.insert(source_id, source);
+    let mut value = serde_json::to_value(&document)?;
+    let object = value
+        .as_object_mut()
+        .expect("EvidenceProject serializes as an object");
+    object.insert("apiVersion".to_owned(), json!(project::PROJECT_API_VERSION));
+    object.insert("kind".to_owned(), json!(project::PROJECT_KIND));
+    let project_text = serde_norway::to_string(&value).context("encoding evidence.yaml")?;
+    project::read_project(project::PROJECT_FILE, project_text.as_bytes())
+        .context("validating the updated normalized EvidenceProject")?;
+    let targets = artifacts
+        .files
+        .iter()
+        .map(|file| project.join(&file.bundle_relative_path))
+        .collect::<Vec<_>>();
 
     let collisions = targets
         .iter()
@@ -315,11 +334,9 @@ pub fn write_into_authoring_project(
             collisions.join(", ")
         );
     }
-    let mut contents = vec![artifacts.authoring_source.as_bytes()];
-    contents.extend(artifacts.files.iter().map(|file| file.contents.as_bytes()));
     let mut written = Vec::new();
-    for (target, contents) in targets.iter().zip(contents) {
-        if let Err(error) = write_new_authoring_file(target, contents) {
+    for (target, file) in targets.iter().zip(&artifacts.files) {
+        if let Err(error) = write_new_authoring_file(target, file.contents.as_bytes()) {
             for path in &written {
                 let _ = fs::remove_file(path);
             }
@@ -327,7 +344,28 @@ pub fn write_into_authoring_project(
         }
         written.push(target.clone());
     }
-    Ok(targets)
+    let permissions = fs::metadata(&project_path)?.permissions();
+    let mut staged = tempfile::NamedTempFile::new_in(project)
+        .context("staging the updated normalized EvidenceProject")?;
+    use std::io::Write as _;
+    staged.as_file().set_permissions(permissions)?;
+    if let Err(error) = staged
+        .write_all(project_text.as_bytes())
+        .and_then(|_| staged.as_file().sync_all())
+    {
+        for path in &written {
+            let _ = fs::remove_file(path);
+        }
+        return Err(error).context("staging the updated normalized EvidenceProject");
+    }
+    if let Err(error) = staged.persist(&project_path) {
+        for path in &written {
+            let _ = fs::remove_file(path);
+        }
+        return Err(error).context("publishing the updated normalized EvidenceProject");
+    }
+    written.push(project_path);
+    Ok(written)
 }
 
 fn write_new_authoring_file(path: &Path, contents: &[u8]) -> Result<()> {
@@ -428,10 +466,6 @@ fn get_path_pointer(extended_pointer: &str) -> Result<String> {
     Ok(derived)
 }
 
-fn escape_pointer_segment(segment: &str) -> String {
-    segment.replace('~', "~0").replace('/', "~1")
-}
-
 /// How a derived bound is described wherever it is reported: in a schema
 /// comment, in the report, and in the auto-acceptance notes a flag-driven run
 /// prints. One phrasing keeps those three consistent.
@@ -451,9 +485,6 @@ pub(super) fn provenance_label(provenance: &Provenance) -> Option<&'static str> 
         Provenance::Operator => None,
     }
 }
-
-/// The comment written above a bound the operator chose themselves.
-const OPERATOR_CHOICE_COMMENT: &str = "# chosen at the prompt";
 
 /// The caution shown wherever a bound the tool guessed is announced.
 ///
@@ -502,57 +533,6 @@ pub fn attribute_operator_edits(
     }
 }
 
-/// Tracks which (pointer, kind) bound needs are still unresolved (get a TODO
-/// comment) versus resolved with known provenance (get a "derived from"
-/// comment), so the schema renderer can annotate each node as it recurses.
-struct SchemaAnnotations {
-    unresolved: BTreeSet<(String, BoundKind)>,
-    provenance: BTreeMap<(String, BoundKind), Provenance>,
-}
-
-impl SchemaAnnotations {
-    fn new(narrowed: &NarrowOutcome, needs: &[BoundNeed]) -> Self {
-        let unresolved: BTreeSet<(String, BoundKind)> = narrowed
-            .unresolved
-            .iter()
-            .map(|need| (need.pointer.clone(), need.kind.clone()))
-            .collect();
-
-        let mut provenance = BTreeMap::new();
-        for need in needs {
-            let key = (need.pointer.clone(), need.kind.clone());
-            if unresolved.contains(&key) {
-                continue;
-            }
-            if let Some(suggestion) = &need.suggestion {
-                provenance.insert(key, suggestion.provenance.clone());
-            }
-        }
-
-        Self {
-            unresolved,
-            provenance,
-        }
-    }
-
-    fn comment_for(&self, pointer: &str, kind: BoundKind) -> Option<String> {
-        let key = (pointer.to_owned(), kind.clone());
-        if self.unresolved.contains(&key) {
-            return Some(format!(
-                "# TODO(evidencectl): {} needs {}",
-                display_pointer(pointer),
-                kind.label()
-            ));
-        }
-        self.provenance.get(&key).map(|provenance| {
-            provenance_label(provenance).map_or_else(
-                || OPERATOR_CHOICE_COMMENT.to_owned(),
-                |label| format!("# derived from {label}"),
-            )
-        })
-    }
-}
-
 /// Renders a pointer for a message, naming the root rather than printing an
 /// empty string. Matches the wording `narrow` and `flatten` already use.
 fn display_pointer(pointer: &str) -> &str {
@@ -569,26 +549,6 @@ fn push_line(out: &mut String, indent: usize, text: &str) {
     }
     out.push_str(text);
     out.push('\n');
-}
-
-fn yaml_scalar_string(value: &str) -> String {
-    quote_if(value, needs_yaml_quoting(value))
-}
-
-/// A scalar written inside a flow sequence. There `,`, `[`, `]`, `{` and `}`
-/// are significant wherever they appear, not only at the start of the scalar:
-/// an unquoted `pending, review` would read as two members.
-fn yaml_flow_scalar_string(value: &str) -> String {
-    let quoted = needs_yaml_quoting(value) || value.contains([',', '[', ']', '{', '}']);
-    quote_if(value, quoted)
-}
-
-fn quote_if(value: &str, quoted: bool) -> String {
-    if quoted {
-        format!("\"{}\"", escape_double_quoted(value))
-    } else {
-        value.to_owned()
-    }
 }
 
 /// Escapes `value` for the interior of a double-quoted YAML or Rhai string.
@@ -625,325 +585,6 @@ fn escape_double_quoted(value: &str) -> String {
 /// Renders `value` as a complete double-quoted Rhai string literal.
 fn rhai_string_literal(value: &str) -> String {
     format!("\"{}\"", escape_double_quoted(value))
-}
-
-fn needs_yaml_quoting(value: &str) -> bool {
-    if value.is_empty() {
-        return true;
-    }
-    if matches!(
-        value,
-        "true" | "false" | "null" | "~" | "yes" | "no" | "Yes" | "No" | "TRUE" | "FALSE" | "NULL"
-    ) {
-        return true;
-    }
-    if value.trim() != value {
-        return true;
-    }
-    if value.parse::<f64>().is_ok() {
-        return true;
-    }
-    let first = value.chars().next().expect("checked non-empty above");
-    if matches!(
-        first,
-        '-' | '?'
-            | ':'
-            | ','
-            | '['
-            | ']'
-            | '{'
-            | '}'
-            | '#'
-            | '&'
-            | '*'
-            | '!'
-            | '|'
-            | '>'
-            | '\''
-            | '"'
-            | '%'
-            | '@'
-            | '`'
-    ) {
-        return true;
-    }
-    // A bare colon or hash is fine in a plain scalar (e.g. `https://...`); it
-    // is only ambiguous with a mapping key or a comment when followed by
-    // whitespace, or when a colon ends the scalar entirely.
-    if value.contains(": ") || value.ends_with(':') || value.contains(" #") {
-        return true;
-    }
-    // Any control character, not just a newline: a plain scalar carrying one
-    // either folds or is rejected outright, and the quoted form escapes it.
-    value.chars().any(char::is_control)
-}
-
-fn render_key(key: &str) -> String {
-    yaml_scalar_string(key)
-}
-
-fn render_scalar(value: &Value) -> String {
-    render_scalar_with(value, yaml_scalar_string)
-}
-
-fn render_flow_scalar(value: &Value) -> String {
-    render_scalar_with(value, yaml_flow_scalar_string)
-}
-
-fn render_scalar_with(value: &Value, quote: fn(&str) -> String) -> String {
-    match value {
-        Value::String(s) => quote(s),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Null => "null".to_owned(),
-        other => other.to_string(),
-    }
-}
-
-fn render_flow_list(items: &[Value]) -> String {
-    let rendered: Vec<String> = items.iter().map(render_flow_scalar).collect();
-    format!("[{}]", rendered.join(", "))
-}
-
-/// A `const` value, which the closed subset admits as a scalar or as a
-/// sequence (an array node may be pinned to one exact list).
-fn render_const_value(value: &Value) -> String {
-    match value {
-        Value::Array(items) => render_flow_list(items),
-        other => render_scalar(other),
-    }
-}
-
-fn render_type(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Array(items) => render_flow_list(items),
-        other => render_scalar(other),
-    }
-}
-
-fn primary_type_name(object: &serde_json::Map<String, Value>) -> Option<&str> {
-    match object.get("type") {
-        Some(Value::String(s)) => Some(s.as_str()),
-        Some(Value::Array(items)) => items
-            .iter()
-            .filter_map(Value::as_str)
-            .find(|s| *s != "null"),
-        _ => None,
-    }
-}
-
-fn bound_kind_of(object: &serde_json::Map<String, Value>) -> Option<BoundKind> {
-    match primary_type_name(object) {
-        Some("array") => Some(BoundKind::ArrayMaxItems),
-        Some("integer") => Some(BoundKind::IntegerRange),
-        Some("string") => Some(BoundKind::StringLength),
-        _ => None,
-    }
-}
-
-fn render_response_schema(inputs: &EmitInputs) -> String {
-    let annotations = SchemaAnnotations::new(&inputs.narrowed, &inputs.needs);
-    let mut out = String::new();
-    push_line(
-        &mut out,
-        0,
-        &format!(
-            "# Closed schema for the projected response of {}. The runtime checks it",
-            inputs.source_id
-        ),
-    );
-    push_line(
-        &mut out,
-        0,
-        "# before the extract script runs, so the script maps a response whose shape",
-    );
-    push_line(
-        &mut out,
-        0,
-        "# it can rely on and never re-checks presence or type by hand.",
-    );
-    push_line(&mut out, 0, "#");
-    push_line(
-        &mut out,
-        0,
-        "# Generated by `evidencectl source suggest`. Every TODO below blocks",
-    );
-    push_line(
-        &mut out,
-        0,
-        "# `evidence check` until it is resolved by hand; every \"derived from\" comment",
-    );
-    push_line(
-        &mut out,
-        0,
-        "# states where a bound came from so it can be reviewed rather than trusted",
-    );
-    push_line(&mut out, 0, "# blindly.");
-    // A response body that is itself an array needs a `maxItems` like any other
-    // array, but the root node has no property line to hang the comment on:
-    // `render_schema_node` annotates children only. It is annotated here or
-    // nowhere.
-    if let Some(kind) = inputs.narrowed.schema.as_object().and_then(bound_kind_of) {
-        if let Some(comment) = annotations.comment_for("", kind) {
-            push_line(&mut out, 0, &comment);
-        }
-    }
-    render_schema_node(&inputs.narrowed.schema, "", 0, &annotations, &mut out);
-    out
-}
-
-fn render_schema_node(
-    node: &Value,
-    pointer: &str,
-    indent: usize,
-    annotations: &SchemaAnnotations,
-    out: &mut String,
-) {
-    let Some(object) = node.as_object() else {
-        return;
-    };
-    if let Some(type_value) = object.get("type") {
-        push_line(out, indent, &format!("type: {}", render_type(type_value)));
-    }
-    match primary_type_name(object) {
-        Some("object") => {
-            if let Some(additional) = object.get("additionalProperties") {
-                push_line(
-                    out,
-                    indent,
-                    &format!("additionalProperties: {}", render_scalar(additional)),
-                );
-            }
-            if let Some(required) = object.get("required").and_then(Value::as_array) {
-                push_line(
-                    out,
-                    indent,
-                    &format!("required: {}", render_flow_list(required)),
-                );
-            }
-            if let Some(properties) = object.get("properties").and_then(Value::as_object) {
-                push_line(out, indent, "properties:");
-                for (key, child) in properties {
-                    let child_pointer = format!("{pointer}/{}", escape_pointer_segment(key));
-                    if let Some(kind) = child.as_object().and_then(bound_kind_of) {
-                        if let Some(comment) = annotations.comment_for(&child_pointer, kind) {
-                            push_line(out, indent + 1, &comment);
-                        }
-                    }
-                    push_line(out, indent + 1, &format!("{}:", render_key(key)));
-                    render_schema_node(child, &child_pointer, indent + 2, annotations, out);
-                }
-            }
-        }
-        Some("array") => {
-            if let Some(min_items) = object.get("minItems") {
-                push_line(
-                    out,
-                    indent,
-                    &format!("minItems: {}", render_scalar(min_items)),
-                );
-            }
-            if let Some(max_items) = object.get("maxItems") {
-                push_line(
-                    out,
-                    indent,
-                    &format!("maxItems: {}", render_scalar(max_items)),
-                );
-            }
-            if object.get("uniqueItems").and_then(Value::as_bool) == Some(true) {
-                push_line(out, indent, "uniqueItems: true");
-            }
-            if let Some(const_value) = object.get("const") {
-                push_line(
-                    out,
-                    indent,
-                    &format!("const: {}", render_const_value(const_value)),
-                );
-            }
-            if let Some(items) = object.get("items") {
-                // An array of scalars never reaches the object-properties loop
-                // below, so a bound demanded of the items node is annotated
-                // here or nowhere.
-                let child_pointer = format!("{pointer}/*");
-                if let Some(kind) = items.as_object().and_then(bound_kind_of) {
-                    if let Some(comment) = annotations.comment_for(&child_pointer, kind) {
-                        push_line(out, indent, &comment);
-                    }
-                }
-                push_line(out, indent, "items:");
-                render_schema_node(items, &child_pointer, indent + 1, annotations, out);
-            }
-        }
-        _ => {
-            for key in ["minimum", "maximum", "minLength", "maxLength"] {
-                if let Some(value) = object.get(key) {
-                    push_line(out, indent, &format!("{key}: {}", render_scalar(value)));
-                }
-            }
-            if let Some(format_value) = object.get("format") {
-                push_line(
-                    out,
-                    indent,
-                    &format!("format: {}", render_scalar(format_value)),
-                );
-            }
-            if let Some(enum_values) = object.get("enum").and_then(Value::as_array) {
-                push_line(
-                    out,
-                    indent,
-                    &format!("enum: {}", render_flow_list(enum_values)),
-                );
-            }
-            if let Some(const_value) = object.get("const") {
-                push_line(
-                    out,
-                    indent,
-                    &format!("const: {}", render_const_value(const_value)),
-                );
-            }
-        }
-    }
-}
-
-fn render_facts_schema(source_id: &str) -> String {
-    let mut out = String::new();
-    push_line(
-        &mut out,
-        0,
-        "# Closed schema for the facts extraction may hand to the derivation for",
-    );
-    push_line(
-        &mut out,
-        0,
-        &format!("# {source_id}. Extraction output that does not match exactly is"),
-    );
-    push_line(&mut out, 0, "# rejected before any derivation runs.");
-    push_line(&mut out, 0, "#");
-    push_line(
-        &mut out,
-        0,
-        "# TODO(evidencectl): replace placeholder_fact with the real fact(s) this",
-    );
-    push_line(
-        &mut out,
-        0,
-        "# source's extract script produces, and give each one real bounds.",
-    );
-    push_line(&mut out, 0, "type: object");
-    push_line(&mut out, 0, "additionalProperties: false");
-    push_line(&mut out, 0, "required: [placeholder_fact]");
-    push_line(&mut out, 0, "properties:");
-    push_line(
-        &mut out,
-        1,
-        "# TODO(evidencectl): rename and bound this placeholder fact.",
-    );
-    push_line(&mut out, 1, "placeholder_fact:");
-    push_line(&mut out, 2, "type: string");
-    push_line(&mut out, 2, "minLength: 1");
-    push_line(&mut out, 2, "maxLength: 256");
-    out
 }
 
 /// The commented loop sketch shown beside a selection that crosses an array,
@@ -1103,143 +744,37 @@ fn render_extract_script(inputs: &EmitInputs, get_paths: &[(String, String)]) ->
 /// Render only facts established mechanically by the selected OpenAPI
 /// operation. Governed source policy remains absent rather than receiving a
 /// plausible-looking default.
-fn render_source_block(inputs: &EmitInputs, method: &str) -> String {
-    let mut out = String::new();
-    push_line(&mut out, 0, "sources:");
-    push_line(&mut out, 1, &format!("{}:", render_key(&inputs.source_id)));
-    push_line(&mut out, 2, "type: http-json");
-    if let Some(base_url) = &inputs.base_url {
-        push_line(
-            &mut out,
-            2,
-            &format!("baseUrl: {}", yaml_scalar_string(base_url)),
-        );
-    } else {
-        match &inputs.base_url_suggestion {
-            Some(server) => {
-                push_line(
-                    &mut out,
-                    2,
-                    "# Review the OpenAPI server origin before adding it to source policy:",
-                );
-                push_line(
-                    &mut out,
-                    2,
-                    &format!("# baseUrl: {}", yaml_scalar_string(&server.base_url)),
-                );
-            }
-            None => push_line(
-                &mut out,
-                2,
-                "# Add a reviewed fixed baseUrl; the OpenAPI document gives no fixed origin.",
-            ),
-        }
-    }
-    push_line(&mut out, 2, "request:");
-    push_line(&mut out, 3, &format!("method: {method}"));
-    let path = request_path(inputs);
-    push_line(&mut out, 3, &format!("path: {}", yaml_scalar_string(&path)));
-    push_line(&mut out, 3, "fixedHeaders:");
-    push_line(&mut out, 4, "- name: Accept");
-    push_line(
-        &mut out,
-        5,
-        &format!("value: {}", yaml_scalar_string(&inputs.media_type)),
-    );
-    let selection_values: Vec<Value> = inputs
-        .selection
-        .iter()
-        .cloned()
-        .map(Value::String)
-        .collect();
-    push_line(
-        &mut out,
-        3,
-        &format!("projection: {}", render_flow_list(&selection_values)),
-    );
-    push_line(
-        &mut out,
-        2,
-        &format!(
-            "responseSchema: schemas/{}-response.schema.yaml",
-            inputs.source_id
-        ),
-    );
-    push_line(
-        &mut out,
-        2,
-        &format!("extractScript: adapters/{}-extract.rhai", inputs.source_id),
-    );
-    push_line(
-        &mut out,
-        2,
-        &format!("factSchema: schemas/{}-facts.schema.yaml", inputs.source_id),
-    );
-    out
+fn render_source_block(inputs: &EmitInputs, _method: &str) -> String {
+    let source: Value = serde_json::from_str(&render_authoring_source(inputs))
+        .expect("generated Source serializes as JSON");
+    serde_norway::to_string(&json!({
+        "functions":[
+            {"id":format!("{}-prepare",inputs.source_id),"interface":"source-prepare/v1","source":format!("functions/{}-prepare.rhai",inputs.source_id)},
+            {"id":format!("{}-extract",inputs.source_id),"interface":"source-extract/v1","source":format!("functions/{}-extract.rhai",inputs.source_id)}
+        ],
+        "sources":{inputs.source_id.clone():source}
+    })).expect("generated Source block renders")
 }
 
 /// Render the existing V1 source object without a surrounding `sources` map.
 /// This keeps the authoring artifact identical to the runtime contract.
 fn render_authoring_source(inputs: &EmitInputs) -> String {
-    let mechanical = render_source_block(
-        inputs,
-        request_method(&inputs.operation.method).expect("validated method"),
-    );
-    let mut out = String::new();
-    push_line(&mut out, 0, &format!("apiVersion: {SOURCE_API_VERSION}"));
-    push_line(&mut out, 0, &format!("kind: {SOURCE_KIND}"));
-    for line in mechanical
-        .lines()
-        .skip(2)
-        .map(|line| line.strip_prefix("    ").unwrap_or(line))
-    {
-        if line == "request:" {
-            push_line(
-                &mut out,
-                0,
-                "# Replace review-required with source-derived, field-projected, or record-transformed.",
-            );
-            push_line(&mut out, 0, "posture: review-required");
-            push_line(
-                &mut out,
-                0,
-                "# Choose an authentication kind and logical secret:file references.",
-            );
-            push_line(&mut out, 0, "authentication: {type: review-required}");
-        }
-        push_line(&mut out, 0, line);
-        if line.starts_with("  projection:") {
-            push_line(
-                &mut out,
-                1,
-                "# Declare selectorInputs and any complete-segment pathBindings before running dev.",
-            );
-            push_line(&mut out, 1, "selectorInputs: []");
-            push_line(
-                &mut out,
-                1,
-                &format!("prepareScript: adapters/{}-prepare.rhai", inputs.source_id),
-            );
-            push_line(&mut out, 1, "adapterParameters: {}");
-            push_line(
-                &mut out,
-                1,
-                &format!(
-                    "adapterParametersSchema: schemas/{}-parameters.schema.yaml",
-                    inputs.source_id
-                ),
-            );
-            push_line(&mut out, 1, "preparationLimits:");
-            push_line(&mut out, 2, "query: allowed");
-            push_line(&mut out, 2, "jsonBody: forbidden");
-            push_line(&mut out, 2, "maximumNormalizedBytes: 4096");
-            push_line(&mut out, 1, "redirects: deny");
-            push_line(&mut out, 1, "attemptTimeoutMilliseconds: 3000");
-            push_line(&mut out, 1, "maximumResponseBytes: 65536");
-            push_line(&mut out, 1, "maximumConcurrency: 8");
-        }
-    }
-    out
+    let method = request_method(&inputs.operation.method).expect("validated method");
+    let source = json!({
+        "type":"http-json",
+        "connection":inputs.source_id,
+        "acquisitionPosture":"record-transformed",
+        "selectors":[],
+        "request":{"method":method,"path":request_path(inputs),"fixedHeaders":[{"name":"Accept","value":inputs.media_type}]},
+        "response":{"projection":inputs.selection,"shape":inputs.narrowed.schema.clone(),"maximumBytes":65536},
+        "prepare":{"function":format!("{}-prepare",inputs.source_id)},
+        "extract":{"function":format!("{}-extract",inputs.source_id)},
+        "facts":{"placeholder-fact":{"type":"boolean"}},
+        "limits":{"attemptTimeoutMilliseconds":3000,"maximumConcurrency":8},
+        "adapterParameters":{},
+        "adapterParametersSchema":{"type":"object","additionalProperties":false,"properties":{}}
+    });
+    serde_json::to_string(&source).expect("normalized Source serializes")
 }
 
 fn render_report(inputs: &EmitInputs) -> String {
@@ -1321,11 +856,13 @@ fn render_report(inputs: &EmitInputs) -> String {
 
     out.push_str("Next steps:\n");
     out.push_str(&format!(
-        "  1. Resolve every TODO(evidencectl) comment in schemas/{}-response.schema.yaml,\n     adapters/{}-extract.rhai, and schemas/{}-facts.schema.yaml.\n",
-        inputs.source_id, inputs.source_id, inputs.source_id
+        "  1. Resolve every TODO(evidencectl) comment in evidence.yaml and\n     functions/{}-extract.rhai.\n",
+        inputs.source_id
     ));
-    out.push_str("  2. Review the source block and add the governed source decisions it omits.\n");
-    out.push_str("  3. Merge it into a separately authored Evidence project.\n");
+    out.push_str(
+        "  2. Review the named Source, target connection, selector bindings, and private facts.\n",
+    );
+    out.push_str("  3. Complete or update the AssertionDefinitions that acquire this Source.\n");
     out
 }
 

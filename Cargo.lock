@@ -5576,6 +5576,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rcgen",
  "registry-discovery-profile",
+ "registry-evidence-authoring",
  "registry-evidence-client",
  "registry-evidence-verifier",
  "registry-platform-audit",
@@ -5627,6 +5628,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "sha2 0.11.0",
  "url",
 ]
 

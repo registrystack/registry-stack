@@ -38,11 +38,6 @@ pub(crate) struct SecureRegularFile {
 }
 
 impl SecureRegularFile {
-    /// The size reported by the descriptor that will be read.
-    pub(crate) fn len(&self) -> u64 {
-        self.metadata.len()
-    }
-
     /// Read no more than `maximum_bytes` from this same descriptor.
     ///
     /// The metadata check avoids paying to read a file already known to be too large. The bounded

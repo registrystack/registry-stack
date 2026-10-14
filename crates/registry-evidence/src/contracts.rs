@@ -356,6 +356,7 @@ fn request_schema() -> Value {
         "properties": {
             "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN},
             "requirement": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 512},
+            "expectedConfigurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Optional independent pin on the active definition revision. A mismatch refuses before authority resolution, credentials, or source I/O. Omission resolves the active revision carried by the assertion."},
             "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
             "subjects": {
                 "type": "array", "minItems": 1, "maxItems": 8,
@@ -423,6 +424,7 @@ fn request_batch_schema() -> Value {
         "required": ["requirement", "purpose", "items"],
         "properties": {
             "requirement": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 512},
+            "expectedConfigurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Optional independent pin on the active definition revision. A mismatch refuses before authority resolution, credentials, or source I/O. Omission resolves the active revision carried by the assertion."},
             "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
             "items": {
                 "type": "array",
@@ -1946,7 +1948,9 @@ mod tests {
             assert_eq!(
                 document["paths"][path][method]["responses"]["401"]["headers"]["WWW-Authenticate"]
                     ["schema"]["pattern"],
-                json!("^Bearer realm=\\\"registry-evidence\\\", resource_metadata=\\\"https?://[^\\\"]+/\\.well-known/oauth-protected-resource\\\"$"),
+                json!(
+                    "^Bearer realm=\\\"registry-evidence\\\", resource_metadata=\\\"https?://[^\\\"]+/\\.well-known/oauth-protected-resource\\\"$"
+                ),
                 "{method} {path}"
             );
         }

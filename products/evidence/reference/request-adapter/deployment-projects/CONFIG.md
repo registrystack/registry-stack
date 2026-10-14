@@ -2,17 +2,22 @@
 
 Status: Implemented Version 1 configuration contract
 
-Evidence starts from two closed, startup-only inputs:
+Evidence captures its closed inputs before serving:
 
-1. `bundle/evidence.yaml` and its referenced bundle files define governed
-   evidence semantics and source authority.
-2. `runtime.yaml` binds that bundle to one process, filesystem, listener, audit
+1. `bundle/evidence.yaml` and its referenced package files define governed
+   assertion behavior and source contracts.
+2. `runtime.yaml` binds that package to one process, filesystem, listener, audit
    destination, secret mount, signer transport and pinned version, and local
    TLS trust files.
+3. A normalized project package requires the separately activated target
+   authority selected by `runtime.authority`. The runtime validates its project,
+   target, exact package digest and complete grant ceilings, then retains one
+   immutable snapshot for the process lifetime.
 
-Both inputs are reviewed, validated completely before readiness, mounted
-read-only, and immutable for the process lifetime. Evidence verifies the
-package and computes its stable digest at startup; audit events carry that
+The package and runtime file are reviewed, validated completely before readiness,
+mounted read-only, and immutable for the process lifetime. Authority activation
+prepares a controlled restart; it does not reload a serving process. Evidence
+verifies the package and computes its stable digest at startup; audit events carry that
 digest in the frozen `bundleRevision` field. Runtime configuration is not an override layer. It cannot
 change a source origin, request, credential kind, requirement, authority,
 selector, disclosure rule, rate limit, signing policy, or audit fail-closed
@@ -133,6 +138,7 @@ The governed file is `bundle/evidence.yaml`.
 |---|---|---|
 | `apiVersion` | yes | Names the bundle grammar. The value is `id.registrystack.org/formats/evidence/bundle/v1`; the runtime refuses any other value at startup. |
 | `kind` | yes | Names the document type. The value is `EvidenceBundle`. |
+| `project` | normalized packages | Stable EvidenceProject identifier. The package carries an empty `authorityProfiles` map, and each definition declares complete grant and representation ceilings. Target authority is activated separately for this project and exact package digest. |
 | `assuranceProfile` | yes | Explicitly `local`, `production`, or `evidence-grade`. Runtime configuration cannot override it. |
 | `service` | yes | Evidence provider identity and trust domain. |
 | `issuer` | yes | Issuer identity placed in evidence. |
@@ -147,7 +153,7 @@ The governed file is `bundle/evidence.yaml`.
 | `selectorProfiles` | yes | Closed caller/grant/context selector shapes. |
 | `sourceConnections` | no | Optional named owners of fixed HTTP endpoints, workload credentials, TLS profiles and shared per-process resource bounds. |
 | `sources` | yes | Fixed source authorities, transport policy, scripts, schemas, and bounds. |
-| `authorityProfiles` | yes | Who may request which requirement, purpose, audience, roles, profiles, and value origins. |
+| `authorityProfiles` | yes | Empty for normalized project packages. Otherwise the compiled bundle authority profiles. Normalized runtime authority comes only from the activated target snapshot. |
 | `requirements` | yes | Evidence semantics, source, derivation, concepts, fixtures, and disclosure family. |
 
 A bundle written with the earlier `version: 1` header is refused before
@@ -259,6 +265,39 @@ different named profiles. Rust does no case folding, Unicode normalization,
 transliteration, phonetics, tokenization, name-order parsing, partial-date
 matching, fuzzy scoring, or candidate selection.
 
+### Target authority and activation
+
+A normalized project compiles its authored `EvidenceTargetAuthority` into an
+`EvidenceCompiledTargetAuthority` document with
+`apiVersion: id.registrystack.org/formats/evidence/compiled-target-authority/v1alpha1`.
+The compiled document names `target`, `project`, and `accessProfiles`; its grants
+reference exact Requirement URIs after local definition names are resolved.
+Authors do not supply trusted revision or digest values.
+
+Activation validates each complete grant against the package's authority kind,
+actor kind, value origin, audience, purpose, subject-role selector profiles,
+representation and binding ceilings. A normalized access profile must explicitly
+name an allowed `actorKind`. A dynamic
+`audienceFrom: authenticated-requester` is checked against the definition's
+allowed audiences on every request. Neither development identities nor caller
+selectors weaken these rules.
+
+The activation store contains one bounded `authority-state.json` holding the
+ordered history and active compiled snapshot. Activation derives
+`authorityRevision` with a dedicated digest domain and `authorityDigest` from
+canonical document bytes, binds the exact package digest, and commits the state
+under a single-writer lock with file and directory synchronization. Repeating
+an exact activation is idempotent. Invalid documents and prepared temporary
+files cannot replace the committed state. If the command cannot confirm a
+commit, inspect the committed history before retrying.
+
+Startup captures the committed snapshot once. A later activation applies at a
+controlled restart; an admitted operation uses the same captured authority
+through every source call and release gate. Authorized audit records carry
+`authorityRevision` and `effectiveGrantDigest` together, binding the activated
+grants with their package ceilings. These identities do not replace current
+authenticated task-grant checks, signing, or durable release audit.
+
 ### Authority profiles
 
 An optional `actorKind` binds the authority profile to `human`, `agent`, or
@@ -271,12 +310,13 @@ An authority profile has a `kind` of `statutory`, `organizational`, `consent`,
 `delegated`, or `explicit-request`, non-empty `requesterTags`, and grants.
 Each grant binds one exact `requirement`, `purpose`,
 `audienceFrom: authenticated-requester`, an optional `responseFormats` list,
-and the complete subject-role set. A grant's `responseFormats` follows the same
-closed rule as the bundle-level list: 1 through 3 unique entries that must
-include `signed-jws`, defaulting to `[signed-jws]` when omitted. Unsigned output
-and the SD-JWT VC serialization each require both the bundle and the one
-complete matched grant to permit them, so a production grant that says nothing
-permits only signed JWS.
+and the complete subject-role set. A grant's `responseFormats` contains 1 through
+4 unique entries from `signed-jws`, `unsigned-json`, `sd-jwt-vc`, and
+`sd-jwt-vc-batch`, defaulting to `[signed-jws]` when omitted. The package keeps
+signed JWS enabled, while a holder-bound grant can permit only the SD-JWT forms
+its binding supports. A response requires the package, definition ceiling, one
+complete matched grant, and binding mode to permit its representation. A grant
+that says nothing permits only signed JWS.
 
 A grant's optional `subjectBindingModes` is a separate permission from
 `responseFormats`: it is a unique list of at most 2 entries drawn from
@@ -330,6 +370,10 @@ Each requirement declares these fields:
 
 | Key | Required | Meaning |
 |---|---|---|
+| `question` | no | Human-facing presentation, 1 through 2,048 bytes when present. It does not change the definition behavior revision. |
+| `grantCeiling` | normalized packages | Nonempty unique `authorities`, `actorKinds`, `valueOrigins`, and `audiences` lists. These constrain every target grant alongside the purposes, subjects/selectors, representations and binding declared here. |
+| `representations` | normalized packages | Definition-specific format ceiling. Each format must fit this definition's subject binding and package response formats; target grants may narrow it. |
+| `handle` | yes | Stable local authoring, inspection and generated-code name. Public requests use the exact Requirement URI and reject this handle as a wire substitute. |
 | `uri`, `kind` | yes | Stable requirement URI and one of `criterion`, `information-requirement`, or `constraint`. Two requirements with the same `uri` are refused with `config.duplicate-id` at the second one's `uri`. The key was `id`; a bundle that still writes `id` there is refused with `config.removed-key`. |
 | `subjectBinding` | no | `audience-scoped` or `holder-bound`. Omission means `audience-scoped`, and an omitted key stays out of the projected configuration, so declaring the mode on one requirement moves no other requirement's `configurationRevision`. See the holder-bound rules below. |
 | `acquisition` | yes | One of the three closed shapes below. None permits response-led routing. |
@@ -647,8 +691,11 @@ In an authored source, `connection: shared-read` replaces `baseUrl`,
 must be absent, so source overrides have no precedence rule. Build resolves
 the reference into concrete values in the governed candidate and retains the
 connection identity and owner. Startup rejects missing owners and mismatched
-copies. Runtime configuration cannot retarget the source. Each question's
-configuration revision includes only its reached connection owners.
+copies. Runtime configuration cannot retarget the source. A definition revision
+covers its acquisition and reached source behavior, selector contracts, function
+assets, output semantics and package release ceilings. Deployment authority and
+connection-owner metadata have separate package or authority identities and do
+not independently churn the definition pin.
 
 The operation still owns its method, fixed path, headers, preparation limits,
 projection, response schemas, response byte limit and
@@ -1408,6 +1455,7 @@ sourceExtracts:
 | `apiVersion` | yes | Literal `id.registrystack.org/formats/evidence/runtime/v1alpha1`. Names the grammar the document is written in. The earlier value `registry.registrystack.org/evidence-runtime/v1alpha1` is refused as `config.retired-api-version` with this one named. |
 | `kind` | yes | Literal `EvidenceRuntimeConfig`. Together with `apiVersion` it tells an Evidence runtime file apart from another product's runtime configuration. |
 | `package.root` | yes | Absolute path to the single governed package directory. No alternate, overlay, or fallback package exists. |
+| `authority.root`, `authority.target` | normalized packages | Absolute owned activation-store directory and exact governed target identifier. Startup requires a committed authority snapshot for this project, target and package digest. Activation prepares the next controlled restart. |
 | `package.expectedDigest` | no | The `sha256:` package digest the operator approved. When set, startup is refused unless the package at `package.root` computes exactly this digest. Omission still verifies and loads the package found there. |
 | `listener.bind` | yes | Numeric socket address written `host:port`, with an IPv6 host in brackets (`[addr]:port`). Port `0` is refused. Under the default `private-address` exposure, the host must be loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6. Under explicit `container-private`, the unspecified IPv4 or IPv6 wildcard is also accepted. Hostnames, concrete public addresses, and multicast are always rejected. |
 | `listener.networkExposure` | no | `private-address` by default. `container-private` permits a wildcard bind only when the operator confines the container network and terminates TLS upstream. It does not enable direct public exposure. |
@@ -1772,6 +1820,7 @@ issuer
 issuer.uri
 kind
 maximumHolderBoundBatchSize
+project
 publication
 publication.description
 publication.endpointUrl
@@ -1851,13 +1900,25 @@ requirements[].disclosureGuard.families[]
 requirements[].evidenceType
 requirements[].existenceDisclosure
 requirements[].fixtures
+requirements[].grantCeiling
+requirements[].grantCeiling.actorKinds
+requirements[].grantCeiling.actorKinds[]
+requirements[].grantCeiling.audiences
+requirements[].grantCeiling.audiences[]
+requirements[].grantCeiling.authorities
+requirements[].grantCeiling.authorities[]
+requirements[].grantCeiling.valueOrigins
+requirements[].grantCeiling.valueOrigins[]
 requirements[].handle
 requirements[].kind
 requirements[].observationTimezone
 requirements[].purposes
 requirements[].purposes[]
+requirements[].question
 requirements[].referenceFrameworks
 requirements[].referenceFrameworks[]
+requirements[].representations
+requirements[].representations[]
 requirements[].subjectBinding
 requirements[].subjectRoles
 requirements[].subjectRoles[]
@@ -2105,6 +2166,9 @@ audit.destination
 audit.path
 audit.retentionDays
 audit.rotateBytes
+authority
+authority.root
+authority.target
 kind
 listener
 listener.bind

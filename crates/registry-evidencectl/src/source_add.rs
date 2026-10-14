@@ -74,7 +74,7 @@ pub(crate) struct SourceAddArgs {
     /// Registry selector profile; defaults to a bounded name derived from the source identifier.
     #[arg(long)]
     pub selector_profile: Option<String>,
-    /// Local target to extend; defaults to PROJECT/targets/local.
+    /// Local target to extend; defaults to PROJECT/local-target.yaml.
     #[arg(long)]
     pub target: Option<PathBuf>,
     /// Perform the reviewed connection; without it this command reviews new choices only.
@@ -246,7 +246,7 @@ fn configure(
     let project = project_destination(&args.project)?;
     let target_path = match &args.target {
         Some(path) => absolute_destination(path)?,
-        None => project.join("targets/local"),
+        None => project.join("local-target.yaml"),
     };
     if !valid_local_identifier(&args.connection) {
         bail!("connection requires a local identifier of at most 64 characters");
@@ -263,7 +263,7 @@ fn configure(
     validate_endpoints(&inspection.endpoints)?;
     let selection = select(&args, &inspection, terminal)?;
     let mut prepare = base;
-    add_pair(&mut prepare, "--entity", &selection.entity);
+    add_pair(&mut prepare, "--record-type", &selection.entity);
     add_pair(&mut prepare, "--selector-field", &selection.selector_field);
     add_pair(
         &mut prepare,
@@ -394,7 +394,7 @@ fn configure(
         "evidence-source".into(),
         registry.as_os_str().into(),
     ];
-    add_pair(&mut generate, "--entity", &selection.entity);
+    add_pair(&mut generate, "--record-type", &selection.entity);
     add_pair(&mut generate, "--access-profile", &selection.access_profile);
     add_pair(&mut generate, "--selector", &selection.selector_profile);
     add_pair(&mut generate, "--fields", selection.fields.join(","));
@@ -413,8 +413,12 @@ fn configure(
         fs::create_dir_all(parent).context("creating the local target parent")?;
     }
     target::ensure_local_connection(&project, &target_path, &args.connection, binding)?;
-    let id_path = project.join(format!("secrets/{}-client-id", args.connection));
-    let key_path = project.join(format!("secrets/{}-client-key", args.connection));
+    let id_path = project
+        .join(registry_evidence_authoring::layout::SECRETS_DIRECTORY)
+        .join(format!("{}-client-id", args.connection));
+    let key_path = project
+        .join(registry_evidence_authoring::layout::SECRETS_DIRECTORY)
+        .join(format!("{}-client-key", args.connection));
     invoke(&export_client_args(
         &registry,
         &selection.client,
@@ -430,7 +434,7 @@ fn configure(
     report["clientIdFile"] = json!(id_path);
     report["assertionKeyFile"] = json!(key_path);
     report["next"] = json!([
-        "Author or review the Evidence question, derivation, and fixtures that use this source.",
+        "Author or review the AssertionDefinition, derivation Function, and fixtures that use this Source.",
         format!(
             "Run `evidencectl test {} --target {} --local`, then start BReg to activate its prepared package and run `evidencectl dev --target {} start {}`.",
             project.display(),
@@ -846,7 +850,7 @@ fn validate_endpoints(endpoints: &Endpoints) -> Result<()> {
 
 fn connection(endpoints: &Endpoints, scope: Option<&str>, name: &str) -> Value {
     let mut binding = json!({
-        "baseUrl": endpoints.breg_url,
+        "origin": endpoints.breg_url,
         "authentication": {
             "type": "oauth2-private-key-jwt", "tokenEndpoint": endpoints.token_endpoint,
             "clientIdRef": format!("secret:file/{name}-client-id"),
@@ -879,10 +883,10 @@ fn project_destination(path: &Path) -> Result<PathBuf> {
     if fs::symlink_metadata(path).is_ok() {
         let project = plain_directory(path, "Evidence project")?;
         if !project
-            .join(registry_evidence_authoring::PROJECT_MARKER_FILE)
+            .join(registry_evidence_authoring::project::PROJECT_FILE)
             .is_file()
         {
-            bail!("existing Evidence project requires evidence-project.yaml; choose a new directory or an existing editable project");
+            bail!("existing Evidence project requires evidence.yaml; choose a new directory or an existing editable project");
         }
         return Ok(project);
     }
@@ -910,7 +914,7 @@ fn check_credential_outputs(
     allow_missing_directory: bool,
     invoke: &mut impl FnMut(&[OsString]) -> Result<Value>,
 ) -> Result<()> {
-    let secrets = project.join("secrets");
+    let secrets = project.join(registry_evidence_authoring::layout::SECRETS_DIRECTORY);
     let metadata = match fs::symlink_metadata(&secrets) {
         // A clean checkout can be previewed before its ignored keys exist.
         Err(error) if allow_missing_directory && error.kind() == std::io::ErrorKind::NotFound => {
@@ -1130,9 +1134,9 @@ mod tests {
                     "entities":[{"id":"record","selectorFields":[{"id":"code","type":"string"}],
                         "readableFields":[{"id":"code","type":"string"},{"id":"name","type":"string"},{"id":"group","type":"string"}],
                         "rowFields":[{"id":"group","type":"string"}]}]});
-                if arguments.iter().any(|arg| arg == "--entity") {
+                if arguments.iter().any(|arg| arg == "--record-type") {
                     for (key, flag) in [
-                        ("entity", "--entity"),
+                        ("entity", "--record-type"),
                         ("selectorField", "--selector-field"),
                         ("selectorProfile", "--selector-profile"),
                         ("accessProfile", "--access-profile"),
@@ -1214,16 +1218,16 @@ mod tests {
     }
 
     fn write_export(root: &Path, id: &str, connection: &str) -> Result<()> {
-        let source = format!("apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nconnection: {connection}\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.yaml\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
+        let source = format!("type: http-json\nposture: record-transformed\nconnection: {connection}\nrequest:\n  method: GET\n  path: /lookup\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  projection: [/matched]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.yaml\n  attemptTimeoutMilliseconds: 1000\n  maximumResponseBytes: 1024\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
         let artifacts = BTreeMap::from([
             (format!("sources/{id}.yaml"), source),
             (
                 "selectors/record-code.yaml".to_owned(),
-                "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
+                "maximumAggregateBytes: 128\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
             ),
             (
                 format!("schemas/{id}-parameters.yaml"),
-                "type: object\nproperties: {}\nadditionalProperties: false\n".to_owned(),
+                "type: object\nrequired: [matched]\nproperties: {matched: {type: boolean}}\nadditionalProperties: false\n".to_owned(),
             ),
             (
                 format!("schemas/{id}-response.yaml"),
@@ -1231,7 +1235,7 @@ mod tests {
             ),
             (
                 format!("schemas/{id}-facts.yaml"),
-                "type: object\nproperties: {}\nadditionalProperties: false\n".to_owned(),
+                "type: object\nrequired: [matched]\nproperties: {matched: {type: boolean}}\nadditionalProperties: false\n".to_owned(),
             ),
             (
                 format!("adapters/{id}-prepare.rhai"),
@@ -1258,6 +1262,13 @@ mod tests {
         Ok(())
     }
 
+    fn authored_source(project: &Path, id: &str) -> Option<Value> {
+        let bytes =
+            fs::read(project.join(registry_evidence_authoring::project::PROJECT_FILE)).ok()?;
+        let value: Value = serde_norway::from_slice(&bytes).ok()?;
+        value["sources"].get(id).cloned()
+    }
+
     #[test]
     fn source_first_setup_and_identical_retry_use_public_commands_and_report_actual_paths() {
         let root = tempfile::tempdir().unwrap();
@@ -1282,11 +1293,10 @@ mod tests {
         assert_eq!(first["resource"], "urn:test:retained-session");
         assert_eq!(first["clientAssertionAudience"], "http://127.0.0.1:19091");
         assert_eq!(first["scope"], "registry:registry-name:lookup");
-        assert_eq!(first["target"], json!(project.join("targets/local")));
-        assert_eq!(fs::read_dir(project.join("questions")).unwrap().count(), 0);
-        assert!(project.join("sources/registry-name.yaml").is_file());
+        assert_eq!(first["target"], json!(project.join("local-target.yaml")));
+        assert!(authored_source(&project, "registry-name").is_some());
         let (connections, _) =
-            crate::build::local_dev_target_inputs(&project.join("targets/local")).unwrap();
+            crate::build::local_dev_target_inputs(&project.join("local-target.yaml")).unwrap();
         assert_eq!(connections["registry"]["baseUrl"], "http://127.0.0.1:19090");
         assert_eq!(
             connections["registry"]["authentication"]["tokenEndpoint"],
@@ -1308,8 +1318,9 @@ mod tests {
             connections["registry"]["authentication"]["scope"],
             "registry:registry-name:lookup"
         );
-        let signing = fs::read(project.join("secrets/signing-p256-private-jwk")).unwrap();
-        let target = fs::read(project.join("targets/local/governance.yaml")).unwrap();
+        let signing =
+            fs::read(project.join(".generated/secrets/signing-p256-private-jwk")).unwrap();
+        let target = fs::read(project.join("local-target.yaml")).unwrap();
         let second = configure(args(&registry, &project), false, false, &mut |a| {
             provider.invoke(a)
         })
@@ -1328,13 +1339,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            fs::read(project.join("secrets/signing-p256-private-jwk")).unwrap(),
+            fs::read(project.join(".generated/secrets/signing-p256-private-jwk")).unwrap(),
             signing
         );
-        assert_eq!(
-            fs::read(project.join("targets/local/governance.yaml")).unwrap(),
-            target
-        );
+        assert_eq!(fs::read(project.join("local-target.yaml")).unwrap(), target);
         assert!(!first.to_string().contains("private-test-key-canary"));
         assert!(provider
             .calls
@@ -1352,7 +1360,7 @@ mod tests {
         selected.apply = false;
         let report = configure(selected, false, false, &mut |a| {
             let mut report = provider.invoke(a)?;
-            report["recoveredPriorApply"] = json!(!a.iter().any(|arg| arg == "--entity"));
+            report["recoveredPriorApply"] = json!(!a.iter().any(|arg| arg == "--record-type"));
             report["requiresRestart"] = json!(false);
             Ok(report)
         })
@@ -1374,10 +1382,54 @@ mod tests {
     fn a_preview_accepts_a_clean_project_without_secrets_but_apply_still_requires_them() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("evidence");
-        fs::create_dir_all(project.join("questions")).unwrap();
-        fs::create_dir(project.join("sources")).unwrap();
-        let marker = b"version: 1\n";
-        fs::write(project.join("evidence-project.yaml"), marker).unwrap();
+        fs::create_dir(&project).unwrap();
+        let project_document = br#"apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
+kind: EvidenceProject
+id: clean-project
+selectorProfiles:
+  baseline-reference:
+    maximumAggregateBytes: 64
+    fields: {value: {type: string, minimumBytes: 1, maximumBytes: 64}}
+functions:
+  - {id: baseline-extract, interface: source-extract/v1, source: functions/baseline-extract.rhai}
+  - {id: baseline-derive, interface: assertion-derive/v1, source: functions/baseline-derive.rhai}
+sources:
+  baseline:
+    type: http-json
+    connection: baseline
+    acquisitionPosture: record-transformed
+    selectors: [{role: subject, profiles: [baseline-reference]}]
+    request: {method: GET, path: /baseline}
+    response: {projection: [/matched], shape: {type: object, properties: {matched: {type: boolean}}}, maximumBytes: 1024}
+    extract: {function: baseline-extract}
+    facts: {matched: {type: boolean}}
+    limits: {attemptTimeoutMilliseconds: 1000, maximumConcurrency: 1}
+assertionDefinitions:
+  baseline:
+    question: Is the synthetic baseline matched?
+    semantics: {requirement: "urn:test:requirement:baseline", kind: criterion, evidenceType: "urn:test:evidence:baseline", referenceFrameworks: ["urn:test:framework"]}
+    purpose: source-add-preview
+    grantCeiling: {authorities: [organizational], actorKinds: [service], valueOrigins: [request], audiences: ["urn:test:audience"]}
+    subjects: [{role: subject, selectors: [baseline-reference]}]
+    acquisition: {type: single, source: baseline}
+    derive: {function: baseline-derive}
+    outputs: {matched: {concept: "urn:test:concept:matched", type: boolean}}
+    validitySeconds: 60
+    subjectBinding: audience-scoped
+    representations: [signed-jws]
+"#;
+        fs::write(project.join("evidence.yaml"), project_document).unwrap();
+        fs::create_dir(project.join("functions")).unwrap();
+        fs::write(
+            project.join("functions/baseline-extract.rhai"),
+            "fn extract(response, context) { #{outcome: \"match\", facts: #{matched: response[\"matched\"]}} }\n",
+        )
+        .unwrap();
+        fs::write(
+            project.join("functions/baseline-derive.rhai"),
+            "fn derive(facts, selectors, context) { [#{output: \"matched\", value: facts[\"matched\"]}] }\n",
+        )
+        .unwrap();
         let mut provider = Provider::new();
         let mut preview = args(root.path(), &project);
         preview.apply = false;
@@ -1408,19 +1460,12 @@ mod tests {
             .collect();
         assert_eq!(
             entries,
-            BTreeSet::from([
-                OsString::from("evidence-project.yaml"),
-                OsString::from("questions"),
-                OsString::from("sources"),
-            ])
+            BTreeSet::from([OsString::from("evidence.yaml"), OsString::from("functions")])
         );
         assert_eq!(
-            fs::read(project.join("evidence-project.yaml")).unwrap(),
-            marker
+            fs::read(project.join("evidence.yaml")).unwrap(),
+            project_document
         );
-        for directory in ["questions", "sources"] {
-            assert_eq!(fs::read_dir(project.join(directory)).unwrap().count(), 0);
-        }
     }
 
     #[test]
@@ -1459,20 +1504,21 @@ mod tests {
                 .invoke(a))
             .is_err()
         );
-        assert!(!project.join("sources/registry-name.yaml").exists());
-        let signing = fs::read(project.join("secrets/signing-p256-private-jwk")).unwrap();
+        assert!(authored_source(&project, "registry-name").is_none());
+        let signing =
+            fs::read(project.join(".generated/secrets/signing-p256-private-jwk")).unwrap();
         configure(args(root.path(), &project), false, false, &mut |a| {
             provider.invoke(a)
         })
         .unwrap();
         assert_eq!(
-            fs::read(project.join("secrets/signing-p256-private-jwk")).unwrap(),
+            fs::read(project.join(".generated/secrets/signing-p256-private-jwk")).unwrap(),
             signing
         );
-        let governance = project.join("targets/local/governance.yaml");
+        let governance = project.join("local-target.yaml");
         let mut document: Value =
             serde_norway::from_slice(&fs::read(&governance).unwrap()).unwrap();
-        document["sourceConnections"]["registry"]["baseUrl"] = json!("http://127.0.0.1:29090");
+        document["connections"]["registry"]["origin"] = json!("http://127.0.0.1:29090");
         fs::write(&governance, serde_norway::to_string(&document).unwrap()).unwrap();
         let before = fs::read(&governance).unwrap();
         provider.calls.clear();
@@ -1494,11 +1540,11 @@ mod tests {
             provider.invoke(a)
         })
         .unwrap();
-        let id_path = project.join("secrets/registry-client-id");
-        let key_path = project.join("secrets/registry-client-key");
+        let id_path = project.join(".generated/secrets/registry-client-id");
+        let key_path = project.join(".generated/secrets/registry-client-key");
         let id_before = fs::read(&id_path).unwrap();
         let key_before = fs::read(&key_path).unwrap();
-        let governance_path = project.join("targets/local/governance.yaml");
+        let governance_path = project.join("local-target.yaml");
         let governance_before = fs::read(&governance_path).unwrap();
         provider.calls.clear();
 
@@ -1518,7 +1564,7 @@ mod tests {
         assert_eq!(fs::read(id_path).unwrap(), id_before);
         assert_eq!(fs::read(key_path).unwrap(), key_before);
         assert_eq!(fs::read(governance_path).unwrap(), governance_before);
-        assert!(!project.join("sources/registry-other.yaml").exists());
+        assert!(authored_source(&project, "registry-other").is_none());
         assert!(!provider.clients.contains("registry-other"));
     }
 
@@ -1531,12 +1577,11 @@ mod tests {
             provider.invoke(a)
         })
         .unwrap();
-        let source_path = project.join("sources/registry-name.yaml");
-        let source_before = fs::read(&source_path).unwrap();
-        let governance_path = project.join("targets/local/governance.yaml");
+        let source_before = authored_source(&project, "registry-name").unwrap();
+        let governance_path = project.join("local-target.yaml");
         let governance_before = fs::read(&governance_path).unwrap();
         for suffix in ["client-id", "client-key"] {
-            fs::remove_file(project.join(format!("secrets/registry-{suffix}"))).unwrap();
+            fs::remove_file(project.join(format!(".generated/secrets/registry-{suffix}"))).unwrap();
         }
 
         for apply in [true, false] {
@@ -1552,32 +1597,39 @@ mod tests {
                 .flatten()
                 .all(|argument| argument != "--apply"));
             assert!(!provider.clients.contains("registry-other"));
-            assert!(!project.join("sources/registry-other.yaml").exists());
+            assert!(authored_source(&project, "registry-other").is_none());
             for suffix in ["client-id", "client-key"] {
-                assert!(!project.join(format!("secrets/registry-{suffix}")).exists());
+                assert!(!project
+                    .join(format!(".generated/secrets/registry-{suffix}"))
+                    .exists());
             }
         }
-        assert_eq!(fs::read(&source_path).unwrap(), source_before);
+        assert_eq!(
+            authored_source(&project, "registry-name").unwrap(),
+            source_before
+        );
         assert_eq!(fs::read(&governance_path).unwrap(), governance_before);
 
         let mut selected = args(root.path(), &project);
         selected.source_id = Some("registry-other".into());
         selected.connection = "registry-other".into();
         configure(selected, false, false, &mut |a| provider.invoke(a)).unwrap();
-        let source: Value = serde_norway::from_slice(
-            &fs::read(project.join("sources/registry-other.yaml")).unwrap(),
-        )
-        .unwrap();
+        let source = authored_source(&project, "registry-other").unwrap();
         assert_eq!(source["connection"], "registry-other");
-        assert_eq!(fs::read(&source_path).unwrap(), source_before);
+        assert_eq!(
+            authored_source(&project, "registry-name").unwrap(),
+            source_before
+        );
         for suffix in ["client-id", "client-key"] {
             assert!(project
-                .join(format!("secrets/registry-other-{suffix}"))
+                .join(format!(".generated/secrets/registry-other-{suffix}"))
                 .is_file());
-            assert!(!project.join(format!("secrets/registry-{suffix}")).exists());
+            assert!(!project
+                .join(format!(".generated/secrets/registry-{suffix}"))
+                .exists());
         }
 
-        fs::remove_dir_all(project.join("secrets")).unwrap();
+        fs::remove_dir_all(project.join(".generated/secrets")).unwrap();
         provider.calls.clear();
         let mut preview = args(root.path(), &project);
         preview.source_id = Some("third-source".into());
@@ -1589,7 +1641,7 @@ mod tests {
             .iter()
             .flatten()
             .all(|argument| argument != "--apply"));
-        assert!(!project.join("secrets").exists());
+        assert!(!project.join(".generated/secrets").exists());
     }
 
     #[test]
@@ -1601,7 +1653,7 @@ mod tests {
             provider.invoke(a)
         })
         .unwrap();
-        let key_path = project.join("secrets/registry-client-key");
+        let key_path = project.join(".generated/secrets/registry-client-key");
         fs::write(&key_path, b"different-private-key-canary").unwrap();
         for apply in [true, false] {
             provider.calls.clear();
@@ -1639,7 +1691,7 @@ mod tests {
             let missing: Vec<_> = missing_suffixes
                 .into_iter()
                 .map(|suffix| {
-                    let path = project.join(format!("secrets/registry-{suffix}"));
+                    let path = project.join(format!(".generated/secrets/registry-{suffix}"));
                     let retained = fs::read(&path).unwrap();
                     fs::remove_file(&path).unwrap();
                     (path, retained)
@@ -1955,7 +2007,7 @@ mod tests {
         };
         let mut prepare = public("dev", "prepare-source");
         for (flag, value) in [
-            ("--entity", "record"),
+            ("--record-type", "record"),
             ("--selector-field", "code"),
             ("--readable-fields", "name"),
             ("--client", "registry-name"),
@@ -1990,7 +2042,7 @@ mod tests {
         assert!(export.is_absolute() && export.file_name().unwrap() == "source");
         let mut generate = public("generate", "evidence-source");
         for (flag, value) in [
-            ("--entity", "record"),
+            ("--record-type", "record"),
             ("--access-profile", "registry-name"),
             ("--selector", "registry-name"),
             ("--fields", "name"),
@@ -2005,12 +2057,12 @@ mod tests {
         add_pair(
             &mut export_client,
             "--client-id-file",
-            project.join("secrets/registry-client-id"),
+            project.join(".generated/secrets/registry-client-id"),
         );
         add_pair(
             &mut export_client,
             "--assertion-key-file",
-            project.join("secrets/registry-client-key"),
+            project.join(".generated/secrets/registry-client-key"),
         );
         assert_eq!(
             provider.calls,

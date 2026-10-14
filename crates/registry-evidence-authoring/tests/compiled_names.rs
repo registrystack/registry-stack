@@ -1,241 +1,180 @@
-//! The authored names a compiled bundle would refuse, refused where they are
-//! written.
-//!
-//! The bundle names a selector profile, a selector field, and a source with a
-//! lowercase letter followed by up to 63 lowercase letters, digits, `_`, or
-//! `-`: no dot, and 64 characters at most. The authoring form is wider, and a
-//! question that reads an operation of the project's own OpenAPI description
-//! has its selector profile and its source named after it. Each case below is
-//! one name the form used to accept and the bundle then refused, held to the
-//! member an author wrote it in.
+//! Stable normalized identifiers and their reference sites use one LocalId
+//! grammar. Presentation labels never enter this contract.
 
-use registry_evidence_authoring::{
-    local_selector_profile_id, local_source_id, local_subject_selector_profile_id,
-    validate_question, Finding, Question, MAX_COMPILED_NAME_BYTES,
-};
+#![allow(
+    clippy::disallowed_macros,
+    reason = "this test target embeds the public canonical fixture; the library performs no I/O"
+)]
+
+use registry_evidence_authoring::project;
+use registry_platform_yaml::Diagnostic;
 use serde_json::{json, Value};
 
-/// A question that reads an operation of the project's own OpenAPI
-/// description, about one subject.
-fn inline_question() -> Value {
-    json!({
-        "id": "record-check",
-        "question": "Does the record carry the reviewed marker?",
-        "purpose": "record-check",
-        "subject": { "role": "holder", "selector": "record_key" },
-        "source": {
-            "operation": "getRecord",
-            "facts": [{ "name": "marker", "path": "/marker", "combine": "exactly-one" }]
-        },
-        "answers": [{ "concept": "marked", "type": "boolean" }],
-        "derivation": "derivations/record-check.rhai",
-        "disclosure": { "allow": ["marked"] }
-    })
+const NORMALIZED_PROJECT: &str =
+    include_str!("../../../products/evidence/examples/standalone/evidence.yaml");
+
+fn normalized_document() -> Value {
+    let project = project::read_project("evidence.yaml", NORMALIZED_PROJECT.as_bytes())
+        .expect("the canonical project reads")
+        .value;
+    let mut value = serde_json::to_value(project).expect("the canonical project serializes");
+    let object = value.as_object_mut().expect("the project is an object");
+    object.insert("apiVersion".to_owned(), json!(project::PROJECT_API_VERSION));
+    object.insert("kind".to_owned(), json!(project::PROJECT_KIND));
+    value
 }
 
-/// A question that reads a source the project names.
-fn referenced_question() -> Value {
-    let mut document = inline_question();
-    document["subject"] = json!({
-        "role": "holder", "selector": "record_key", "profile": "record-key-v1"
-    });
-    document["source"] = json!({ "ref": "record-source" });
-    document
+fn read_normalized(
+    document: &Value,
+) -> Result<project::EvidenceProject, registry_platform_yaml::Report> {
+    let text = serde_norway::to_string(document).expect("the test project renders");
+    project::read_project("evidence.yaml", text.as_bytes()).map(|decoded| decoded.value)
 }
 
-fn check(document: Value) -> Vec<Finding> {
-    validate_question(&serde_json::from_value::<Question>(document).expect("the question parses"))
-}
-
-/// The one finding a refused document reports, as its code, the pointer of the
-/// member it names, and its sentence.
-fn refusal(document: Value) -> (&'static str, String, String) {
-    let findings = check(document);
-    assert_eq!(findings.len(), 1, "{findings:?}");
-    let finding = &findings[0];
-    (
-        finding.code,
-        finding.field.to_json_pointer(),
-        finding.message.clone(),
-    )
-}
-
-fn several_subjects(document: &mut Value, first_role: &str, second_role: &str) {
-    document.as_object_mut().unwrap().remove("subject");
-    document["subjects"] = json!([
-        { "role": first_role, "selector": "record_key" },
-        { "role": second_role, "selector": "other_key", "derivation": true },
-    ]);
+fn normalized_refusal(document: &Value) -> Diagnostic {
+    let report = read_normalized(document).unwrap_err();
+    assert_eq!(report.diagnostics().len(), 1, "{report:?}");
+    report.diagnostics()[0].clone()
 }
 
 #[test]
-fn an_inline_question_id_over_47_bytes_is_refused_at_the_id() {
-    let mut document = inline_question();
-    document["id"] = json!("a".repeat(47));
-    assert_eq!(check(document), Vec::new());
-
-    let mut document = inline_question();
-    document["id"] = json!("a".repeat(48));
-    assert_eq!(
-        refusal(document),
-        (
-            "compiled-name-length",
-            "/id".to_owned(),
-            "question id must be at most 47 bytes: the selector profile it compiles to, \
-             `local-subject-<id>-v1`, may hold 64"
-                .to_owned()
-        )
-    );
-}
-
-#[test]
-fn an_id_and_a_role_over_46_bytes_together_are_refused_at_the_role() {
-    let mut document = inline_question();
-    document["id"] = json!("a".repeat(20));
-    several_subjects(&mut document, &"b".repeat(26), "other");
-    assert_eq!(check(document), Vec::new());
-
-    let mut document = inline_question();
-    document["id"] = json!("a".repeat(20));
-    several_subjects(&mut document, "holder", &"b".repeat(27));
-    assert_eq!(
-        refusal(document),
-        (
-            "compiled-name-length",
-            "/subjects/1/role".to_owned(),
-            "question id and subject role must be at most 46 bytes together: the selector \
-             profile they compile to, `local-subject-<id>-<role>-v1`, may hold 64"
-                .to_owned()
-        )
-    );
-}
-
-#[test]
-fn a_role_with_a_dot_is_refused_where_it_names_a_selector_profile() {
-    let mut document = inline_question();
-    several_subjects(&mut document, "holder", "second.party");
-    assert_eq!(
-        refusal(document),
-        (
-            "compiled-name-dot",
-            "/subjects/1/role".to_owned(),
-            "subject role must not contain a dot: it names a selector profile in the compiled \
-             bundle"
-                .to_owned()
-        )
-    );
-
-    // One subject's role enters no compiled name, and neither does a role of
-    // a question that reads a named source.
-    let mut document = inline_question();
-    document["subject"]["role"] = json!("first.party");
-    assert_eq!(check(document), Vec::new());
-    let mut document = referenced_question();
-    document["subject"]["role"] = json!("first.party");
-    assert_eq!(check(document), Vec::new());
-}
-
-#[test]
-fn a_selector_with_a_dot_is_refused_at_the_selector() {
-    let sentence = "subject selector must not contain a dot: it names a selector field in the \
-                    compiled bundle";
-    let mut document = inline_question();
-    document["subject"]["selector"] = json!("record.key");
-    assert_eq!(
-        refusal(document),
-        (
-            "compiled-name-dot",
-            "/subject/selector".to_owned(),
-            sentence.to_owned()
-        )
-    );
-
-    let mut document = referenced_question();
-    document["subject"]["selector"] = json!("record.key");
-    assert_eq!(
-        refusal(document),
-        (
-            "compiled-name-dot",
-            "/subject/selector".to_owned(),
-            sentence.to_owned()
-        )
-    );
-}
-
-#[test]
-fn a_named_profile_with_a_dot_is_refused_at_the_profile() {
-    let mut document = referenced_question();
-    document["subject"]["profile"] = json!("record-key.v1");
-    assert_eq!(
-        refusal(document),
-        (
-            "compiled-name-dot",
-            "/subject/profile".to_owned(),
-            "subject profile must not contain a dot: it names a selector profile in the \
-             compiled bundle"
-                .to_owned()
-        )
-    );
-}
-
-#[test]
-fn an_alternative_profile_with_a_dot_is_refused_at_its_position() {
-    let mut document = referenced_question();
-    document["subject"] = json!({
-        "role": "holder", "profiles": ["record-key-v1", "record-key.v2"]
-    });
-    assert_eq!(
-        refusal(document),
-        (
-            "compiled-name-dot",
-            "/subject/profiles/1".to_owned(),
-            "subject profile must not contain a dot: it names a selector profile in the \
-             compiled bundle"
-                .to_owned()
-        )
-    );
-}
-
-#[test]
-fn a_source_reference_with_a_dot_is_refused_at_the_ref() {
-    let mut document = referenced_question();
-    document["source"]["ref"] = json!("record.source");
-    assert_eq!(
-        refusal(document),
-        (
-            "compiled-name-dot",
-            "/source/ref".to_owned(),
-            "source.ref must not contain a dot: it names a source in the compiled bundle"
-                .to_owned()
-        )
-    );
-}
-
-#[test]
-fn a_question_reading_a_named_source_keeps_the_whole_identifier_length() {
-    let mut document = referenced_question();
+fn project_id_uses_the_complete_local_id_bound() {
+    let mut document = normalized_document();
     document["id"] = json!("a".repeat(64));
-    assert_eq!(check(document), Vec::new());
+    assert!(read_normalized(&document).is_ok());
+
+    document["id"] = json!("a".repeat(65));
+    let diagnostic = normalized_refusal(&document);
+    assert_eq!(diagnostic.path, "/id");
+    assert_eq!(diagnostic.code, "config.invalid-value");
 }
 
 #[test]
-fn the_bounds_are_the_ones_the_compiled_names_leave() {
-    assert_eq!(MAX_COMPILED_NAME_BYTES, 64);
+fn function_id_and_presentation_label_are_separate() {
+    let mut document = normalized_document();
+    document["functions"].as_array_mut().unwrap().push(json!({
+        "id": "a".repeat(64),
+        "label": "Friendly label with spaces and punctuation.",
+        "interface": "source-prepare/v1",
+        "source": "functions/unused-prepare.rhai"
+    }));
+    assert!(read_normalized(&document).is_ok());
+
+    document["functions"]
+        .as_array_mut()
+        .unwrap()
+        .last_mut()
+        .unwrap()["id"] = json!("a".repeat(65));
+    let diagnostic = normalized_refusal(&document);
+    assert_eq!(diagnostic.path, "/functions/7/id");
+}
+
+#[test]
+fn selector_profile_keys_use_the_same_local_id_grammar() {
+    let mut document = normalized_document();
+    let profile = document["selectorProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .remove("record-by-id")
+        .unwrap();
+    document["selectorProfiles"]
+        .as_object_mut()
+        .unwrap()
+        .insert("record.by.id".to_owned(), profile);
+    let diagnostic = normalized_refusal(&document);
+    assert_eq!(diagnostic.path, "/selectorProfiles/record.by.id");
+}
+
+#[test]
+fn source_keys_use_the_same_local_id_grammar() {
+    let mut document = normalized_document();
+    let source = document["sources"]
+        .as_object_mut()
+        .unwrap()
+        .remove("person-record")
+        .unwrap();
+    document["sources"]
+        .as_object_mut()
+        .unwrap()
+        .insert("person.record".to_owned(), source);
+    let diagnostic = normalized_refusal(&document);
+    assert_eq!(diagnostic.path, "/sources/person.record");
+}
+
+#[test]
+fn assertion_definition_keys_use_the_same_local_id_grammar() {
+    let mut document = normalized_document();
+    let definition = document["assertionDefinitions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("adult-status")
+        .unwrap();
+    document["assertionDefinitions"]
+        .as_object_mut()
+        .unwrap()
+        .insert("adult.status".to_owned(), definition);
+    let diagnostic = normalized_refusal(&document);
+    assert_eq!(diagnostic.path, "/assertionDefinitions/adult.status");
+}
+
+#[test]
+fn selector_references_are_typed_local_ids_at_the_reference_site() {
+    let mut document = normalized_document();
+    document["assertionDefinitions"]["adult-status"]["subjects"][0]["selectors"][0] =
+        json!("record.by.id");
+    let diagnostic = normalized_refusal(&document);
     assert_eq!(
-        local_selector_profile_id(&"a".repeat(47)).len(),
-        MAX_COMPILED_NAME_BYTES
+        diagnostic.path,
+        "/assertionDefinitions/adult-status/subjects/0/selectors/0"
     );
+}
+
+#[test]
+fn source_references_are_typed_local_ids_at_the_reference_site() {
+    let mut document = normalized_document();
+    document["assertionDefinitions"]["adult-status"]["acquisition"]["source"] =
+        json!("missing-source");
+    let diagnostic = normalized_refusal(&document);
     assert_eq!(
-        local_subject_selector_profile_id(&"a".repeat(20), &"b".repeat(26), 2).len(),
-        MAX_COMPILED_NAME_BYTES
+        diagnostic.path,
+        "/assertionDefinitions/adult-status/acquisition/source"
     );
-    assert_eq!(
-        local_subject_selector_profile_id("record-check", "holder", 1),
-        local_selector_profile_id("record-check")
-    );
-    // The source name is shorter than either profile name, so it fits
-    // whenever they do.
-    assert!(
-        local_source_id("record-check").len() < local_selector_profile_id("record-check").len()
-    );
+}
+
+#[test]
+fn definition_keys_keep_the_complete_local_id_bound() {
+    let mut document = normalized_document();
+    let definition = document["assertionDefinitions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("adult-status")
+        .unwrap();
+    document["assertionDefinitions"]
+        .as_object_mut()
+        .unwrap()
+        .insert("a".repeat(64), definition);
+    assert!(read_normalized(&document).is_ok());
+}
+
+#[test]
+fn presentation_labels_do_not_rename_stable_ids_or_references() {
+    let mut document = normalized_document();
+    document["label"] = json!("Standalone Evidence project");
+    document["selectorProfiles"]["record-by-id"]["label"] = json!("Record identifier");
+    document["sources"]["person-record"]["label"] = json!("Person source");
+    document["assertionDefinitions"]["adult-status"]["label"] = json!("Adult status");
+    let project = read_normalized(&document).unwrap();
+    assert_eq!(project.id.as_str(), "standalone-evidence");
+    assert!(project
+        .selector_profiles
+        .keys()
+        .any(|id| id.as_str() == "record-by-id"));
+    assert!(project
+        .sources
+        .keys()
+        .any(|id| id.as_str() == "person-record"));
+    assert!(project
+        .assertion_definitions
+        .keys()
+        .any(|id| id.as_str() == "adult-status"));
 }

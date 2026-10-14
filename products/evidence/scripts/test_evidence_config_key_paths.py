@@ -243,7 +243,7 @@ class ParityTests(unittest.TestCase):
         problems = checker.compare(
             schema_paths={"a"},
             documented_paths={"c"},
-            label="crates/example/schemas/question.schema.json",
+            label="crates/example/schemas/project.schema.json",
             reference="products/evidence/reference/authoring-projects/CONFIG.md",
         )
         self.assertEqual(len(problems), 2)
@@ -279,6 +279,48 @@ class ContractAddressingTests(unittest.TestCase):
     def test_every_marker_is_unique(self):
         markers = [contract.marker for contract in checker.CONTRACTS.values()]
         self.assertEqual(len(markers), len(set(markers)))
+
+    def test_normalized_authoring_contracts_replace_the_retired_parallel_schemas(self):
+        self.assertEqual(
+            {
+                name
+                for name in checker.CONTRACTS
+                if name in {
+                    "authoring-project",
+                    "authoring-target",
+                    "authoring-target-authority",
+                }
+            },
+            {
+                "authoring-project",
+                "authoring-target",
+                "authoring-target-authority",
+            },
+        )
+        self.assertFalse(
+            {
+                "authoring-question",
+                "authoring-project-marker",
+                "authoring-access-policy",
+                "authoring-selector",
+                "authoring-source",
+                "authoring-target-governance",
+                "authoring-target-settings",
+            }
+            & checker.CONTRACTS.keys()
+        )
+        self.assertEqual(
+            checker.CONTRACTS["authoring-project"].schema,
+            "crates/registry-evidencectl/schemas/authoring/project.schema.json",
+        )
+        self.assertEqual(
+            checker.CONTRACTS["authoring-target"].schema,
+            "crates/registry-evidencectl/schemas/authoring/target.schema.json",
+        )
+        self.assertEqual(
+            checker.CONTRACTS["authoring-target-authority"].schema,
+            "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
+        )
 
     def test_the_frozen_contracts_and_the_authoring_schemas_split_references(self):
         """The authoring form is adopter tooling, documented apart from the

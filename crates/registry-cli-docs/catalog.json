@@ -8978,9 +8978,78 @@
           "subcommands": []
         },
         {
+          "name": "types",
+          "invocation": "evidencectl types",
+          "about": "Generate typed project outputs and Requirement URI names",
+          "long_about": null,
+          "usage": "evidencectl types [OPTIONS] --language <LANGUAGE> --output <OUTPUT> [PROJECT]",
+          "arguments": [
+            {
+              "display": "[PROJECT]",
+              "description": "Evidence project directory; defaults to the current directory. This command needs an editable project holding evidence.yaml.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "."
+              ],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--language <LANGUAGE>",
+              "description": "Output language for generated declarations",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "typescript",
+                "python"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "New generated declaration file to create",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json",
+                "junit"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
           "name": "check",
           "invocation": "evidencectl check",
-          "about": "Check authored policy and, when selected, deployment closure, or one tooling file, offline",
+          "about": "Check a normalized project and, when selected, deployment closure, or one tooling file, offline",
           "long_about": null,
           "usage": "evidencectl check [OPTIONS] <PROJECT|--file <FILE>>",
           "arguments": [
@@ -9070,14 +9139,6 @@
               "when": "--production",
               "arguments": [
                 "--target <TARGET>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--deny-warnings",
-                "--file <FILE>"
               ]
             },
             {
@@ -9190,15 +9251,6 @@
               "environment": null
             },
             {
-              "display": "--local",
-              "description": "Generate local caller governance while retaining the target's source connections",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
               "display": "--fixture <FIXTURE>",
               "description": "Run only the exact bundle-relative fixture path named here",
               "always_required": false,
@@ -9260,13 +9312,6 @@
             }
           ],
           "constraints": [
-            {
-              "kind": "requires-all",
-              "when": "--local",
-              "arguments": [
-                "--target <TARGET>"
-              ]
-            },
             {
               "kind": "requires-all",
               "when": "--case <CASE>",
@@ -9353,7 +9398,7 @@
         {
           "name": "access",
           "invocation": "evidencectl access",
-          "about": "Manage local caller access policies and clients",
+          "about": "Manage target access profiles and local caller clients",
           "long_about": null,
           "usage": "evidencectl access [OPTIONS] <COMMAND>",
           "arguments": [],
@@ -9386,11 +9431,11 @@
           "constraints": [],
           "subcommands": [
             {
-              "name": "policy",
-              "invocation": "evidencectl access policy",
-              "about": "Define which authored questions a policy may request",
+              "name": "profile",
+              "invocation": "evidencectl access profile",
+              "about": "Inspect complete access profiles from the target authority",
               "long_about": null,
-              "usage": "evidencectl access policy [OPTIONS] <COMMAND>",
+              "usage": "evidencectl access profile [OPTIONS] <COMMAND>",
               "arguments": [],
               "options": [
                 {
@@ -9421,66 +9466,11 @@
               "constraints": [],
               "subcommands": [
                 {
-                  "name": "add",
-                  "invocation": "evidencectl access policy add",
-                  "about": "Add one governed access policy",
-                  "long_about": null,
-                  "usage": "evidencectl access policy add [OPTIONS] --question <QUESTION> <POLICY>",
-                  "arguments": [
-                    {
-                      "display": "<POLICY>",
-                      "description": "Lowercase policy identifier",
-                      "always_required": true,
-                      "repeatable": false,
-                      "default_values": [],
-                      "possible_values": [],
-                      "environment": null
-                    }
-                  ],
-                  "options": [
-                    {
-                      "display": "--question <QUESTION>",
-                      "description": "Authored question granted by this policy. Repeat for more than one",
-                      "always_required": true,
-                      "repeatable": true,
-                      "default_values": [],
-                      "possible_values": [],
-                      "environment": null
-                    },
-                    {
-                      "display": "--format <FORMAT>",
-                      "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
-                      "always_required": false,
-                      "repeatable": false,
-                      "default_values": [
-                        "human"
-                      ],
-                      "possible_values": [
-                        "human",
-                        "json",
-                        "junit"
-                      ],
-                      "environment": null
-                    },
-                    {
-                      "display": "-h, --help",
-                      "description": "Print help",
-                      "always_required": false,
-                      "repeatable": false,
-                      "default_values": [],
-                      "possible_values": [],
-                      "environment": null
-                    }
-                  ],
-                  "constraints": [],
-                  "subcommands": []
-                },
-                {
                   "name": "list",
-                  "invocation": "evidencectl access policy list",
-                  "about": "List governed access policies",
+                  "invocation": "evidencectl access profile list",
+                  "about": "List governed target access profiles",
                   "long_about": null,
-                  "usage": "evidencectl access policy list [OPTIONS]",
+                  "usage": "evidencectl access profile list [OPTIONS]",
                   "arguments": [],
                   "options": [
                     {
@@ -9553,7 +9543,7 @@
                   "invocation": "evidencectl access client add",
                   "about": "Add one local client and generate its private key",
                   "long_about": null,
-                  "usage": "evidencectl access client add [OPTIONS] --policy <POLICY> --generate-local-key <CLIENT>",
+                  "usage": "evidencectl access client add [OPTIONS] --access-profile <ACCESS_PROFILE> --generate-local-key <CLIENT>",
                   "arguments": [
                     {
                       "display": "<CLIENT>",
@@ -9567,12 +9557,34 @@
                   ],
                   "options": [
                     {
-                      "display": "--policy <POLICY>",
-                      "description": "Access policy assigned to this client. Repeat for more than one",
+                      "display": "--access-profile <ACCESS_PROFILE>",
+                      "description": "Existing target access profile assigned to this client. Repeat for disjoint grants",
                       "always_required": true,
                       "repeatable": true,
                       "default_values": [],
                       "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--evidence-audience <EVIDENCE_AUDIENCE>",
+                      "description": "Audience inside every selected definition ceiling. Inferred when exactly one fits",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--actor-kind <ACTOR_KIND>",
+                      "description": "Actor permitted by the selected profiles. Inferred when exactly one fits",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [
+                        "human",
+                        "agent",
+                        "service"
+                      ],
                       "environment": null
                     },
                     {
@@ -9700,7 +9712,7 @@
                 {
                   "name": "list",
                   "invocation": "evidencectl access client list",
-                  "about": "List local clients and their policy membership",
+                  "about": "List local clients and their access-profile membership",
                   "long_about": null,
                   "usage": "evidencectl access client list [OPTIONS]",
                   "arguments": [],
@@ -10293,126 +10305,6 @@
           ]
         },
         {
-          "name": "new",
-          "invocation": "evidencectl new",
-          "about": "Start an editable Evidence Gateway project from OpenAPI, a starter, or a SQLite extract",
-          "long_about": null,
-          "usage": "evidencectl new [OPTIONS] --profile <PROFILE> <--openapi <OPENAPI>|--transport <TRANSPORT>|--starter <STARTER>> <DIRECTORY>",
-          "arguments": [
-            {
-              "display": "<DIRECTORY>",
-              "description": "New directory to create for the editable authoring project",
-              "always_required": true,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "options": [
-            {
-              "display": "--openapi <OPENAPI>",
-              "description": "OpenAPI 3.0 or 3.1 document: a local path or an HTTPS URL",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--transport <TRANSPORT>",
-              "description": "Source transport to author without an API description",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [
-                "sqlite-extract"
-              ],
-              "environment": null
-            },
-            {
-              "display": "--starter <STARTER>",
-              "description": "Reviewed local starter directory to copy without requiring an API description",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--profile <PROFILE>",
-              "description": "Explicit development profile for local authoring",
-              "always_required": true,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [
-                "local"
-              ],
-              "environment": null
-            },
-            {
-              "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "human"
-              ],
-              "possible_values": [
-                "human",
-                "json",
-                "junit"
-              ],
-              "environment": null
-            },
-            {
-              "display": "-h, --help",
-              "description": "Print help (see a summary with '-h')",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "constraints": [
-            {
-              "kind": "required-exactly-one",
-              "when": null,
-              "arguments": [
-                "--openapi <OPENAPI>",
-                "--transport <TRANSPORT>",
-                "--starter <STARTER>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--openapi <OPENAPI>",
-                "--starter <STARTER>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--openapi <OPENAPI>",
-                "--transport <TRANSPORT>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--starter <STARTER>",
-                "--transport <TRANSPORT>"
-              ]
-            }
-          ],
-          "subcommands": []
-        },
-        {
           "name": "fixtures",
           "invocation": "evidencectl fixtures",
           "about": "Drive the evidence binary across a project's bundle fixtures",
@@ -10456,7 +10348,7 @@
               "arguments": [
                 {
                   "display": "[PROJECT]",
-                  "description": "Evidence project directory; defaults to the current directory. This command accepts either shape: an editable project holding questions/ and sources/, or a deployment project holding runtime.yaml beside bundle/.",
+                  "description": "Evidence project directory; defaults to the current directory. This command accepts either shape: an editable project holding evidence.yaml, or a deployment project holding runtime.yaml beside bundle/.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -10479,15 +10371,6 @@
                 {
                   "display": "--target <TARGET>",
                   "description": "Complete deployment target to use when compiling an editable project",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--local",
-                  "description": "Generate local caller governance from current questions, using target connections",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -10565,13 +10448,6 @@
                 }
               ],
               "constraints": [
-                {
-                  "kind": "requires-all",
-                  "when": "--local",
-                  "arguments": [
-                    "--target <TARGET>"
-                  ]
-                },
                 {
                   "kind": "requires-all",
                   "when": "--case <CASE>",
@@ -10792,18 +10668,9 @@
           "invocation": "evidencectl dev",
           "about": "Run the private local issuer and Evidence Gateway pair",
           "long_about": null,
-          "usage": "evidencectl dev [OPTIONS]\n       evidencectl dev [OPTIONS] <COMMAND>",
+          "usage": "evidencectl dev [OPTIONS] <COMMAND>",
           "arguments": [],
           "options": [
-            {
-              "display": "--detach",
-              "description": "Return after the local issuer and Evidence Gateway are ready on loopback",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
             {
               "display": "--evidence-port <EVIDENCE_PORT>",
               "description": "Loopback port for the local Evidence Gateway service",
@@ -10842,16 +10709,7 @@
             },
             {
               "display": "--target <TARGET>",
-              "description": "Reuse a local target's source connections and outbound TLS in the generated local caller rehearsal. Target service authentication is not replayed",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--preserve-target-authenticated-context",
-              "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+              "description": "Select the governed target and its complete authority. Defaults to local-target.yaml",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -10950,16 +10808,7 @@
                 },
                 {
                   "display": "--target <TARGET>",
-                  "description": "Reuse a local target's source connections and outbound TLS in the generated local caller rehearsal. Target service authentication is not replayed",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--preserve-target-authenticated-context",
-                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "description": "Select the governed target and its complete authority. Defaults to local-target.yaml",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -10991,16 +10840,7 @@
                   "environment": null
                 }
               ],
-              "constraints": [
-                {
-                  "kind": "requires-all",
-                  "when": "--preserve-target-authenticated-context",
-                  "arguments": [
-                    "--target <TARGET>",
-                    "--issuer-project <PROJECT>"
-                  ]
-                }
-              ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -11070,16 +10910,7 @@
                 },
                 {
                   "display": "--target <TARGET>",
-                  "description": "Reuse a local target's source connections and outbound TLS in the generated local caller rehearsal. Target service authentication is not replayed",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--preserve-target-authenticated-context",
-                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "description": "Select the governed target and its complete authority. Defaults to local-target.yaml",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11111,16 +10942,7 @@
                   "environment": null
                 }
               ],
-              "constraints": [
-                {
-                  "kind": "requires-all",
-                  "when": "--preserve-target-authenticated-context",
-                  "arguments": [
-                    "--target <TARGET>",
-                    "--issuer-project <PROJECT>"
-                  ]
-                }
-              ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -11179,16 +11001,7 @@
                 },
                 {
                   "display": "--target <TARGET>",
-                  "description": "Reuse a local target's source connections and outbound TLS in the generated local caller rehearsal. Target service authentication is not replayed",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--preserve-target-authenticated-context",
-                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "description": "Select the governed target and its complete authority. Defaults to local-target.yaml",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11220,16 +11033,7 @@
                   "environment": null
                 }
               ],
-              "constraints": [
-                {
-                  "kind": "requires-all",
-                  "when": "--preserve-target-authenticated-context",
-                  "arguments": [
-                    "--target <TARGET>",
-                    "--issuer-project <PROJECT>"
-                  ]
-                }
-              ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -11290,16 +11094,7 @@
                 },
                 {
                   "display": "--target <TARGET>",
-                  "description": "Reuse a local target's source connections and outbound TLS in the generated local caller rehearsal. Target service authentication is not replayed",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--preserve-target-authenticated-context",
-                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "description": "Select the governed target and its complete authority. Defaults to local-target.yaml",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11331,16 +11126,7 @@
                   "environment": null
                 }
               ],
-              "constraints": [
-                {
-                  "kind": "requires-all",
-                  "when": "--preserve-target-authenticated-context",
-                  "arguments": [
-                    "--target <TARGET>",
-                    "--issuer-project <PROJECT>"
-                  ]
-                }
-              ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -11410,16 +11196,7 @@
                 },
                 {
                   "display": "--target <TARGET>",
-                  "description": "Reuse a local target's source connections and outbound TLS in the generated local caller rehearsal. Target service authentication is not replayed",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--preserve-target-authenticated-context",
-                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "description": "Select the governed target and its complete authority. Defaults to local-target.yaml",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11451,16 +11228,7 @@
                   "environment": null
                 }
               ],
-              "constraints": [
-                {
-                  "kind": "requires-all",
-                  "when": "--preserve-target-authenticated-context",
-                  "arguments": [
-                    "--target <TARGET>",
-                    "--issuer-project <PROJECT>"
-                  ]
-                }
-              ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -11548,16 +11316,7 @@
                 },
                 {
                   "display": "--target <TARGET>",
-                  "description": "Reuse a local target's source connections and outbound TLS in the generated local caller rehearsal. Target service authentication is not replayed",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--preserve-target-authenticated-context",
-                  "description": "Preserve the selected local target's reviewed human authenticated-context subject bindings. Requires a target and its borrowed BReg issuer owner",
+                  "description": "Select the governed target and its complete authority. Defaults to local-target.yaml",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11589,16 +11348,7 @@
                   "environment": null
                 }
               ],
-              "constraints": [
-                {
-                  "kind": "requires-all",
-                  "when": "--preserve-target-authenticated-context",
-                  "arguments": [
-                    "--target <TARGET>",
-                    "--issuer-project <PROJECT>"
-                  ]
-                }
-              ],
+              "constraints": [],
               "subcommands": []
             }
           ]
@@ -12239,7 +11989,7 @@
                 },
                 {
                   "display": "--target <TARGET>",
-                  "description": "Local target to extend; defaults to PROJECT/targets/local",
+                  "description": "Local target to extend; defaults to PROJECT/local-target.yaml",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -12326,7 +12076,7 @@
               "arguments": [
                 {
                   "display": "[PROJECT]",
-                  "description": "Evidence project directory; the draft is printed when this is absent. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "description": "Evidence project directory; the draft is printed when this is absent. This command needs an editable project containing evidence.yaml and its named Function assets.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -12492,7 +12242,7 @@
               "options": [
                 {
                   "display": "--project <PROJECT>",
-                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project containing evidence.yaml and its named Function assets.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -12512,7 +12262,7 @@
                 },
                 {
                   "display": "--target <TARGET>",
-                  "description": "Complete target used by the compiler to compare actual question revisions",
+                  "description": "Complete target used by the compiler to compare actual definition revisions",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -12567,7 +12317,7 @@
               "options": [
                 {
                   "display": "--project <PROJECT>",
-                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project containing evidence.yaml and its named Function assets.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -12587,7 +12337,7 @@
                 },
                 {
                   "display": "--target <TARGET>",
-                  "description": "Complete target used by the compiler to compare actual question revisions",
+                  "description": "Complete target used by the compiler to compare actual definition revisions",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -12642,7 +12392,7 @@
               "options": [
                 {
                   "display": "--project <PROJECT>",
-                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project containing evidence.yaml and its named Function assets.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -12662,7 +12412,7 @@
                 },
                 {
                   "display": "--target <TARGET>",
-                  "description": "Complete target used by the compiler to compare actual question revisions",
+                  "description": "Complete target used by the compiler to compare actual definition revisions",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -12741,7 +12491,7 @@
                   "arguments": [
                     {
                       "display": "[PROJECT]",
-                      "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                      "description": "Evidence project directory; defaults to the current directory. This command needs an editable project containing evidence.yaml and its named Function assets.",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -12814,7 +12564,7 @@
                   "arguments": [
                     {
                       "display": "[PROJECT]",
-                      "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                      "description": "Evidence project directory; defaults to the current directory. This command needs an editable project containing evidence.yaml and its named Function assets.",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -12978,7 +12728,7 @@
                   "arguments": [
                     {
                       "display": "[PROJECT]",
-                      "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                      "description": "Evidence project directory; defaults to the current directory. This command needs an editable project containing evidence.yaml and its named Function assets.",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -13184,7 +12934,7 @@
                 },
                 {
                   "display": "[PROJECT]",
-                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project containing evidence.yaml and its named Function assets.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -13261,13 +13011,13 @@
             {
               "name": "explain",
               "invocation": "evidencectl target explain",
-              "about": "Inspect the public files and logical secret references in a target",
+              "about": "Inspect one normalized target and its complete grants",
               "long_about": null,
               "usage": "evidencectl target explain [OPTIONS] <TARGET> [PROJECT]",
               "arguments": [
                 {
                   "display": "<TARGET>",
-                  "description": "Complete deployment target containing governance.yaml and runtime.yaml",
+                  "description": "Normalized target.yaml, or a directory containing target.yaml",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -13276,7 +13026,7 @@
                 },
                 {
                   "display": "[PROJECT]",
-                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project holding evidence.yaml.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [
@@ -13289,7 +13039,7 @@
               "options": [
                 {
                   "display": "--json",
-                  "description": "Emit one machine-readable JSON report on standard output",
+                  "description": "Emit one machine-readable JSON report",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -13327,13 +13077,13 @@
             {
               "name": "new",
               "invocation": "evidencectl target new",
-              "about": "Create target files from explicit settings or a project-local baseline",
+              "about": "Create a normalized target and its complete authority file",
               "long_about": null,
               "usage": "evidencectl target new [OPTIONS] <DIRECTORY>",
               "arguments": [
                 {
                   "display": "<DIRECTORY>",
-                  "description": "New target directory to create; missing parent directories are created",
+                  "description": "New target directory to create",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -13344,7 +13094,7 @@
               "options": [
                 {
                   "display": "--settings <SETTINGS>",
-                  "description": "Closed settings document with native governance, runtime, and public keys. This command checks target-file shape, logical secret references, and public-key identity. Project-specific bundle and runtime semantics are checked by `target explain`, `fixtures run --target`, `build --target`, and `doctor`.",
+                  "description": "Existing normalized target.yaml to copy with its referenced authority and public key",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -13353,7 +13103,7 @@
                 },
                 {
                   "display": "--project <PROJECT>",
-                  "description": "Evidence project directory; defaults to the current directory with --local. This command needs an editable project with local signing keys when using --local. Its paths fill only omitted local filesystem settings.",
+                  "description": "Evidence project directory; defaults to the current directory with --local. This command needs an editable project holding evidence.yaml.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -13362,16 +13112,7 @@
                 },
                 {
                   "display": "--local",
-                  "description": "Use project-local development paths; requires local assurance governance",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--signing-public-key <SIGNING_PUBLIC_KEY>",
-                  "description": "Public signing JWK whose RFC 7638 thumbprint names activePublicJwkFile",
+                  "description": "Generate a complete disposable local target from the EvidenceProject ceilings",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -13454,11 +13195,11 @@
               "invocation": "evidencectl request prepare",
               "about": "Prepare the request, authorization header, and verification context",
               "long_about": null,
-              "usage": "evidencectl request prepare [OPTIONS] --name <NAME> <QUESTION|--profile <PROFILE>>",
+              "usage": "evidencectl request prepare [OPTIONS] --name <NAME> <DEFINITION|--profile <PROFILE>>",
               "arguments": [
                 {
-                  "display": "[QUESTION]",
-                  "description": "Question defined by the active local project",
+                  "display": "[DEFINITION]",
+                  "description": "AssertionDefinition ID declared by the active local project",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -13478,7 +13219,7 @@
                 },
                 {
                   "display": "--requirement <REQUIREMENT>",
-                  "description": "Stable public requirement handle from the selected contract catalog",
+                  "description": "Public Requirement URI from the selected contract catalog",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -13487,7 +13228,7 @@
                 },
                 {
                   "display": "--purpose <PURPOSE>",
-                  "description": "Exact purpose declared by the question",
+                  "description": "Exact purpose declared by the definition",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -13572,7 +13313,7 @@
                   "kind": "required-exactly-one",
                   "when": null,
                   "arguments": [
-                    "[QUESTION]",
+                    "[DEFINITION]",
                     "--profile <PROFILE>"
                   ]
                 },
@@ -13587,7 +13328,7 @@
                   "kind": "requires-all",
                   "when": "--purpose <PURPOSE>",
                   "arguments": [
-                    "<QUESTION>"
+                    "<DEFINITION>"
                   ]
                 },
                 {
@@ -13595,7 +13336,7 @@
                   "when": null,
                   "arguments": [
                     "--profile <PROFILE>",
-                    "[QUESTION]"
+                    "[DEFINITION]"
                   ]
                 },
                 {
@@ -13607,68 +13348,6 @@
                   ]
                 }
               ],
-              "subcommands": []
-            },
-            {
-              "name": "verify",
-              "invocation": "evidencectl request verify",
-              "about": "Deprecated alias for `evidencectl verify`",
-              "long_about": "Deprecated alias for `evidencectl verify`. `evidencectl verify` is the one verification command, and it takes the same arguments. This spelling keeps working so a script that already calls it is not broken by the rename.",
-              "usage": "evidencectl request verify [OPTIONS] --context <CONTEXT> --output <OUTPUT> <RESPONSE>",
-              "arguments": [
-                {
-                  "display": "<RESPONSE>",
-                  "description": "Signed JWS or SD-JWT VC response returned by Evidence Gateway",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--context <CONTEXT>",
-                  "description": "Owner-only verification context retained before the response existed",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--output <OUTPUT>",
-                  "description": "New owner-only file for the exact verified Evidence Gateway payload",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Select human-readable output; this command provides no JSON report",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help (see a summary with '-h')",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
               "subcommands": []
             }
           ]
@@ -13779,7 +13458,7 @@
               "arguments": [
                 {
                   "display": "[PROJECT]",
-                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project: one holding questions/ and sources/ beside evidence-project.yaml.",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project holding evidence.yaml.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [

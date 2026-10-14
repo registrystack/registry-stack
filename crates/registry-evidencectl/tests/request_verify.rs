@@ -23,8 +23,7 @@ use serde_json::{json, Value};
 
 const TOKEN: &str = "secret.token.canary";
 const BINDING: &str = "urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-const AGE_CHECKS_TAG: &str =
-    "policy-v1-bc8c04f766133dc6ffd6e395caa64f9c3b43301c1d308716668c71b8b839c0dc";
+const AGE_CHECKS_TAG: &str = "age-checks";
 
 #[test]
 fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
@@ -35,7 +34,7 @@ fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
     assert_success(&request);
     let request = String::from_utf8_lossy(&request.stdout);
     for visible in [
-        "[QUESTION]",
+        "[DEFINITION]",
         "--profile",
         "--requirement",
         "--purpose",
@@ -66,7 +65,7 @@ fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
         .args(["request", "verify", "--help"])
         .output()
         .expect("nested verify help");
-    assert_success(&nested_verify);
+    assert_eq!(nested_verify.status.code(), Some(2));
 }
 
 #[test]
@@ -191,6 +190,7 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
         json!({
             "requestNonce": request["requestNonce"],
             "requirement": "urn:registrystack:evidence:local:requirement:adult-status",
+            "expectedConfigurationRevision": format!("sha256:{}", "0".repeat(64)),
             "purpose": "age-check",
             "subjects": [{
                 "role": "person",
@@ -465,7 +465,7 @@ fn unusable_named_clients_and_issuer_refusal_publish_no_request_artifacts() {
 }
 
 #[test]
-fn selected_clients_require_an_explicit_current_policy_generation() {
+fn selected_clients_require_an_explicit_current_authority_generation() {
     let implicit = Fixture::new();
     implicit.add_named_client("age-checker", "active", 0o600);
     let output = implicit.prepare_as("age-checker", "implicit-client");
@@ -479,19 +479,20 @@ fn selected_clients_require_an_explicit_current_policy_generation() {
     assert!(!output.status.success());
     assert_no_request_artifacts(&explicit.root, "missing-client");
 
-    private_file(
-        &explicit.root.join("questions/age-bracket.yaml"),
-        b"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\nid: age-bracket\n",
-        0o644,
+    let authority_path = explicit.root.join("dev-authority.yaml");
+    let mut authority: Value = serde_json::from_slice(&fs::read(&authority_path).unwrap()).unwrap();
+    let state: Value =
+        serde_json::from_slice(&fs::read(explicit.root.join(".evidence/dev/state.json")).unwrap())
+            .unwrap();
+    authority["accessProfiles"]["age-checks"] = authored_profile(
+        state["definitions"].as_array().unwrap(),
+        &["adult-status".to_owned(), "age-bracket".to_owned()],
+        AGE_CHECKS_TAG,
     );
-    private_file(
-        &explicit.root.join("access/policies/age-checks.yaml"),
-        b"apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nid: age-checks\nquestions: [adult-status, age-bracket]\n",
-        0o644,
-    );
-    let output = explicit.prepare_as("age-checker", "drifted-policy");
+    fs::write(&authority_path, serde_json::to_vec(&authority).unwrap()).unwrap();
+    let output = explicit.prepare_as("age-checker", "drifted-authority");
     assert!(!output.status.success());
-    assert_no_request_artifacts(&explicit.root, "drifted-policy");
+    assert_no_request_artifacts(&explicit.root, "drifted-authority");
 }
 
 #[test]
@@ -843,8 +844,8 @@ impl Fixture {
                 "evidenceAudience": "urn:registrystack:evidence:local:caller",
                 "requesterTag": "local-caller"
             },
-            "accessPolicies": [],
-            "questions": [
+            "accessProfiles": [],
+            "definitions": [
                 {
                     "alias": "adult-status",
                     "requirementUri": "urn:registrystack:evidence:local:requirement:adult-status",
@@ -1123,20 +1124,18 @@ impl Fixture {
     }
 
     fn add_named_client(&self, client_id: &str, status: &str, key_mode: u32) {
-        let questions = self.root.join("questions");
-        fs::create_dir_all(&questions).expect("authored question directory");
-        private_file(
-            &questions.join("adult-status.yaml"),
-            b"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\nid: adult-status\n",
-            0o644,
+        let authority_path = self.root.join("dev-authority.yaml");
+        let mut authority: Value =
+            serde_json::from_slice(&fs::read(&authority_path).unwrap()).unwrap();
+        let state: Value =
+            serde_json::from_slice(&fs::read(self.root.join(".evidence/dev/state.json")).unwrap())
+                .unwrap();
+        authority["accessProfiles"]["age-checks"] = authored_profile(
+            state["definitions"].as_array().unwrap(),
+            &["adult-status".to_owned()],
+            AGE_CHECKS_TAG,
         );
-        let policies = self.root.join("access/policies");
-        fs::create_dir_all(&policies).expect("editable policy directory");
-        private_file(
-            &policies.join("age-checks.yaml"),
-            b"apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nid: age-checks\nquestions: [adult-status]\n",
-            0o644,
-        );
+        fs::write(&authority_path, serde_json::to_vec(&authority).unwrap()).unwrap();
         let clients = self.root.join("access/clients");
         fs::create_dir_all(&clients).expect("editable client directory");
         private_file(
@@ -1148,7 +1147,7 @@ impl Fixture {
                  status: {status}\n\
                  principal: urn:registrystack:evidence:local:client:{client_id}\n\
                  evidenceAudience: urn:registrystack:evidence:local:client:{client_id}\n\
-                 policies: [age-checks]\n\
+                 accessProfiles: [age-checks]\n\
                  keys:\n\
                    - {{kty: OKP, crv: Ed25519, kid: {client_id}-key-1, alg: EdDSA, use: sig, x: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo}}\n"
             )
@@ -1176,10 +1175,11 @@ impl Fixture {
         let path = self.root.join(".evidence/dev/state.json");
         let mut state: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         state.as_object_mut().unwrap().remove("caller");
-        state["accessPolicies"] = json!([{
+        state["accessProfiles"] = json!([{
             "id": "age-checks",
-            "requesterTag": AGE_CHECKS_TAG,
-            "questions": ["adult-status"]
+            "requesterTags": [AGE_CHECKS_TAG],
+            "definitions": ["adult-status"],
+            "actorKind": "service"
         }]);
         fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
@@ -1216,147 +1216,246 @@ fn private_file(path: &Path, contents: &[u8], mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 
-fn write_sealed_bundle(root: &Path, state: &Value) {
-    let bundle_directory = root.join(".evidence/dev/bundle");
-    if !bundle_directory.exists() {
-        private_directory(&bundle_directory);
-    } else {
-        fs::set_permissions(&bundle_directory, fs::Permissions::from_mode(0o700))
-            .expect("unseal bundle fixture directory");
-    }
-    let questions = state["questions"].as_array().expect("state questions");
-    let mut selector_profiles = serde_json::Map::new();
-    let requirements = questions
-        .iter()
-        .map(|question| {
-            let roles = question["subjects"]
-                .as_array()
-                .expect("question subjects")
-                .iter()
-                .map(|subject| {
-                    let selector = &subject["selectors"][0];
-                    let profile = selector["profile"].as_str().expect("selector profile");
-                    let field = selector["fields"][0].as_str().expect("selector field");
-                    selector_profiles.insert(
-                        profile.to_owned(),
-                        json!({"fields": {field: {"type": "string"}}}),
-                    );
-                    json!({"role": subject["role"], "selectorProfiles": [profile]})
-                })
-                .collect::<Vec<_>>();
-            let concepts = question["concepts"]
-                .as_array()
-                .expect("question concepts")
-                .iter()
-                .map(|concept| {
-                    json!({
-                        "handle": concept["alias"],
-                        "uri": concept["uri"],
-                        "type": concept["form"]
-                    })
-                })
-                .collect::<Vec<_>>();
-            json!({
-                "handle": question["alias"],
-                "uri": question["requirementUri"],
-                "purposes": [question["purpose"].clone()],
-                "subjectRoles": roles,
-                "concepts": concepts,
-            })
+fn authored_profile(definitions: &[Value], selected: &[String], tag: &str) -> Value {
+    let grants = selected.iter().map(|id| {
+        let definition = definitions.iter().find(|d| d["alias"] == id.as_str())
+            .expect("profile definition exists");
+        json!({
+            "definition":id,"purpose":definition["purpose"],
+            "audienceFrom":"authenticated-requester","representations":["signed-jws"],
+            "subjectBinding":"audience-scoped",
+            "subjects":definition["subjects"].as_array().unwrap().iter().map(|subject|
+                json!({"role":subject["role"],"selectorProfile":subject["selectors"][0]["profile"],"valueOrigin":"request"})
+            ).collect::<Vec<_>>()
         })
-        .collect::<Vec<_>>();
-    let grant_for = |question: &Value| {
-        let subjects = question["subjects"]
+    }).collect::<Vec<_>>();
+    json!({"authority":"organizational","actorKind":"service","requesterTags":[tag],"grants":grants})
+}
+
+/// Exercise retained frontend state against the actual pure project and
+/// authority compilers. Only the child that closes relying-party trust is
+/// substituted; these tests never claim to execute a source or signer.
+fn write_sealed_bundle(root: &Path, state: &Value) {
+    let mut state = state.clone();
+    let definitions = state["definitions"]
+        .as_array()
+        .expect("state definitions")
+        .clone();
+    let mut selector_profiles = serde_json::Map::new();
+    let mut source_selectors =
+        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    let mut authored_definitions = serde_json::Map::new();
+    let mut functions = vec![
+        json!({"id":"extract-record","interface":"source-extract/v1","source":"functions/extract-record.rhai"}),
+    ];
+    let mut scripts = std::collections::BTreeMap::from([("functions/extract-record.rhai".to_owned(),
+        "fn extract(response, context) { #{outcome: \"match\", facts: #{active: response.active}} }".to_owned())]);
+    let mut audiences = vec!["urn:registrystack:evidence:local:caller".to_owned()];
+    for client in [
+        "age-checker",
+        "other-client",
+        "revoked-client",
+        "unsafe-client",
+        "missing-key-client",
+        "mismatched-key-client",
+        "refused-client",
+    ] {
+        audiences.push(format!("urn:registrystack:evidence:local:client:{client}"));
+    }
+    for definition in &definitions {
+        let id = definition["alias"].as_str().unwrap();
+        let subjects = definition["subjects"]
             .as_array()
-            .expect("question subjects")
+            .unwrap()
             .iter()
             .map(|subject| {
-                json!({
-                    "role": subject["role"],
-                    "selectorProfile": subject["selectors"][0]["profile"],
-                    "valueOrigin": "request",
-                })
+                let role = subject["role"].as_str().unwrap();
+                let selector = &subject["selectors"][0];
+                let profile = selector["profile"].as_str().unwrap();
+                let fields = selector["fields"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|field| {
+                        (
+                            field.as_str().unwrap().to_owned(),
+                            json!({"type":"string","minimumBytes":1,"maximumBytes":128}),
+                        )
+                    })
+                    .collect::<serde_json::Map<_, _>>();
+                selector_profiles.insert(
+                    profile.to_owned(),
+                    json!({"maximumAggregateBytes":512,"fields":fields}),
+                );
+                source_selectors
+                    .entry(role.to_owned())
+                    .or_default()
+                    .insert(profile.to_owned());
+                json!({"role":role,"selectors":[profile]})
             })
             .collect::<Vec<_>>();
-        json!({
-            "requirement": question["requirementUri"],
-            "purpose": question["purpose"],
-            "audienceFrom": "authenticated-requester",
-            "responseFormats": ["signed-jws"],
-            "subjects": subjects,
-        })
-    };
-    let access_policies = state["accessPolicies"]
-        .as_array()
-        .expect("state access policies");
-    let authority_profiles = if access_policies.is_empty() {
-        serde_json::Map::from_iter([(
-            "local-caller".to_owned(),
-            json!({
-                "kind": "explicit-request",
-                "requesterTags": ["local-caller"],
-                "grants": questions.iter().map(grant_for).collect::<Vec<_>>(),
-            }),
-        )])
-    } else {
-        access_policies
+        let outputs = definition["concepts"]
+            .as_array()
+            .unwrap()
             .iter()
-            .map(|policy| {
-                let requester_tag = policy["requesterTag"]
-                    .as_str()
-                    .expect("policy requester tag");
-                let grants = policy["questions"]
-                    .as_array()
-                    .expect("policy questions")
-                    .iter()
-                    .map(|alias| {
-                        let alias = alias.as_str().expect("question alias");
-                        let question = questions
-                            .iter()
-                            .find(|question| question["alias"] == alias)
-                            .expect("policy question exists");
-                        grant_for(question)
-                    })
-                    .collect::<Vec<_>>();
-                (
-                    // The profile is named by the tag through the first 32
-                    // hexadecimal digits of its digest.
-                    requester_tag.chars().take(42).collect::<String>(),
-                    json!({
-                        "kind": "explicit-request",
-                        "requesterTags": [requester_tag],
-                        "grants": grants,
-                    }),
-                )
+            .map(|concept| {
+                let mut output = json!({"concept":concept["uri"],"type":concept["form"]});
+                if concept["form"] == "controlled-category" {
+                    output["values"] = json!(["adult", "minor"]);
+                }
+                (concept["alias"].as_str().unwrap().to_owned(), output)
             })
-            .collect()
-    };
-    let bundle = json!({
-        "selectorProfiles": selector_profiles,
-        "authorityProfiles": authority_profiles,
-        "requirements": requirements,
+            .collect::<serde_json::Map<_, _>>();
+        let function_id = format!("derive-{id}");
+        let path = format!("functions/{function_id}.rhai");
+        let values = definition["concepts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|concept| {
+                let value = if concept["form"] == "controlled-category" {
+                    json!("adult")
+                } else {
+                    json!(true)
+                };
+                format!("#{{output: {}, value: {value}}}", concept["alias"])
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        scripts.insert(
+            path.clone(),
+            format!("fn derive(facts, selectors, context) {{ [{values}] }}"),
+        );
+        functions.push(json!({"id":function_id,"interface":"assertion-derive/v1","source":path}));
+        authored_definitions.insert(id.to_owned(),json!({
+            "question":format!("Synthetic {id} assertion"),
+            "semantics":{"requirement":definition["requirementUri"],"kind":"criterion","evidenceType":format!("urn:registrystack:evidence:local:evidence-type:{id}"),"referenceFrameworks":["urn:example:framework:request-verification"]},
+            "purpose":definition["purpose"],
+            "grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":audiences},
+            "subjects":subjects,"acquisition":{"type":"single","source":"record"},
+            "derive":{"function":function_id},"outputs":outputs,"validitySeconds":300,
+            "subjectBinding":"audience-scoped","representations":["signed-jws"]
+        }));
+    }
+    let project_document = json!({
+        "apiVersion":registry_evidence_authoring::project::PROJECT_API_VERSION,
+        "kind":"EvidenceProject","id":"request-verify-fixture","selectorProfiles":selector_profiles,
+        "functions":functions,
+        "sources":{"record":{
+            "type":"http-json","connection":"synthetic-register","acquisitionPosture":"record-transformed",
+            "selectors":source_selectors.iter().map(|(role,profiles)|json!({"role":role,"profiles":profiles})).collect::<Vec<_>>(),
+            "request":{"method":"GET","path":"/record","fixedHeaders":[]},
+            "response":{"projection":["/active"],"shape":{"type":"object","required":["active"],"properties":{"active":{"type":"boolean"}}},"maximumBytes":4096},
+            "extract":{"function":"extract-record"},"facts":{"active":{"type":"boolean"}},
+            "limits":{"attemptTimeoutMilliseconds":2000,"maximumConcurrency":4}
+        }},"assertionDefinitions":authored_definitions
     });
-    let bundle_path = bundle_directory.join("evidence.yaml");
-    if bundle_path.exists() {
-        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o600))
-            .expect("unseal bundle fixture");
+    let project_bytes = serde_json::to_vec(&project_document).unwrap();
+    let project =
+        registry_evidence_authoring::project::read_project("evidence.yaml", &project_bytes)
+            .unwrap()
+            .value;
+    let compiled = registry_evidence_authoring::compile::compile(&project, &scripts).unwrap();
+    private_file(&root.join("evidence.yaml"), &project_bytes, 0o644);
+    fs::create_dir_all(root.join("functions")).unwrap();
+    for (path, text) in &scripts {
+        private_file(&root.join(path), text.as_bytes(), 0o644);
+    }
+    let mut target = registry_platform_yaml::Reader::new("local-target.yaml")
+        .scan(include_bytes!(
+            "../../../products/evidence/examples/standalone/local-target.yaml"
+        ))
+        .unwrap()
+        .expect("target document")
+        .to_json_value();
+    target["project"] = json!("request-verify-fixture");
+    private_file(
+        &root.join("local-target.yaml"),
+        &serde_json::to_vec(&target).unwrap(),
+        0o644,
+    );
+    if state["accessProfiles"].as_array().unwrap().is_empty() {
+        let selected = definitions
+            .iter()
+            .map(|d| d["alias"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        state["accessProfiles"] = json!([{"id":"local-caller","requesterTags":["local-caller"],"definitions":selected,"actorKind":"service"}]);
+    }
+    let profiles = state["accessProfiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|profile| {
+            let selected = profile["definitions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| d.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            (
+                profile["id"].as_str().unwrap().to_owned(),
+                authored_profile(
+                    &definitions,
+                    &selected,
+                    profile["requesterTags"][0].as_str().unwrap(),
+                ),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let authority_document = json!({"apiVersion":registry_evidence_authoring::target::AUTHORITY_API_VERSION,"kind":"EvidenceTargetAuthority","target":"local","project":"request-verify-fixture","accessProfiles":profiles});
+    let authority_bytes = serde_json::to_vec(&authority_document).unwrap();
+    private_file(&root.join("dev-authority.yaml"), &authority_bytes, 0o644);
+    let authority = registry_evidence_authoring::target::read_authority(
+        "dev-authority.yaml",
+        &authority_bytes,
+        &project,
+    )
+    .unwrap()
+    .value;
+    let mut document =
+        registry_evidence_authoring::target::compile_authority(&authority, &project).unwrap();
+    document.as_object_mut().unwrap().remove("apiVersion");
+    document.as_object_mut().unwrap().remove("kind");
+    for profile in state["accessProfiles"].as_array_mut().unwrap() {
+        let body = &document["accessProfiles"][profile["id"].as_str().unwrap()];
+        profile["digest"] = json!(registry_platform_config::sha256_uri(
+            &registry_platform_crypto::canonicalize_json(body).unwrap()
+        ));
     }
     private_file(
-        &bundle_path,
-        serde_norway::to_string(&bundle)
-            .expect("bundle renders")
-            .as_bytes(),
+        &root.join(".evidence/dev/state.json"),
+        &serde_json::to_vec(&state).unwrap(),
+        0o600,
+    );
+    let bundle_directory = root.join(".evidence/dev/bundle");
+    if bundle_directory.exists() {
+        make_fixture_writable(&bundle_directory);
+    } else {
+        private_directory(&bundle_directory);
+    }
+    for (path, bytes) in &compiled.artifacts {
+        let path = bundle_directory.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        private_file(&path, bytes, 0o400);
+    }
+    let mut bundle = compiled.model;
+    bundle["authentication"] = target["authentication"].clone();
+    bundle["authentication"]["oidc"]["issuer"] = state["issuerOrigin"].clone();
+    bundle["authentication"]["oidc"]["audience"] = state["accessTokenAudience"].clone();
+    private_file(
+        &bundle_directory.join("evidence.yaml"),
+        &serde_json::to_vec(&bundle).unwrap(),
         0o400,
     );
     let sum_file = bundle_directory.join(registry_platform_config::SUM_FILE);
     if sum_file.exists() {
-        fs::remove_file(&sum_file).expect("remove stale package sum file");
+        fs::remove_file(&sum_file).unwrap();
     }
-    registry_platform_config::write_sum_file(
+    let package = registry_platform_config::write_sum_file(
         &bundle_directory,
         None,
         &registry_platform_config::PackageLimits {
-            max_files: 1_024,
+            max_files: 1024,
             max_file_bytes: 1024 * 1024,
             max_total_bytes: 16 * 1024 * 1024,
             max_depth: 3,
@@ -1364,11 +1463,36 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
         },
         "evidencectl package",
     )
-    .expect("publish local test package");
-    fs::set_permissions(sum_file, fs::Permissions::from_mode(0o400))
-        .expect("seal package sum file");
-    fs::set_permissions(bundle_directory, fs::Permissions::from_mode(0o500))
-        .expect("seal package directory");
+    .unwrap();
+    fs::set_permissions(sum_file, fs::Permissions::from_mode(0o400)).unwrap();
+    fs::set_permissions(&bundle_directory, fs::Permissions::from_mode(0o500)).unwrap();
+    let authority_directory = root.join(".evidence/dev/authority");
+    if !authority_directory.exists() {
+        private_directory(&authority_directory);
+    }
+    let bytes = registry_platform_crypto::canonicalize_json(&document).unwrap();
+    let activation = json!({"apiVersion":"id.registrystack.org/formats/evidence/authority-state/v1alpha1","kind":"EvidenceAuthorityState","activations":[{
+        "sequence":1,"activatedAt":"2026-08-04T00:00:00Z","packageDigest":package.digest(),
+        "authorityDigest":registry_platform_config::sha256_uri(&bytes),
+        "authorityRevision":format!("sha256:{}",hex::encode(registry_platform_crypto::domain_separated_sha256(b"registry.evidence.target-authority/v1\0",&bytes))),"document":document
+    }]});
+    private_file(
+        &authority_directory.join("authority-state.json"),
+        &serde_json::to_vec(&activation).unwrap(),
+        0o600,
+    );
+}
+
+fn make_fixture_writable(root: &Path) {
+    fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
+    for entry in fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            make_fixture_writable(&path);
+        } else {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
 }
 
 fn executable(path: &Path, contents: &[u8]) {

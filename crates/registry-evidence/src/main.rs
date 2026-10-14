@@ -201,6 +201,97 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
+        Command::Authority { command } => {
+            use registry_evidence::{authority, cli::AuthorityCommand};
+            let (runtime_path, document) = match command {
+                AuthorityCommand::Activate {
+                    runtime_config,
+                    document,
+                } => (runtime_config, Some(document)),
+                AuthorityCommand::History { runtime_config } => (runtime_config, None),
+            };
+            // Operator inspection and authority activation need the closed
+            // configuration, not source extracts, credentials or a signer.
+            let mut bytes = Vec::new();
+            File::open(&runtime_path)
+                .and_then(|file| {
+                    file.take((registry_evidence::config::MAX_CONFIG_BYTES + 1) as u64)
+                        .read_to_end(&mut bytes)
+                })
+                .map_err(|_| CommandError::Cli(CliError("runtime configuration is unavailable")))?;
+            let runtime =
+                registry_evidence::config::RuntimeConfig::parse_yaml_with(&bytes, |name| {
+                    std::env::var(name).ok()
+                })
+                .map_err(
+                    |error| match error.in_file(&runtime_path.display().to_string()) {
+                        ConfigError::Refused(report) => CommandError::Refused(report),
+                        error => CommandError::Deployment(
+                            "runtime authority binding is invalid",
+                            ArtifactFault::new(runtime_path.display().to_string(), error.fault()),
+                        ),
+                    },
+                )?
+                .config;
+            let binding = runtime
+                .authority
+                .as_ref()
+                .ok_or(CommandError::Cli(CliError(
+                    "runtime authority binding is required",
+                )))?;
+            let result = if let Some(document) = document {
+                let mut bytes = Vec::new();
+                File::open(&document)
+                    .and_then(|file| {
+                        file.take((registry_evidence::config::MAX_CONFIG_BYTES + 1) as u64)
+                            .read_to_end(&mut bytes)
+                    })
+                    .map_err(|_| {
+                        CommandError::Cli(CliError("target authority document is unavailable"))
+                    })?;
+                match authority::AuthorityDocument::parse(&document.display().to_string(), &bytes) {
+                    Ok(document) => {
+                        let bundle =
+                            Bundle::load_pinned(&runtime.package).map_err(deployment_load_error)?;
+                        authority::activate(
+                            &binding.root,
+                            &binding.target,
+                            &bundle.config,
+                            bundle.package_digest(),
+                            &document,
+                        )
+                        .map(|snapshot| {
+                            println!(
+                                "ACTIVATED {} {} sequence={}",
+                                snapshot.revision(),
+                                snapshot.digest(),
+                                snapshot.sequence()
+                            )
+                        })
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                authority::history(&binding.root).map(|entries| {
+                    for entry in entries {
+                        println!(
+                            "{} {} {} {}",
+                            entry.sequence,
+                            entry.authority_revision,
+                            entry.authority_digest,
+                            entry.package_digest
+                        );
+                    }
+                })
+            };
+            match result {
+                Ok(()) => Ok(ExitCode::SUCCESS),
+                Err(error) => {
+                    eprintln!("evidence: {error}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
         Command::Check {
             runtime_config,
             format,
@@ -288,8 +379,15 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        Command::BundleCheck { bundle, json } => {
+        Command::BundleCheck {
+            bundle,
+            authority_document,
+            json,
+        } => {
             let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
+            if let Some(path) = authority_document {
+                read_bundle_authority(&path, &bundle.config)?;
+            }
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
             let _source_plans = compile_bundle_source_plans(&bundle)?;
@@ -306,12 +404,23 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::BundleEvaluate {
             bundle,
+            authority_document,
             fixture,
             case,
             explain,
             explain_format,
         } => {
-            let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
+            let mut bundle = Bundle::load(&bundle).map_err(deployment_load_error)?;
+            if let Some(path) = authority_document {
+                let document = read_bundle_authority(&path, &bundle.config)?;
+                // This copy can reach only the offline fixture kernel, never
+                // DeploymentInputs or serving initialization. No authority
+                // store, credential, source or operator signer is accessed.
+                bundle.config.authority_profiles = document.access_profiles;
+            } else if bundle.config.project.is_some() {
+                return Err(CliError("normalized fixtures require --authority-document with the compiled target grants").into());
+            }
+            let bundle = Arc::new(bundle);
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
                 kernel_compile_error("fixture bundle compilation failed", error)
             })?;
@@ -326,7 +435,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 &source_plans,
                 &fixture,
                 case.as_deref(),
-                false,
+                true,
                 &mut trace,
             )
             .await;
@@ -479,6 +588,28 @@ const DISCOVERY_CONFIG_INVALID: CliError =
     CliError("discovery description configuration is not valid Evidence configuration");
 const DISCOVERY_OUTPUT_UNWRITABLE: CliError =
     CliError("discovery description output could not be written");
+
+/// Validate one compiled authority through the runtime's owning contract.
+/// This offline check neither activates grants nor initializes dependencies.
+fn read_bundle_authority(
+    path: &Path,
+    config: &registry_evidence::config::EvidenceConfig,
+) -> Result<registry_evidence::authority::AuthorityDocument, CliError> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| {
+            file.take((registry_evidence::config::MAX_CONFIG_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+        })
+        .map_err(|_| CliError("compiled target authority is unavailable"))?;
+    let document =
+        registry_evidence::authority::AuthorityDocument::parse(&path.display().to_string(), &bytes)
+            .map_err(|_| CliError("compiled target authority document is invalid"))?;
+    document
+        .validate_for(&document.target, config)
+        .map_err(|_| CliError("compiled target authority exceeds the package ceilings"))?;
+    Ok(document)
+}
 
 /// Report a refused discovery configuration with the cause the parser carried.
 ///
@@ -1763,6 +1894,9 @@ async fn evaluate_fixture(
                 Err(OfflineFixtureError::Purpose) => {
                     return Err(CliError(FIXTURE_PURPOSE_FAILURE));
                 }
+                Err(OfflineFixtureError::Audience) => {
+                    return Err(CliError(FIXTURE_AUDIENCE_FAILURE))
+                }
                 Err(OfflineFixtureError::Authorization(_)) => {}
             }
             trace.record(
@@ -1974,10 +2108,14 @@ fn evaluate_fixture_acquisition(
     trace: &mut FixtureTrace,
 ) -> Result<Result<KernelOutcome, KernelError>, CliError> {
     let resolved = selectors.resolved;
+    let audience = resolved
+        .subject_scope
+        .audience()
+        .unwrap_or(OFFLINE_AUDIENCE);
     let derivation_selectors = selectors.derivation;
     let projection = || ValueProjection {
         scope: EvidenceScope::AudienceScoped {
-            audience: OFFLINE_AUDIENCE,
+            audience,
             request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
         },
         binding_key: &OFFLINE_BINDING_KEY,
@@ -2658,6 +2796,7 @@ async fn evaluate_reference_fixture(
         &[
             "observed_at",
             "purpose",
+            "audience",
             "selectors",
             "verified_token_claims",
             "derivationSelectorInputs",
@@ -2724,6 +2863,7 @@ async fn evaluate_reference_fixture(
             &[
                 "id",
                 "purpose",
+                "audience",
                 "response",
                 "responses",
                 "selectors",
@@ -3654,6 +3794,10 @@ async fn sign_and_verify_fixture_evidence(
     values: ValidatedValues,
     observed_at: DateTime<Utc>,
 ) -> Result<Value, CliError> {
+    let audience = resolved
+        .subject_scope
+        .audience()
+        .unwrap_or(OFFLINE_AUDIENCE);
     let subjects = resolved
         .subjects
         .iter()
@@ -3665,7 +3809,7 @@ async fn sign_and_verify_fixture_evidence(
                         &OFFLINE_BINDING_KEY,
                         1,
                         &bundle.config.service.trust_domain,
-                        registry_evidence::binding::SubjectBindingScope::Audience(OFFLINE_AUDIENCE),
+                        registry_evidence::binding::SubjectBindingScope::Audience(audience),
                         &resolved.purpose,
                     )
                     .map_err(|_| CliError("fixture subject binding failed"))?,
@@ -3682,7 +3826,7 @@ async fn sign_and_verify_fixture_evidence(
                 evidence_id: &evidence_id,
                 purpose: &resolved.purpose,
                 scope: EvidenceScope::AudienceScoped {
-                    audience: OFFLINE_AUDIENCE,
+                    audience,
                     request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                 },
                 issued_at,
@@ -3714,7 +3858,7 @@ async fn sign_and_verify_fixture_evidence(
     policy.requirement = requirement.id.clone();
     policy.evidence_type = requirement.evidence_type.clone();
     policy.purpose = resolved.purpose.clone();
-    policy.audience = OFFLINE_AUDIENCE.to_owned();
+    policy.audience = audience.to_owned();
     policy.configuration_revision = bundle
         .configuration_revision(&requirement.id)
         .ok_or(CliError(
@@ -4297,6 +4441,7 @@ fn validate_reference_request_mutation(
     ) {
         Ok(_) => return Err(CliError("reference request mutation was authorized")),
         Err(OfflineFixtureError::Purpose) => return Err(CliError(FIXTURE_PURPOSE_FAILURE)),
+        Err(OfflineFixtureError::Audience) => return Err(CliError(FIXTURE_AUDIENCE_FAILURE)),
         Err(OfflineFixtureError::Authorization(_)) => {}
     }
     if expected.get("signed").and_then(Value::as_bool) != Some(false) {
@@ -4474,6 +4619,8 @@ fn validate_reference_privacy(
     validate_privacy_projection(&expectation, &projection, diagnostics)
 }
 
+const FIXTURE_AUDIENCE_FAILURE: &str =
+    "fixture must name one audience inside the definition ceiling when more than one is declared";
 const FIXTURE_PURPOSE_FAILURE: &str = "fixture does not select one of the requirement's purposes";
 
 /// Report an unselected fixture purpose as its own failure so a harness
@@ -4481,6 +4628,7 @@ const FIXTURE_PURPOSE_FAILURE: &str = "fixture does not select one of the requir
 fn fixture_failure(error: OfflineFixtureError, authorization: &'static str) -> CliError {
     match error {
         OfflineFixtureError::Purpose => CliError(FIXTURE_PURPOSE_FAILURE),
+        OfflineFixtureError::Audience => CliError(FIXTURE_AUDIENCE_FAILURE),
         OfflineFixtureError::Authorization(_) => CliError(authorization),
     }
 }

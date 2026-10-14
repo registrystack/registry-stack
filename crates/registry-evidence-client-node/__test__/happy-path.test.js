@@ -24,6 +24,7 @@ const {
 function evidenceRoute(spec, signingKey) {
   return (req, res, body) => {
     const requestBody = JSON.parse(body.toString('utf8'));
+    assert.equal(requestBody.expectedConfigurationRevision, spec.configurationRevision);
     const evidence = evidenceFor(spec, requestBody.requestNonce);
     const jws = signEvidence(evidence, signingKey);
     res.writeHead(200, { 'content-type': 'application/jose+json' });

@@ -37,23 +37,16 @@ use zeroize::Zeroizing;
 #[cfg(test)]
 use std::os::unix::fs::symlink;
 
-#[cfg(test)]
-use crate::authoring::access_policy_requester_tag;
+use crate::access::TaskGrantBinding;
 use crate::{
     access,
     authoring::{
-        compile_local_project_with_ports_and_resource,
-        compile_local_project_with_target_authenticated_context,
-        compile_local_project_with_target_inputs_and_resource, valid_local_audience,
-        CompiledAccessPolicy, CompiledConceptForm, CompiledQuestion, LocalAdmission,
-        LocalServicePorts, MAX_SOURCE_ARTIFACT_BYTES, SOURCES_DIRECTORY,
+        valid_local_audience, CompiledAccessProfile, CompiledConceptForm, CompiledDefinition,
+        LocalAdmission, LocalServicePorts,
     },
     keygen, OutputFormat,
 };
-use registry_evidence_authoring::model::{AccessPolicy, AccessTaskGrant};
-use registry_platform_yaml::{
-    ApiVersion, EnvelopeRule, Expect, FormatSpec, LocalId, Reader, RemovedKey,
-};
+use registry_platform_yaml::{ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey};
 
 const DEV_STATE_API_VERSION: &str = "id.registrystack.org/formats/evidence/dev-state/v6";
 pub(crate) const DEV_STATE_KIND: &str = "EvidenceDevState";
@@ -77,8 +70,6 @@ const UNREADABLE_STATE: &str = "retained dev state is not readable by this evide
 const CONTROL_SOCKET_NAME: &str = "control.sock";
 const CALLER_ID: &str = "local-tutorial-caller";
 const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "urn:registrystack:evidence:local:gateway";
-const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
-const LOCAL_REQUESTER_TAG: &str = "local-caller";
 const FAILED_START_LOGS: &str = "failed-start";
 pub(crate) const RETAINED_STOPPED_SESSION: &str = "dev-stopped-before-restart";
 const PRIVATE_DIR_MODE: u32 = 0o700;
@@ -153,18 +144,9 @@ impl std::fmt::Display for DevRefusal {
 impl std::error::Error for DevRefusal {}
 
 #[derive(Debug, Args)]
-// The bare-form flags --detach and --project stay parseable beside an action
-// subcommand on purpose: `args_conflicts_with_subcommands` would replace this
-// command's specific "these compatibility flags belong to the bare spelling"
-// refusal with the generic top-level usage failure that names neither flag.
-#[command(subcommand_negates_reqs = true)]
 pub struct DevArgs {
     #[command(subcommand)]
-    action: Option<DevAction>,
-
-    /// Return after the local issuer and Evidence Gateway are ready on loopback.
-    #[arg(long)]
-    detach: bool,
+    action: DevAction,
 
     /// Loopback port for the local Evidence Gateway service.
     #[arg(long, global = true)]
@@ -183,19 +165,9 @@ pub struct DevArgs {
     #[arg(long, global = true, value_name = "URI")]
     resource: Option<String>,
 
-    /// Project root. Defaults to the current directory.
-    #[arg(long, hide = true)]
-    project: Option<PathBuf>,
-
-    /// Reuse a local target's source connections and outbound TLS in the generated
-    /// local caller rehearsal. Target service authentication is not replayed.
+    /// Select the governed target and its complete authority. Defaults to local-target.yaml.
     #[arg(long, global = true)]
     target: Option<PathBuf>,
-
-    /// Preserve the selected local target's reviewed human authenticated-context
-    /// subject bindings. Requires a target and its borrowed BReg issuer owner.
-    #[arg(long, global = true, requires_all = ["target", "issuer_project"])]
-    preserve_target_authenticated_context: bool,
 
     #[arg(long, hide = true, global = true)]
     evidence_bin: Option<PathBuf>,
@@ -324,6 +296,11 @@ fn issuer_label(name_prefix: &str, issuer_session_id: &str) -> String {
     format!("{name_prefix}-{}", &issuer_session_id[..12])
 }
 
+/// The private bind-mount root owned by one local issuer generation.
+fn generated_issuer_root(generated_root: &Path, issuer_session_id: &str) -> PathBuf {
+    generated_root.join(format!("issuer-{issuer_session_id}"))
+}
+
 #[derive(Debug, Args)]
 pub struct SupervisorArgs {
     #[arg(long)]
@@ -377,8 +354,8 @@ struct DevState {
     access_token_audience: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     caller: Option<CallerState>,
-    access_policies: Vec<AccessPolicyState>,
-    questions: Vec<QuestionState>,
+    access_profiles: Vec<AccessProfileState>,
+    definitions: Vec<DefinitionState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failure: Option<FailureKind>,
 }
@@ -395,17 +372,20 @@ struct CallerState {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AccessPolicyState {
+struct AccessProfileState {
     id: String,
-    requester_tag: String,
-    questions: Vec<String>,
+    digest: String,
+    requester_tags: Vec<String>,
+    definitions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    task_grant: Option<AccessTaskGrant>,
+    actor_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_grant: Option<TaskGrantBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct QuestionState {
+struct DefinitionState {
     alias: String,
     requirement_uri: String,
     purpose: String,
@@ -458,8 +438,8 @@ pub(crate) struct ReadyDevState {
     pub(crate) token_url: String,
     pub(crate) access_token_audience: String,
     pub(crate) caller: Option<ReadyCallerState>,
-    pub(crate) access_policies: Vec<ReadyAccessPolicy>,
-    pub(crate) questions: Vec<ReadyQuestionState>,
+    pub(crate) access_profiles: Vec<ReadyAccessProfile>,
+    pub(crate) definitions: Vec<ReadyDefinitionState>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -472,15 +452,17 @@ pub(crate) struct ReadyCallerState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReadyAccessPolicy {
+pub(crate) struct ReadyAccessProfile {
     pub(crate) id: String,
-    pub(crate) requester_tag: String,
-    pub(crate) questions: Vec<String>,
-    pub(crate) task_grant: Option<AccessTaskGrant>,
+    pub(crate) digest: String,
+    pub(crate) requester_tags: Vec<String>,
+    pub(crate) definitions: Vec<String>,
+    pub(crate) actor_kind: Option<String>,
+    pub(crate) task_grant: Option<TaskGrantBinding>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReadyQuestionState {
+pub(crate) struct ReadyDefinitionState {
     pub(crate) alias: String,
     pub(crate) requirement_uri: String,
     pub(crate) purpose: String,
@@ -504,7 +486,7 @@ pub(crate) struct ReadyConceptState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StoppedDevState {
     pub(crate) runtime_path: PathBuf,
-    pub(crate) questions: Vec<ReadyQuestionState>,
+    pub(crate) definitions: Vec<ReadyDefinitionState>,
 }
 
 pub(crate) struct LifecycleLock {
@@ -530,13 +512,8 @@ impl Drop for OwnedChildren {
 }
 
 pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<ExitCode> {
-    if let Some(action) = &args.action {
-        if args.detach || args.project.is_some() {
-            return Err(compat_flag_refusal(action_name(action)));
-        }
-    }
     match args.action {
-        Some(DevAction::Start(start)) => {
+        DevAction::Start(start) => {
             let owner = args
                 .issuer_project
                 .as_deref()
@@ -562,98 +539,21 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 DevStartSelection {
                     target: args.target.as_deref(),
                     issuer_project: args.issuer_project.as_deref(),
-                    preserve_target_authenticated_context: args
-                        .preserve_target_authenticated_context,
                     requested_resource: args.resource.as_deref(),
                     name_prefix: start.name_prefix.as_deref(),
                 },
                 format,
             )
         }
-        Some(DevAction::Stop(stop)) => {
+        DevAction::Stop(stop) => {
             let project = stop.project.as_deref().unwrap_or_else(|| Path::new("."));
             stop_dev(project, format)
         }
-        Some(DevAction::Clean(clean)) => clean_dev(&clean.project, format),
-        Some(DevAction::Token(token)) => fresh_token(&token.project, &token.client, format),
-        Some(DevAction::Grant(args)) => approved_grant(args, format),
-        Some(DevAction::Check(args)) => Ok(check_platform_file(&args, format)),
-        None => {
-            if !args.detach {
-                return Err(DevRefusal {
-                    operational: false,
-                    code: "evidence.dev.detach-required",
-                    path: "$".to_owned(),
-                    message: "The bare `dev` form requires --detach.".to_owned(),
-                    suggested_action:
-                        "Run `evidencectl dev start <project>` for the current lifecycle, or add --detach for the retained bare spelling."
-                            .to_owned(),
-                }
-                .into());
-            }
-            let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
-            let owner = args
-                .issuer_project
-                .as_deref()
-                .map(load_breg_issuer)
-                .transpose()?;
-            if owner
-                .as_ref()
-                .is_some_and(|owner| args.issuer_port.is_some_and(|port| port != owner.port))
-            {
-                bail!("--issuer-port differs from the BREG issuer owner");
-            }
-            let ports = selected_ports(
-                project,
-                args.evidence_port,
-                owner.as_ref().map(|owner| owner.port).or(args.issuer_port),
-            )?;
-            start_detached(
-                project,
-                args.evidence_bin.as_deref(),
-                args.docker_bin.as_deref(),
-                args.ready_timeout_seconds,
-                ports,
-                DevStartSelection {
-                    target: args.target.as_deref(),
-                    issuer_project: args.issuer_project.as_deref(),
-                    preserve_target_authenticated_context: args
-                        .preserve_target_authenticated_context,
-                    requested_resource: args.resource.as_deref(),
-                    name_prefix: None,
-                },
-                format,
-            )
-        }
+        DevAction::Clean(clean) => clean_dev(&clean.project, format),
+        DevAction::Token(token) => fresh_token(&token.project, &token.client, format),
+        DevAction::Grant(args) => approved_grant(args, format),
+        DevAction::Check(args) => Ok(check_platform_file(&args, format)),
     }
-}
-
-fn action_name(action: &DevAction) -> &'static str {
-    match action {
-        DevAction::Start(_) => "start",
-        DevAction::Stop(_) => "stop",
-        DevAction::Clean(_) => "clean",
-        DevAction::Token(_) => "token",
-        DevAction::Grant(_) => "grant",
-        DevAction::Check(_) => "check",
-    }
-}
-
-/// The bare-`dev` compatibility flags are refused beside an action
-/// subcommand, naming both the flags and the spelling that owns them.
-fn compat_flag_refusal(action: &'static str) -> anyhow::Error {
-    DevRefusal {
-        operational: false,
-        code: "evidence.dev.compat-flags-refused",
-        path: "$".to_owned(),
-        message: format!(
-            "`dev {action}` does not accept the compatibility flags --detach or --project."
-        ),
-        suggested_action: format!(
-            "Run `evidencectl dev {action}` with the project as its own argument; --detach and --project belong to the bare `evidencectl dev` spelling."
-        ),
-    }
-    .into()
 }
 
 fn selected_ports(
@@ -780,20 +680,24 @@ fn verify_borrowed_issuer(owner: &BorrowedIssuer) -> Result<()> {
 }
 
 /// The task source authorities an active client requests Evidence under. Its
-/// declared exchange binding must match the task policies that name it: a task
-/// requester holds the policy tag and exchanges institutionally, and any
+/// declared exchange binding must match the task profiles that name it: a task
+/// requester holds the profile tag and exchanges institutionally, and any
 /// exchange binding needs a borrowed issuer owner to register it.
 fn client_task_sources(
     registration: &access::ActiveClientRegistration,
-    policies: &[crate::authoring::CompiledAccessPolicy],
+    profiles: &[crate::authoring::CompiledAccessProfile],
     borrowed_owner: bool,
 ) -> Result<BTreeSet<String>> {
     let mut task_sources = BTreeSet::new();
-    for policy in policies {
-        if let Some(task) = &policy.task_grant {
+    for profile in profiles {
+        if let Some(task) = &profile.task_grant {
             if task.requester_clients.contains(&registration.client_id) {
-                if !registration.requester_tags.contains(&policy.requester_tag) {
-                    bail!("task grant requester is not assigned its access policy");
+                if !profile
+                    .requester_tags
+                    .iter()
+                    .all(|tag| registration.requester_tags.contains(tag))
+                {
+                    bail!("task grant requester is not assigned its access profile");
                 }
                 task_sources.insert(task.source_issuer.as_str().to_owned());
             }
@@ -801,7 +705,7 @@ fn client_task_sources(
     }
     match registration.exchange.as_ref().map(|binding| binding.kind) {
         Some(access::ActiveClientExchangeKind::InstitutionalGrant) if task_sources.is_empty() => {
-            bail!("institutional exchange needs one active assigned task policy");
+            bail!("institutional exchange needs one active assigned task profile");
         }
         Some(access::ActiveClientExchangeKind::FirstParty) if !task_sources.is_empty() => {
             bail!("task requester cannot use first-party exchange");
@@ -822,23 +726,25 @@ fn verify_authenticated_context_clients(
     admission: &LocalAdmission,
 ) -> Result<()> {
     if clients.len() != admission.allowed_clients.len() {
-        bail!("preserved authenticated context requires every admitted client to be active");
+        bail!("human authenticated context requires every admitted client to be active");
     }
     for client in clients {
         let binding = client
             .exchange
             .as_ref()
             .filter(|binding| binding.kind == access::ActiveClientExchangeKind::FirstParty)
-            .context("preserved authenticated context requires first-party exchange for every active client")?;
+            .context(
+                "human authenticated context requires first-party exchange for every active client",
+            )?;
         let source_issuer = binding
             .source_issuer
             .as_ref()
-            .context("preserved authenticated context client has no source issuer")?
+            .context("human authenticated context client has no source issuer")?
             .as_str();
         if admission.assertion_issuers.get(&client.client_id)
             != Some(&vec![source_issuer.to_owned()])
         {
-            bail!("preserved authenticated context requires one exact owner assertion issuer per active client");
+            bail!("human authenticated context requires one exact owner assertion issuer per active client");
         }
     }
     Ok(())
@@ -846,12 +752,10 @@ fn verify_authenticated_context_clients(
 
 fn exchange_client_actor(
     binding: &access::ActiveClientExchange,
-    preserve_target_authenticated_context: bool,
+    human_profile: bool,
 ) -> (&'static str, bool) {
     match binding.kind {
-        access::ActiveClientExchangeKind::FirstParty if preserve_target_authenticated_context => {
-            ("human", true)
-        }
+        access::ActiveClientExchangeKind::FirstParty if human_profile => ("human", true),
         access::ActiveClientExchangeKind::FirstParty => ("service", false),
         access::ActiveClientExchangeKind::InstitutionalGrant => ("agent", false),
     }
@@ -891,6 +795,7 @@ fn borrowed_assertion_issuers(
 fn verify_borrowed_registrations(
     owner: &BorrowedIssuer,
     audience: &str,
+    evidence_scopes: &[String],
     clients: &[registry_thunderid_tooling::local::TypedLocalClient],
     admitted: &[String],
     assertion_issuers: &BTreeMap<String, Vec<String>>,
@@ -920,13 +825,17 @@ fn verify_borrowed_registrations(
         .is_some_and(|resources| {
             resources.iter().any(|resource| {
                 resource["audience"] == audience
-                    && resource["scopes"]
-                        .as_array()
-                        .is_some_and(|scopes| scopes.iter().any(|scope| scope == "evidence:invoke"))
+                    && resource["scopes"].as_array().is_some_and(|scopes| {
+                        evidence_scopes.iter().all(|required| {
+                            scopes
+                                .iter()
+                                .any(|scope| scope.as_str() == Some(required.as_str()))
+                        })
+                    })
             })
         })
     {
-        bail!("BREG issuer owner has not declared the Evidence audience and invoke scope");
+        bail!("BREG issuer owner must declare the Evidence resource audience and every target-required scope");
     }
     for client in clients {
         let registered = inventory["clients"]
@@ -1169,10 +1078,10 @@ fn fresh_token(project: &Path, client_id: &str, format: OutputFormat) -> Result<
         }
         caller.private_key_path.clone()
     } else {
-        let policy_tags = ready
-            .access_policies
+        let profile_digests = ready
+            .access_profiles
             .iter()
-            .map(|policy| (policy.id.clone(), policy.requester_tag.clone()))
+            .map(|profile| (profile.id.clone(), profile.digest.clone()))
             .collect::<BTreeMap<_, _>>();
         if !access::active_client_ids(&ready.project)?
             .iter()
@@ -1180,7 +1089,7 @@ fn fresh_token(project: &Path, client_id: &str, format: OutputFormat) -> Result<
         {
             return Err(unregistered_client_refusal());
         }
-        access::resolve_ready_client(&ready.project, client_id, &policy_tags)?.private_key_path
+        access::resolve_ready_client(&ready.project, client_id, &profile_digests)?.private_key_path
     };
     let token = obtain_issuer_token(&ready, client_id, &private_key_path)?;
     let output = ready
@@ -1200,6 +1109,24 @@ fn fresh_token(project: &Path, client_id: &str, format: OutputFormat) -> Result<
         )),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn retained_token_scopes(dev_root: &Path) -> Result<Vec<String>> {
+    let bundle =
+        read_sealed_bundle(dev_root)?.context("the ready session has no sealed package")?;
+    match &bundle["authentication"]["oidc"]["requiredScopes"] {
+        Value::Array(scopes) => scopes
+            .iter()
+            .map(|scope| {
+                scope
+                    .as_str()
+                    .map(str::to_owned)
+                    .context("the sealed authentication scope declaration is invalid")
+            })
+            .collect(),
+        Value::String(mode) if mode == "unrestricted" => Ok(vec!["evidence:invoke".to_owned()]),
+        _ => bail!("the sealed package must declare its authentication scopes"),
+    }
 }
 
 pub(crate) fn obtain_issuer_token(
@@ -1222,7 +1149,7 @@ pub(crate) fn obtain_issuer_token(
         PrivateKeyJwtConfig::new(endpoint, client_id.to_owned(), key)
             .with_audience(ready.issuer_origin.clone())
             .with_resource(ready.access_token_audience.clone())
-            .with_scopes(["evidence:invoke".to_owned()]),
+            .with_scopes(retained_token_scopes(&ready.project.join(".evidence/dev"))?),
     )
     .map_err(|error| anyhow!("the local token provider is unusable: {error}"))?;
     let token = tokio::runtime::Builder::new_current_thread()
@@ -1346,17 +1273,23 @@ pub(crate) fn load_ready_state(project: &Path) -> Result<ReadyDevState> {
             evidence_audience: caller.evidence_audience,
             requester_tag: caller.requester_tag,
         }),
-        access_policies: state
-            .access_policies
+        access_profiles: state
+            .access_profiles
             .into_iter()
-            .map(|policy| ReadyAccessPolicy {
-                id: policy.id,
-                requester_tag: policy.requester_tag,
-                questions: policy.questions,
-                task_grant: policy.task_grant,
+            .map(|profile| ReadyAccessProfile {
+                id: profile.id,
+                digest: profile.digest,
+                requester_tags: profile.requester_tags,
+                definitions: profile.definitions,
+                actor_kind: profile.actor_kind,
+                task_grant: profile.task_grant,
             })
             .collect(),
-        questions: state.questions.into_iter().map(ready_question).collect(),
+        definitions: state
+            .definitions
+            .into_iter()
+            .map(ready_definition)
+            .collect(),
     })
 }
 
@@ -1405,7 +1338,11 @@ pub(crate) fn load_stopped_state(project: &Path) -> Result<StoppedDevState> {
     }
     Ok(StoppedDevState {
         runtime_path: state.runtime_path,
-        questions: state.questions.into_iter().map(ready_question).collect(),
+        definitions: state
+            .definitions
+            .into_iter()
+            .map(ready_definition)
+            .collect(),
     })
 }
 
@@ -1445,47 +1382,46 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
         && valid_name_prefix(&state.name_prefix);
-    let questions_are_closed = !state.questions.is_empty()
-        && state.questions.len() <= 128
-        && state.questions.iter().all(valid_question_state)
+    let definitions_are_closed = !state.definitions.is_empty()
+        && state.definitions.len() <= 128
+        && state.definitions.iter().all(valid_definition_state)
         && state
-            .questions
+            .definitions
             .iter()
-            .map(|question| question.alias.as_str())
+            .map(|definition| definition.alias.as_str())
             .collect::<std::collections::BTreeSet<_>>()
             .len()
-            == state.questions.len();
-    let question_aliases = state
-        .questions
+            == state.definitions.len();
+    let definition_aliases = state
+        .definitions
         .iter()
-        .map(|question| question.alias.as_str())
+        .map(|definition| definition.alias.as_str())
         .collect::<BTreeSet<_>>();
-    let access_policies_are_closed = state.access_policies.len() <= 128
+    let access_profiles_are_closed = state.access_profiles.len() <= 128
         && state
-            .access_policies
+            .access_profiles
             .windows(2)
             .all(|pair| pair[0].id < pair[1].id)
         && state
-            .access_policies
+            .access_profiles
             .iter()
-            .all(|policy| valid_access_policy_state(policy, &question_aliases))
-        && state
-            .access_policies
-            .iter()
-            .map(|policy| policy.requester_tag.as_str())
-            .collect::<BTreeSet<_>>()
-            .len()
-            == state.access_policies.len()
-        && state_matches_sealed_bundle(&state.questions, &state.access_policies, dev_root)
+            .all(|profile| valid_access_profile_state(profile, &definition_aliases))
+        && state_matches_sealed_bundle(&state.definitions, &state.access_profiles, dev_root)
             .unwrap_or(false);
     let caller_is_closed = match state.status {
-        DevStatus::Starting | DevStatus::Ready => {
-            state.access_policies.is_empty() == state.caller.is_some()
-        }
+        DevStatus::Starting | DevStatus::Ready => !state.access_profiles.is_empty(),
         DevStatus::Stopped => state.caller.is_none(),
         DevStatus::Stopping | DevStatus::Failed => true,
     } && state.caller.as_ref().is_none_or(|caller| {
         validate_closed_caller(caller, dev_root, &state.issuer_origin).is_ok()
+            && state.access_profiles.iter().any(|profile| {
+                profile
+                    .actor_kind
+                    .as_deref()
+                    .is_none_or(|kind| kind == "service")
+                    && profile.task_grant.is_none()
+                    && profile.requester_tags.contains(&caller.requester_tag)
+            })
     });
     if state.project != project
         || state.runtime_path != dev_root.join("runtime.yaml")
@@ -1506,8 +1442,8 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
                 })
         })
         || !valid_local_audience(&state.access_token_audience)
-        || !questions_are_closed
-        || !access_policies_are_closed
+        || !definitions_are_closed
+        || !access_profiles_are_closed
         || !caller_is_closed
     {
         bail!("the local development state contains values outside the closed lifecycle profile");
@@ -1515,44 +1451,64 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
     Ok(())
 }
 
-fn valid_access_policy_state(
-    policy: &AccessPolicyState,
-    question_aliases: &BTreeSet<&str>,
-) -> bool {
-    valid_local_identifier(&policy.id)
-        && !policy.questions.is_empty()
-        && policy.questions.len() <= 128
-        && policy.questions.windows(2).all(|pair| pair[0] < pair[1])
-        && policy
-            .questions
-            .iter()
-            .all(|question| question_aliases.contains(question.as_str()))
-        && crate::authoring::access_policy_requester_tag_for(&AccessPolicy {
-            id: LocalId::new(policy.id.clone()).expect("a validated local identifier"),
-            questions: policy.questions.clone(),
-            task_grant: policy.task_grant.clone(),
-        })
-        .is_ok_and(|tag| tag == policy.requester_tag)
+fn valid_identity_tag(tag: &str) -> bool {
+    !tag.is_empty() && tag.len() <= 128 && !tag.chars().any(char::is_control)
 }
 
-fn valid_question_state(question: &QuestionState) -> bool {
-    let identifiers_are_closed = [question.alias.as_str(), question.purpose.as_str()]
+fn valid_access_profile_state(profile: &AccessProfileState, definitions: &BTreeSet<&str>) -> bool {
+    valid_local_identifier(&profile.id)
+        && registry_platform_config::is_sha256_label(&profile.digest)
+        && !profile.requester_tags.is_empty()
+        && profile.requester_tags.len() <= 32
+        && profile
+            .requester_tags
+            .iter()
+            .all(|tag| valid_identity_tag(tag))
+        && profile.requester_tags.iter().collect::<BTreeSet<_>>().len()
+            == profile.requester_tags.len()
+        && profile
+            .actor_kind
+            .as_deref()
+            .is_none_or(|kind| matches!(kind, "service" | "human" | "agent"))
+        && !profile.definitions.is_empty()
+        && profile.definitions.len() <= 128
+        && profile.definitions.windows(2).all(|pair| pair[0] < pair[1])
+        && profile
+            .definitions
+            .iter()
+            .all(|definition| definitions.contains(definition.as_str()))
+        && profile.task_grant.as_ref().is_none_or(|task| {
+            profile
+                .actor_kind
+                .as_deref()
+                .is_none_or(|kind| kind == "agent")
+                && !task.requester_clients.is_empty()
+                && task
+                    .requester_clients
+                    .iter()
+                    .all(|id| valid_local_identifier(id))
+                && valid_uri(task.source_issuer.as_str())
+        })
+}
+
+fn valid_definition_state(definition: &DefinitionState) -> bool {
+    let identifiers_are_closed = [definition.alias.as_str(), definition.purpose.as_str()]
         .into_iter()
         .all(valid_local_identifier);
-    let concepts_are_closed = !question.concepts.is_empty()
-        && question.concepts.len() <= 16
-        && question.concepts.iter().all(valid_concept_state)
-        && question
+    let concepts_are_closed = !definition.concepts.is_empty()
+        && definition.concepts.len() <= 16
+        && definition.concepts.iter().all(valid_concept_state)
+        && definition
             .concepts
             .iter()
             .map(|concept| concept.alias.as_str())
             .collect::<std::collections::BTreeSet<_>>()
             .len()
-            == question.concepts.len();
-    let subject_count = question.subjects.len();
-    let subjects_are_closed = !question.subjects.is_empty()
-        && question.subjects.len() <= 8
-        && question.subjects.iter().all(|subject| {
+            == definition.concepts.len();
+    let subject_count = definition.subjects.len();
+    let subjects_are_closed = !definition.subjects.is_empty()
+        && definition.subjects.len() <= 8
+        && definition.subjects.iter().all(|subject| {
             valid_local_identifier(&subject.role)
                 && (1..=16).contains(&subject.selectors.len())
                 && subject.selectors.iter().all(|selector| {
@@ -1571,9 +1527,12 @@ fn valid_question_state(question: &QuestionState) -> bool {
                         && (!selector.profile.starts_with("local-subject-")
                             || selector.profile
                                 == if subject_count == 1 {
-                                    format!("local-subject-{}-v1", question.alias)
+                                    format!("local-subject-{}-v1", definition.alias)
                                 } else {
-                                    format!("local-subject-{}-{}-v1", question.alias, subject.role)
+                                    format!(
+                                        "local-subject-{}-{}-v1",
+                                        definition.alias, subject.role
+                                    )
                                 })
                 })
                 && subject
@@ -1584,15 +1543,15 @@ fn valid_question_state(question: &QuestionState) -> bool {
                     .len()
                     == subject.selectors.len()
         })
-        && question
+        && definition
             .subjects
             .iter()
             .map(|subject| subject.role.as_str())
             .collect::<std::collections::BTreeSet<_>>()
             .len()
-            == question.subjects.len();
+            == definition.subjects.len();
     identifiers_are_closed
-        && valid_uri(&question.requirement_uri)
+        && valid_uri(&definition.requirement_uri)
         && subjects_are_closed
         && concepts_are_closed
 }
@@ -1603,6 +1562,13 @@ fn valid_concept_state(concept: &ConceptState) -> bool {
         && matches!(
             concept.form.as_str(),
             "boolean"
+                | "controlled-code"
+                | "bounded-decimal"
+                | "date-bucket"
+                | "time-bucket"
+                | "audience-scoped-entity-reference"
+                | "controlled-code-list"
+                | "entity-reference-list"
                 | "controlled-category"
                 | "bounded-identifier"
                 | "bounded-integer"
@@ -1615,8 +1581,8 @@ fn valid_uri(value: &str) -> bool {
 }
 
 fn state_matches_sealed_bundle(
-    questions: &[QuestionState],
-    access_policies: &[AccessPolicyState],
+    definitions: &[DefinitionState],
+    access_profiles: &[AccessProfileState],
     dev_root: &Path,
 ) -> Result<bool> {
     let Some(bundle) = read_sealed_bundle(dev_root)? else {
@@ -1626,24 +1592,24 @@ fn state_matches_sealed_bundle(
         .get("requirements")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("the sealed local bundle has no requirements"))?;
-    if requirements.len() != questions.len() {
+    if requirements.len() != definitions.len() {
         return Ok(false);
     }
     let selector_profiles = bundle
         .get("selectorProfiles")
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("the sealed local bundle has no selector profiles"))?;
-    for question in questions {
+    for definition in definitions {
         let Some(requirement) = requirements.iter().find(|requirement| {
             requirement.get("uri").and_then(Value::as_str)
-                == Some(question.requirement_uri.as_str())
+                == Some(definition.requirement_uri.as_str())
         }) else {
             return Ok(false);
         };
         if !requirement
             .get("purposes")
             .and_then(Value::as_array)
-            .is_some_and(|purposes| *purposes == [Value::String(question.purpose.clone())])
+            .is_some_and(|purposes| *purposes == [Value::String(definition.purpose.clone())])
         {
             return Ok(false);
         }
@@ -1651,8 +1617,8 @@ fn state_matches_sealed_bundle(
             .get("concepts")
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("a sealed local requirement has no concepts"))?;
-        if concepts.len() != question.concepts.len()
-            || question.concepts.iter().any(|concept| {
+        if concepts.len() != definition.concepts.len()
+            || definition.concepts.iter().any(|concept| {
                 !concepts.iter().any(|configured| {
                     configured.get("uri").and_then(Value::as_str) == Some(concept.uri.as_str())
                         && configured.get("type").and_then(Value::as_str)
@@ -1666,8 +1632,8 @@ fn state_matches_sealed_bundle(
             .get("subjectRoles")
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("a sealed local requirement has no subject roles"))?;
-        if roles.len() != question.subjects.len()
-            || question.subjects.iter().any(|subject| {
+        if roles.len() != definition.subjects.len()
+            || definition.subjects.iter().any(|subject| {
                 !roles.iter().any(|role| {
                     role.get("role").and_then(Value::as_str) == Some(subject.role.as_str())
                         && role
@@ -1697,18 +1663,68 @@ fn state_matches_sealed_bundle(
         }
     }
 
-    let authority_profiles = bundle
-        .get("authorityProfiles")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("the sealed local bundle has no authority profiles"))?;
-    Ok([false, true].into_iter().any(|preserved_context| {
-        authority_profiles_match_state(
-            authority_profiles,
-            questions,
-            access_policies,
-            preserved_context,
-        )
-    }))
+    if bundle.get("project").is_some() {
+        let path = dev_root.join("authority/authority-state.json");
+        let state = read_owner_json(&path, 16 * 1024 * 1024)?;
+        let Some(active) = state["activations"]
+            .as_array()
+            .and_then(|entries| entries.last())
+        else {
+            return Ok(false);
+        };
+        let verified = registry_platform_config::verify_package(
+            &dev_root.join("bundle"),
+            &crate::authoring::package_limits(),
+            "evidencectl dev state",
+        )?;
+        if active["packageDigest"].as_str() != Some(verified.digest()) {
+            return Ok(false);
+        }
+        let Some(profiles) = active["document"]["accessProfiles"].as_object() else {
+            return Ok(false);
+        };
+        if active["document"]["project"] != bundle["project"]
+            || profiles.len() != access_profiles.len()
+        {
+            return Ok(false);
+        }
+        return Ok(access_profiles.iter().all(|profile| {
+            let Some(compiled) = profiles.get(&profile.id) else {
+                return false;
+            };
+            let definitions = compiled["grants"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|grant| {
+                    definitions.iter().find(|definition| {
+                        grant["requirement"].as_str() == Some(definition.requirement_uri.as_str())
+                    })
+                })
+                .map(|definition| definition.alias.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            access::profile_digest(compiled).is_ok_and(|digest| digest == profile.digest)
+                && compiled["requesterTags"] == json!(profile.requester_tags)
+                && compiled["actorKind"] == json!(profile.actor_kind)
+                && definitions == profile.definitions
+                && match &profile.task_grant {
+                    Some(task) => {
+                        compiled["requesterClients"] == json!(task.requester_clients)
+                            && compiled["grantSourceIssuer"].as_str()
+                                == Some(task.source_issuer.as_str())
+                    }
+                    None => !compiled["grants"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|grant| grant["subjects"].as_array().into_iter().flatten())
+                        .any(|subject| subject["valueOrigin"] == "authenticated-grant"),
+                }
+        }));
+    }
+    Ok(false)
 }
 
 fn read_sealed_bundle(dev_root: &Path) -> Result<Option<Value>> {
@@ -1738,12 +1754,7 @@ fn read_sealed_bundle(dev_root: &Path) -> Result<Option<Value>> {
     Ok(Some(bundle))
 }
 
-fn sealed_bundle_uses_authenticated_context(dev_root: &Path) -> Result<bool> {
-    let bundle = read_sealed_bundle(dev_root)?
-        .context("the retained Evidence session has no readable sealed bundle")?;
-    bundle_uses_authenticated_context(&bundle)
-}
-
+#[cfg(test)]
 fn bundle_uses_authenticated_context(bundle: &Value) -> Result<bool> {
     let origins = bundle
         .get("authorityProfiles")
@@ -1779,229 +1790,6 @@ fn bundle_uses_authenticated_context(bundle: &Value) -> Result<bool> {
     }
 }
 
-fn authority_profiles_match_state(
-    authority_profiles: &serde_json::Map<String, Value>,
-    questions: &[QuestionState],
-    access_policies: &[AccessPolicyState],
-    preserved_context: bool,
-) -> bool {
-    if access_policies.is_empty() {
-        if preserved_context {
-            return false;
-        }
-        let Some(profile) = authority_profiles.get(LOCAL_REQUESTER_TAG) else {
-            return false;
-        };
-        return authority_profiles.len() == 1
-            && authority_profile_matches(
-                profile,
-                LOCAL_REQUESTER_TAG,
-                &questions.iter().collect::<Vec<_>>(),
-                None,
-                preserved_context,
-            );
-    }
-    if authority_profiles.len() != access_policies.len() {
-        return false;
-    }
-    if preserved_context
-        && access_policies
-            .iter()
-            .any(|policy| policy.task_grant.is_some())
-    {
-        return false;
-    }
-    if !preserved_context {
-        return access_policies.iter().all(|policy| {
-            let Some(profile) = authority_profiles.get(
-                &crate::authoring::access_policy_authority_profile_id(&policy.requester_tag),
-            ) else {
-                return false;
-            };
-            let governed_questions = policy
-                .questions
-                .iter()
-                .filter_map(|alias| questions.iter().find(|question| question.alias == *alias))
-                .collect::<Vec<_>>();
-            governed_questions.len() == policy.questions.len()
-                && authority_profile_matches(
-                    profile,
-                    &policy.requester_tag,
-                    &governed_questions,
-                    policy.task_grant.as_ref(),
-                    false,
-                )
-        });
-    }
-    let mut profiles_by_tag = BTreeMap::new();
-    for profile in authority_profiles.values() {
-        let Some(tags) = profile.get("requesterTags").and_then(Value::as_array) else {
-            return false;
-        };
-        if tags.len() != 1 {
-            return false;
-        }
-        let Some(tag) = tags[0].as_str() else {
-            return false;
-        };
-        if profiles_by_tag.insert(tag, profile).is_some() {
-            return false;
-        }
-    }
-    let mut matched = BTreeSet::new();
-    access_policies.iter().all(|policy| {
-        if !matched.insert(policy.requester_tag.as_str()) {
-            return false;
-        }
-        let Some(profile) = profiles_by_tag.get(policy.requester_tag.as_str()) else {
-            return false;
-        };
-        let governed_questions = policy
-            .questions
-            .iter()
-            .filter_map(|alias| questions.iter().find(|question| question.alias == *alias))
-            .collect::<Vec<_>>();
-        governed_questions.len() == policy.questions.len()
-            && authority_profile_matches(
-                profile,
-                &policy.requester_tag,
-                &governed_questions,
-                policy.task_grant.as_ref(),
-                preserved_context,
-            )
-    })
-}
-
-fn authority_profile_matches(
-    profile: &Value,
-    requester_tag: &str,
-    questions: &[&QuestionState],
-    task_grant: Option<&AccessTaskGrant>,
-    preserved_context: bool,
-) -> bool {
-    let expected_kind = task_grant.map_or("explicit-request", |grant| grant.kind.as_str());
-    if profile.get("kind").and_then(Value::as_str) != Some(expected_kind)
-        || profile
-            .get("requesterTags")
-            .and_then(Value::as_array)
-            .is_none_or(|tags| tags.as_slice() != [Value::String(requester_tag.to_owned())])
-    {
-        return false;
-    }
-    if let Some(task) = task_grant {
-        if profile["requesterClients"] != json!(task.requester_clients)
-            || profile["grantSourceIssuer"] != task.source_issuer.as_str()
-        {
-            return false;
-        }
-    } else if profile.get("requesterClients").is_some()
-        || profile.get("grantSourceIssuer").is_some()
-    {
-        return false;
-    }
-    let Some(grants) = profile.get("grants").and_then(Value::as_array) else {
-        return false;
-    };
-    let expected_count = questions.iter().try_fold(0_usize, |total, question| {
-        question
-            .subjects
-            .iter()
-            .try_fold(1_usize, |count, subject| {
-                count.checked_mul(subject.selectors.len())
-            })
-            .and_then(|count| total.checked_add(count))
-            .filter(|count| *count <= 128)
-    });
-    if expected_count != Some(grants.len()) {
-        return false;
-    }
-    // Exact complete shapes must each occur once. Counting permitted grants
-    // alone would accept duplicated alternatives while omitting another one.
-    let mut seen = std::collections::BTreeSet::new();
-    grants.iter().all(|grant| {
-        let Some(question) = questions.iter().find(|question| {
-            grant.get("requirement").and_then(Value::as_str)
-                == Some(question.requirement_uri.as_str())
-        }) else {
-            return false;
-        };
-        grant_matches_question(grant, question, task_grant, preserved_context)
-            && seen.insert((
-                question.requirement_uri.as_str(),
-                grant["subjects"].to_string(),
-            ))
-    })
-}
-
-fn grant_matches_question(
-    grant: &Value,
-    question: &QuestionState,
-    task_grant: Option<&AccessTaskGrant>,
-    preserved_context: bool,
-) -> bool {
-    if grant.get("requirement").and_then(Value::as_str) != Some(question.requirement_uri.as_str())
-        || grant.get("purpose").and_then(Value::as_str) != Some(question.purpose.as_str())
-        || grant.get("audienceFrom").and_then(Value::as_str) != Some("authenticated-requester")
-    {
-        return false;
-    }
-    grant
-        .get("subjects")
-        .and_then(Value::as_array)
-        .is_some_and(|subjects| {
-            subjects.len() == question.subjects.len()
-                && subjects
-                    .iter()
-                    .zip(&question.subjects)
-                    .all(|(configured, expected)| {
-                        let Some(selector) = expected.selectors.iter().find(|selector| {
-                            configured.get("selectorProfile").and_then(Value::as_str)
-                                == Some(selector.profile.as_str())
-                        }) else {
-                            return false;
-                        };
-                        configured.get("role").and_then(Value::as_str)
-                            == Some(expected.role.as_str())
-                            && match task_grant {
-                                Some(task) => task.bindings.iter().any(|binding| {
-                                    binding.question == question.alias
-                                        && binding.role == expected.role
-                                        && configured.get("selectorProfile").and_then(Value::as_str)
-                                            == Some(binding.selector_profile.as_str())
-                                        && configured.get("valueOrigin").and_then(Value::as_str)
-                                            == Some("authenticated-grant")
-                                        && configured.get("valueClaims")
-                                            == Some(&json!(binding.value_claims))
-                                }),
-                                None if preserved_context => {
-                                    configured.get("valueOrigin").and_then(Value::as_str)
-                                        == Some("authenticated-context")
-                                        && configured
-                                            .get("valueClaims")
-                                            .and_then(Value::as_object)
-                                            .is_some_and(|claims| {
-                                                claims.keys().collect::<BTreeSet<_>>()
-                                                    == selector
-                                                        .fields
-                                                        .iter()
-                                                        .collect::<BTreeSet<_>>()
-                                                    && claims.values().all(|claim| {
-                                                        claim
-                                                            .as_str()
-                                                            .is_some_and(|claim| !claim.is_empty())
-                                                    })
-                                            })
-                                }
-                                None => {
-                                    configured.get("valueOrigin").and_then(Value::as_str)
-                                        == Some("request")
-                                        && configured.get("valueClaims").is_none()
-                                }
-                            }
-                    })
-        })
-}
-
 fn validate_closed_caller(
     caller: &CallerState,
     dev_root: &Path,
@@ -2010,8 +1798,8 @@ fn validate_closed_caller(
     if caller.client_id != CALLER_ID
         || caller.private_key_path != dev_root.join("generated/keys/caller-private.jwk")
         || caller.assertion_audience != issuer_origin
-        || caller.evidence_audience != LOCAL_CALLER_EVIDENCE_AUDIENCE
-        || caller.requester_tag != LOCAL_REQUESTER_TAG
+        || !crate::authoring::valid_local_audience(&caller.evidence_audience)
+        || !valid_identity_tag(&caller.requester_tag)
     {
         bail!("the local development caller is outside the closed lifecycle profile");
     }
@@ -2039,7 +1827,6 @@ fn valid_local_identifier(value: &str) -> bool {
 struct DevStartSelection<'a> {
     target: Option<&'a Path>,
     issuer_project: Option<&'a Path>,
-    preserve_target_authenticated_context: bool,
     requested_resource: Option<&'a str>,
     name_prefix: Option<&'a str>,
 }
@@ -2056,7 +1843,6 @@ fn start_detached(
     let DevStartSelection {
         target,
         issuer_project,
-        preserve_target_authenticated_context,
         requested_resource,
         name_prefix,
     } = selection;
@@ -2076,12 +1862,6 @@ fn start_detached(
     } else {
         None
     };
-    if prior.is_some()
-        && sealed_bundle_uses_authenticated_context(&dev_root)?
-            != preserve_target_authenticated_context
-    {
-        bail!("--preserve-target-authenticated-context differs from the retained Evidence session");
-    }
     let resource = select_resource(
         prior
             .as_ref()
@@ -2145,7 +1925,6 @@ fn start_detached(
             ready_timeout_seconds,
             ports,
             target,
-            preserve_target_authenticated_context,
             owner.as_ref(),
             resource,
             &name_prefix,
@@ -2185,7 +1964,7 @@ fn start_detached(
 /// The compiler raises the same refusal, but only once a container binary has
 /// been resolved and the session's ports have been claimed, so an operator is
 /// asked to install Docker or to free a port for a project no port can serve.
-/// The authored transports answer that question on their own, so they are read
+/// The authored transports answer that definition on their own, so they are read
 /// first and the session ends where nothing has been touched.
 fn refuse_unservable_project(project: &Path) -> Result<()> {
     let Some(source_id) = source_local_serving_cannot_bind(project) else {
@@ -2194,7 +1973,7 @@ fn refuse_unservable_project(project: &Path) -> Result<()> {
     Err(DevRefusal {
         operational: false,
         code: "evidence.dev.local-transport-refused",
-        path: format!("sources/{source_id}.yaml:/type"),
+        path: format!("evidence.yaml:/sources/{source_id}/type"),
         message: "Local serving does not bind SQLite extracts.".to_owned(),
         suggested_action: "Prove this editable project offline with `evidencectl test <dir>`, or re-author the source over an HTTP transport before `evidencectl dev start`."
             .to_owned(),
@@ -2205,39 +1984,25 @@ fn refuse_unservable_project(project: &Path) -> Result<()> {
 /// The first authored source, by id, whose transport opens no channel a local
 /// service could bind.
 ///
-/// This read answers that one question and no other: a document it cannot
+/// This read answers that one definition and no other: a document it cannot
 /// open, bound or parse is left to the compiler, which reads the same
-/// directory under the authoring form and states the diagnostic for it.
+/// normalized project under the authoring form and states the diagnostic for it.
 fn source_local_serving_cannot_bind(project: &Path) -> Option<String> {
-    let mut refused = BTreeSet::new();
-    let authored = fs::read_dir(project.join(SOURCES_DIRECTORY)).ok()?;
-    for entry in authored.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
-            continue;
-        }
-        let Some(source_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        let readable = fs::symlink_metadata(&path).is_ok_and(|metadata| {
-            metadata.is_file() && metadata.len() <= MAX_SOURCE_ARTIFACT_BYTES
-        });
-        if !readable {
-            continue;
-        }
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-        let Ok(source) = registry_evidence_authoring::formats::scan_authored(source_id, &bytes)
-            .map(crate::authored::node_value)
-        else {
-            continue;
-        };
-        if source.get("type").and_then(Value::as_str) == Some("sqlite-extract") {
-            refused.insert(source_id.to_owned());
-        }
-    }
-    refused.into_iter().next()
+    let bytes = crate::authored::read_authored_file(
+        &project.join(registry_evidence_authoring::project::PROJECT_FILE),
+        "Evidence project",
+    )
+    .ok()?;
+    let project = registry_evidence_authoring::project::read_project(
+        registry_evidence_authoring::project::PROJECT_FILE,
+        &bytes,
+    )
+    .ok()?
+    .value;
+    project.sources.into_iter().find_map(|(id, source)| {
+        (source.source_type == registry_evidence_authoring::project::SourceType::SqliteExtract)
+            .then(|| id.to_string())
+    })
 }
 
 /// The container name prefix a start uses: the one `--name-prefix` names, else
@@ -2282,7 +2047,7 @@ fn select_resource<'a>(retained: Option<&'a str>, requested: Option<&'a str>) ->
 /// The services bind these ports themselves, several seconds later and inside
 /// a detached supervisor, where the failure reaches the operator as a
 /// readiness timeout that names neither the port nor a way out. Binding first
-/// is the same question asked where the answer can still be acted on.
+/// is the same definition asked where the answer can still be acted on.
 fn probe_local_ports(ports: LocalServicePorts, borrowed_issuer: bool) -> Result<()> {
     for (port, service, flag) in [
         (ports.evidence, "Evidence Gateway", "--evidence-port"),
@@ -2561,7 +2326,6 @@ fn prepare_and_start(
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
     target: Option<&Path>,
-    preserve_target_authenticated_context: bool,
     owner: Option<&BorrowedIssuer>,
     resource: &str,
     name_prefix: &str,
@@ -2601,50 +2365,17 @@ fn prepare_and_start(
             }
             None => LocalAdmission::default(),
         };
-        let compiled = match target {
-            Some(target) => {
-                let compiled = if preserve_target_authenticated_context {
-                    let target =
-                        crate::build::compile_local_dev_target(project, target, &evidence_bin)?;
-                    compile_local_project_with_target_authenticated_context(
-                        project,
-                        dev_root,
-                        &evidence_bin,
-                        ports,
-                        target.source_connections,
-                        target.outbound_tls,
-                        resource,
-                        &admission,
-                        &target.bundle,
-                    )?
-                } else {
-                    let (connections, outbound_tls) =
-                        crate::build::local_dev_target_inputs(target)?;
-                    compile_local_project_with_target_inputs_and_resource(
-                        project,
-                        dev_root,
-                        &evidence_bin,
-                        ports,
-                        connections,
-                        outbound_tls,
-                        resource,
-                        &admission,
-                    )?
-                };
-                if format == OutputFormat::Human {
-                    println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and the local issuer use generated local governance.");
-                }
-                compiled
-            }
-            None => compile_local_project_with_ports_and_resource(
-                project,
-                dev_root,
-                &evidence_bin,
-                ports,
-                resource,
-                &admission,
-            )?,
-        };
+        let default_target = project.join("local-target.yaml");
+        let target = target.unwrap_or(&default_target);
+        let compiled = crate::authoring::compile_normalized_local_project(
+            project,
+            dev_root,
+            &evidence_bin,
+            ports,
+            target,
+            resource,
+            &admission,
+        )?;
         (compiled, admission)
     };
     let evidence_origin = local_origin(ports.evidence);
@@ -2661,10 +2392,36 @@ fn prepare_and_start(
     generate_holder_key(&keys)?;
     let mut issuer_clients = Vec::new();
     let mut exchange_bindings = BTreeMap::new();
-    let caller = if compiled.access_policies.is_empty() {
+    let caller = if access::active_client_ids(project)?.is_empty() {
         if owner.is_some() {
-            bail!("--issuer-project requires explicit Evidence access policies and active clients before the issuer owner starts");
+            bail!("--issuer-project requires explicit Evidence access profiles and active clients before the issuer owner starts");
         }
+        let service_profiles = access::service_caller_profiles(project)?;
+        let eligible = compiled
+            .access_profiles
+            .iter()
+            .filter(|profile| {
+                profile
+                    .actor_kind
+                    .as_deref()
+                    .is_none_or(|kind| kind == "service")
+                    && service_profiles.contains(&profile.id)
+                    && profile.task_grant.is_none()
+                    && !compiled.access_profiles.iter().any(|other| {
+                        other.id != profile.id
+                            && service_profiles.contains(&other.id)
+                            && other
+                                .requester_tags
+                                .iter()
+                                .all(|tag| profile.requester_tags.contains(tag))
+                    })
+            })
+            .collect::<Vec<_>>();
+        if eligible.len() != 1 {
+            bail!("register an access client with --access-profile and --evidence-audience before dev start; exactly one unambiguous non-task service profile is required for the generated caller");
+        }
+        let profile = eligible[0];
+        let caller_evidence_audience = access::generated_caller_audience(project, &profile.id)?;
         let (caller_private, caller_public) =
             keygen::generate_dev_keypair(&keys, "caller-private.jwk", "caller-public.jwk.json")?;
         let caller_public = read_owner_json(&caller_public, 16 * 1024)?;
@@ -2673,68 +2430,93 @@ fn prepare_and_start(
             public_jwks: serde_json::to_string(&json!({"keys":[caller_public]}))?,
             claims: BTreeMap::from([
                 ("registry_actor_kind".to_owned(), json!("service")),
-                ("evidence_tags".to_owned(), json!([compiled.requester_tag])),
+                ("evidence_tags".to_owned(), json!(profile.requester_tags)),
                 (
                     "evidence_audience".to_owned(),
-                    json!(compiled.caller_evidence_audience),
+                    json!(caller_evidence_audience),
                 ),
             ]),
-            scopes: vec!["evidence:invoke".to_owned()],
+            scopes: compiled.required_scopes.clone(),
             allow_human_fixture: false,
         });
         Some(CallerState {
             client_id: CALLER_ID.to_owned(),
             private_key_path: caller_private,
             assertion_audience: issuer_origin.clone(),
-            evidence_audience: compiled.caller_evidence_audience.clone(),
-            requester_tag: compiled.requester_tag.clone(),
+            evidence_audience: caller_evidence_audience,
+            requester_tag: profile.requester_tags[0].clone(),
         })
     } else {
-        let policy_tags = compiled
-            .access_policies
+        let profile_digests = compiled
+            .access_profiles
             .iter()
-            .map(|policy| (policy.id.clone(), policy.requester_tag.clone()))
+            .map(|profile| (profile.id.clone(), profile.digest.clone()))
             .collect::<BTreeMap<_, _>>();
-        let registrations = access::load_active_clients(project, &policy_tags)?;
+        let registrations = access::load_active_clients(project, &profile_digests)?;
         if registrations.is_empty() {
-            bail!("explicit access policies require at least one active client");
+            bail!("explicit access profiles require at least one active client");
         }
-        if preserve_target_authenticated_context {
-            verify_authenticated_context_clients(&registrations, &admission)?;
+        let human_clients = registrations
+            .iter()
+            .filter(|client| client.actor_kind == "human")
+            .cloned()
+            .collect::<Vec<_>>();
+        if !human_clients.is_empty() {
+            let ids = human_clients
+                .iter()
+                .map(|client| client.client_id.clone())
+                .collect::<Vec<_>>();
+            let human_admission = LocalAdmission {
+                allowed_clients: ids.clone(),
+                assertion_issuers: admission
+                    .assertion_issuers
+                    .iter()
+                    .filter(|(id, _)| ids.contains(id))
+                    .map(|(id, issuers)| (id.clone(), issuers.clone()))
+                    .collect(),
+            };
+            verify_authenticated_context_clients(&human_clients, &human_admission)?;
         }
         for registration in registrations {
             let task_sources =
-                client_task_sources(&registration, &compiled.access_policies, owner.is_some())?;
-            let (claims, scopes, allow_human_fixture) =
-                if let Some(binding) = &registration.exchange {
-                    exchange_bindings.insert(
-                        registration.client_id.clone(),
-                        (binding.clone(), task_sources),
-                    );
-                    let (actor_kind, allow_human_fixture) =
-                        exchange_client_actor(binding, preserve_target_authenticated_context);
-                    (
-                        BTreeMap::from([("registry_actor_kind".to_owned(), json!(actor_kind))]),
-                        vec![binding.bootstrap_scope.clone()],
-                        allow_human_fixture,
-                    )
-                } else {
-                    (
-                        BTreeMap::from([
-                            ("registry_actor_kind".to_owned(), json!("service")),
-                            (
-                                "evidence_tags".to_owned(),
-                                json!(registration.requester_tags),
-                            ),
-                            (
-                                "evidence_audience".to_owned(),
-                                json!(registration.evidence_audience),
-                            ),
-                        ]),
-                        vec!["evidence:invoke".to_owned()],
-                        false,
-                    )
-                };
+                client_task_sources(&registration, &compiled.access_profiles, owner.is_some())?;
+            let (claims, scopes, allow_human_fixture) = if let Some(binding) =
+                &registration.exchange
+            {
+                exchange_bindings.insert(
+                    registration.client_id.clone(),
+                    (binding.clone(), task_sources),
+                );
+                let (actor_kind, allow_human_fixture) =
+                    exchange_client_actor(binding, registration.actor_kind == "human");
+                if actor_kind != registration.actor_kind {
+                    bail!("client exchange actor kind does not match its complete target access profile");
+                }
+                (
+                    BTreeMap::from([("registry_actor_kind".to_owned(), json!(actor_kind))]),
+                    vec![binding.bootstrap_scope.clone()],
+                    allow_human_fixture,
+                )
+            } else {
+                (
+                    BTreeMap::from([
+                        (
+                            "registry_actor_kind".to_owned(),
+                            json!(registration.actor_kind),
+                        ),
+                        (
+                            "evidence_tags".to_owned(),
+                            json!(registration.requester_tags),
+                        ),
+                        (
+                            "evidence_audience".to_owned(),
+                            json!(registration.evidence_audience),
+                        ),
+                    ]),
+                    compiled.required_scopes.clone(),
+                    false,
+                )
+            };
             issuer_clients.push(registry_thunderid_tooling::local::TypedLocalClient {
                 client_id: registration.client_id,
                 public_jwks: registration.public_jwks,
@@ -2753,6 +2535,7 @@ fn prepare_and_start(
         verify_borrowed_registrations(
             owner,
             &compiled.local_audience,
+            &compiled.required_scopes,
             &issuer_clients,
             &admission.allowed_clients,
             &admission.assertion_issuers,
@@ -2765,7 +2548,7 @@ fn prepare_and_start(
                 id: issuer_session_id.clone(),
             },
             ports.issuer,
-            generated.join("issuer"),
+            generated_issuer_root(&generated, &issuer_session_id),
             compiled.local_audience.clone(),
             issuer_clients,
         )?;
@@ -2787,12 +2570,16 @@ fn prepare_and_start(
         token_url: token_url.clone(),
         access_token_audience: compiled.local_audience.clone(),
         caller,
-        access_policies: compiled
-            .access_policies
+        access_profiles: compiled
+            .access_profiles
             .iter()
-            .map(AccessPolicyState::from)
+            .map(AccessProfileState::from)
             .collect(),
-        questions: compiled.questions.iter().map(QuestionState::from).collect(),
+        definitions: compiled
+            .definitions
+            .iter()
+            .map(DefinitionState::from)
+            .collect(),
         failure: None,
     };
     write_new_state(&dev_root.join("state.json"), &state)?;
@@ -2932,7 +2719,7 @@ fn or_inactive_session<T>(result: Result<T>) -> Result<T> {
     match result {
         // The context layers naming the private directory wrap the raw
         // `NotFound`, so the whole chain is searched: every call site here
-        // is the same question of a dev tree that was never written.
+        // is the same definition of a dev tree that was never written.
         Err(error)
             if error
                 .chain()
@@ -3051,7 +2838,7 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
 
     let pin = registry_thunderid_tooling::version::ThunderIdPin::load()?;
     let issuer_label = issuer_label(&state.name_prefix, &state.issuer_session_id);
-    let issuer_root = dev_root.join("generated/issuer");
+    let issuer_root = generated_issuer_root(&dev_root.join("generated"), &state.issuer_session_id);
     let issuer_session = registry_thunderid_tooling::container::Session {
         label: &issuer_label,
         id: &state.issuer_session_id,
@@ -3393,21 +3180,23 @@ fn abort_start(supervisor: &mut Child) -> Result<()> {
     Ok(())
 }
 
-impl From<&CompiledAccessPolicy> for AccessPolicyState {
-    fn from(compiled: &CompiledAccessPolicy) -> Self {
+impl From<&CompiledAccessProfile> for AccessProfileState {
+    fn from(compiled: &CompiledAccessProfile) -> Self {
         Self {
             id: compiled.id.clone(),
-            requester_tag: compiled.requester_tag.clone(),
-            questions: compiled.questions.clone(),
+            digest: compiled.digest.clone(),
+            requester_tags: compiled.requester_tags.clone(),
+            definitions: compiled.definitions.clone(),
+            actor_kind: compiled.actor_kind.clone(),
             task_grant: compiled.task_grant.clone(),
         }
     }
 }
 
-impl From<&CompiledQuestion> for QuestionState {
-    fn from(compiled: &CompiledQuestion) -> Self {
+impl From<&CompiledDefinition> for DefinitionState {
+    fn from(compiled: &CompiledDefinition) -> Self {
         Self {
-            alias: compiled.question_alias.clone(),
+            alias: compiled.definition_alias.clone(),
             requirement_uri: compiled.requirement_uri.clone(),
             purpose: compiled.purpose.clone(),
             subjects: compiled
@@ -3426,6 +3215,19 @@ impl From<&CompiledQuestion> for QuestionState {
                     uri: concept.concept_uri.clone(),
                     form: match concept.concept_form {
                         CompiledConceptForm::Boolean => "boolean".to_owned(),
+                        CompiledConceptForm::ControlledCode => "controlled-code".to_owned(),
+                        CompiledConceptForm::BoundedDecimal => "bounded-decimal".to_owned(),
+                        CompiledConceptForm::DateBucket => "date-bucket".to_owned(),
+                        CompiledConceptForm::TimeBucket => "time-bucket".to_owned(),
+                        CompiledConceptForm::AudienceScopedEntityReference => {
+                            "audience-scoped-entity-reference".to_owned()
+                        }
+                        CompiledConceptForm::ControlledCodeList => {
+                            "controlled-code-list".to_owned()
+                        }
+                        CompiledConceptForm::EntityReferenceList => {
+                            "entity-reference-list".to_owned()
+                        }
                         CompiledConceptForm::ControlledCategory => "controlled-category".to_owned(),
                         CompiledConceptForm::BoundedIdentifier => "bounded-identifier".to_owned(),
                         CompiledConceptForm::BoundedInteger => "bounded-integer".to_owned(),
@@ -3797,12 +3599,12 @@ fn make_validated_tree_removable(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ready_question(question: QuestionState) -> ReadyQuestionState {
-    ReadyQuestionState {
-        alias: question.alias,
-        requirement_uri: question.requirement_uri,
-        purpose: question.purpose,
-        subjects: question
+fn ready_definition(definition: DefinitionState) -> ReadyDefinitionState {
+    ReadyDefinitionState {
+        alias: definition.alias,
+        requirement_uri: definition.requirement_uri,
+        purpose: definition.purpose,
+        subjects: definition
             .subjects
             .into_iter()
             .map(|subject| ReadySubjectState {
@@ -3810,7 +3612,7 @@ fn ready_question(question: QuestionState) -> ReadyQuestionState {
                 selectors: subject.selectors,
             })
             .collect(),
-        concepts: question
+        concepts: definition
             .concepts
             .into_iter()
             .map(|concept| ReadyConceptState {
@@ -3830,6 +3632,7 @@ mod tests {
     )]
     use super::*;
     use crate::authoring::CompiledProject;
+    const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:example:test:caller";
 
     #[test]
     fn the_issuer_container_label_carries_the_selected_name_prefix() {
@@ -3839,6 +3642,27 @@ mod tests {
             "evidence-dev-0123456789ab"
         );
         assert_eq!(issuer_label("ci-4711", session), "ci-4711-0123456789ab");
+    }
+
+    #[test]
+    fn each_issuer_generation_owns_one_removable_bind_root() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let generated = temporary.path().join("generated");
+        create_private_directory(&generated).expect("private generated directory");
+        let first_id = "0123456789abcdef0123456789abcdef0123456789abcdef";
+        let second_id = "fedcba9876543210fedcba9876543210fedcba9876543210";
+
+        let first = generated_issuer_root(&generated, first_id);
+        assert_eq!(first, generated_issuer_root(&generated, first_id));
+        let second = generated_issuer_root(&generated, second_id);
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(generated.as_path()));
+        assert_eq!(second.parent(), Some(generated.as_path()));
+
+        create_private_directory(&first).expect("first issuer root");
+        create_private_directory(&second).expect("second issuer root");
+        remove_private_tree(&generated).expect("remove generated roots");
+        assert!(!generated.exists());
     }
 
     #[test]
@@ -3883,8 +3707,8 @@ mod tests {
             "tokenUrl": "http://127.0.0.1:8081/oauth2/token",
             "accessTokenAudience": "urn:example:audience",
             "caller": null,
-            "accessPolicies": [],
-            "questions": [],
+            "accessProfiles": [],
+            "definitions": [],
             "failure": null,
         });
         assert!(serde_json::from_value::<DevState>(state.clone()).is_err());
@@ -3896,13 +3720,22 @@ mod tests {
     }
 
     #[test]
-    fn the_registered_example_is_a_readable_state() {
+    fn the_retired_policy_state_example_is_refused() {
         let example = include_bytes!(
             "../../../products/evidence/examples/formats/dev-session/.evidence/dev/state.json"
         );
+        let mut retired: Value = serde_json::from_slice(example).expect("current state example");
+        let state = retired.as_object_mut().unwrap();
+        let profiles = state.remove("accessProfiles").expect("current profiles");
+        let definitions = state.remove("definitions").expect("current definitions");
+        state.insert("accessPolicies".to_owned(), profiles);
+        state.insert("questions".to_owned(), definitions);
         Reader::new("state.json")
-            .decode::<DevState>(example, &Expect::one(&DEV_STATE_FORMAT))
-            .expect("the example reads");
+            .decode::<DevState>(
+                &serde_json::to_vec(&retired).unwrap(),
+                &Expect::one(&DEV_STATE_FORMAT),
+            )
+            .expect_err("retired profile state members are not accepted");
     }
 
     #[test]
@@ -3968,19 +3801,44 @@ mod tests {
         assert!(select_resource(None, Some("not-an-absolute-uri")).is_err());
     }
 
+    fn transport_test_project() -> Value {
+        registry_platform_yaml::Reader::new("evidence.yaml")
+            .scan(include_bytes!(
+                "../../../products/evidence/examples/standalone/evidence.yaml"
+            ))
+            .expect("normalized public project")
+            .expect("project document")
+            .to_json_value()
+    }
+
+    fn extract_test_source(document: &Value) -> Value {
+        let mut source = document["sources"]["person-record"].clone();
+        source.as_object_mut().unwrap().remove("connection");
+        source["type"] = json!("sqlite-extract");
+        source["extractProfile"] = json!("records");
+        source["maximumExtractAgeSeconds"] = json!(3600);
+        source["request"] = json!({
+            "statement":"queries/records.sql", "columns":[], "parameterBindings":{},
+            "maximumRows":2, "maximumCellBytes":1024, "maximumStatementSteps":1000
+        });
+        source
+    }
+
     #[test]
     fn a_project_read_from_a_sqlite_extract_is_refused_before_a_session_is_prepared() {
         let root = tempfile::tempdir().expect("tempdir");
-        let project = root.path();
-        let sources = project.join(SOURCES_DIRECTORY);
-        fs::create_dir(&sources).expect("sources directory");
-        fs::write(sources.join("records.yaml"), "type: sqlite-extract\n").expect("source");
+        let mut document = transport_test_project();
+        document["sources"]["records"] = extract_test_source(&document);
+        fs::write(
+            root.path().join("evidence.yaml"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .expect("normalized project");
 
-        let error = refuse_unservable_project(project).expect_err("unservable project");
-
+        let error = refuse_unservable_project(root.path()).expect_err("unservable project");
         let refusal = error.downcast_ref::<DevRefusal>().expect("typed refusal");
         assert_eq!(refusal.code, "evidence.dev.local-transport-refused");
-        assert_eq!(refusal.path, "sources/records.yaml:/type");
+        assert_eq!(refusal.path, "evidence.yaml:/sources/records/type");
         assert!(refusal.message.contains("does not bind SQLite extracts"));
         assert!(!refusal.operational);
     }
@@ -3989,20 +3847,25 @@ mod tests {
     fn a_project_a_local_service_can_bind_is_left_to_the_compiler() {
         let root = tempfile::tempdir().expect("tempdir");
         let project = root.path();
-        refuse_unservable_project(project).expect("a project without sources is not refused here");
+        refuse_unservable_project(project).expect("a missing project is left to the compiler");
+        let mut document = transport_test_project();
+        fs::write(
+            project.join("evidence.yaml"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .expect("normalized project");
+        fs::write(project.join("notes.txt"), "type: sqlite-extract\n").expect("other file");
+        refuse_unservable_project(project).expect("an HTTP project is not refused here");
 
-        let sources = project.join(SOURCES_DIRECTORY);
-        fs::create_dir(&sources).expect("sources directory");
-        fs::write(sources.join("people.yaml"), "type: http-json\n").expect("source");
-        fs::write(sources.join("notes.txt"), "type: sqlite-extract\n").expect("other file");
-        refuse_unservable_project(project).expect("an HTTP source is not refused here");
-
-        // Two extracts name the first by id, as the compiler's own reading of
-        // the same directory does.
+        // Named Sources are examined in the same stable order as the compiler.
         for id in ["records", "holders"] {
-            fs::write(sources.join(format!("{id}.yaml")), "type: sqlite-extract\n")
-                .expect("source");
+            document["sources"][id] = extract_test_source(&document);
         }
+        fs::write(
+            project.join("evidence.yaml"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .expect("normalized project");
         assert_eq!(
             source_local_serving_cannot_bind(project).as_deref(),
             Some("holders")
@@ -4032,80 +3895,30 @@ mod tests {
 
     #[test]
     fn retained_task_grant_profile_refuses_changed_origin_client_or_claim() {
-        let question = QuestionState::from(&compiled(Path::new("/tmp/unused")).questions[0]);
-        let task = AccessTaskGrant {
-            kind: "delegated".to_owned(),
-            source_issuer: registry_platform_yaml::Url::new("https://casework.invalid")
-                .expect("a URL"),
-            requester_clients: vec!["task-agent".to_owned()],
-            bindings: vec![registry_evidence_authoring::model::AccessTaskBinding {
-                question: "adult-status".to_owned(),
-                role: "person".to_owned(),
-                selector_profile: "local-subject-adult-status-v1".to_owned(),
-                value_claims: BTreeMap::from([(
-                    LocalId::new("person_id").expect("a local id"),
-                    "identity.person_reference".to_owned(),
-                )]),
-            }],
-        };
         let profile = json!({
-            "kind":"delegated", "requesterTags":["policy-v2-example"],
+            "kind":"delegated", "actorKind":"agent", "requesterTags":["task-profile"],
             "requesterClients":["task-agent"], "grantSourceIssuer":"https://casework.invalid",
-            "grants":[{"requirement":"urn:registrystack:evidence:local:requirement:adult-status",
-                "purpose":"age-check", "audienceFrom":"authenticated-requester",
-                "subjects":[{"role":"person", "selectorProfile":"local-subject-adult-status-v1",
-                    "valueOrigin":"authenticated-grant",
-                    "valueClaims":{"person_id":"identity.person_reference"}}]}],
+            "grants":[{"requirement":"urn:example:requirement", "purpose":"age-check",
+                "subjects":[{"role":"person","selectorProfile":"person-id",
+                    "valueOrigin":"authenticated-grant","valueClaims":{"person_id":"identity.person_reference"}}]}]
         });
-        assert!(authority_profile_matches(
-            &profile,
-            "policy-v2-example",
-            &[&question],
-            Some(&task),
-            false,
-        ));
-        let policy = AccessPolicyState {
-            id: "delegated-check".to_owned(),
-            requester_tag: "policy-v2-example".to_owned(),
-            questions: vec![question.alias.clone()],
-            task_grant: Some(task.clone()),
-        };
-        let exact = serde_json::Map::from_iter([(
-            crate::authoring::access_policy_authority_profile_id(&policy.requester_tag),
-            profile.clone(),
-        )]);
-        assert!(authority_profiles_match_state(
-            &exact,
-            std::slice::from_ref(&question),
-            std::slice::from_ref(&policy),
-            false,
-        ));
-        let renamed = serde_json::Map::from_iter([("reviewed-task".to_owned(), profile.clone())]);
-        assert!(!authority_profiles_match_state(
-            &renamed,
-            std::slice::from_ref(&question),
-            std::slice::from_ref(&policy),
-            false,
-        ));
+        let digest = access::profile_digest(&profile).expect("complete profile fingerprint");
         for pointer in [
             "/grantSourceIssuer",
             "/requesterClients/0",
             "/grants/0/subjects/0/valueClaims/person_id",
         ] {
             let mut changed = profile.clone();
-            *changed.pointer_mut(pointer).unwrap() = json!("different");
-            assert!(!authority_profile_matches(
-                &changed,
-                "policy-v2-example",
-                &[&question],
-                Some(&task),
-                false,
-            ));
+            *changed.pointer_mut(pointer).expect("governed dimension") = json!("different");
+            assert_ne!(
+                access::profile_digest(&changed).expect("changed fingerprint"),
+                digest
+            );
         }
     }
 
     #[test]
-    fn preserved_context_clients_require_one_exact_first_party_owner_pairing() {
+    fn human_context_clients_require_one_exact_first_party_owner_pairing() {
         let first_party = access::ActiveClientExchange {
             kind: access::ActiveClientExchangeKind::FirstParty,
             bootstrap_scope: "evidence:invoke".to_owned(),
@@ -4117,7 +3930,8 @@ mod tests {
         let client = access::ActiveClientRegistration {
             client_id: "citizen-download".to_owned(),
             public_jwks: "{\"keys\":[]}".to_owned(),
-            requester_tags: vec!["policy-v1-example".to_owned()],
+            requester_tags: vec!["citizen-profile".to_owned()],
+            actor_kind: "human".to_owned(),
             evidence_audience: LOCAL_ACCESS_TOKEN_AUDIENCE.to_owned(),
             exchange: Some(first_party.clone()),
         };
@@ -4166,7 +3980,7 @@ mod tests {
     }
 
     #[test]
-    fn preserved_context_marks_only_first_party_exchange_clients_human() {
+    fn human_context_marks_only_first_party_exchange_clients_human() {
         let first_party = access::ActiveClientExchange {
             kind: access::ActiveClientExchangeKind::FirstParty,
             bootstrap_scope: "evidence:invoke".to_owned(),
@@ -4214,73 +4028,32 @@ mod tests {
     }
 
     #[test]
-    fn retained_access_policy_profiles_match_by_one_exact_requester_tag() {
-        let question = QuestionState::from(&compiled(Path::new("/tmp/unused")).questions[0]);
-        let policy = AccessPolicyState {
-            id: "age-checks".to_owned(),
-            requester_tag: "policy-v1-example".to_owned(),
-            questions: vec![question.alias.clone()],
-            task_grant: None,
-        };
-        let profile = json!({
-            "kind": "explicit-request",
-            "requesterTags": [policy.requester_tag],
-            "grants": [{
-                "requirement": question.requirement_uri,
-                "purpose": question.purpose,
-                "audienceFrom": "authenticated-requester",
-                "responseFormats": ["signed-jws"],
-                "subjects": [{
-                    "role": "person",
-                    "selectorProfile": "local-subject-adult-status-v1",
-                    "valueOrigin": "authenticated-context",
-                    "valueClaims": {"person_id": "identity.person_reference"},
-                }],
-            }],
-        });
-        let renamed =
-            serde_json::Map::from_iter([("citizen-record-holder".to_owned(), profile.clone())]);
-        assert!(authority_profiles_match_state(
-            &renamed,
-            std::slice::from_ref(&question),
-            std::slice::from_ref(&policy),
-            true,
-        ));
-        assert!(!authority_profiles_match_state(
-            &renamed,
-            std::slice::from_ref(&question),
-            std::slice::from_ref(&policy),
-            false,
-        ));
-
-        let duplicate = serde_json::Map::from_iter([
-            ("citizen-record-holder".to_owned(), profile.clone()),
-            ("duplicate-name".to_owned(), profile.clone()),
-        ]);
-        assert!(!authority_profiles_match_state(
-            &duplicate,
-            std::slice::from_ref(&question),
-            std::slice::from_ref(&policy),
-            true,
-        ));
-
-        let mut wrong_tag = profile;
-        wrong_tag["requesterTags"] = json!(["policy-v1-other"]);
-        let wrong_tag =
-            serde_json::Map::from_iter([("citizen-record-holder".to_owned(), wrong_tag)]);
-        assert!(!authority_profiles_match_state(
-            &wrong_tag,
-            &[question],
-            &[policy],
-            true,
-        ));
+    fn retained_access_profiles_bind_complete_tags_actor_and_grants() {
+        let profile = json!({"kind":"statutory","actorKind":"human","requesterTags":["institution","citizen"],
+            "grants":[{"requirement":"urn:example:requirement","purpose":"review", "responseFormats":["signed-jws"],
+            "subjects":[{"role":"person","selectorProfile":"person-id","valueOrigin":"authenticated-context"}]}]});
+        let digest = access::profile_digest(&profile).expect("complete fingerprint");
+        for pointer in [
+            "/requesterTags/0",
+            "/actorKind",
+            "/grants/0/purpose",
+            "/grants/0/responseFormats/0",
+            "/grants/0/subjects/0/valueOrigin",
+        ] {
+            let mut changed = profile.clone();
+            *changed.pointer_mut(pointer).expect("dimension") = json!("different");
+            assert_ne!(
+                access::profile_digest(&changed).expect("fingerprint"),
+                digest
+            );
+        }
     }
 
     fn compiled(runtime: &Path) -> CompiledProject {
         CompiledProject {
             runtime_path: runtime.to_path_buf(),
-            questions: vec![CompiledQuestion {
-                question_alias: "adult-status".to_owned(),
+            definitions: vec![CompiledDefinition {
+                definition_alias: "adult-status".to_owned(),
                 requirement_uri: "urn:registrystack:evidence:local:requirement:adult-status"
                     .to_owned(),
                 purpose: "age-check".to_owned(),
@@ -4298,10 +4071,11 @@ mod tests {
                     concept_form: CompiledConceptForm::Boolean,
                 }],
             }],
+            required_scopes: vec!["evidence:invoke".to_owned()],
             local_audience: "urn:registrystack:evidence:local:gateway".to_owned(),
             requester_tag: "local-caller".to_owned(),
             caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
-            access_policies: Vec::new(),
+            access_profiles: Vec::new(),
         }
     }
 
@@ -4374,12 +4148,12 @@ mod tests {
     #[test]
     fn structured_concepts_use_the_runtime_value_form_in_lifecycle_state() {
         let mut compiled = compiled(Path::new("/private/runtime.yaml"));
-        compiled.questions[0].concepts[0].concept_form = CompiledConceptForm::Structured;
+        compiled.definitions[0].concepts[0].concept_form = CompiledConceptForm::Structured;
 
-        let state = QuestionState::from(&compiled.questions[0]);
+        let state = DefinitionState::from(&compiled.definitions[0]);
 
         assert_eq!(state.concepts[0].form, "reviewed-structured-value");
-        assert!(valid_question_state(&state));
+        assert!(valid_definition_state(&state));
     }
 
     #[test]
@@ -4453,23 +4227,11 @@ mod tests {
         let bundle_path = bundle.join("evidence.yaml");
         fs::write(
             &bundle_path,
-            br#"selectorProfiles:
+            br#"project: lifecycle-fixture
+selectorProfiles:
   local-subject-adult-status-v1:
     fields:
       person_id: {type: string}
-authorityProfiles:
-  local-caller:
-    kind: explicit-request
-    requesterTags: [local-caller]
-    grants:
-      - requirement: urn:registrystack:evidence:local:requirement:adult-status
-        purpose: age-check
-        audienceFrom: authenticated-requester
-        responseFormats: [signed-jws]
-        subjects:
-          - role: person
-            selectorProfile: local-subject-adult-status-v1
-            valueOrigin: request
 requirements:
   - uri: urn:registrystack:evidence:local:requirement:adult-status
     purposes: [age-check]
@@ -4497,6 +4259,32 @@ requirements:
         )
         .expect("seal package sum file");
         fs::set_permissions(&bundle, fs::Permissions::from_mode(0o500)).expect("seal bundle");
+        let profile = json!({"kind":"explicit-request","actorKind":"service","requesterTags":["local-caller"],
+            "grants":[{"requirement":compiled.definitions[0].requirement_uri,"purpose":"age-check",
+            "responseFormats":["signed-jws"],"subjects":[{"role":"person","selectorProfile":"local-subject-adult-status-v1","valueOrigin":"request"}]}]});
+        let profile_state = AccessProfileState {
+            id: "local-profile".into(),
+            digest: access::profile_digest(&profile).unwrap(),
+            requester_tags: vec!["local-caller".into()],
+            definitions: vec!["adult-status".into()],
+            actor_kind: Some("service".into()),
+            task_grant: None,
+        };
+        let verified = registry_platform_config::verify_package(
+            &bundle,
+            &crate::authoring::package_limits(),
+            "test",
+        )
+        .expect("verified package");
+        create_private_directory(&dev.join("authority")).expect("authority root");
+        fs::write(dev.join("authority/authority-state.json"), serde_json::to_vec(&json!({"activations":[{
+            "packageDigest":verified.digest(),"document":{"project":"lifecycle-fixture","accessProfiles":{"local-profile":profile}}
+        }]})).unwrap()).expect("authority snapshot");
+        fs::set_permissions(
+            dev.join("authority/authority-state.json"),
+            fs::Permissions::from_mode(PRIVATE_FILE_MODE),
+        )
+        .unwrap();
         let mut state = DevState {
             api_version: DEV_STATE_API_VERSION.to_owned(),
             kind: DEV_STATE_KIND.to_owned(),
@@ -4518,16 +4306,20 @@ requirements:
                 evidence_audience: compiled.caller_evidence_audience.clone(),
                 requester_tag: compiled.requester_tag.clone(),
             }),
-            access_policies: Vec::new(),
-            questions: compiled.questions.iter().map(QuestionState::from).collect(),
+            access_profiles: vec![profile_state],
+            definitions: compiled
+                .definitions
+                .iter()
+                .map(DefinitionState::from)
+                .collect(),
             failure: None,
         };
         write_new_state(&dev.join("state.json"), &state).expect("ready state");
         let ready = load_ready_state(&project).expect("ready handoff");
         assert_eq!(ready.runtime_path, runtime);
-        assert_eq!(ready.questions[0].alias, "adult-status");
+        assert_eq!(ready.definitions[0].alias, "adult-status");
         assert!(ready.caller.is_some());
-        assert!(ready.access_policies.is_empty());
+        assert_eq!(ready.access_profiles.len(), 1);
         assert!(
             clean_dev(&project, OutputFormat::Human).is_err(),
             "active state is never removed"
@@ -4539,96 +4331,29 @@ requirements:
         replace_state(&dev.join("state.json"), &state).expect("tampered state");
         assert!(load_ready_state(&project).is_err());
         state = valid_ready.clone();
-        state.questions[0].requirement_uri = "urn:tampered".to_owned();
+        state.definitions[0].requirement_uri = "urn:tampered".to_owned();
         replace_state(&dev.join("state.json"), &state).expect("tampered canonical value");
         assert!(load_ready_state(&project).is_err());
         state = valid_ready.clone();
-        state.questions[0].concepts[0].uri = "urn:tampered".to_owned();
+        state.definitions[0].concepts[0].uri = "urn:tampered".to_owned();
         replace_state(&dev.join("state.json"), &state).expect("tampered concept");
         assert!(load_ready_state(&project).is_err());
         state = valid_ready;
         replace_state(&dev.join("state.json"), &state).expect("restore ready state");
 
-        let policy_questions = vec!["adult-status".to_owned()];
-        let policy_tag =
-            access_policy_requester_tag("age-checks", &policy_questions).expect("policy tag");
-        let mut explicit_bundle: Value =
-            serde_norway::from_slice(&fs::read(&bundle_path).expect("read implicit bundle"))
-                .expect("parse implicit bundle");
-        explicit_bundle["authorityProfiles"] = Value::Object(serde_json::Map::from_iter([(
-            crate::authoring::access_policy_authority_profile_id(&policy_tag),
-            json!({
-                "kind": "explicit-request",
-                "requesterTags": [policy_tag],
-                "grants": [{
-                    "requirement": "urn:registrystack:evidence:local:requirement:adult-status",
-                    "purpose": "age-check",
-                    "audienceFrom": "authenticated-requester",
-                    "responseFormats": ["signed-jws"],
-                    "subjects": [{
-                        "role": "person",
-                        "selectorProfile": "local-subject-adult-status-v1",
-                        "valueOrigin": "request",
-                    }],
-                }],
-            }),
-        )]));
-        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))
-            .expect("unseal bundle config for test update");
-        fs::write(
-            &bundle_path,
-            serde_norway::to_string(&explicit_bundle).expect("explicit bundle YAML"),
-        )
-        .expect("write explicit bundle");
-        fs::set_permissions(&bundle, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
-            .expect("unseal package directory for test update");
-        fs::remove_file(bundle.join(registry_platform_config::SUM_FILE))
-            .expect("remove stale package sum file");
-        registry_platform_config::write_sum_file(
-            &bundle,
-            None,
-            &crate::authoring::package_limits(),
-            "evidencectl dev start",
-        )
-        .expect("reseal local test package");
-        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
-            .expect("reseal bundle config");
-        fs::set_permissions(
-            bundle.join(registry_platform_config::SUM_FILE),
-            fs::Permissions::from_mode(0o400),
-        )
-        .expect("reseal package sum file");
-        fs::set_permissions(&bundle, fs::Permissions::from_mode(0o500))
-            .expect("reseal package directory");
-        state.caller = None;
-        state.access_policies = vec![AccessPolicyState {
-            id: "age-checks".to_owned(),
-            requester_tag: policy_tag.clone(),
-            questions: policy_questions,
-            task_grant: None,
-        }];
-        replace_state(&dev.join("state.json"), &state).expect("explicit policy state");
-        let explicit = load_ready_state(&project).expect("explicit ready handoff");
-        assert!(explicit.caller.is_none());
-        assert_eq!(explicit.access_policies[0].requester_tag, policy_tag);
-        assert!(try_load_ready_state(&project)
-            .expect("optional ready handoff")
-            .is_some());
         let valid_explicit = state.clone();
-        state.access_policies[0].id = "other-age-checks".to_owned();
-        state.access_policies[0].requester_tag = access_policy_requester_tag(
-            &state.access_policies[0].id,
-            &state.access_policies[0].questions,
-        )
-        .expect("internally valid but unsealed policy tag");
-        replace_state(&dev.join("state.json"), &state).expect("unsealed policy state");
-        assert!(load_ready_state(&project).is_err());
-        state = valid_explicit.clone();
-        state.access_policies[0].requester_tag = "policy-v1-tampered".to_owned();
-        replace_state(&dev.join("state.json"), &state).expect("tampered policy state");
-        assert!(load_ready_state(&project).is_err());
+        for mutate in [0, 1, 2] {
+            state = valid_explicit.clone();
+            match mutate {
+                0 => state.access_profiles[0].id = "other-profile".into(),
+                1 => state.access_profiles[0].digest = format!("sha256:{}", "0".repeat(64)),
+                _ => state.access_profiles[0].requester_tags = vec!["tampered".into()],
+            }
+            replace_state(&dev.join("state.json"), &state).expect("tampered profile state");
+            assert!(load_ready_state(&project).is_err());
+        }
         state = valid_explicit;
-        replace_state(&dev.join("state.json"), &state).expect("restore explicit state");
+        replace_state(&dev.join("state.json"), &state).expect("restore profile state");
 
         drop(listener);
         remove_control_socket(&socket).expect("remove socket");
@@ -4641,7 +4366,7 @@ requirements:
             .expect("stopped optional handoff")
             .is_none());
         assert_eq!(stopped.runtime_path, runtime);
-        assert_eq!(stopped.questions[0].concepts[0].alias, "is_adult");
+        assert_eq!(stopped.definitions[0].concepts[0].alias, "is_adult");
 
         clean_dev(&project, OutputFormat::Human).expect("clean stopped session");
         assert!(!dev.exists());
@@ -4804,7 +4529,7 @@ requirements:
         let public = read_owner_json(&client_dir.join("public.jwk"), 4096).unwrap();
         let claims = BTreeMap::from([
             ("registry_actor_kind".into(), json!("service")),
-            ("evidence_tags".into(), json!(["policy-one"])),
+            ("evidence_tags".into(), json!(["profile-one"])),
             (
                 "evidence_audience".into(),
                 json!("urn:evidence:client:synthetic"),
@@ -4836,6 +4561,7 @@ requirements:
         verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             std::slice::from_ref(&client),
             &admitted,
             &unpaired,
@@ -4854,6 +4580,7 @@ requirements:
                 verify_borrowed_registrations(
                     &owner,
                     LOCAL_ACCESS_TOKEN_AUDIENCE,
+                    &["evidence:invoke".to_owned()],
                     std::slice::from_ref(&client),
                     &drifted,
                     &unpaired,
@@ -4870,6 +4597,7 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             &[altered],
             &admitted,
             &unpaired,
@@ -4881,6 +4609,7 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             &[altered],
             &admitted,
             &unpaired,
@@ -4896,6 +4625,7 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             std::slice::from_ref(&client),
             &admitted,
             &unpaired,
@@ -4907,6 +4637,7 @@ requirements:
         verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             std::slice::from_ref(&client),
             &admitted,
             &unpaired,
@@ -4918,6 +4649,7 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             std::slice::from_ref(&client),
             &admitted,
             &unpaired,
@@ -4955,6 +4687,7 @@ requirements:
         verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             std::slice::from_ref(&exchange_client),
             &admitted,
             &paired,
@@ -4967,6 +4700,7 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             std::slice::from_ref(&exchange_client),
             &admitted,
             &unpaired,
@@ -4985,6 +4719,7 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             std::slice::from_ref(&exchange_client),
             &admitted,
             &paired,
@@ -4997,6 +4732,7 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             &[exchange_client],
             &admitted,
             &paired,
@@ -5035,6 +4771,7 @@ requirements:
         verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             std::slice::from_ref(&portal_client),
             &admitted,
             &portal_paired,
@@ -5046,6 +4783,7 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             std::slice::from_ref(&portal_client),
             &admitted,
             &portal_paired,
@@ -5062,6 +4800,7 @@ requirements:
         verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             std::slice::from_ref(&human_portal_client),
             &admitted,
             &portal_paired,
@@ -5073,6 +4812,7 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &["evidence:invoke".to_owned()],
             &[human_portal_client],
             &admitted,
             &portal_paired,
@@ -5094,6 +4834,7 @@ requirements:
                 verify_borrowed_registrations(
                     &owner,
                     LOCAL_ACCESS_TOKEN_AUDIENCE,
+                    &["evidence:invoke".to_owned()],
                     std::slice::from_ref(&portal_client),
                     &admitted,
                     &portal_paired,
@@ -5192,24 +4933,26 @@ requirements:
     }
 
     #[test]
-    fn client_exchange_binding_must_match_the_task_policies_that_name_it() {
+    fn client_exchange_binding_must_match_the_task_profiles_that_name_it() {
         let source = "https://casework.invalid";
-        let policies = vec![
-            crate::authoring::CompiledAccessPolicy {
+        let profiles = vec![
+            crate::authoring::CompiledAccessProfile {
                 id: "lot-tasks".into(),
-                requester_tag: "lot-tasks-tag".into(),
-                questions: vec!["lot-status".into()],
-                task_grant: Some(AccessTaskGrant {
-                    kind: "institutional".into(),
+                digest: format!("sha256:{}", "0".repeat(64)),
+                requester_tags: vec!["lot-tasks-tag".into()],
+                definitions: vec!["lot-status".into()],
+                actor_kind: Some("agent".into()),
+                task_grant: Some(TaskGrantBinding {
                     source_issuer: registry_platform_yaml::Url::new(source).expect("a URL"),
                     requester_clients: vec!["assistant".into()],
-                    bindings: Vec::new(),
                 }),
             },
-            crate::authoring::CompiledAccessPolicy {
+            crate::authoring::CompiledAccessProfile {
                 id: "portal-reads".into(),
-                requester_tag: "portal-reads-tag".into(),
-                questions: vec!["lot-status".into()],
+                digest: format!("sha256:{}", "1".repeat(64)),
+                requester_tags: vec!["portal-reads-tag".into()],
+                definitions: vec!["lot-status".into()],
+                actor_kind: Some("service".into()),
                 task_grant: None,
             },
         ];
@@ -5224,6 +4967,12 @@ requirements:
             client_id: client.into(),
             public_jwks: "{}".into(),
             requester_tags: vec![tag.into()],
+            actor_kind: if tag == "lot-tasks-tag" {
+                "agent"
+            } else {
+                "service"
+            }
+            .into(),
             evidence_audience: "urn:registrystack:evidence:local:gateway".into(),
             exchange: binding,
         };
@@ -5235,7 +4984,7 @@ requirements:
         assert_eq!(
             client_task_sources(
                 &registration("assistant", "lot-tasks-tag", institutional.clone()),
-                &policies,
+                &profiles,
                 true,
             )
             .unwrap(),
@@ -5243,14 +4992,14 @@ requirements:
         );
         assert!(client_task_sources(
             &registration("portal", "portal-reads-tag", first_party.clone()),
-            &policies,
+            &profiles,
             true,
         )
         .unwrap()
         .is_empty());
         assert!(client_task_sources(
             &registration("direct", "portal-reads-tag", None),
-            &policies,
+            &profiles,
             false,
         )
         .unwrap()
@@ -5258,20 +5007,20 @@ requirements:
 
         for (case, client, tag, binding, borrowed, refusal) in [
             (
-                "a task requester must hold the policy tag",
+                "a task requester must hold the profile tag",
                 "assistant",
                 "portal-reads-tag",
                 institutional.clone(),
                 true,
-                "task grant requester is not assigned its access policy",
+                "task grant requester is not assigned its access profile",
             ),
             (
-                "an institutional binding needs a task policy naming the client",
+                "an institutional binding needs a task profile naming the client",
                 "portal",
                 "portal-reads-tag",
                 institutional.clone(),
                 true,
-                "institutional exchange needs one active assigned task policy",
+                "institutional exchange needs one active assigned task profile",
             ),
             (
                 "a task requester cannot also be a first-party exchanger",
@@ -5299,7 +5048,7 @@ requirements:
             ),
         ] {
             let error =
-                client_task_sources(&registration(client, tag, binding), &policies, borrowed)
+                client_task_sources(&registration(client, tag, binding), &profiles, borrowed)
                     .expect_err(case)
                     .to_string();
             assert_eq!(error, refusal, "{case}");

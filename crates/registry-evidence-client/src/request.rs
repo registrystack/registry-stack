@@ -32,6 +32,8 @@ use serde::Serialize;
 pub(crate) struct EvidenceRequestBody {
     pub(crate) request_nonce: String,
     pub(crate) requirement: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) expected_configuration_revision: Option<String>,
     pub(crate) purpose: String,
     /// Unordered role set encoded as an array. Each configured role appears
     /// exactly once; array position carries no meaning.
@@ -126,6 +128,7 @@ mod tests {
         EvidenceRequestBody {
             request_nonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             requirement: "urn:example:client:requirement:status:v1".to_owned(),
+            expected_configuration_revision: None,
             purpose: "example-decision".to_owned(),
             subjects: vec![RequestedSubject {
                 role: "subject".to_owned(),

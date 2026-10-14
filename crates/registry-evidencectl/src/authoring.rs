@@ -16,29 +16,13 @@ use std::{
     thread,
 };
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use jsonschema::{error::ValidationErrorKind, Draft, JSONSchema};
-use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
-use serde_json::{json, Map, Value};
-use url::{Host, Url};
+use anyhow::{anyhow, bail, Context as _, Result};
+use serde_json::{json, Value};
 
-use registry_evidence_authoring::formats::{
-    check_access_policy, check_question, diagnostic_near, read_envelope_body, scan_authored,
-    SELECTOR, SOURCE,
-};
-use registry_platform_yaml::{
-    Document, ExternalId, FormatSpec, LocalId, Node, NodeValue, Severity,
-};
-
-use crate::authored::{self, Gathered};
+use crate::authored;
 use crate::evidence_binary::{
-    EVIDENCE_BUNDLE_API_VERSION, EVIDENCE_BUNDLE_KIND, EVIDENCE_CODELIST_API_VERSION,
-    EVIDENCE_CODELIST_KIND, EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND,
-};
-use crate::suggest::{
-    narrow,
-    openapi::Spec,
-    types::{BoundKind, BoundValues, OperationKey},
+    EVIDENCE_BUNDLE_API_VERSION, EVIDENCE_BUNDLE_KIND, EVIDENCE_RUNTIME_API_VERSION,
+    EVIDENCE_RUNTIME_KIND,
 };
 
 // The authoring form itself: what an adopter may write, and the checks that
@@ -46,50 +30,31 @@ use crate::suggest::{
 // reach the same verdict from the same code; the reading of files below stays
 // here, because that library performs no input or output.
 pub(crate) use registry_evidence_authoring::{
-    layout::{
-        ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, DERIVATIONS_DIRECTORY, FIXTURES_DIRECTORY,
-        MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES, MAX_QUESTIONS, MAX_SOURCE_ARTIFACT_BYTES,
-        OPENAPI_FILE, QUESTIONS_DIRECTORY, SCHEMAS_DIRECTORY, SECRETS_DIRECTORY,
-        SELECTORS_DIRECTORY, SOURCES_DIRECTORY,
-    },
-    model::{
-        AccessPolicy, AccessTaskGrant, AnswerType, FactCombination, Question, QuestionAnswer,
-        QuestionFact, QuestionResponseFormat, QuestionSdJwtVcDisclosure, QuestionSource,
-    },
-    names::{local_source_id, local_subject_selector_profile_id},
-    validate::{
-        collection_pointers, question_subjects, valid_local_identifier, validate_access_policy,
-        validate_answer_schema_document,
-    },
-    validate_answer_fact_reads, validate_authored_answer,
+    layout::{FIXTURES_DIRECTORY, MAX_SOURCE_ARTIFACT_BYTES, SECRETS_DIRECTORY},
+    validate::valid_local_identifier,
 };
 
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
 const LOCAL_AUDIENCE: &str = "urn:registrystack:evidence:local:gateway";
 const LOCAL_SIGNING_PRIVATE_FILENAME: &str = "signing-p256-private-jwk";
 const LOCAL_SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
-const AUTHORITY_PROFILE_ID: &str = "local-caller";
-/// How much of an access policy's requester tag names its authority profile:
-/// `policy-vN-` and 32 hexadecimal digits.
-const AUTHORITY_PROFILE_ID_CHARACTERS: usize = 42;
-/// The largest number of authority grants one generated profile may carry.
-///
-/// `products/evidence/contracts/bundle.schema.yaml` bounds
-/// `authorityProfiles.*.grants` at this many entries and the runtime refuses a
-/// bundle past it when it loads. Questions each hold their own selector
-/// alternatives well under the bound, so only the profile they are gathered
-/// into can exceed it.
-const MAX_PROFILE_AUTHORITY_GRANTS: usize = 128;
-const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
-const BUNDLE_SCHEMA: &str = include_str!("../../../products/evidence/contracts/bundle.schema.yaml");
+#[cfg(test)]
 const OFFLINE_CHECK_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-256","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+#[cfg(test)]
 const OFFLINE_CHECK_PUBLIC_JWK_FILE: &str =
     "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompiledConceptForm {
     Boolean,
+    ControlledCode,
     ControlledCategory,
+    BoundedDecimal,
+    DateBucket,
+    TimeBucket,
+    AudienceScopedEntityReference,
+    ControlledCodeList,
+    EntityReferenceList,
     BoundedIdentifier,
     BoundedInteger,
     Structured,
@@ -105,8 +70,8 @@ pub(crate) struct CompiledConcept {
 /// Closed metadata consumed later by `dev` and request preparation. It stays
 /// in memory here; this compiler does not create a second public artifact.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct CompiledQuestion {
-    pub(crate) question_alias: String,
+pub(crate) struct CompiledDefinition {
+    pub(crate) definition_alias: String,
     pub(crate) requirement_uri: String,
     pub(crate) purpose: String,
     pub(crate) subjects: Vec<CompiledSubject>,
@@ -129,19 +94,22 @@ pub(crate) struct CompiledSelector {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct CompiledProject {
     pub(crate) runtime_path: PathBuf,
-    pub(crate) questions: Vec<CompiledQuestion>,
+    pub(crate) definitions: Vec<CompiledDefinition>,
     pub(crate) local_audience: String,
     pub(crate) requester_tag: String,
     pub(crate) caller_evidence_audience: String,
-    pub(crate) access_policies: Vec<CompiledAccessPolicy>,
+    pub(crate) required_scopes: Vec<String>,
+    pub(crate) access_profiles: Vec<CompiledAccessProfile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CompiledAccessPolicy {
+pub(crate) struct CompiledAccessProfile {
     pub(crate) id: String,
-    pub(crate) requester_tag: String,
-    pub(crate) questions: Vec<String>,
-    pub(crate) task_grant: Option<AccessTaskGrant>,
+    pub(crate) digest: String,
+    pub(crate) requester_tags: Vec<String>,
+    pub(crate) definitions: Vec<String>,
+    pub(crate) actor_kind: Option<String>,
+    pub(crate) task_grant: Option<crate::access::TaskGrantBinding>,
 }
 
 /// A field-addressed refusal from a typed authored document.
@@ -172,28 +140,11 @@ pub(crate) struct CompiledProductionProject {
     pub(crate) bundle: Value,
 }
 
-/// One unpublished local bundle used only by the fixture driver.
-///
-/// Dropping it restores owner-write permission so the caller's temporary
-/// staging directory can be removed without leaving sealed artifacts behind.
-pub(crate) struct CompiledFixtureProject {
-    pub(crate) bundle_path: PathBuf,
-    pub(crate) fixture_paths: Vec<String>,
-}
-
-impl Drop for CompiledFixtureProject {
-    fn drop(&mut self) {
-        if let Err(error) = set_bundle_modes(&self.bundle_path, 0o700, 0o600) {
-            eprintln!("{}", cleanup_failure_line(&self.bundle_path, &error));
-        }
-    }
-}
-
 /// The single line a cleanup failure a `Drop` cannot return is reported on.
 ///
 /// A sealed artifact left behind is the operator's to remove, so the path and
 /// the cause both have to reach them.
-fn cleanup_failure_line(path: &Path, error: &anyhow::Error) -> String {
+pub(crate) fn cleanup_failure_line(path: &Path, error: &anyhow::Error) -> String {
     format!(
         "evidencectl: failed to restore owner write on {}: {error:#}",
         path.display()
@@ -258,129 +209,27 @@ impl Default for LocalServicePorts {
     }
 }
 
-/// Compile the authored questions into one unpublished local generation, then
-/// ask the real Evidence binary to check the complete result.
-///
-/// `staging_root` must be an existing, empty, owner-only directory. The caller
-/// owns generation publication and process supervision.
-#[cfg(test)]
-pub(crate) fn compile_local_project(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-) -> Result<CompiledProject> {
-    compile_local_project_with_ports(
-        project_root,
-        staging_root,
-        evidence_bin,
-        LocalServicePorts::default(),
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn compile_local_project_with_ports(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-    ports: LocalServicePorts,
-) -> Result<CompiledProject> {
-    compile_local_project_with_ports_and_resource(
-        project_root,
-        staging_root,
-        evidence_bin,
-        ports,
-        LOCAL_AUDIENCE,
-        &LocalAdmission::default(),
-    )
-}
-
-pub(crate) fn compile_local_project_with_ports_and_resource(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-    ports: LocalServicePorts,
-    audience: &str,
-    admission: &LocalAdmission,
-) -> Result<CompiledProject> {
-    compile_local_project_with_target_inputs_and_resource(
-        project_root,
-        staging_root,
-        evidence_bin,
-        ports,
-        json!({}),
-        json!({"systemRoots": true, "trustProfiles": {}}),
-        audience,
-        admission,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn compile_local_project_with_target_inputs(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-    ports: LocalServicePorts,
-    source_connections: Value,
-    outbound_tls: Value,
-) -> Result<CompiledProject> {
-    compile_local_project_with_target_inputs_and_resource(
-        project_root,
-        staging_root,
-        evidence_bin,
-        ports,
-        source_connections,
-        outbound_tls,
-        LOCAL_AUDIENCE,
-        &LocalAdmission::default(),
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn compile_local_project_with_target_inputs_and_resource(
+pub(crate) fn compile_normalized_local_project(
     project_root: &Path,
     staging_root: &Path,
     evidence_bin: &Path,
     ports: LocalServicePorts,
-    source_connections: Value,
-    outbound_tls: Value,
+    target: &Path,
     audience: &str,
     admission: &LocalAdmission,
 ) -> Result<CompiledProject> {
+    let (connections, outbound_tls) = crate::build::local_dev_target_inputs(target)?;
     compile_local_project_with_target_inputs_resource_and_authority(
         project_root,
         staging_root,
         evidence_bin,
         ports,
-        source_connections,
+        connections,
         outbound_tls,
         audience,
         admission,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn compile_local_project_with_target_authenticated_context(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-    ports: LocalServicePorts,
-    source_connections: Value,
-    outbound_tls: Value,
-    audience: &str,
-    admission: &LocalAdmission,
-    compiled_target_bundle: &Value,
-) -> Result<CompiledProject> {
-    compile_local_project_with_target_inputs_resource_and_authority(
-        project_root,
-        staging_root,
-        evidence_bin,
-        ports,
-        source_connections,
-        outbound_tls,
-        audience,
-        admission,
-        Some(compiled_target_bundle),
+        Some(&json!({"authoredTargetPath":target})),
     )
 }
 
@@ -407,8 +256,19 @@ fn compile_local_project_with_target_inputs_resource_and_authority(
     // Resolve the complete plan before writing anything. Unsupported or
     // ambiguous authoring inputs therefore leave the staging root empty.
     let inputs = read_inputs(&project_root, true)?;
-    validate_local_dev_sources(&inputs.sources)?;
-    let (active_public_jwk_file, active_public_jwk) = local_signing_public_jwk(&project_root)?;
+    if inputs.project.sources.values().any(|source| {
+        source.source_type == registry_evidence_authoring::project::SourceType::SqliteExtract
+    }) {
+        bail!("local dev requires HTTP sources; SQLite extracts remain available through fixture and deployed runtime paths");
+    }
+    let generated = project_root.join(".generated");
+    if !generated.exists() {
+        create_private_directory(&generated)?;
+    }
+    let secrets = project_root.join(SECRETS_DIRECTORY);
+    crate::keygen::ensure_local_key_material(&secrets)?;
+    let (active_public_jwk_file, active_public_jwk) =
+        ensure_local_signing_public_jwk(&project_root)?;
     let mut plan = compile_plan_with_connections(
         inputs,
         CompileProfile::Local {
@@ -420,9 +280,26 @@ fn compile_local_project_with_target_inputs_resource_and_authority(
         },
         source_connections,
     )?;
-    if let Some(target_bundle) = compiled_target_bundle {
-        preserve_target_authenticated_context(&mut plan.bundle, target_bundle)?;
-    }
+    let target_path = compiled_target_bundle
+        .and_then(|value| value.get("authoredTargetPath"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| project_root.join("local-target.yaml"));
+    let target_bytes = authored::read_authored_file(&target_path, "local EvidenceTarget")?;
+    let target = registry_evidence_authoring::target::read_target(
+        &target_path.to_string_lossy(),
+        &target_bytes,
+    )?
+    .value;
+    let (project, _) = crate::normalized::read(&project_root)?;
+    let target_root = crate::normalized::target_directory(&target_path);
+    plan.authority_document = Some(crate::normalized::compiled_authority(
+        &project,
+        &target,
+        target_root,
+    )?);
+    plan.bundle["authentication"]["oidc"]["requiredScopes"] =
+        serde_json::to_value(&target.authentication.oidc.required_scopes)?;
     let compilation = write_plan(
         &project_root,
         staging_root,
@@ -462,61 +339,6 @@ pub(crate) fn valid_local_audience(value: &str) -> bool {
         })
 }
 
-fn validate_local_dev_sources(sources: &BTreeMap<String, Value>) -> Result<()> {
-    for (source_id, source) in sources {
-        if source.get("type").and_then(Value::as_str) == Some("sqlite-extract") {
-            return Err(crate::dev::DevRefusal {
-                operational: false,
-                code: "evidence.dev.local-transport-refused",
-                path: format!("sources/{source_id}.yaml:/type"),
-                message: "Local serving does not bind SQLite extracts.".to_owned(),
-                suggested_action: "Prove this editable project offline with `evidencectl test <dir>`, or re-author the source over an HTTP transport before `evidencectl dev start`."
-                    .to_owned(),
-            }
-            .into());
-        }
-    }
-    Ok(())
-}
-
-/// Compile one complete non-local deployment bundle into an unpublished private
-/// staging directory. The caller owns temporary runtime validation and publication.
-#[cfg(test)]
-pub(crate) fn compile_production_project(
-    project_root: &Path,
-    deployment_target_root: &Path,
-    staging_root: &Path,
-    governed_bundle: Value,
-    evidence_bin: &Path,
-) -> Result<CompiledProductionProject> {
-    compile_target_project(
-        project_root,
-        deployment_target_root,
-        staging_root,
-        governed_bundle,
-        evidence_bin,
-    )
-}
-
-/// Compile the target's complete governance under its declared assurance profile.
-#[cfg(test)]
-pub(crate) fn compile_target_project(
-    project_root: &Path,
-    deployment_target_root: &Path,
-    staging_root: &Path,
-    governed_bundle: Value,
-    evidence_bin: &Path,
-) -> Result<CompiledProductionProject> {
-    compile_target_project_with_revision(
-        project_root,
-        deployment_target_root,
-        staging_root,
-        governed_bundle,
-        evidence_bin,
-        None,
-    )
-}
-
 /// Compile a target package with optional operator revision metadata.
 pub(crate) fn compile_target_project_with_revision(
     project_root: &Path,
@@ -532,7 +354,7 @@ pub(crate) fn compile_target_project_with_revision(
     let deployment_target_root = fs::canonicalize(deployment_target_root)
         .context("resolving deployment target directory")?;
     validate_private_empty_staging(staging_root)?;
-    let mut inputs = read_inputs(&project_root, false)?;
+    let inputs = read_inputs(&project_root, false)?;
     let production = match governed_bundle
         .get("assuranceProfile")
         .and_then(Value::as_str)
@@ -543,24 +365,6 @@ pub(crate) fn compile_target_project_with_revision(
             "deployment governance assuranceProfile must be local, production, or evidence-grade"
         ),
     };
-    if !production {
-        // A local target is a local bundle, so it takes its authority from the
-        // authored access policies `dev` compiles rather than from every
-        // question. A production or evidence-grade target is governed by its
-        // reviewed deployment governance and reads no local access at all.
-        let question_ids = inputs
-            .questions
-            .iter()
-            .map(|authored| authored.question.id.to_string())
-            .collect::<BTreeSet<_>>();
-        let mut gathered = Gathered::default();
-        let access_policies =
-            read_access_policies(&project_root, Some(&question_ids), &mut gathered)?;
-        gathered.checkpoint()?;
-        let local_access = read_local_access(&project_root, access_policies)?;
-        inputs.access_policies = local_access.access_policies;
-        inputs.active_client_policies = local_access.active_client_policies;
-    }
     validate_deployment_inputs(&project_root, &inputs, production)?;
     let plan = compile_plan(inputs, CompileProfile::Production(governed_bundle))?;
     check_target_signing_validity(&plan)?;
@@ -577,14 +381,9 @@ pub(crate) fn compile_target_project_with_revision(
         revision,
     )?;
     let fixture_paths = plan
-        .questions
+        .definitions
         .iter()
-        .map(|question| {
-            question
-                .fixture_artifact
-                .clone()
-                .expect("production questions were validated")
-        })
+        .filter_map(|definition| definition.fixture_artifact.clone())
         .collect();
     Ok(CompiledProductionProject {
         bundle_path,
@@ -593,84 +392,11 @@ pub(crate) fn compile_target_project_with_revision(
     })
 }
 
-/// Compile an editable project into a local bundle for offline fixture runs.
-///
-/// This path writes no runtime file and binds no extract. The real `evidence`
-/// binary remains responsible for bundle validation and for materializing a
-/// fixture's synthetic SQLite seed during `bundle-evaluate`.
-pub(crate) fn compile_fixture_project(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-) -> Result<CompiledFixtureProject> {
-    compile_fixture_project_with_connections(project_root, staging_root, evidence_bin, json!({}))
-}
-
-/// Compile the same fixture-capable local bundle for an offline check without
-/// consulting disposable development signing state in the editable project.
-pub(crate) fn compile_check_project(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-) -> Result<CompiledFixtureProject> {
-    let project_root = validate_project_root(project_root)?;
-    validate_private_empty_staging(staging_root)?;
-    let inputs = read_inputs(&project_root, false)?;
-    validate_production_inputs(&project_root, &inputs)?;
-    let mut plan = compile_plan_with_connections(
-        inputs,
-        CompileProfile::Local {
-            ports: LocalServicePorts::default(),
-            audience: LOCAL_AUDIENCE.to_owned(),
-            active_public_jwk_file: OFFLINE_CHECK_PUBLIC_JWK_FILE.to_owned(),
-            active_public_jwk: OFFLINE_CHECK_PUBLIC_JWK.as_bytes().to_vec(),
-            admission: LocalAdmission::default(),
-        },
-        json!({}),
-    )?;
-    expand_check_signing_validity(&mut plan.bundle);
-    validate_compiled_bundle_shape(&plan.bundle)?;
-    let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin, None)?;
-    let fixture_paths = plan
-        .questions
-        .iter()
-        .map(|question| {
-            question
-                .fixture_artifact
-                .clone()
-                .expect("fixture inputs were validated")
-        })
-        .collect();
-    Ok(CompiledFixtureProject {
-        bundle_path,
-        fixture_paths,
-    })
-}
-
-/// Raise the synthetic check bundle's signing maximum to cover every authored
-/// requirement validity, never below the local 300 second baseline.
-///
-/// A project-only `check` has no deployment target, and the signing maximum
-/// that caps a requirement validity belongs to the target that eventually
-/// signs it. The bundle grammar still bounds each validity, and
-/// `check_target_signing_validity` applies the cap wherever a target is known.
-fn expand_check_signing_validity(bundle: &mut Value) {
-    let maximum = bundle["requirements"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|requirement| requirement["validitySeconds"].as_u64())
-        .max()
-        .unwrap_or(300)
-        .max(300);
-    bundle["signing"]["maximumAssertionValiditySeconds"] = json!(maximum);
-}
-
 /// Refuse a requirement validity the selected deployment target cannot sign.
 ///
 /// The target's governance states `signing.maximumAssertionValiditySeconds`,
 /// and the runtime refuses any requirement whose validity exceeds it.
-/// Reporting it here, against the question that declares it, names the field
+/// Reporting it here, against the definition that declares it, names the field
 /// to change before the bundle reaches the runtime, which reports it only as a
 /// generic refusal of the whole configuration. A target that states no integer
 /// maximum is left to the runtime's own validation of the target shape.
@@ -678,18 +404,18 @@ fn check_target_signing_validity(plan: &CompilePlan) -> Result<()> {
     let Some(maximum) = plan.bundle["signing"]["maximumAssertionValiditySeconds"].as_u64() else {
         return Ok(());
     };
-    for question in &plan.questions {
-        let Some(validity) = question.requirement["validitySeconds"].as_u64() else {
+    for definition in &plan.definitions {
+        let Some(validity) = definition.requirement["validitySeconds"].as_u64() else {
             continue;
         };
         if validity > maximum {
             return Err(AuthoredDiagnostic {
-                code: "evidence.question.validity-exceeds-signing-maximum".to_owned(),
+                code: "evidence.definition.validity-exceeds-signing-maximum".to_owned(),
                 path: format!(
-                    "questions/{}.yaml:/governance/validitySeconds",
-                    question.question_id
+                    "evidence.yaml:/assertionDefinitions/{}/validitySeconds",
+                    definition.definition_id
                 ),
-                message: "the requirement validity exceeds the deployment target's signing maximum at governance.yaml /signing/maximumAssertionValiditySeconds".to_owned(),
+                message: "the requirement validity exceeds the deployment target's signing maximum at target.yaml /signing/maximumAssertionValiditySeconds".to_owned(),
             }
             .into());
         }
@@ -697,287 +423,46 @@ fn check_target_signing_validity(plan: &CompilePlan) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn compile_fixture_project_with_connections(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-    source_connections: Value,
-) -> Result<CompiledFixtureProject> {
-    let project_root = validate_project_root(project_root)?;
-    validate_private_empty_staging(staging_root)?;
-    let inputs = read_inputs(&project_root, false)?;
-    validate_production_inputs(&project_root, &inputs)?;
-    let (active_public_jwk_file, active_public_jwk) = local_signing_public_jwk(&project_root)?;
-    let plan = compile_plan_with_connections(
-        inputs,
-        CompileProfile::Local {
-            ports: LocalServicePorts::default(),
-            audience: LOCAL_AUDIENCE.to_owned(),
-            active_public_jwk_file,
-            active_public_jwk,
-            admission: LocalAdmission::default(),
-        },
-        source_connections,
-    )?;
-    let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin, None)?;
-    let fixture_paths = plan
-        .questions
-        .iter()
-        .map(|question| {
-            question
-                .fixture_artifact
-                .clone()
-                .expect("fixture inputs were validated")
-        })
-        .collect();
-    Ok(CompiledFixtureProject {
-        bundle_path,
-        fixture_paths,
-    })
-}
-
-fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
-    let schema = authored::embedded_document("Evidence bundle schema", BUNDLE_SCHEMA)?;
-    if let Some(sources) = bundle.get("sources").and_then(Value::as_object) {
-        for (source_id, source) in sources {
-            let Some(transport) = source.get("type") else {
-                continue;
-            };
-            let branch = schema
-                .pointer("/$defs/source/oneOf")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|branch| branch.get("$ref").and_then(Value::as_str))
-                .find(|reference| {
-                    reference
-                        .strip_prefix('#')
-                        .and_then(|pointer| schema.pointer(pointer))
-                        .and_then(|branch| branch.pointer("/properties/type/const"))
-                        == Some(transport)
-                });
-            let Some(branch) = branch else { continue };
-            let source_schema = json!({
-                "$schema": schema["$schema"],
-                "$defs": schema["$defs"],
-                "$ref": branch,
-            });
-            let source_validator = JSONSchema::options()
-                .with_draft(Draft::Draft202012)
-                .should_validate_formats(true)
-                .compile(&source_schema)
-                .map_err(|_| anyhow!("the embedded Evidence source schema could not compile"))?;
-            if let Err(errors) = source_validator.validate(source) {
-                if let Some((instance_path, member)) = errors
-                    .filter_map(|error| match &error.kind {
-                        ValidationErrorKind::AdditionalProperties { unexpected } => unexpected
-                            .iter()
-                            .next()
-                            .map(|member| (error.instance_path.to_string(), member.clone())),
-                        _ => None,
-                    })
-                    .next()
-                {
-                    let member_path = if instance_path.is_empty() {
-                        format!("/{member}")
-                    } else {
-                        format!("{instance_path}/{member}")
-                    };
-                    return Err(AuthoredDiagnostic {
-                        code: "evidence.source.member-unknown".to_owned(),
-                        path: format!("sources/{source_id}.yaml:{member_path}"),
-                        message: "the compiled source contains a member outside the closed Evidence source shape".to_owned(),
-                    }
-                    .into());
-                }
-            };
-        }
-    }
-    let validator = JSONSchema::options()
-        .with_draft(Draft::Draft202012)
-        .should_validate_formats(true)
-        .compile(&schema)
-        .map_err(|_| anyhow!("the embedded Evidence bundle schema could not compile"))?;
-    if let Err(mut errors) = validator.validate(bundle) {
-        let error = errors.next().expect("schema validation returned one error");
-        let mut instance_path = error.instance_path.to_string();
-        let additional_member = match &error.kind {
-            ValidationErrorKind::AdditionalProperties { unexpected } => unexpected.first(),
-            _ => None,
-        };
-        if let Some(member) = additional_member {
-            instance_path.push('/');
-            instance_path.push_str(member);
-        }
-        return Err(AuthoredDiagnostic {
-            code: (if additional_member.is_some() && instance_path.starts_with("/sources/") {
-                "evidence.source.member-unknown"
-            } else {
-                "evidence.bundle.shape"
-            })
-            .to_owned(),
-            path: compiled_bundle_authoring_path(&instance_path),
-            message: "the compiled authoring does not satisfy the closed Evidence bundle shape"
-                .to_owned(),
-        }
-        .into());
-    }
-    Ok(())
-}
-
-fn compiled_bundle_authoring_path(instance_path: &str) -> String {
-    let parts = instance_path
-        .trim_start_matches('/')
-        .split('/')
-        .collect::<Vec<_>>();
-    if let ["sources", source, rest @ ..] = parts.as_slice() {
-        let suffix = if rest.is_empty() {
-            String::new()
-        } else {
-            format!(":/{}", rest.join("/"))
-        };
-        format!("sources/{source}.yaml{suffix}")
-    } else {
-        instance_path.to_owned()
-    }
-}
-
-/// Validate explicit local access policy authoring without opening the local
-/// secret directory or any client private key.
-///
-/// The ordinary local compiler reads these policies only when preparing a
-/// runnable development process. Offline `check` and `explain` use this seam
-/// so the same owning parser and cross-reference rules apply without crossing
-/// into secret resolution.
-pub(crate) fn validate_offline_local_access(
-    project_root: &Path,
-) -> Result<Vec<CompiledAccessPolicy>> {
-    validate_plain_path_components(project_root, "authoring project")?;
-    let project_root = validate_project_root(project_root)?;
-    let mut gathered = Gathered::default();
-    let questions = read_questions(&project_root, &mut gathered)?;
-    let question_ids = (!gathered.has_errors()).then(|| {
-        questions
-            .iter()
-            .map(|read| read.question.id.to_string())
-            .collect::<BTreeSet<_>>()
-    });
-    let policies = read_access_policies(&project_root, question_ids.as_ref(), &mut gathered)?;
-    gathered.checkpoint()?;
-    Ok(policies
-        .into_iter()
-        .map(|policy| CompiledAccessPolicy {
-            id: policy.id,
-            requester_tag: policy.requester_tag,
-            questions: policy.questions,
-            task_grant: policy.task_grant,
-        })
-        .collect())
-}
-
+/// Validated normalized project and its supplied reviewed assets.
 struct Inputs {
-    openapi: Value,
-    selectors: BTreeMap<String, Value>,
-    sources: BTreeMap<String, Value>,
-    schemas: BTreeMap<String, Value>,
-    questions: Vec<AuthoredQuestion>,
-    access_policies: Vec<AuthoredAccessPolicy>,
-    active_client_policies: BTreeMap<String, Vec<String>>,
-}
-
-/// The authored access a local bundle takes its authority profiles from.
-#[derive(Default)]
-struct LocalAccess {
-    access_policies: Vec<AuthoredAccessPolicy>,
-    active_client_policies: BTreeMap<String, Vec<String>>,
-}
-
-#[derive(Clone)]
-struct AuthoredAccessPolicy {
-    id: String,
-    requester_tag: String,
-    questions: Vec<String>,
-    task_grant: Option<AccessTaskGrant>,
-}
-
-struct AuthoredQuestion {
-    question: Question,
-    derivation: String,
+    project: registry_evidence_authoring::project::EvidenceProject,
+    scripts: BTreeMap<String, String>,
 }
 
 struct CompilePlan {
-    questions: Vec<QuestionPlan>,
-    access_policies: Vec<AuthoredAccessPolicy>,
+    definitions: Vec<DefinitionPlan>,
     bundle: Value,
     local_public_jwk: Option<(String, Vec<u8>)>,
+    generated_artifacts: BTreeMap<String, Vec<u8>>,
+    authority_document: Option<Value>,
 }
 
-struct QuestionPlan {
-    question_id: String,
-    source_artifact_id: String,
-    authored_source_artifacts: Option<Vec<String>>,
-    derivation_artifact: String,
+struct DefinitionPlan {
+    definition_id: String,
     fixture_artifact: Option<String>,
     purpose: String,
     requirement_uri: String,
-    response_formats: Vec<QuestionResponseFormat>,
     concepts: Vec<ConceptPlan>,
     subjects: Vec<SubjectPlan>,
-    source_id: String,
-    source_value: Value,
-    grants: Vec<Value>,
     requirement: Value,
-    response_schema: Value,
-    fact_schema: Value,
-    adapter_parameters_schema: Value,
-    prepare_script: String,
-    extract_script: String,
-    derivation_script: String,
 }
 
 #[derive(Debug)]
 struct SubjectPlan {
     role: String,
     selectors: Vec<SubjectSelectorPlan>,
-    source: bool,
-    derivation: bool,
 }
 
 #[derive(Debug)]
 struct SubjectSelectorPlan {
     profile: String,
     fields: Vec<String>,
-    value: Value,
 }
 
 struct ConceptPlan {
     concept_alias: String,
     concept_uri: String,
     concept_form: CompiledConceptForm,
-    constraints: Value,
-    codelist: Option<(String, Value)>,
-    schema: Option<(String, Value)>,
-    sd_jwt_vc: Option<Value>,
-}
-
-struct CompiledFacts {
-    response_schema: Value,
-    fact_schema: Value,
-    extract_script: String,
-}
-
-struct BundleRequirement<'a> {
-    handle: String,
-    requirement_uri: String,
-    kind: &'static str,
-    concepts: &'a [ConceptPlan],
-}
-
-struct Operation<'a> {
-    method: &'a str,
-    path: &'a str,
-    path_item: &'a Map<String, Value>,
-    operation: &'a Map<String, Value>,
 }
 
 fn validate_project_root(project_root: &Path) -> Result<PathBuf> {
@@ -991,33 +476,6 @@ fn validate_project_root(project_root: &Path) -> Result<PathBuf> {
     }
     let root = fs::canonicalize(project_root)
         .with_context(|| format!("resolving project root {}", project_root.display()))?;
-
-    // The marker is optional: a root that carries none compiles exactly as it
-    // always has. A root that carries one must parse, so a project an author
-    // meant to anchor never compiles from a document that failed to.
-    let marker_path = root.join(registry_evidence_authoring::PROJECT_MARKER_FILE);
-    match fs::symlink_metadata(&marker_path) {
-        Ok(marker_metadata)
-            if marker_metadata.file_type().is_symlink() || !marker_metadata.is_file() =>
-        {
-            bail!(
-                "project marker {} must be a plain file",
-                marker_path.display()
-            );
-        }
-        Ok(_) => {
-            let bytes = authored::read_authored_file(&marker_path, "project marker")?;
-            registry_evidence_authoring::parse_project_marker(
-                registry_evidence_authoring::PROJECT_MARKER_FILE,
-                &bytes,
-            )?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("inspecting project marker {}", marker_path.display()))
-        }
-    }
 
     Ok(root)
 }
@@ -1042,7 +500,11 @@ fn validate_plain_path_components(path: &Path, description: &str) -> Result<()> 
         let metadata =
             fs::symlink_metadata(&current).with_context(|| format!("inspecting {description}"))?;
         if metadata.file_type().is_symlink() {
-            bail!("{description} must not traverse symbolic links");
+            return Err(AuthoredDiagnostic {
+                code: "evidence.project.symbolic-link".to_owned(),
+                path: String::new(),
+                message: "project and target directory paths must use plain directories without symbolic links; use the canonical absolute path".to_owned(),
+            }.into());
         }
         if !metadata.is_dir() {
             bail!("{description} must be a plain directory");
@@ -1084,215 +546,9 @@ fn validate_evidence_binary(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Inputs> {
-    let openapi_path = project_root.join(OPENAPI_FILE);
-    let openapi = match fs::symlink_metadata(&openapi_path) {
-        Ok(_) => {
-            let openapi_text = read_regular_file(
-                &openapi_path,
-                MAX_OPENAPI_BYTES,
-                "retained OpenAPI document",
-            )?;
-            #[allow(
-                clippy::disallowed_methods,
-                reason = "evidence/source-openapi is registered as an external format: an OpenAPI description is a grammar Registry Stack does not own; \
-                          it may use anchors, aliases, and tags the shared configuration reader refuses"
-            )]
-            let openapi: Value = serde_norway::from_slice(&openapi_text)
-                .context("parsing retained OpenAPI document as YAML or JSON")?;
-            validate_openapi_version(&openapi)?;
-            openapi
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Null,
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "inspecting retained OpenAPI document {}",
-                    openapi_path.display()
-                )
-            })
-        }
-    };
-
-    let mut gathered = Gathered::default();
-    let selectors = named_values(read_named_documents(
-        project_root,
-        SELECTORS_DIRECTORY,
-        "selector profile",
-        Some(&SELECTOR),
-        &mut gathered,
-    )?);
-    let sources = named_values(read_named_documents(
-        project_root,
-        SOURCES_DIRECTORY,
-        "source",
-        Some(&SOURCE),
-        &mut gathered,
-    )?);
-    let schema_documents = read_named_documents(
-        project_root,
-        SCHEMAS_DIRECTORY,
-        "schema",
-        None,
-        &mut gathered,
-    )?;
-    let schemas = schema_documents
-        .iter()
-        .map(|(id, named)| (id.clone(), named.value.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let mut questions = Vec::new();
-    let mut question_ids = BTreeSet::new();
-    let mut derivation_paths = BTreeSet::new();
-    let mut checked_schemas = BTreeSet::new();
-    for ReadQuestion { document, question } in read_questions(project_root, &mut gathered)? {
-        // The answer schema document is checked beside its own file rather than
-        // beside the question that named it: the departure is in the schema,
-        // and the finding already carries the field inside it.
-        for answer in &question.answers {
-            if answer.answer_type != AnswerType::ReviewedStructuredValue {
-                continue;
-            }
-            let schema_path = answer
-                .schema
-                .as_deref()
-                .expect("the authoring form requires an answer schema path");
-            let schema_key = Path::new(schema_path)
-                .file_stem()
-                .and_then(|stem| stem.to_str());
-            if let Some(named) = schema_key
-                .filter(|key| checked_schemas.insert((*key).to_owned()))
-                .and_then(|key| schema_documents.get(key))
-            {
-                gathered.extend(authored::node_findings_report(
-                    &named.file,
-                    "answer-schema",
-                    &named.node,
-                    validate_answer_schema_document(&named.value),
-                ));
-            }
-        }
-        question_ids.insert(question.id.to_string());
-        if !derivation_paths.insert(question.derivation.clone()) {
-            gathered.push(diagnostic_near(
-                &document,
-                "evidence.question.derivation-shared",
-                "/derivation",
-                "the question names a derivation file another question already names",
-                "Give each question its own derivations/<question id>.rhai file.",
-            ));
-            continue;
-        }
-
-        let derivation_path = project_relative_derivation(project_root, &question.derivation)?;
-        let derivation_file = project_relative_path(project_root, &derivation_path);
-        let derivation_bytes = read_regular_file(
-            &derivation_path,
-            MAX_DERIVATION_BYTES,
-            "authored derivation",
-        )?;
-        gathered.read_one();
-        let Ok(derivation) = String::from_utf8(derivation_bytes) else {
-            gathered.push(authored::file_diagnostic(
-                Severity::Error,
-                "evidence.derivation.encoding",
-                None,
-                &derivation_file,
-                "",
-                "the derivation is not UTF-8 text",
-                "Save the derivation as UTF-8 text.",
-            ));
-            continue;
-        };
-        let mut findings = validate_authored_answer(&derivation);
-        if findings.is_empty() {
-            if let Some(declared) = declared_fact_names(&question, &sources, &schemas) {
-                findings = validate_answer_fact_reads(&derivation, &declared);
-            }
-        }
-        gathered.extend(authored::file_findings_report(
-            &derivation_file,
-            "derivation",
-            findings,
-        ));
-        questions.push(AuthoredQuestion {
-            question,
-            derivation,
-        });
-    }
-    let access_policies = if require_local_secrets {
-        let known = (!gathered.has_errors()).then_some(&question_ids);
-        read_access_policies(project_root, known, &mut gathered)?
-    } else {
-        Vec::new()
-    };
-    gathered.checkpoint()?;
-    let local_access = read_local_access(project_root, access_policies)?;
-
-    if require_local_secrets {
-        let secrets = project_root.join(SECRETS_DIRECTORY);
-        let secrets_metadata = fs::symlink_metadata(&secrets)
-            .with_context(|| format!("inspecting local secret directory {}", secrets.display()))?;
-        if secrets_metadata.file_type().is_symlink()
-            || !secrets_metadata.is_dir()
-            || secrets_metadata.uid() != rustix::process::geteuid().as_raw()
-            || secrets_metadata.permissions().mode() & 0o7777 != 0o700
-        {
-            bail!("local secret directory must be a plain owner-only directory (mode 0700)");
-        }
-    }
-
-    Ok(Inputs {
-        openapi,
-        selectors,
-        sources,
-        schemas,
-        questions,
-        access_policies: local_access.access_policies,
-        active_client_policies: local_access.active_client_policies,
-    })
-}
-
-/// The facts a question's derivation may read, when the project names a closed
-/// set of them.
-///
-/// An inline operation declares its facts by name. A referenced source
-/// declares them through its fact schema, and only a closed object schema
-/// (`additionalProperties: false`) names every fact the source can produce; an
-/// open one, or one this project does not hold, names no set, and the
-/// derivation is left to the fixtures.
-fn declared_fact_names(
-    question: &Question,
-    sources: &BTreeMap<String, Value>,
-    schemas: &BTreeMap<String, Value>,
-) -> Option<BTreeSet<String>> {
-    let Some(source_id) = question.source.source_ref.as_deref() else {
-        return Some(
-            question
-                .source
-                .facts
-                .iter()
-                .map(|fact| fact.name.clone())
-                .collect(),
-        );
-    };
-    let schema_key = sources
-        .get(source_id)?
-        .get("factSchema")?
-        .as_str()?
-        .strip_prefix(&format!("{SCHEMAS_DIRECTORY}/"))?
-        .strip_suffix(".yaml")?;
-    let schema = schemas.get(schema_key)?;
-    if schema.get("additionalProperties") != Some(&Value::Bool(false)) {
-        return None;
-    }
-    Some(
-        schema
-            .get("properties")?
-            .as_object()?
-            .keys()
-            .cloned()
-            .collect(),
-    )
+fn read_inputs(project_root: &Path, _require_local_secrets: bool) -> Result<Inputs> {
+    let (project, scripts) = crate::normalized::read(project_root)?;
+    Ok(Inputs { project, scripts })
 }
 
 fn local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
@@ -1342,41 +598,24 @@ pub(crate) fn ensure_local_signing_public_jwk(project_root: &Path) -> Result<(St
     local_signing_public_jwk(project_root)
 }
 
-fn validate_production_inputs(project_root: &Path, inputs: &Inputs) -> Result<()> {
-    validate_deployment_inputs(project_root, inputs, true)
-}
-
 fn validate_deployment_inputs(
     project_root: &Path,
     inputs: &Inputs,
     production: bool,
 ) -> Result<()> {
-    for authored in &inputs.questions {
-        let question = &authored.question;
-        let governance = question
-            .governance
-            .as_ref()
-            .ok_or_else(|| anyhow!("every production question requires governance"))?;
-        if question.answers.iter().any(|answer| answer.uri.is_none()) {
-            bail!("every production answer requires one stable concept uri");
-        }
-        for uri in std::iter::once(governance.requirement.as_str())
-            .chain(governance.reference_frameworks.iter().map(String::as_str))
-            .chain(std::iter::once(governance.evidence_type.as_str()))
-            .chain(governance.disclosure_families.iter().map(String::as_str))
-            .chain(
-                question
-                    .answers
-                    .iter()
-                    .filter_map(|answer| answer.uri.as_ref().map(ExternalId::as_str)),
-            )
+    for definition in inputs.project.assertion_definitions.values() {
+        if production
+            && definition
+                .semantics
+                .requirement
+                .starts_with(LOCAL_URI_PREFIX)
         {
-            if production && uri.starts_with(LOCAL_URI_PREFIX) {
-                bail!("deployment governance must not use disposable local identifiers");
-            }
+            bail!("production definitions cannot use disposable local semantics");
         }
-        let fixture = project_relative_fixture(project_root, &governance.fixtures)?;
-        let _ = read_regular_file(&fixture, MAX_SOURCE_ARTIFACT_BYTES, "deployment fixture")?;
+        if let Some(fixture) = &definition.fixtures {
+            let path = project_relative_fixture(project_root, fixture)?;
+            let _ = read_regular_file(&path, MAX_SOURCE_ARTIFACT_BYTES, "deployment fixture")?;
+        }
     }
     Ok(())
 }
@@ -1442,11 +681,24 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
                 })?;
         match transport {
             "http-json" => {
-                let https = source
+                let connection = source
+                    .get("connection")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        anyhow!("production HTTP Source must name a target connection")
+                    })?;
+                let binding = bundle
+                    .get("sourceConnections")
+                    .and_then(Value::as_object)
+                    .and_then(|connections| connections.get(connection))
+                    .ok_or_else(|| {
+                        anyhow!("production HTTP Source requires its named target connection")
+                    })?;
+                let https = binding
                     .get("baseUrl")
                     .and_then(Value::as_str)
                     .is_some_and(|value| value.starts_with("https://"));
-                let authenticated = source
+                let authenticated = binding
                     .pointer("/authentication/type")
                     .and_then(Value::as_str)
                     .is_some_and(|kind| kind != "none" && kind != "review-required");
@@ -1454,9 +706,9 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
                     return Err(AuthoredDiagnostic {
                         code: "evidence.source.production-channel".to_owned(),
                         path: if !https {
-                            format!("sources/{source_id}.yaml:/baseUrl")
+                            format!("target.yaml:/connections/{connection}/origin")
                         } else {
-                            format!("sources/{source_id}.yaml:/authentication/type")
+                            format!("target.yaml:/connections/{connection}/authentication/type")
                         },
                         message: "every production source must use authenticated HTTPS".to_owned(),
                     }
@@ -1485,362 +737,6 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// The authored access policies a local bundle takes its authority from, with
-/// the client assignments a task grant among them is checked against.
-///
-/// A project that authored no policy has neither, and the compile falls back
-/// to the implicit caller profile over every question.
-fn read_local_access(
-    project_root: &Path,
-    access_policies: Vec<AuthoredAccessPolicy>,
-) -> Result<LocalAccess> {
-    let active_client_policies = if access_policies
-        .iter()
-        .any(|policy| policy.task_grant.is_some())
-    {
-        crate::access::active_client_policies(project_root)?
-    } else {
-        BTreeMap::new()
-    };
-    Ok(LocalAccess {
-        access_policies,
-        active_client_policies,
-    })
-}
-
-/// Read every authored access policy, gathering what each one departs from.
-/// `question_ids` is the project's question set when every question read
-/// cleanly; a policy is held to it only then, so a question that failed to
-/// read is not reported a second time as missing.
-fn read_access_policies(
-    project_root: &Path,
-    question_ids: Option<&BTreeSet<String>>,
-    gathered: &mut Gathered,
-) -> Result<Vec<AuthoredAccessPolicy>> {
-    let access_root = project_root.join(ACCESS_DIRECTORY);
-    let access_metadata = match fs::symlink_metadata(&access_root) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("inspecting access directory {}", access_root.display()))
-        }
-    };
-    if access_metadata.file_type().is_symlink() || !access_metadata.is_dir() {
-        bail!("access must be held in a plain project directory");
-    }
-    let directory = access_root.join(ACCESS_POLICIES_DIRECTORY);
-    let metadata = match fs::symlink_metadata(&directory) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if access_root.join("clients").exists() {
-                bail!("client access configuration requires at least one access policy");
-            }
-            return Ok(Vec::new());
-        }
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!("inspecting access policy directory {}", directory.display())
-            })
-        }
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        bail!("access policies must be held in a plain access/policies directory");
-    }
-    let mut paths = fs::read_dir(&directory)
-        .with_context(|| format!("reading access policy directory {}", directory.display()))?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    paths.sort();
-    if !(1..=MAX_QUESTIONS).contains(&paths.len()) {
-        bail!("explicit access configuration requires 1..={MAX_QUESTIONS} access policies");
-    }
-
-    let mut policies = Vec::with_capacity(paths.len());
-    for path in paths {
-        if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
-            bail!("access-policies may contain only <id>.yaml files");
-        }
-        let file = project_relative_path(project_root, &path);
-        let bytes = authored::read_authored_file(&path, "access policy")?;
-        gathered.read_one();
-        let decoded = match check_access_policy(&file, &bytes) {
-            Ok(decoded) => decoded,
-            Err(report) => {
-                gathered.extend(report);
-                continue;
-            }
-        };
-        gathered.extend(decoded.document.warnings());
-        let policy = decoded.value;
-        if path.file_stem().and_then(|value| value.to_str()) != Some(policy.id.as_str()) {
-            gathered.push(diagnostic_near(
-                &decoded.document,
-                "evidence.access-policy.id-filename-mismatch",
-                "/id",
-                "the access policy id is not its file name",
-                "Rename the file to access/policies/<id>.yaml, or change `id` to match the file name.",
-            ));
-            continue;
-        }
-        if let Some(question_ids) = question_ids {
-            let missing = policy
-                .questions
-                .iter()
-                .enumerate()
-                .filter(|(_, question)| !question_ids.contains(*question))
-                .map(|(index, _)| {
-                    diagnostic_near(
-                        &decoded.document,
-                        "evidence.access-policy.question-missing",
-                        &format!("/questions/{index}"),
-                        "the access policy names a question this project does not hold",
-                        "Name a question under questions/, or remove it from the policy.",
-                    )
-                })
-                .collect::<Vec<_>>();
-            if !missing.is_empty() {
-                missing
-                    .into_iter()
-                    .for_each(|diagnostic| gathered.push(diagnostic));
-                continue;
-            }
-        }
-        let requester_tag = access_policy_requester_tag_for(&policy)?;
-        policies.push(AuthoredAccessPolicy {
-            id: policy.id.as_str().to_owned(),
-            requester_tag,
-            questions: policy.questions,
-            task_grant: policy.task_grant,
-        });
-    }
-    Ok(policies)
-}
-
-pub(crate) fn access_policy_requester_tag(id: &str, questions: &[String]) -> Result<String> {
-    if !valid_local_identifier(id) || questions.is_empty() || questions.len() > MAX_QUESTIONS {
-        bail!("access policy is outside the closed local profile");
-    }
-    if !questions.windows(2).all(|pair| pair[0] < pair[1])
-        || questions
-            .iter()
-            .any(|question| !valid_local_identifier(question))
-    {
-        bail!("access policy questions must be unique lowercase local identifiers");
-    }
-    let canonical = canonicalize_json(&json!({
-        "version": 1,
-        "id": id,
-        "questions": questions,
-    }))
-    .context("canonicalizing access policy")?;
-    let digest = domain_separated_sha256(b"registry-evidencectl-access-policy-v1\0", &canonical);
-    let mut tag = String::from("policy-v1-");
-    for byte in digest {
-        use std::fmt::Write as _;
-        write!(&mut tag, "{byte:02x}").expect("writing to a string cannot fail");
-    }
-    Ok(tag)
-}
-
-/// The name of the authority profile an authored access policy compiles to:
-/// the policy's requester tag through the first 32 hexadecimal digits of its
-/// digest, 42 characters. The bundle names an authority profile with a local
-/// identifier of at most 64 characters, which the tag, at 74, is not; the
-/// profile's `requesterTags` carries the tag whole.
-pub(crate) fn access_policy_authority_profile_id(requester_tag: &str) -> String {
-    requester_tag
-        .chars()
-        .take(AUTHORITY_PROFILE_ID_CHARACTERS)
-        .collect()
-}
-
-pub(crate) fn access_policy_requester_tag_for(policy: &AccessPolicy) -> Result<String> {
-    if policy.task_grant.is_none() {
-        return access_policy_requester_tag(&policy.id, &policy.questions);
-    }
-    if !validate_access_policy(policy).is_empty() {
-        bail!("task grant policy is outside the closed authored profile");
-    }
-    // The tag hashes the policy as its first format wrote it, with the
-    // `version: 1` member `apiVersion` has since replaced, so a policy keeps
-    // the requester tag it was granted under.
-    let mut hashed = serde_json::to_value(policy)?;
-    hashed
-        .as_object_mut()
-        .context("an access policy serializes as an object")?
-        .insert("version".to_owned(), json!(1));
-    let canonical = canonicalize_json(&hashed).context("canonicalizing task grant policy")?;
-    let digest = domain_separated_sha256(b"registry-evidencectl-access-policy-v2\0", &canonical);
-    Ok(format!("policy-v2-{}", hex::encode(digest)))
-}
-
-/// One authored selector, source, or schema: the file it was read from, its
-/// tree with positions, and the same tree as a JSON value.
-struct NamedDocument {
-    file: String,
-    node: Node,
-    value: Value,
-}
-
-/// Read every `<id>.yaml` under `directory_name`, stopping with every problem
-/// found in any of them.
-fn read_named_objects(
-    project_root: &Path,
-    directory_name: &str,
-    description: &str,
-    format: &FormatSpec<'_>,
-) -> Result<BTreeMap<String, Value>> {
-    let mut gathered = Gathered::default();
-    let documents = read_named_documents(
-        project_root,
-        directory_name,
-        description,
-        Some(format),
-        &mut gathered,
-    )?;
-    gathered.checkpoint()?;
-    Ok(named_values(documents))
-}
-
-fn named_values(documents: BTreeMap<String, NamedDocument>) -> BTreeMap<String, Value> {
-    documents
-        .into_iter()
-        .map(|(id, named)| (id, named.value))
-        .collect()
-}
-
-/// Read every `<id>.yaml` under `directory_name` through the shared reader,
-/// gathering what each one departs from. A selector or source is read by its
-/// envelope `format` and returned without the header; a schema is a foreign
-/// JSON Schema file with no envelope, so `format` is `None` and it must only be
-/// a YAML mapping.
-fn read_named_documents(
-    project_root: &Path,
-    directory_name: &str,
-    description: &str,
-    format: Option<&FormatSpec<'_>>,
-    gathered: &mut Gathered,
-) -> Result<BTreeMap<String, NamedDocument>> {
-    let directory = project_root.join(directory_name);
-    let metadata = match fs::symlink_metadata(&directory) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!("inspecting {description} directory {}", directory.display())
-            })
-        }
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        bail!("{directory_name} must be held in a plain directory");
-    }
-    let mut paths = fs::read_dir(&directory)
-        .with_context(|| format!("reading {description} directory {}", directory.display()))?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    paths.sort();
-
-    let mut objects = BTreeMap::new();
-    for path in paths {
-        if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
-            bail!("{directory_name} may contain only <id>.yaml files");
-        }
-        let id = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or_else(|| anyhow!("{description} file name is not valid UTF-8"))?;
-        if !valid_local_identifier(id) {
-            bail!("{description} file name must be a lowercase local identifier");
-        }
-        let file = project_relative_path(project_root, &path);
-        let bytes = authored::read_authored_file(&path, description)?;
-        gathered.read_one();
-        let node = match scan_authored(&file, &bytes) {
-            Ok(Some(node)) if matches!(node.value, NodeValue::Mapping(_)) => node,
-            Ok(_) => {
-                gathered.push(authored::file_diagnostic(
-                    Severity::Error,
-                    "config.wrong-type",
-                    None,
-                    &file,
-                    "",
-                    &format!("the {description} is not a YAML mapping"),
-                    &format!("Write the {description} as a mapping of its members."),
-                ));
-                continue;
-            }
-            Err(report) => {
-                gathered.extend(report);
-                continue;
-            }
-        };
-        let value = match format {
-            Some(format) => match read_envelope_body(&file, &bytes, format) {
-                Ok(decoded) => {
-                    gathered.extend(decoded.document.warnings());
-                    decoded.value
-                }
-                Err(report) => {
-                    gathered.extend(report);
-                    continue;
-                }
-            },
-            None => node.to_json_value(),
-        };
-        objects.insert(id.to_owned(), NamedDocument { file, node, value });
-    }
-    Ok(objects)
-}
-
-/// One authored question read through the shared reader and checked, with
-/// the document it was read from.
-struct ReadQuestion {
-    document: Document,
-    question: Question,
-}
-
-/// Read and check every authored question, gathering what each one departs
-/// from: its own shape and findings, and an id that is not its file name.
-fn read_questions(project_root: &Path, gathered: &mut Gathered) -> Result<Vec<ReadQuestion>> {
-    let mut questions = Vec::new();
-    for path in question_paths(project_root)? {
-        let file = project_relative_path(project_root, &path);
-        let bytes = authored::read_authored_file(&path, "question")?;
-        gathered.read_one();
-        let decoded = match check_question(&file, &bytes) {
-            Ok(decoded) => decoded,
-            Err(report) => {
-                gathered.extend(report);
-                continue;
-            }
-        };
-        gathered.extend(decoded.document.warnings());
-        if path.file_stem().and_then(|value| value.to_str()) != Some(decoded.value.id.as_str()) {
-            gathered.push(diagnostic_near(
-                &decoded.document,
-                "evidence.question.id-filename-mismatch",
-                "/id",
-                "the question id is not its file name",
-                "Rename the file to questions/<id>.yaml, or change `id` to match the file name.",
-            ));
-            continue;
-        }
-        questions.push(ReadQuestion {
-            document: decoded.document,
-            question: decoded.value,
-        });
-    }
-    Ok(questions)
-}
-
-fn project_relative_path(project_root: &Path, path: &Path) -> String {
-    path.strip_prefix(project_root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
 }
 
 fn read_regular_file(path: &Path, maximum_bytes: u64, description: &str) -> Result<Vec<u8>> {
@@ -1874,48 +770,6 @@ fn read_regular_file(path: &Path, maximum_bytes: u64, description: &str) -> Resu
     Ok(bytes)
 }
 
-fn question_paths(project_root: &Path) -> Result<Vec<PathBuf>> {
-    let directory = project_root.join(QUESTIONS_DIRECTORY);
-    let metadata = fs::symlink_metadata(&directory)
-        .with_context(|| format!("inspecting question directory {}", directory.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        bail!("questions must be held in a plain directory");
-    }
-    let mut paths = fs::read_dir(&directory)
-        .with_context(|| format!("reading question directory {}", directory.display()))?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    paths.sort();
-    if paths.is_empty() || paths.len() > MAX_QUESTIONS {
-        bail!("local authoring requires 1..={MAX_QUESTIONS} questions/*.yaml files");
-    }
-    if paths
-        .iter()
-        .any(|path| path.extension().and_then(|value| value.to_str()) != Some("yaml"))
-    {
-        bail!("questions must contain only questions/*.yaml files");
-    }
-    Ok(paths)
-}
-
-fn project_relative_derivation(project_root: &Path, value: &str) -> Result<PathBuf> {
-    if !valid_derivation_reference(value) {
-        bail!("derivation must be a project-relative derivations/<name>.rhai file");
-    }
-    let relative = Path::new(value);
-    let directory = project_root.join(DERIVATIONS_DIRECTORY);
-    let metadata = fs::symlink_metadata(&directory)
-        .with_context(|| format!("inspecting derivation directory {}", directory.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        bail!("derivations must be held in a plain directory");
-    }
-    Ok(project_root.join(relative))
-}
-
-pub(crate) fn valid_derivation_reference(value: &str) -> bool {
-    valid_two_part_reference(value, DERIVATIONS_DIRECTORY, "rhai")
-}
-
 fn valid_two_part_reference(value: &str, directory: &str, extension: &str) -> bool {
     let relative = Path::new(value);
     let components = relative.components().collect::<Vec<_>>();
@@ -1924,17 +778,6 @@ fn valid_two_part_reference(value: &str, directory: &str, extension: &str) -> bo
         && components.first() == Some(&Component::Normal(directory.as_ref()))
         && matches!(components.get(1), Some(Component::Normal(_)))
         && relative.extension().and_then(|value| value.to_str()) == Some(extension)
-}
-
-fn validate_openapi_version(document: &Value) -> Result<()> {
-    let version = document
-        .get("openapi")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("retained document has no OpenAPI version"))?;
-    if !(version.starts_with("3.0.") || version.starts_with("3.1.")) {
-        bail!("only OpenAPI 3.0.x and 3.1.x are supported");
-    }
-    Ok(())
 }
 
 fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> {
@@ -1949,215 +792,162 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
 }
 
 fn compile_plan_with_connections(
-    mut inputs: Inputs,
+    inputs: Inputs,
     profile: CompileProfile,
     source_connections: Value,
 ) -> Result<CompilePlan> {
-    resolve_source_connections(&mut inputs.sources, &source_connections)?;
-    let has_inline_source = inputs
-        .questions
-        .iter()
-        .any(|authored| authored.question.source.source_ref.is_none());
-    let (spec, base_url) = if has_inline_source {
-        reject_unsupported_keys(
-            inputs
-                .openapi
-                .as_object()
-                .ok_or_else(|| anyhow!("retained OpenAPI document must be an object"))?,
-            &["openapi", "info", "servers", "paths", "components"],
-            "OpenAPI document",
-        )?;
-        if inputs.openapi.get("security").is_some() {
-            bail!("the local tutorial source must omit top-level OpenAPI security");
-        }
-        (
-            Some(Spec::from_value(
-                inputs.openapi.clone(),
-                "retained OpenAPI document",
-            )?),
-            Some(exact_loopback_server(&inputs.openapi)?),
-        )
-    } else {
-        (None, None)
-    };
-    let mut questions = Vec::with_capacity(inputs.questions.len());
-    for authored in inputs.questions {
-        questions.push(compile_question_plan(
-            &inputs.openapi,
-            spec.as_ref(),
-            base_url.as_deref(),
-            &inputs.selectors,
-            &inputs.sources,
-            &inputs.schemas,
-            authored,
-        )?);
-    }
-    prune_unused_source_alternatives(&mut questions)?;
-    let access_policies = inputs.access_policies;
-    let active_client_policies = inputs.active_client_policies;
-    match profile {
+    let compiled = registry_evidence_authoring::compile::compile(&inputs.project, &inputs.scripts)
+        .map_err(|findings| authored::file_findings_report("evidence.yaml", "project", findings))?;
+    let (mut bundle, local_public_jwk) = match profile {
+        CompileProfile::Production(governance) => (governance, None),
         CompileProfile::Local {
             ports,
             audience,
             active_public_jwk_file,
             active_public_jwk,
             admission,
-        } => {
-            let mut bundle = render_local_bundle(
-                &questions,
-                &access_policies,
-                &active_client_policies,
-                ports,
-                &active_public_jwk_file,
-                &audience,
-                &admission,
-            )?;
-            if source_connections
-                .as_object()
-                .is_some_and(|connections| !connections.is_empty())
-            {
-                bundle["sourceConnections"] = source_connections;
-            }
-            Ok(CompilePlan {
-                questions,
-                access_policies,
-                bundle,
-                local_public_jwk: Some((active_public_jwk_file, active_public_jwk)),
-            })
-        }
-        CompileProfile::Production(governance) => {
-            let bundle = render_production_bundle(
-                &questions,
-                &access_policies,
-                &active_client_policies,
-                governance,
-            )?;
-            Ok(CompilePlan {
-                questions,
-                access_policies,
-                bundle,
-                local_public_jwk: None,
-            })
-        }
+        } => (
+            render_local_bundle(ports, &active_public_jwk_file, &audience, &admission)?,
+            Some((active_public_jwk_file, active_public_jwk)),
+        ),
+    };
+    let object = bundle
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("target governance must be an object"))?;
+    object.insert("authorityProfiles".to_owned(), json!({}));
+    for (key, value) in compiled
+        .model
+        .as_object()
+        .expect("compiled project is object")
+    {
+        object.insert(key.clone(), value.clone());
     }
-}
-
-fn prune_unused_source_alternatives(questions: &mut [QuestionPlan]) -> Result<()> {
-    let mut reached = BTreeMap::<String, BTreeSet<(String, String)>>::new();
-    for question in questions.iter() {
-        let profiles = reached.entry(question.source_id.clone()).or_default();
-        for subject in &question.subjects {
-            if subject.source {
-                profiles.extend(
-                    subject
-                        .selectors
-                        .iter()
-                        .map(|selector| (subject.role.clone(), selector.profile.clone())),
-                );
-            }
-        }
-    }
-    for question in questions {
-        let profiles = &reached[&question.source_id];
-        if let Some(inputs) = question
-            .source_value
-            .pointer_mut("/request/selectorInputs")
-            .and_then(Value::as_array_mut)
-        {
-            for input in inputs {
-                let role = selector_input_role(input)?.to_owned();
-                if let Some(alternatives) = input["alternatives"].as_array_mut() {
-                    alternatives.retain(|alternative| {
-                        alternative["profile"].as_str().is_some_and(|profile| {
-                            profiles.contains(&(role.clone(), profile.to_owned()))
-                        })
-                    });
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Copy only the connection-owned slots into ordinary source configuration.
-/// The runtime validates the resulting bundle's closed connection/auth/TLS
-/// model and proves the copies equal their declared connection owner.
-fn resolve_source_connections(
-    sources: &mut BTreeMap<String, Value>,
-    connections: &Value,
-) -> Result<()> {
-    let connections = connections
+    object.insert("sourceConnections".to_owned(), source_connections.clone());
+    let connections = source_connections
         .as_object()
         .ok_or_else(|| anyhow!("sourceConnections must be a mapping"))?;
-    for source in sources.values_mut() {
-        let Some(connection) = source.get("connection") else {
-            continue;
-        };
-        let name = connection
-            .as_str()
-            .filter(|name| valid_local_identifier(name))
-            .ok_or_else(|| anyhow!("source connection must name a valid connection"))?;
-        let connection = connections
-            .get(name)
-            .and_then(Value::as_object)
-            .ok_or_else(|| {
-                anyhow!("source connection `{name}` is not declared by the selected target")
-            })?;
-        let source = source
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("source must be a mapping"))?;
-        if source.get("type").and_then(Value::as_str) != Some("http-json") {
-            bail!("only an HTTP source may reference a named connection");
-        }
-        if ["baseUrl", "authentication", "tlsTrustProfile"]
-            .iter()
-            .any(|field| source.contains_key(*field))
+    for source in object
+        .get_mut("sources")
+        .expect("compiled sources")
+        .as_object_mut()
+        .expect("sources is object")
+        .values_mut()
+    {
+        if let Some(name) = source
+            .get("connection")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
         {
-            bail!("connection-owned source fields must be omitted from the authored source");
-        }
-        let request = source
-            .get_mut("request")
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| anyhow!("source request must be a mapping"))?;
-        if request.contains_key("maximumConcurrency") {
-            bail!("a connected source must omit request.maximumConcurrency");
-        }
-        request.insert(
-            "maximumConcurrency".to_owned(),
-            connection
-                .get("maximumConcurrency")
-                .cloned()
-                .unwrap_or_else(|| json!(4)),
-        );
-        for field in ["baseUrl", "authentication"] {
-            source.insert(
-                field.to_owned(),
-                connection
-                    .get(field)
-                    .cloned()
-                    .ok_or_else(|| anyhow!("source connection requires {field}"))?,
-            );
-        }
-        if let Some(trust) = connection.get("tlsTrustProfile") {
-            source.insert("tlsTrustProfile".to_owned(), trust.clone());
+            let connection = connections
+                .get(&name)
+                .ok_or_else(|| anyhow!("source connection `{name}` requires an explicit target"))?;
+            source["baseUrl"] = connection["baseUrl"].clone();
+            source["authentication"] = connection["authentication"].clone();
+            if let Some(trust) = connection.get("tlsTrustProfile") {
+                source["tlsTrustProfile"] = trust.clone();
+            }
         }
     }
-    Ok(())
+    let formats = inputs
+        .project
+        .assertion_definitions
+        .values()
+        .flat_map(|definition| definition.representations.iter())
+        .map(|format| serde_json::to_value(format).expect("format serializes"))
+        .collect::<Vec<_>>();
+    let mut formats = formats
+        .into_iter()
+        .filter_map(|value| value.as_str().map(str::to_owned))
+        .collect::<BTreeSet<_>>();
+    formats.insert("signed-jws".to_owned());
+    object.insert("responseFormats".to_owned(), json!(formats));
+    let definitions = inputs
+        .project
+        .assertion_definitions
+        .iter()
+        .map(|(id, definition)| {
+            let requirement = compiled.model["requirements"]
+                .as_array()
+                .expect("requirements array")
+                .iter()
+                .find(|value| value["handle"] == id.as_str())
+                .expect("compiled definition")
+                .clone();
+            let subjects = definition
+                .subjects
+                .iter()
+                .map(|subject| SubjectPlan {
+                    role: subject.role.to_string(),
+                    selectors: subject
+                        .selectors
+                        .iter()
+                        .map(|selector| SubjectSelectorPlan {
+                            profile: selector.to_string(),
+                            fields: inputs.project.selector_profiles[selector]
+                                .fields
+                                .keys()
+                                .map(ToString::to_string)
+                                .collect(),
+                        })
+                        .collect(),
+                })
+                .collect();
+            let concepts = definition
+                .outputs
+                .iter()
+                .map(|(name, output)| ConceptPlan {
+                    concept_alias: name.to_string(),
+                    concept_uri: output.concept.clone(),
+                    concept_form: match output.value_type.as_str() {
+                        "boolean" => CompiledConceptForm::Boolean,
+                        "controlled-code" => CompiledConceptForm::ControlledCode,
+                        "bounded-decimal" => CompiledConceptForm::BoundedDecimal,
+                        "date-bucket" => CompiledConceptForm::DateBucket,
+                        "time-bucket" => CompiledConceptForm::TimeBucket,
+                        "audience-scoped-entity-reference" => {
+                            CompiledConceptForm::AudienceScopedEntityReference
+                        }
+                        "controlled-code-list" => CompiledConceptForm::ControlledCodeList,
+                        "entity-reference-list" => CompiledConceptForm::EntityReferenceList,
+                        "controlled-category" => CompiledConceptForm::ControlledCategory,
+                        "bounded-identifier" => CompiledConceptForm::BoundedIdentifier,
+                        "bounded-integer" => CompiledConceptForm::BoundedInteger,
+                        _ => CompiledConceptForm::Structured,
+                    },
+                })
+                .collect();
+            DefinitionPlan {
+                definition_id: id.to_string(),
+                fixture_artifact: definition.fixtures.clone(),
+                purpose: definition.purpose.clone(),
+                requirement_uri: definition.semantics.requirement.clone(),
+                concepts,
+                subjects,
+                requirement,
+            }
+        })
+        .collect();
+    Ok(CompilePlan {
+        definitions,
+        bundle,
+        local_public_jwk,
+        generated_artifacts: compiled.artifacts,
+        authority_document: None,
+    })
 }
 
-/// Read authored connection references without requiring questions or secrets.
+/// Read authored connection references without requiring runtime credentials.
 pub(crate) fn source_connection_users(
     project_root: &Path,
     connection: &str,
 ) -> Result<Vec<String>> {
-    Ok(
-        read_named_objects(project_root, SOURCES_DIRECTORY, "source", &SOURCE)?
-            .into_iter()
-            .filter_map(|(id, source)| {
-                (source.get("connection").and_then(Value::as_str) == Some(connection)).then_some(id)
-            })
-            .collect(),
-    )
+    let (project, _) = crate::normalized::read(project_root)?;
+    Ok(project
+        .sources
+        .iter()
+        .filter(|(_, source)| source.connection.as_ref().map(|id| id.as_str()) == Some(connection))
+        .map(|(id, _)| id.to_string())
+        .collect())
 }
 
 /// Validate imported ordinary artifact references without synthesizing a
@@ -2168,1772 +958,29 @@ pub(crate) fn validate_source_artifact_graph(project_root: &Path) -> Result<()> 
     validate_source_artifact_graph_with_target_bindings(project_root).map(drop)
 }
 
-/// Validate the authored source graph and return the connections whose values
-/// only an explicit deployment target can supply.
-///
-/// This does not resolve, synthesize, or validate deployment connection
-/// values. `resolve_source_connections` remains the strict compilation step
-/// after a target has been selected.
-pub(crate) fn target_bound_sources(project_root: &Path) -> Result<Vec<TargetBoundSource>> {
-    validate_source_artifact_graph_with_target_bindings(project_root)
-}
-
 fn validate_source_artifact_graph_with_target_bindings(
     project_root: &Path,
 ) -> Result<Vec<TargetBoundSource>> {
-    let selectors = read_named_objects(
-        project_root,
-        SELECTORS_DIRECTORY,
-        "selector profile",
-        &SELECTOR,
-    )?;
-    let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source", &SOURCE)?;
-    let mut target_bound_sources = Vec::new();
-    for (source_id, source) in &sources {
-        if source.get("connection").is_none() {
-            validate_referenced_source_authentication("imported source", source_id, source)?;
-        } else {
-            let name = source
-                .get("connection")
-                .and_then(Value::as_str)
-                .filter(|name| valid_local_identifier(name))
-                .ok_or_else(|| anyhow!("source connection must name a valid connection"))?;
-            if source.get("type").and_then(Value::as_str) != Some("http-json")
-                || ["baseUrl", "authentication", "tlsTrustProfile"]
-                    .iter()
-                    .any(|field| source.get(field).is_some())
-                || source.pointer("/request/maximumConcurrency").is_some()
-            {
-                bail!("source `{source_id}` must leave connection-owned fields to `{name}`");
-            }
-            target_bound_sources.push(TargetBoundSource {
-                source_id: source_id.clone(),
-            });
-        }
-        for input in source_selector_inputs(source)? {
-            let alternatives = input
-                .get("alternatives")
-                .and_then(Value::as_array)
-                .ok_or_else(|| anyhow!("source selector alternatives must be an array"))?;
-            for alternative in alternatives {
-                let profile = alternative
-                    .get("profile")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow!("source selector alternative must name a profile"))?;
-                let fields = selectors
-                    .get(profile)
-                    .and_then(|profile| profile.get("fields"))
-                    .and_then(Value::as_object)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "source `{source_id}` references missing selector profile `{profile}`"
-                        )
-                    })?;
-                let selected = alternative
-                    .get("fields")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| anyhow!("source selector fields must be an array"))?;
-                if selected.is_empty()
-                    || selected.iter().any(|field| {
-                        field
-                            .as_str()
-                            .is_none_or(|field| !fields.contains_key(field))
-                    })
-                {
-                    bail!("source `{source_id}` references a field outside selector profile `{profile}`");
-                }
-            }
-        }
-        for artifact in referenced_source_artifacts(source)? {
-            let bytes = read_project_artifact(
-                project_root,
-                &artifact,
-                MAX_SOURCE_ARTIFACT_BYTES,
-                "imported source artifact",
-            )?;
-            if artifact.starts_with("schemas/") {
-                let schema = registry_evidence_authoring::formats::scan_authored(&artifact, &bytes)
-                    .map(authored::node_value)?;
-                if !schema.is_object() {
-                    bail!("source schema must be a mapping");
-                }
-            } else if artifact.starts_with("adapters/") {
-                let script = std::str::from_utf8(&bytes).context("source adapter must be UTF-8")?;
-                let ast = rhai::Engine::new_raw()
-                    .set_max_expr_depths(64, 64)
-                    .compile(script)
-                    .map_err(|_| anyhow!("source adapter `{artifact}` does not compile"))?;
-                let name = if source
-                    .pointer("/batch/extractScript")
-                    .and_then(Value::as_str)
-                    == Some(artifact.as_str())
-                {
-                    "extract_batch"
-                } else if source
-                    .pointer("/batch/prepareScript")
-                    .and_then(Value::as_str)
-                    == Some(artifact.as_str())
-                {
-                    "prepare_batch"
-                } else if source.get("extractScript").and_then(Value::as_str)
-                    == Some(artifact.as_str())
-                {
-                    "extract"
-                } else {
-                    "prepare"
-                };
-                let functions = ast
-                    .iter_functions()
-                    .filter(|function| function.name == name)
-                    .collect::<Vec<_>>();
-                if functions.len() != 1
-                    || functions[0].access != rhai::FnAccess::Public
-                    || !(functions[0].params.len() == 2
-                        || (name == "extract" && functions[0].params.len() == 3))
-                {
-                    bail!("source adapter `{artifact}` has an invalid entry point");
-                }
-                if name == "extract"
-                    && functions[0].params.len() == 3
-                    && source.get("batch").is_some()
-                {
-                    bail!("selector-aware extraction requires sequential execution; omit source batch");
-                }
-            }
-        }
-    }
-    let questions = project_root.join(QUESTIONS_DIRECTORY);
-    if questions.is_dir() && fs::read_dir(&questions)?.next().is_some() {
-        let inputs = read_inputs(project_root, false)?;
-        for authored in &inputs.questions {
-            if let Some(source_id) = &authored.question.source.source_ref {
-                let source = sources
-                    .get(source_id)
-                    .ok_or_else(|| anyhow!("question references missing source `{source_id}`"))?;
-                compile_referenced_subjects(&authored.question, source, &selectors)?;
-            }
-        }
-    }
-    Ok(target_bound_sources)
-}
-
-fn compile_question_plan(
-    openapi: &Value,
-    spec: Option<&Spec>,
-    base_url: Option<&str>,
-    selectors: &BTreeMap<String, Value>,
-    sources: &BTreeMap<String, Value>,
-    schemas: &BTreeMap<String, Value>,
-    authored: AuthoredQuestion,
-) -> Result<QuestionPlan> {
-    let question = &authored.question;
-    if question.source.source_ref.is_some() {
-        return compile_referenced_question(selectors, sources, schemas, authored);
-    }
-    let authored_subjects =
-        question_subjects(question).map_err(|finding| anyhow!("{}", finding.message))?;
-    if authored_subjects
+    let (project, _) = crate::normalized::compile(project_root)?;
+    Ok(project
+        .sources
         .iter()
-        .any(|subject| subject.profile.is_some())
-    {
-        bail!("an OpenAPI question derives its local selector profiles");
-    }
-    let operation_id = question
-        .source
-        .operation
-        .as_deref()
-        .expect("inline source was validated");
-    let operation = unique_operation(openapi, operation_id)?;
-    if operation.operation.get("security").is_some() {
-        bail!("the local tutorial operation must omit OpenAPI security");
-    }
-    if operation.operation.get("requestBody").is_some() {
-        bail!("the local tutorial GET operation must not declare a request body");
-    }
-    if operation.operation.get("servers").is_some() || operation.path_item.get("servers").is_some()
-    {
-        bail!("the local tutorial operation must use the document's one server");
-    }
-    reject_unsupported_keys(
-        operation.path_item,
-        &["get", "parameters"],
-        "selected OpenAPI path item",
-    )?;
-    reject_unsupported_keys(
-        operation.operation,
-        &["operationId", "parameters", "responses"],
-        "selected OpenAPI operation",
-    )?;
-
-    let path_selector_fields = authored_subjects
-        .iter()
-        .filter(|subject| {
-            let placeholder = format!("{{{}}}", subject.selector);
-            operation
-                .path
-                .split('/')
-                .any(|segment| segment == placeholder)
+        .filter(|(_, source)| source.connection.is_some())
+        .map(|(id, _)| TargetBoundSource {
+            source_id: id.to_string(),
         })
-        .map(|subject| subject.selector.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut source_subjects = vec![false; authored_subjects.len()];
-    for selector in &path_selector_fields {
-        let candidates = authored_subjects
-            .iter()
-            .enumerate()
-            .filter(|(_, subject)| subject.selector == *selector)
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        let explicit = candidates
-            .iter()
-            .copied()
-            .filter(|index| authored_subjects[*index].source == Some(true))
-            .collect::<Vec<_>>();
-        let selected = match (explicit.as_slice(), candidates.as_slice()) {
-            ([selected], _) => *selected,
-            ([], [selected]) if authored_subjects[*selected].source != Some(false) => *selected,
-            ([], [_]) => {
-                bail!("an inline path selector cannot bind a subject with source: false")
-            }
-            ([], _) => {
-                bail!("shared selector fields require exactly one subject with source: true")
-            }
-            _ => {
-                bail!("an inline path selector must identify exactly one subject with source: true")
-            }
-        };
-        source_subjects[selected] = true;
-    }
-    for (index, subject) in authored_subjects.iter().enumerate() {
-        if subject.source == Some(true) && !source_subjects[index] {
-            bail!("a subject with source: true must supply an inline operation path selector");
-        }
-        if !source_subjects[index] && !subject.derivation {
-            bail!("every question subject must be used by the source or declared for derivation");
-        }
-    }
-    if !source_subjects.iter().any(|source| *source) {
-        bail!("an inline OpenAPI question must bind at least one subject to the source path");
-    }
-    let source_selector_fields = path_selector_fields.into_iter().collect::<Vec<_>>();
-    exact_path_selectors(&operation, &source_selector_fields)?;
-    let compiled_facts = compile_facts(
-        spec.expect("inline source needs parsed OpenAPI"),
-        &operation,
-        &question.source,
-    )?;
-    let requirement_uri = question
-        .governance
-        .as_ref()
-        .map(|governance| governance.requirement.clone())
-        .unwrap_or_else(|| local_uri(&format!("requirement:{}", question.id)));
-    let concepts = question
-        .answers
-        .iter()
-        .map(|answer| compile_concept(&question.id, answer, schemas))
-        .collect::<Result<Vec<_>>>()?;
-    let requirement_kind = question
-        .governance
-        .as_ref()
-        .map(|governance| governance.kind.as_str())
-        .unwrap_or_else(|| {
-            if concepts.len() == 1 && concepts[0].concept_form == CompiledConceptForm::Boolean {
-                "criterion"
-            } else {
-                "information-requirement"
-            }
-        });
-
-    let response_schema = compiled_facts.response_schema;
-    let fact_schema = compiled_facts.fact_schema;
-    let adapter_parameters_schema = json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["operationId"],
-        "properties": {
-            "operationId": {"type": "string", "const": operation_id}
-        }
-    });
-
-    let prepare_script =
-        "fn prepare(selectors, context) {\n    #{query: [], body: ()}\n}\n".to_owned();
-    let extract_script = compiled_facts.extract_script;
-    let derivation_script = render_derivation(&authored.derivation, &concepts);
-    let subjects = authored_subjects
-        .iter()
-        .enumerate()
-        .map(|(index, authored_subject)| {
-            let selector_profile = local_subject_selector_profile_id(
-                &question.id,
-                &authored_subject.role,
-                authored_subjects.len(),
-            );
-            SubjectPlan {
-                role: authored_subject.role.clone(),
-                selectors: vec![SubjectSelectorPlan {
-                    profile: selector_profile,
-                    fields: vec![authored_subject.selector.clone()],
-                    value: json!({
-                        "maximumAggregateBytes": 200,
-                        "fields": {
-                            authored_subject.selector.clone(): {
-                                "type": "string",
-                                "minimumBytes": 1,
-                                "maximumBytes": 200,
-                            }
-                        },
-                    }),
-                }],
-                source: source_subjects[index],
-                derivation: authored_subject.derivation,
-            }
-        })
-        .collect::<Vec<_>>();
-    let source_id = local_source_id(&question.id);
-    let (source_value, grants, requirement) = render_question_bundle_parts(
-        question,
-        base_url.expect("inline source needs local base URL"),
-        operation.path,
-        &subjects,
-        &source_id,
-        &BundleRequirement {
-            handle: question.id.to_string(),
-            requirement_uri: requirement_uri.clone(),
-            kind: requirement_kind,
-            concepts: &concepts,
-        },
-    );
-    Ok(QuestionPlan {
-        question_id: question.id.to_string(),
-        source_artifact_id: question.id.to_string(),
-        authored_source_artifacts: None,
-        derivation_artifact: question.derivation.clone(),
-        fixture_artifact: question
-            .governance
-            .as_ref()
-            .map(|governance| governance.fixtures.clone()),
-        purpose: question.purpose.clone(),
-        requirement_uri,
-        response_formats: question.response_formats.to_vec(),
-        concepts,
-        subjects,
-        source_id,
-        source_value,
-        grants,
-        requirement,
-        response_schema,
-        fact_schema,
-        adapter_parameters_schema,
-        prepare_script,
-        extract_script,
-        derivation_script,
-    })
-}
-
-fn compile_referenced_question(
-    selectors: &BTreeMap<String, Value>,
-    sources: &BTreeMap<String, Value>,
-    schemas: &BTreeMap<String, Value>,
-    authored: AuthoredQuestion,
-) -> Result<QuestionPlan> {
-    let question = &authored.question;
-    let source_id = question
-        .source
-        .source_ref
-        .as_deref()
-        .expect("referenced source was validated");
-    let source_value = sources
-        .get(source_id)
-        .ok_or_else(|| AuthoredDiagnostic {
-            code: "evidence.question.source-missing".to_owned(),
-            path: format!("questions/{}.yaml:/source/ref", question.id),
-            message: "the source this ref names has no file under sources/".to_owned(),
-        })?
-        .clone();
-    validate_referenced_source_authentication(&question.id, source_id, &source_value)?;
-    let subjects = compile_referenced_subjects(question, &source_value, selectors)?;
-
-    let requirement_uri = question
-        .governance
-        .as_ref()
-        .map(|governance| governance.requirement.clone())
-        .unwrap_or_else(|| local_uri(&format!("requirement:{}", question.id)));
-    let concepts = question
-        .answers
-        .iter()
-        .map(|answer| compile_concept(&question.id, answer, schemas))
-        .collect::<Result<Vec<_>>>()?;
-    let requirement_kind = question
-        .governance
-        .as_ref()
-        .map(|governance| governance.kind.as_str())
-        .unwrap_or_else(|| {
-            if concepts.len() == 1 && concepts[0].concept_form == CompiledConceptForm::Boolean {
-                "criterion"
-            } else {
-                "information-requirement"
-            }
-        });
-    let (grants, requirement) = render_governance_parts(
-        question,
-        &subjects,
-        source_id,
-        &BundleRequirement {
-            handle: question.id.to_string(),
-            requirement_uri: requirement_uri.clone(),
-            kind: requirement_kind,
-            concepts: &concepts,
-        },
-    );
-    let derivation_script = render_derivation(&authored.derivation, &concepts);
-
-    Ok(QuestionPlan {
-        question_id: question.id.to_string(),
-        source_artifact_id: source_id.to_owned(),
-        authored_source_artifacts: Some(referenced_source_artifacts(&source_value)?),
-        derivation_artifact: question.derivation.clone(),
-        fixture_artifact: question
-            .governance
-            .as_ref()
-            .map(|governance| governance.fixtures.clone()),
-        purpose: question.purpose.clone(),
-        requirement_uri,
-        response_formats: question.response_formats.to_vec(),
-        concepts,
-        subjects,
-        source_id: source_id.to_owned(),
-        source_value,
-        grants,
-        requirement,
-        response_schema: Value::Null,
-        fact_schema: Value::Null,
-        adapter_parameters_schema: Value::Null,
-        prepare_script: String::new(),
-        extract_script: String::new(),
-        derivation_script,
-    })
-}
-
-fn compile_referenced_subjects(
-    question: &Question,
-    source: &Value,
-    selectors: &BTreeMap<String, Value>,
-) -> Result<Vec<SubjectPlan>> {
-    let authored = question_subjects(question).map_err(|finding| anyhow!("{}", finding.message))?;
-    let mut compiled = Vec::with_capacity(authored.len());
-    let mut combinations = 1_usize;
-    for (subject_index, subject) in authored.into_iter().enumerate() {
-        let profiles = if subject.profiles.is_empty() {
-            vec![match &subject.profile {
-                Some(profile) => profile.clone(),
-                None => referenced_selector_profile(source, &subject.role, &subject.selector)?,
-            }]
-        } else {
-            subject.profiles.clone()
-        };
-        combinations = combinations
-            .checked_mul(profiles.len())
-            .filter(|count| *count <= 128)
-            .ok_or_else(|| {
-                anyhow!("question selector alternatives exceed 128 complete authorization shapes")
-            })?;
-        let mut alternatives = Vec::with_capacity(profiles.len());
-        let mut used_by_source = false;
-        for profile in profiles {
-            let value = selectors
-                .get(&profile)
-                .ok_or_else(|| AuthoredDiagnostic {
-                    code: "evidence.question.selector-missing".to_owned(),
-                    path: format!(
-                        "questions/{}.yaml:/subjectProfiles/{subject_index}",
-                        question.id
-                    ),
-                    message: "the selector profile this member names has no file under selectors/"
-                        .to_owned(),
-                })?
-                .clone();
-            let declared_fields = value
-                .get("fields")
-                .and_then(Value::as_object)
-                .ok_or_else(|| anyhow!("selector profile `{profile}` has no fields object"))?;
-            let fields = if subject.profiles.is_empty() {
-                if !declared_fields.contains_key(&subject.selector) {
-                    bail!(
-                        "selector profile `{profile}` does not declare the question subject field"
-                    );
-                }
-                vec![subject.selector.clone()]
-            } else {
-                declared_fields.keys().cloned().collect::<Vec<_>>()
-            };
-            let uses_alternative = source_uses_subject(source, &subject.role, &profile, &fields)?;
-            if !uses_alternative && !subject.derivation {
-                bail!("every question subject alternative must be used by the source or declared for derivation");
-            }
-            // One source role cannot omit the selected alternative and hope that
-            // another one succeeds. Every allowed choice executes the same read.
-            if source_has_role(source, &subject.role)? && !uses_alternative {
-                bail!("each question profile must exactly match an alternative of its source role");
-            }
-            used_by_source |= uses_alternative;
-            alternatives.push(SubjectSelectorPlan {
-                profile,
-                fields,
-                value,
-            });
-        }
-        compiled.push(SubjectPlan {
-            role: subject.role.clone(),
-            selectors: alternatives,
-            source: used_by_source,
-            derivation: subject.derivation,
-        });
-    }
-    for input in source_selector_inputs(source)? {
-        let role = selector_input_role(input)?;
-        if compiled
-            .iter()
-            .filter(|subject| subject.role == role && subject.source)
-            .count()
-            != 1
-        {
-            bail!("question subjects must cover every source role exactly once");
-        }
-    }
-    Ok(compiled)
-}
-
-/// The role one source selector input binds.
-///
-/// A role that is not a string is refused by name rather than read as an empty
-/// one, so no caller compares against a role no source declares.
-fn selector_input_role(input: &Value) -> Result<&str> {
-    input
-        .get("role")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("source selectorInputs entry must name a string `role`"))
-}
-
-fn source_selector_inputs(source: &Value) -> Result<&Vec<Value>> {
-    source
-        .pointer("/request/selectorInputs")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("referenced source request must declare selectorInputs"))
-}
-
-fn source_has_role(source: &Value, role: &str) -> Result<bool> {
-    Ok(source_selector_inputs(source)?
-        .iter()
-        .any(|input| input.get("role").and_then(Value::as_str) == Some(role)))
-}
-
-fn source_uses_subject(
-    source: &Value,
-    role: &str,
-    profile: &str,
-    fields: &[String],
-) -> Result<bool> {
-    let expected = fields.iter().map(String::as_str).collect::<BTreeSet<_>>();
-    Ok(source_selector_inputs(source)?.iter().any(|input| {
-        input.get("role").and_then(Value::as_str) == Some(role)
-            && input
-                .get("alternatives")
-                .and_then(Value::as_array)
-                .is_some_and(|alternatives| {
-                    alternatives.iter().any(|alternative| {
-                        alternative.get("profile").and_then(Value::as_str) == Some(profile)
-                            && alternative
-                                .get("fields")
-                                .and_then(Value::as_array)
-                                .is_some_and(|actual| {
-                                    actual.len() == expected.len()
-                                        && actual
-                                            .iter()
-                                            .filter_map(Value::as_str)
-                                            .collect::<BTreeSet<_>>()
-                                            == expected
-                                })
-                    })
-                })
-    }))
-}
-
-fn referenced_selector_profile(source: &Value, role: &str, field: &str) -> Result<String> {
-    let inputs = source
-        .pointer("/request/selectorInputs")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("referenced source request must declare selectorInputs"))?;
-    let mut matches = Vec::new();
-    for input in inputs {
-        if input.get("role").and_then(Value::as_str) != Some(role) {
-            continue;
-        }
-        let alternatives = input
-            .get("alternatives")
-            .and_then(Value::as_array)
-            .ok_or_else(|| anyhow!("source selector alternatives must be an array"))?;
-        for alternative in alternatives {
-            let fields = alternative
-                .get("fields")
-                .and_then(Value::as_array)
-                .ok_or_else(|| anyhow!("source selector fields must be an array"))?;
-            if fields.iter().any(|value| value.as_str() == Some(field)) {
-                matches.push(
-                    alternative
-                        .get("profile")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| anyhow!("source selector alternative has no profile"))?
-                        .to_owned(),
-                );
-            }
-        }
-    }
-    if matches.len() != 1 {
-        bail!("question subject must match exactly one referenced source selector alternative");
-    }
-    Ok(matches.pop().expect("one selector profile"))
-}
-
-/// Hold a referenced source to a credential posture it states itself. A
-/// transport that opens a network channel carries a credential decision, and
-/// neither an absent field nor a mapping that names no kind is that decision,
-/// so the compile names the source file rather than emitting a bundle the
-/// runtime rejects later. Which kind was stated is the runtime's closed
-/// enumeration to settle, so an unrecognized kind passes this gate and is
-/// judged there. A transport carrying no network channel holds no credential,
-/// so it declares none.
-fn validate_referenced_source_authentication(
-    question_id: &str,
-    source_id: &str,
-    source: &Value,
-) -> Result<()> {
-    if source.get("type").and_then(Value::as_str) != Some("http-json") {
-        return Ok(());
-    }
-    let Some(authentication) = source
-        .get("authentication")
-        .filter(|value| !value.is_null())
-    else {
-        bail!(
-            "the referenced source sends no credential, and an absent field does not decide that: \
-question `{question_id}` must declare the posture itself by adding an `authentication:` mapping \
-naming the `type:` its channel uses, in sources/{source_id}.yaml"
-        )
-    };
-    if authentication
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| !kind.trim().is_empty())
-    {
-        return Ok(());
-    }
-    bail!(
-        "the referenced source states `authentication:` without naming a `type`, and an undecided \
-mapping is not a posture: question `{question_id}` must name the `type:` its channel uses under \
-`authentication:` in sources/{source_id}.yaml"
-    )
-}
-
-fn referenced_source_artifacts(source: &Value) -> Result<Vec<String>> {
-    fn required(source: &Value, pointer: &str, artifacts: &mut Vec<String>) -> Result<()> {
-        let path = source
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("referenced source is missing `{pointer}`"))?;
-        validate_bundle_relative_artifact(path)?;
-        artifacts.push(path.to_owned());
-        Ok(())
-    }
-
-    fn optional(source: &Value, pointer: &str, artifacts: &mut Vec<String>) -> Result<()> {
-        if let Some(path) = source.pointer(pointer).and_then(Value::as_str) {
-            validate_bundle_relative_artifact(path)?;
-            artifacts.push(path.to_owned());
-        }
-        Ok(())
-    }
-
-    let mut artifacts = Vec::new();
-    for pointer in ["/responseSchema", "/extractScript", "/factSchema"] {
-        required(source, pointer, &mut artifacts)?;
-    }
-    match source.get("type").and_then(Value::as_str) {
-        Some("http-json") => {
-            required(source, "/request/prepareScript", &mut artifacts)?;
-            required(source, "/request/adapterParametersSchema", &mut artifacts)?;
-        }
-        Some("sqlite-extract") => {
-            required(source, "/request/statement", &mut artifacts)?;
-            optional(source, "/request/prepareScript", &mut artifacts)?;
-            optional(source, "/request/adapterParametersSchema", &mut artifacts)?;
-        }
-        Some(other) => bail!("referenced source transport `{other}` is unsupported"),
-        None => bail!("referenced source must declare its transport"),
-    }
-    if source.get("batch").is_some() {
-        for pointer in [
-            "/batch/prepareScript",
-            "/batch/extractScript",
-            "/batch/responseSchema",
-        ] {
-            required(source, pointer, &mut artifacts)?;
-        }
-    }
-    Ok(artifacts)
-}
-
-fn validate_bundle_relative_artifact(value: &str) -> Result<()> {
-    if !valid_source_artifact_reference(value) {
-        bail!(
-            "referenced source artifacts must be adapters/<file>, queries/<file>, or schemas/<file>"
-        );
-    }
-    Ok(())
-}
-
-pub(crate) fn valid_source_artifact_reference(value: &str) -> bool {
-    let path = Path::new(value);
-    !path.is_absolute()
-        && !path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-        && path.components().count() == 2
-        && matches!(
-            path.components().next(),
-            Some(Component::Normal(directory))
-                if directory == "adapters" || directory == "queries" || directory == "schemas"
-        )
-}
-
-/// Inspect an already syntax-validated project-relative artifact without
-/// following a symlink in its parent or leaf.
-pub(crate) fn plain_project_asset_exists(project_root: &Path, value: &str) -> Result<bool> {
-    let components = Path::new(value).components().collect::<Vec<_>>();
-    if components.is_empty()
-        || components
-            .iter()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        bail!("project artifact reference must contain only normal path components");
-    }
-    let mut path = project_root.to_path_buf();
-    for (index, component) in components.iter().enumerate() {
-        let Component::Normal(component) = component else {
-            unreachable!("components were checked")
-        };
-        path.push(component);
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error).context("inspecting a declared project artifact"),
-        };
-        let leaf = index + 1 == components.len();
-        if metadata.file_type().is_symlink()
-            || (leaf && (!metadata.is_file() || metadata.nlink() != 1))
-            || (!leaf && !metadata.is_dir())
-        {
-            bail!("declared project artifact must use plain directories and one plain file");
-        }
-    }
-    Ok(true)
-}
-
-fn compile_concept(
-    question_id: &str,
-    answer: &QuestionAnswer,
-    schemas: &BTreeMap<String, Value>,
-) -> Result<ConceptPlan> {
-    let concept_uri = answer
-        .uri
-        .as_ref()
-        .map(|uri| uri.as_str().to_owned())
-        .unwrap_or_else(|| local_uri(&format!("concept:{question_id}:{}", answer.concept)));
-    Ok(match answer.answer_type {
-        AnswerType::Boolean => ConceptPlan {
-            concept_alias: answer.concept.clone(),
-            concept_uri,
-            concept_form: CompiledConceptForm::Boolean,
-            constraints: json!({}),
-            codelist: None,
-            schema: None,
-            sd_jwt_vc: None,
-        },
-        AnswerType::ControlledCategory => {
-            let scheme = answer.uri.as_ref().map(ExternalId::as_str).map_or_else(
-                || local_uri(&format!("category-scheme:{question_id}:{}", answer.concept)),
-                // Version 1 requires a distinct category-scheme identifier,
-                // while the compact production question contract authors
-                // only the stable concept identifier. This deterministic
-                // suffix does not invent a requirement, framework, Evidence
-                // Type, concept, or disclosure-family URI.
-                |identifier| format!("{identifier}:categories"),
-            );
-            let path = format!("codelists/{question_id}-{}.yaml", answer.concept);
-            let maximum_bytes = answer
-                .values
-                .iter()
-                .map(String::len)
-                .max()
-                .expect("controlled categories were validated");
-            ConceptPlan {
-                concept_alias: answer.concept.clone(),
-                concept_uri,
-                concept_form: CompiledConceptForm::ControlledCategory,
-                constraints: json!({
-                    "categoryScheme": scheme,
-                    "schemeVersion": "1",
-                    "maximumBytes": maximum_bytes,
-                    "codelist": path,
-                }),
-                codelist: Some((
-                    path,
-                    json!({
-                        "apiVersion": EVIDENCE_CODELIST_API_VERSION,
-                        "kind": EVIDENCE_CODELIST_KIND,
-                        "uri": scheme,
-                        "version": "1",
-                        "type": "code-list",
-                        "codes": answer.values,
-                    }),
-                )),
-                schema: None,
-                sd_jwt_vc: None,
-            }
-        }
-        AnswerType::BoundedIdentifier => ConceptPlan {
-            concept_alias: answer.concept.clone(),
-            concept_uri,
-            concept_form: CompiledConceptForm::BoundedIdentifier,
-            constraints: json!({
-                "prefix": answer.prefix.as_deref().expect("bounded identifier was validated"),
-                "minimumBytes": answer.minimum_bytes.expect("bounded identifier was validated"),
-                "maximumBytes": answer.maximum_bytes.expect("bounded identifier was validated"),
-            }),
-            codelist: None,
-            schema: None,
-            sd_jwt_vc: None,
-        },
-        AnswerType::BoundedInteger => ConceptPlan {
-            concept_alias: answer.concept.clone(),
-            concept_uri,
-            concept_form: CompiledConceptForm::BoundedInteger,
-            constraints: json!({
-                "minimum": answer.minimum.expect("bounded integer was validated"),
-                "maximum": answer.maximum.expect("bounded integer was validated"),
-            }),
-            codelist: None,
-            schema: None,
-            sd_jwt_vc: None,
-        },
-        AnswerType::ReviewedStructuredValue => {
-            let path = answer
-                .schema
-                .as_deref()
-                .expect("structured answer was validated");
-            let key = Path::new(path)
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .ok_or_else(|| anyhow!("answer schema filename is not valid UTF-8"))?;
-            let schema = schemas
-                .get(key)
-                .cloned()
-                .ok_or_else(|| anyhow!("answer schema `{path}` does not exist"))?;
-            let schema_id = schema
-                .get("$id")
-                .and_then(Value::as_str)
-                .filter(|value| url::Url::parse(value).is_ok())
-                .ok_or_else(|| anyhow!("answer schema `{path}` requires an absolute `$id`"))?
-                .to_owned();
-            ConceptPlan {
-                concept_alias: answer.concept.clone(),
-                concept_uri,
-                concept_form: CompiledConceptForm::Structured,
-                constraints: json!({
-                    "schema": schema_id,
-                    "maximumSerializedBytes": answer
-                        .maximum_serialized_bytes
-                        .expect("structured answer was validated"),
-                }),
-                codelist: None,
-                schema: Some((path.to_owned(), schema)),
-                sd_jwt_vc: answer.sd_jwt_vc.as_ref().map(|projection| {
-                    json!({
-                        "claim": projection.claim,
-                        "disclosure": match projection.disclosure {
-                            QuestionSdJwtVcDisclosure::TopLevel => "top-level",
-                        },
-                    })
-                }),
-            }
-        }
-    })
-}
-
-fn exact_loopback_server(document: &Value) -> Result<String> {
-    let servers = document
-        .get("servers")
-        .and_then(Value::as_array)
-        .filter(|servers| servers.len() == 1)
-        .ok_or_else(|| anyhow!("OpenAPI must declare exactly one local server"))?;
-    let server = servers[0]
-        .as_object()
-        .filter(|server| server.len() == 1)
-        .ok_or_else(|| anyhow!("the local OpenAPI server must contain only its fixed URL"))?;
-    let value = server
-        .get("url")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("the local OpenAPI server URL is missing"))?;
-    let url = Url::parse(value).context("parsing the local OpenAPI server URL")?;
-    let port = url
-        .port()
-        .filter(|port| *port != 0)
-        .ok_or_else(|| anyhow!("the local OpenAPI server needs an explicit non-zero port"))?;
-    if url.scheme() != "http"
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        bail!("the local OpenAPI server must be one canonical HTTP loopback origin");
-    }
-    let canonical = match url.host() {
-        Some(Host::Ipv4(address)) if address.is_loopback() => {
-            format!("http://{address}:{port}")
-        }
-        Some(Host::Ipv6(address)) if address == std::net::Ipv6Addr::LOCALHOST => {
-            format!("http://[{address}]:{port}")
-        }
-        _ => bail!("the local OpenAPI server must use a numeric loopback address"),
-    };
-    if canonical != value {
-        bail!("the local OpenAPI server must use its exact canonical origin spelling");
-    }
-    Ok(canonical)
-}
-
-fn unique_operation<'a>(document: &'a Value, operation_id: &str) -> Result<Operation<'a>> {
-    const METHODS: [&str; 8] = [
-        "get", "put", "post", "delete", "options", "head", "patch", "trace",
-    ];
-    let paths = document
-        .get("paths")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("OpenAPI paths must be an object"))?;
-    let mut matches = Vec::new();
-    for (path, item) in paths {
-        let item = item
-            .as_object()
-            .ok_or_else(|| anyhow!("OpenAPI path item `{path}` must be an object"))?;
-        if item.contains_key("$ref") {
-            bail!("OpenAPI path-item references are outside the local tutorial subset");
-        }
-        for method in METHODS {
-            let Some(operation) = item.get(method) else {
-                continue;
-            };
-            let operation = operation
-                .as_object()
-                .ok_or_else(|| anyhow!("OpenAPI operation `{method} {path}` must be an object"))?;
-            if operation.get("operationId").and_then(Value::as_str) == Some(operation_id) {
-                matches.push(Operation {
-                    method,
-                    path,
-                    path_item: item,
-                    operation,
-                });
-            }
-        }
-    }
-    if matches.len() != 1 {
-        bail!("source.operation must resolve to exactly one OpenAPI operationId");
-    }
-    let operation = matches.pop().expect("one operation");
-    if operation.method != "get" {
-        bail!("the local tutorial source supports only one resolved GET operationId");
-    }
-    Ok(operation)
-}
-
-fn exact_path_selectors(operation: &Operation<'_>, expected: &[&str]) -> Result<()> {
-    let mut parameters = Vec::new();
-    for owner in [operation.path_item, operation.operation] {
-        if let Some(values) = owner.get("parameters") {
-            let values = values
-                .as_array()
-                .ok_or_else(|| anyhow!("OpenAPI parameters must be an array"))?;
-            parameters.extend(values);
-        }
-    }
-    if parameters.len() != expected.len() {
-        bail!(
-            "the local tutorial operation must declare exactly one path selector per source-bound subject"
-        );
-    }
-    let expected = expected.iter().copied().collect::<BTreeSet<_>>();
-    if expected.len() != parameters.len() {
-        bail!("each OpenAPI question subject must use a distinct path selector");
-    }
-    let mut actual = BTreeSet::new();
-    for parameter in parameters {
-        let parameter = parameter
-            .as_object()
-            .ok_or_else(|| anyhow!("the path selector must be an object"))?;
-        reject_unsupported_keys(
-            parameter,
-            &["name", "in", "required", "schema"],
-            "path selector",
-        )?;
-        let parameter_schema = parameter
-            .get("schema")
-            .and_then(Value::as_object)
-            .ok_or_else(|| anyhow!("the path selector schema must be an object"))?;
-        reject_unsupported_keys(parameter_schema, &["type"], "path selector schema")?;
-        let name = parameter
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("the path selector must have a name"))?;
-        if parameter.contains_key("$ref")
-            || parameter.get("in").and_then(Value::as_str) != Some("path")
-            || parameter.get("required").and_then(Value::as_bool) != Some(true)
-            || parameter_schema.get("type").and_then(Value::as_str) != Some("string")
-            || !actual.insert(name)
-        {
-            bail!("question selectors must equal the operation's required string path parameters");
-        }
-    }
-    if actual != expected {
-        bail!("question selectors must equal the operation's required string path parameters");
-    }
-    if !operation.path.starts_with('/')
-        || operation.path.starts_with("//")
-        || operation.path.contains(['?', '#', '\\'])
-        || operation
-            .path
-            .split('/')
-            .skip(1)
-            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
-        || expected.iter().any(|name| {
-            let placeholder = format!("{{{name}}}");
-            operation
-                .path
-                .split('/')
-                .filter(|segment| *segment == placeholder)
-                .count()
-                != 1
-        })
-        || operation.path.matches('{').count() != expected.len()
-        || operation.path.matches('}').count() != expected.len()
-    {
-        bail!("each path selector must occupy exactly one complete path segment");
-    }
-    Ok(())
-}
-
-fn compile_facts(
-    spec: &Spec,
-    operation: &Operation<'_>,
-    source: &QuestionSource,
-) -> Result<CompiledFacts> {
-    let operation_key = OperationKey {
-        method: operation.method.to_ascii_uppercase(),
-        path: operation.path.to_owned(),
-    };
-    let resolved = spec.response_schema(&operation_key, "200", "application/json")?;
-    for fact in &source.facts {
-        validate_selected_schema_path(&resolved.schema.0, &fact.path)?;
-    }
-    let selectable = registry_evidence_authoring::openapi::selectable_leaves(spec, &operation_key)?;
-    let offered = selectable
-        .iter()
-        .map(|leaf| leaf.pointer.as_str())
-        .collect::<BTreeSet<_>>();
-    for fact in &source.facts {
-        if !offered.contains(fact.path.as_str()) {
-            bail!(
-                "source fact `{}` path is not a selectable scalar leaf in the 200 application/json response",
-                fact.name
-            );
-        }
-    }
-
-    let projection = source
-        .facts
-        .iter()
-        .map(|fact| fact.path.clone())
-        .collect::<Vec<_>>();
-    let used_collections = source
-        .facts
-        .iter()
-        .flat_map(|fact| collection_pointers(&fact.path))
-        .collect::<BTreeSet<_>>();
-    let declared_collections = source
-        .collection_bounds
-        .keys()
-        .map(|pointer| pointer.as_str().to_owned())
-        .collect::<BTreeSet<_>>();
-    if used_collections != declared_collections {
-        let missing = used_collections
-            .difference(&declared_collections)
-            .cloned()
-            .collect::<Vec<_>>();
-        let unused = declared_collections
-            .difference(&used_collections)
-            .cloned()
-            .collect::<Vec<_>>();
-        bail!(
-            "source.collectionBounds must exactly name every selected collection (missing: {}; unused: {})",
-            display_list(&missing),
-            display_list(&unused)
-        );
-    }
-
-    let collection_bounds = source
-        .collection_bounds
-        .iter()
-        .map(|(pointer, bound)| (pointer.as_str().to_owned(), bound.get()))
-        .collect::<BTreeMap<_, _>>();
-
-    let plan = narrow::plan_advisories(
-        &resolved.schema,
-        &projection,
-        &crate::suggest::types::Observations::default(),
-    )?;
-    if let Some(advisory) = plan.advisories.first() {
-        bail!(
-            "selected source schema needs adopter review: {}",
-            advisory.message()
-        );
-    }
-    let mut resolutions = BTreeMap::new();
-    for need in &plan.needs {
-        match need.kind {
-            BoundKind::ArrayMaxItems => {
-                let maximum = collection_bounds.get(&need.pointer).ok_or_else(|| {
-                    anyhow!(
-                        "selected collection `{}` is unbounded; declare it in source.collectionBounds",
-                        need.pointer
-                    )
-                })?;
-                resolutions.insert(
-                    (need.pointer.clone(), BoundKind::ArrayMaxItems),
-                    BoundValues::MaxItems(*maximum),
-                );
-            }
-            BoundKind::IntegerRange | BoundKind::StringLength => bail!(
-                "selected fact schema at `{}` is unbounded; add its closed bounds to the retained OpenAPI document",
-                need.pointer
-            ),
-        }
-    }
-    let mut response_schema = narrow::apply(&resolved.schema, &projection, &resolutions)?.schema;
-    close_selected_response(&mut response_schema, &projection, &collection_bounds)?;
-
-    let mut fact_properties = Map::new();
-    for fact in &source.facts {
-        let leaf = schema_at_extended_pointer(&response_schema, &fact.path)?.clone();
-        let property = match fact.combine {
-            FactCombination::ExactlyOne => leaf,
-            FactCombination::Collect => {
-                let maximum = collection_pointers(&fact.path)
-                    .iter()
-                    .try_fold(1_u64, |product, pointer| {
-                        product.checked_mul(collection_bounds[pointer])
-                    })
-                    .ok_or_else(|| {
-                        anyhow!("source fact `{}` collection bound overflows", fact.name)
-                    })?;
-                if maximum > 256 {
-                    bail!(
-                        "source fact `{}` can collect {maximum} values; reduce collection bounds so the product is at most 256",
-                        fact.name
-                    );
-                }
-                json!({
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": maximum,
-                    "items": leaf,
-                })
-            }
-        };
-        fact_properties.insert(fact.name.clone(), property);
-    }
-    let required = source
-        .facts
-        .iter()
-        .map(|fact| Value::String(fact.name.clone()))
-        .collect::<Vec<_>>();
-    let fact_schema = json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": required,
-        "properties": fact_properties,
-    });
-
-    Ok(CompiledFacts {
-        response_schema,
-        fact_schema,
-        extract_script: render_fact_extraction(&source.facts),
-    })
-}
-
-fn validate_selected_schema_path(schema: &Value, pointer: &str) -> Result<()> {
-    let segments = parse_extended_pointer(pointer)?;
-    validate_selected_schema_node(schema, &segments, "")
-}
-
-fn validate_selected_schema_node(
-    node: &Value,
-    segments: &[ExtendedSegment],
-    pointer: &str,
-) -> Result<()> {
-    let object = node
-        .as_object()
-        .ok_or_else(|| anyhow!("selected OpenAPI schema node at `{pointer}` is not an object"))?;
-    let primary_type = match object.get("type") {
-        Some(Value::String(value)) => value.as_str(),
-        Some(Value::Array(values)) => values
-            .iter()
-            .filter_map(Value::as_str)
-            .find(|value| *value != "null")
-            .ok_or_else(|| {
-                anyhow!("selected OpenAPI schema node at `{pointer}` has no value type")
-            })?,
-        _ => bail!("selected OpenAPI schema node at `{pointer}` has no closed type"),
-    };
-    let mut allowed = vec![
-        "type",
-        "description",
-        "title",
-        "deprecated",
-        "readOnly",
-        "writeOnly",
-        "example",
-        "examples",
-        // Local synthetic generation metadata is intentionally ignored by
-        // the production narrowing step and never reaches compiled contracts.
-        "x-evidencectl-mock",
-    ];
-    allowed.extend(match primary_type {
-        "object" => &["properties", "required", "additionalProperties"][..],
-        "array" => &["items", "minItems", "maxItems", "uniqueItems", "const"][..],
-        "string" => &["format", "minLength", "maxLength", "enum", "const"][..],
-        "integer" => &["minimum", "maximum", "enum", "const"][..],
-        "boolean" => &["enum", "const"][..],
-        other => {
-            bail!("selected OpenAPI schema node at `{pointer}` has unsupported type `{other}`")
-        }
-    });
-    reject_unsupported_keys(
-        object,
-        &allowed,
-        &format!("selected OpenAPI schema at `{pointer}`"),
-    )?;
-
-    let Some((segment, rest)) = segments.split_first() else {
-        return Ok(());
-    };
-    match (primary_type, segment) {
-        ("object", ExtendedSegment::Key(key)) => {
-            let child = object
-                .get("properties")
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get(key))
-                .ok_or_else(|| {
-                    anyhow!("selected OpenAPI schema at `{pointer}` has no member `{key}`")
-                })?;
-            validate_selected_schema_node(
-                child,
-                rest,
-                &format!("{pointer}/{}", escape_pointer_segment(key)),
-            )
-        }
-        ("array", ExtendedSegment::Wildcard) => {
-            let child = object
-                .get("items")
-                .ok_or_else(|| anyhow!("selected OpenAPI array at `{pointer}` has no items"))?;
-            validate_selected_schema_node(child, rest, &format!("{pointer}/*"))
-        }
-        ("object", ExtendedSegment::Wildcard) => {
-            bail!("selected fact path uses `*` at object `{pointer}`")
-        }
-        ("array", ExtendedSegment::Key(_)) => {
-            bail!("selected fact path must use `*` at array `{pointer}`")
-        }
-        _ => bail!("selected fact path continues past scalar `{pointer}`"),
-    }
-}
-
-fn display_list(values: &[String]) -> String {
-    if values.is_empty() {
-        "none".to_owned()
-    } else {
-        values.join(", ")
-    }
-}
-
-fn close_selected_response(
-    schema: &mut Value,
-    selections: &[String],
-    collection_bounds: &BTreeMap<String, u64>,
-) -> Result<()> {
-    for selection in selections {
-        let segments = parse_extended_pointer(selection)?;
-        close_selected_path(schema, &segments, "", collection_bounds)?;
-    }
-    Ok(())
-}
-
-#[derive(Clone, Debug)]
-enum ExtendedSegment {
-    Key(String),
-    Wildcard,
-}
-
-fn parse_extended_pointer(pointer: &str) -> Result<Vec<ExtendedSegment>> {
-    if pointer.is_empty() || !pointer.starts_with('/') {
-        bail!("source fact path must be a non-empty extended JSON Pointer");
-    }
-    pointer
-        .split('/')
-        .skip(1)
-        .map(|segment| {
-            if segment == "*" {
-                Ok(ExtendedSegment::Wildcard)
-            } else {
-                decode_pointer_segment(segment).map(ExtendedSegment::Key)
-            }
-        })
-        .collect()
-}
-
-fn decode_pointer_segment(segment: &str) -> Result<String> {
-    let mut decoded = String::new();
-    let mut characters = segment.chars();
-    while let Some(character) = characters.next() {
-        if character != '~' {
-            decoded.push(character);
-            continue;
-        }
-        match characters.next() {
-            Some('0') => decoded.push('~'),
-            Some('1') => decoded.push('/'),
-            _ => bail!("source fact path contains an invalid JSON Pointer escape"),
-        }
-    }
-    Ok(decoded)
-}
-
-fn close_selected_path(
-    node: &mut Value,
-    segments: &[ExtendedSegment],
-    pointer: &str,
-    collection_bounds: &BTreeMap<String, u64>,
-) -> Result<()> {
-    make_non_nullable(node);
-    let Some((segment, rest)) = segments.split_first() else {
-        return Ok(());
-    };
-    let object = node.as_object_mut().ok_or_else(|| {
-        anyhow!("selected response path crosses a non-schema node at `{pointer}`")
-    })?;
-    match segment {
-        ExtendedSegment::Key(key) => {
-            let required = object
-                .get_mut("required")
-                .and_then(Value::as_array_mut)
-                .ok_or_else(|| {
-                    anyhow!("selected response object at `{pointer}` has no required list")
-                })?;
-            if !required.iter().any(|value| value.as_str() == Some(key)) {
-                required.push(Value::String(key.clone()));
-            }
-            let properties = object
-                .get_mut("properties")
-                .and_then(Value::as_object_mut)
-                .ok_or_else(|| {
-                    anyhow!("selected response path expects an object at `{pointer}`")
-                })?;
-            let child = properties
-                .get_mut(key)
-                .ok_or_else(|| anyhow!("selected response path does not declare `{key}`"))?;
-            let child_pointer = format!("{pointer}/{}", escape_pointer_segment(key));
-            close_selected_path(child, rest, &child_pointer, collection_bounds)
-        }
-        ExtendedSegment::Wildcard => {
-            let maximum = collection_bounds.get(pointer).ok_or_else(|| {
-                anyhow!("selected response collection `{pointer}` has no authored bound")
-            })?;
-            let minimum = object.get("minItems").and_then(Value::as_u64).unwrap_or(0);
-            if minimum > *maximum {
-                bail!(
-                    "source.collectionBounds sets `{pointer}` to {maximum}, below its declared minItems {minimum}"
-                );
-            }
-            object.insert("minItems".to_owned(), Value::from(minimum.max(1)));
-            object.insert("maxItems".to_owned(), Value::from(*maximum));
-            let items = object.get_mut("items").ok_or_else(|| {
-                anyhow!("selected response collection `{pointer}` has no items schema")
-            })?;
-            close_selected_path(items, rest, &format!("{pointer}/*"), collection_bounds)
-        }
-    }
-}
-
-fn make_non_nullable(node: &mut Value) {
-    let Some(object) = node.as_object_mut() else {
-        return;
-    };
-    let Some(Value::Array(types)) = object.get("type") else {
-        return;
-    };
-    if types.len() == 2 && types.iter().any(|value| value.as_str() == Some("null")) {
-        if let Some(value_type) = types.iter().find(|value| value.as_str() != Some("null")) {
-            object.insert("type".to_owned(), value_type.clone());
-        }
-    }
-}
-
-fn schema_at_extended_pointer<'a>(schema: &'a Value, pointer: &str) -> Result<&'a Value> {
-    let mut node = schema;
-    for segment in parse_extended_pointer(pointer)? {
-        node = match segment {
-            ExtendedSegment::Key(key) => node
-                .get("properties")
-                .and_then(|properties| properties.get(&key))
-                .ok_or_else(|| anyhow!("generated response schema lost selected member `{key}`"))?,
-            ExtendedSegment::Wildcard => node.get("items").ok_or_else(|| {
-                anyhow!("generated response schema lost selected collection items")
-            })?,
-        };
-    }
-    Ok(node)
-}
-
-fn render_fact_extraction(facts: &[QuestionFact]) -> String {
-    let mut rendered =
-        String::from("fn extract(source_response, context) {\n    let facts = #{};\n");
-    for (index, fact) in facts.iter().enumerate() {
-        let name = json_string(&fact.name);
-        match fact.combine {
-            FactCombination::ExactlyOne => rendered.push_str(&format!(
-                "    facts[{name}] = required(get_path(source_response, {}), \"source_fact_missing\");\n",
-                json_string(&fact.path)
-            )),
-            FactCombination::Collect => {
-                rendered.push_str(&format!("    let collected_{index} = [];\n"));
-                render_collection_walk(&mut rendered, index, &fact.path);
-                rendered.push_str(&format!("    facts[{name}] = collected_{index};\n"));
-            }
-        }
-    }
-    rendered.push_str("    #{outcome: \"match\", facts: facts}\n}\n");
-    rendered
-}
-
-fn render_collection_walk(rendered: &mut String, fact_index: usize, pointer: &str) {
-    let segments = pointer.split('/').skip(1).collect::<Vec<_>>();
-    let wildcard_count = segments.iter().filter(|segment| **segment == "*").count();
-    let mut cursor = "source_response".to_owned();
-    let mut start = 0;
-    let mut depth = 0;
-    for (position, segment) in segments.iter().enumerate() {
-        if *segment != "*" {
-            continue;
-        }
-        let relative = format!("/{}", segments[start..position].join("/"));
-        let items = format!("items_{fact_index}_{depth}");
-        let item = format!("item_{fact_index}_{depth}");
-        let indent = "    ".repeat(depth + 1);
-        let collection = if relative == "/" {
-            cursor.clone()
-        } else {
-            format!("get_path({cursor}, {})", json_string(&relative))
-        };
-        rendered.push_str(&format!(
-            "{indent}let {items} = required({collection}, \"source_collection_missing\");\n"
-        ));
-        rendered.push_str(&format!("{indent}for {item} in {items} {{\n"));
-        cursor = item;
-        start = position + 1;
-        depth += 1;
-    }
-    debug_assert_eq!(depth, wildcard_count);
-    let tail = segments[start..].join("/");
-    let indent = "    ".repeat(depth + 1);
-    let value = if tail.is_empty() {
-        cursor
-    } else {
-        format!("get_path({cursor}, {})", json_string(&format!("/{tail}")))
-    };
-    rendered.push_str(&format!(
-        "{indent}collected_{fact_index}.push(required({value}, \"source_fact_missing\"));\n"
-    ));
-    for closing_depth in (0..depth).rev() {
-        rendered.push_str(&format!("{}}}\n", "    ".repeat(closing_depth + 1)));
-    }
-}
-
-fn reject_unsupported_keys(
-    object: &Map<String, Value>,
-    allowed: &[&str],
-    description: &str,
-) -> Result<()> {
-    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
-        bail!("{description} contains unsupported key `{key}`");
-    }
-    Ok(())
-}
-
-fn render_derivation(authored: &str, concepts: &[ConceptPlan]) -> String {
-    let mut rendered = authored.trim_end().to_owned();
-    rendered.push_str("\n\n");
-    rendered.push_str("fn derive(facts, selectors, evaluation_context) {\n");
-    rendered.push_str("    let governed_answers = answer(facts, selectors, evaluation_context);\n");
-    rendered.push_str("    [\n");
-    for (index, concept) in concepts.iter().enumerate() {
-        rendered.push_str("        #{\n");
-        rendered.push_str(&format!(
-            "            concept_id: {},\n",
-            json_string(&concept.concept_uri)
-        ));
-        rendered.push_str(&format!(
-            "            value: governed_answers[{}]\n",
-            json_string(&concept.concept_alias)
-        ));
-        rendered.push_str("        }");
-        if index + 1 != concepts.len() {
-            rendered.push(',');
-        }
-        rendered.push('\n');
-    }
-    rendered.push_str("    ]\n}\n");
-    rendered
-}
-
-fn render_question_bundle_parts(
-    question: &Question,
-    base_url: &str,
-    path_template: &str,
-    subjects: &[SubjectPlan],
-    source_id: &str,
-    requirement: &BundleRequirement,
-) -> (Value, Vec<Value>, Value) {
-    let source_subjects = subjects.iter().filter(|subject| subject.source);
-    let path_bindings = Value::Object(Map::from_iter(source_subjects.clone().map(|subject| {
-        (
-            subject.selectors[0].fields[0].clone(),
-            json!({
-                "type": "selector",
-                "role": subject.role,
-                "profile": subject.selectors[0].profile,
-                "field": subject.selectors[0].fields[0],
-            }),
-        )
-    })));
-    let selector_inputs = source_subjects
-        .map(|subject| {
-            json!({
-                "role": subject.role,
-                "alternatives": subject.selectors.iter().map(|selector| json!({
-                    "profile": selector.profile,
-                    "fields": selector.fields,
-                })).collect::<Vec<_>>(),
-            })
-        })
-        .collect::<Vec<_>>();
-    let projection = question
-        .source
-        .facts
-        .iter()
-        .map(|fact| Value::String(fact.path.clone()))
-        .collect::<Vec<_>>();
-
-    let source_value = json!({
-        "type": "http-json",
-        "baseUrl": base_url,
-        "posture": "field-projected",
-        "authentication": {"type": "none"},
-        "request": {
-            "method": "GET",
-            "path": path_template,
-            "pathBindings": path_bindings,
-            "fixedHeaders": [{"name": "Accept", "value": "application/json"}],
-            "selectorInputs": selector_inputs,
-            "prepareScript": format!("adapters/{}-source-prepare.rhai", question.id),
-            "adapterParameters": {"operationId": question.source.operation.as_deref().expect("inline source")},
-            "adapterParametersSchema": format!(
-                "schemas/{}-source-adapter-parameters.schema.yaml",
-                question.id
-            ),
-            "preparationLimits": {
-                "query": "allowed",
-                "jsonBody": "forbidden",
-                "maximumNormalizedBytes": 4096,
-            },
-            "projection": projection,
-            "redirects": "deny",
-            "attemptTimeoutMilliseconds": 3000,
-            "maximumResponseBytes": 65536,
-            "maximumConcurrency": 8,
-        },
-        "responseSchema": format!("schemas/{}-source-response.schema.yaml", question.id),
-        "extractScript": format!("adapters/{}-source-extract.rhai", question.id),
-        "factSchema": format!("schemas/{}-source-facts.schema.yaml", question.id),
-    });
-    let (grants, requirement_value) =
-        render_governance_parts(question, subjects, source_id, requirement);
-    (source_value, grants, requirement_value)
-}
-
-fn render_governance_parts(
-    question: &Question,
-    subjects: &[SubjectPlan],
-    source_id: &str,
-    requirement: &BundleRequirement<'_>,
-) -> (Vec<Value>, Value) {
-    let (reference_frameworks, evidence_type, observation_timezone, validity_seconds, families) =
-        match &question.governance {
-            Some(governance) => (
-                governance.reference_frameworks.clone(),
-                governance.evidence_type.clone(),
-                governance.observation_timezone.clone(),
-                governance.validity_seconds.get(),
-                governance.disclosure_families.clone(),
-            ),
-            None => (
-                vec![local_uri(&format!("framework:{}", question.id))],
-                local_uri(&format!("evidence-type:{}", question.id)),
-                "UTC".to_owned(),
-                300,
-                vec![local_uri(&format!("disclosure-family:{}", question.id))],
-            ),
-        };
-    let response_formats = question
-        .response_formats
-        .iter()
-        .map(|format| format.as_str())
-        .collect::<Vec<_>>();
-    let mut grant_shapes = vec![Vec::new()];
-    for subject in subjects {
-        grant_shapes = grant_shapes
-            .into_iter()
-            .flat_map(|shape| {
-                subject.selectors.iter().map(move |selector| {
-                    let mut shape = shape.clone();
-                    shape.push(json!({
-                        "role": subject.role,
-                        "selectorProfile": selector.profile,
-                        "valueOrigin": "request",
-                    }));
-                    shape
-                })
-            })
-            .collect();
-    }
-    let grants = grant_shapes
-        .into_iter()
-        .map(|shape| {
-            json!({
-                "requirement": requirement.requirement_uri,
-                "purpose": question.purpose,
-                "audienceFrom": "authenticated-requester",
-                "responseFormats": response_formats,
-                "subjects": shape,
-            })
-        })
-        .collect();
-    let concepts = requirement
-        .concepts
-        .iter()
-        .map(|concept| {
-            let mut rendered = json!({
-                "handle": concept.concept_alias,
-                "uri": concept.concept_uri,
-                "type": match concept.concept_form {
-                    CompiledConceptForm::Boolean => "boolean",
-                    CompiledConceptForm::ControlledCategory => "controlled-category",
-                    CompiledConceptForm::BoundedIdentifier => "bounded-identifier",
-                    CompiledConceptForm::BoundedInteger => "bounded-integer",
-                    CompiledConceptForm::Structured => "reviewed-structured-value",
-                },
-                "required": true,
-                "constraints": concept.constraints,
-            });
-            if let Some(projection) = &concept.sd_jwt_vc {
-                rendered["sdJwtVc"] = projection.clone();
-            }
-            rendered
-        })
-        .collect::<Vec<_>>();
-    let subject_roles = subjects
-        .iter()
-        .map(|subject| {
-            json!({
-                "role": subject.role,
-                "cardinality": "one",
-                "selectorProfiles": subject.selectors.iter().map(|selector| &selector.profile).collect::<Vec<_>>(),
-            })
-        })
-        .collect::<Vec<_>>();
-    let selector_inputs = subjects
-        .iter()
-        .filter(|subject| subject.derivation)
-        .map(|subject| {
-            json!({
-                "role": subject.role,
-                "alternatives": subject.selectors.iter().map(|selector| json!({
-                    "profile": selector.profile,
-                    "fields": selector.fields,
-                })).collect::<Vec<_>>(),
-            })
-        })
-        .collect::<Vec<_>>();
-    let mut derivation = Map::from_iter([
-        ("script".to_owned(), json!(question.derivation)),
-        ("parameters".to_owned(), json!({})),
-    ]);
-    if !selector_inputs.is_empty() {
-        derivation.insert("selectorInputs".to_owned(), Value::Array(selector_inputs));
-    }
-    let mut requirement_value = json!({
-            "handle": requirement.handle,
-            "uri": requirement.requirement_uri,
-            "kind": requirement.kind,
-            "acquisition": {
-                "type": "single",
-                "source": source_id,
-            },
-            "purposes": [question.purpose],
-            "subjectRoles": subject_roles,
-            "referenceFrameworks": reference_frameworks,
-            "evidenceType": evidence_type,
-            "observationTimezone": observation_timezone,
-            "validitySeconds": validity_seconds,
-            "derivation": derivation,
-            "concepts": concepts,
-            "disclosureGuard": {"families": families},
-            "existenceDisclosure": "collapse-unresolved",
-    });
-    if let Some(governance) = &question.governance {
-        requirement_value["fixtures"] = Value::String(governance.fixtures.clone());
-    }
-    (grants, requirement_value)
+        .collect())
 }
 
 /// Local target baseline for source-first authoring. Actual local grants are
-/// compiled from authored questions and access policies by `dev`, and from
-/// the authored questions again wherever the baseline is compiled into a
+/// compiled from authored definitions and target access profiles by `dev`, and from
+/// the authored definitions again wherever the baseline is compiled into a
 /// bundle (`check`, `explain`, `fixtures run`, `build` with `--target`).
 ///
 /// The signing key reference is supplied by the caller so the governance
 /// content and the key file written beside it come from one read of one key.
 pub(crate) fn local_target_governance(active_public_jwk_file: &str) -> Result<Value> {
     let mut governance = render_local_bundle(
-        &[],
-        &[],
-        &BTreeMap::new(),
         LocalServicePorts::new(8080, 8081)?,
         active_public_jwk_file,
         LOCAL_AUDIENCE,
@@ -3957,9 +1004,6 @@ pub(crate) fn local_target_governance(active_public_jwk_file: &str) -> Result<Va
 }
 
 fn render_local_bundle(
-    questions: &[QuestionPlan],
-    access_policies: &[AuthoredAccessPolicy],
-    active_client_policies: &BTreeMap<String, Vec<String>>,
     ports: LocalServicePorts,
     active_public_jwk_file: &str,
     audience: &str,
@@ -3969,29 +1013,11 @@ fn render_local_bundle(
     let provider_id = local_resource_identity(audience, "provider");
     let issuer_id = local_resource_identity(audience, "issuer");
     let service_id = local_resource_identity(audience, "service");
-    let selector_profiles = questions
-        .iter()
-        .flat_map(|question| &question.subjects)
-        .flat_map(|subject| &subject.selectors)
-        .map(|selector| (selector.profile.clone(), selector.value.clone()))
-        .collect::<Map<_, _>>();
-    let sources = questions
-        .iter()
-        .map(|question| (question.source_id.clone(), question.source_value.clone()))
-        .collect::<Map<_, _>>();
-    let authority_profiles =
-        render_local_authority_profiles(questions, access_policies, active_client_policies)?;
-    let requirements = questions
-        .iter()
-        .map(|question| question.requirement.clone())
-        .collect::<Vec<_>>();
-    let response_formats = questions
-        .iter()
-        .flat_map(|question| question.response_formats.iter().copied())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(QuestionResponseFormat::as_str)
-        .collect::<Vec<_>>();
+    let selector_profiles = json!({});
+    let sources = json!({});
+    let authority_profiles = json!({});
+    let requirements = json!([]);
+    let response_formats = json!(["signed-jws"]);
     let mut bundle = json!({
         "apiVersion": EVIDENCE_BUNDLE_API_VERSION,
         "kind": EVIDENCE_BUNDLE_KIND,
@@ -4054,139 +1080,13 @@ fn render_local_bundle(
         "authorityProfiles": authority_profiles,
         "requirements": requirements,
     });
-    let has_task_grants = access_policies
-        .iter()
-        .any(|policy| policy.task_grant.is_some());
-    if has_task_grants && active_client_policies.is_empty() {
-        bail!("task grant policies require active local clients");
-    }
     if !admission.allowed_clients.is_empty() {
         bundle["authentication"]["oidc"]["allowedClients"] = json!(admission.allowed_clients);
-    } else if has_task_grants {
-        let admitted = active_client_policies.keys().collect::<Vec<_>>();
-        bundle["authentication"]["oidc"]["allowedClients"] = json!(admitted);
     }
     if !admission.assertion_issuers.is_empty() {
         bundle["authentication"]["oidc"]["assertionIssuers"] = json!(admission.assertion_issuers);
     }
     Ok(bundle)
-}
-
-/// Keep one reviewed local target's human subject binding while every other
-/// local authority member remains the compiler's own explicit-request result.
-/// The target has already passed the normal target compiler and Evidence
-/// bundle check before reaching this comparison.
-fn preserve_target_authenticated_context(local: &mut Value, target: &Value) -> Result<()> {
-    if target.get("assuranceProfile").and_then(Value::as_str) != Some("local") {
-        bail!("preserving target authenticated context requires local assurance");
-    }
-    for member in ["allowedClients", "assertionIssuers"] {
-        if target.pointer(&format!("/authentication/oidc/{member}"))
-            != local.pointer(&format!("/authentication/oidc/{member}"))
-        {
-            bail!("the target {member} must exactly match the borrowed issuer admission");
-        }
-    }
-    let selector_profiles = local
-        .get("selectorProfiles")
-        .and_then(Value::as_object)
-        .context("compiled local bundle has no selector profiles")?;
-    let local_profiles = local
-        .get("authorityProfiles")
-        .and_then(Value::as_object)
-        .context("compiled local bundle has no authority profiles")?;
-    let target_profiles = target
-        .get("authorityProfiles")
-        .and_then(Value::as_object)
-        .context("compiled target bundle has no authority profiles")?;
-    if local_profiles.len() != target_profiles.len() {
-        bail!("the target authority profile count differs from the authored local access policies");
-    }
-
-    let mut normalized = Value::Object(target_profiles.clone());
-    for profile in normalized
-        .as_object_mut()
-        .expect("target authority profiles remain a mapping")
-        .values_mut()
-    {
-        if profile.get("kind").and_then(Value::as_str) != Some("explicit-request") {
-            bail!("preserved target authority profiles must be explicit-request profiles");
-        }
-        let grants = profile
-            .get_mut("grants")
-            .and_then(Value::as_array_mut)
-            .context("preserved target authority profile has no grants")?;
-        for grant in grants {
-            let subjects = grant
-                .get_mut("subjects")
-                .and_then(Value::as_array_mut)
-                .context("preserved target authority grant has no subjects")?;
-            for subject in subjects {
-                if subject.get("valueOrigin").and_then(Value::as_str)
-                    != Some("authenticated-context")
-                {
-                    bail!("preserved target authority must use authenticated-context for every subject");
-                }
-                let profile_name = subject
-                    .get("selectorProfile")
-                    .and_then(Value::as_str)
-                    .context("preserved target authority subject has no selector profile")?;
-                let expected_fields = selector_profiles
-                    .get(profile_name)
-                    .and_then(|profile| profile.get("fields"))
-                    .and_then(Value::as_object)
-                    .context("preserved target authority names an unknown selector profile")?
-                    .keys()
-                    .collect::<BTreeSet<_>>();
-                let claims = subject
-                    .get("valueClaims")
-                    .and_then(Value::as_object)
-                    .context("authenticated-context subject needs exact valueClaims")?;
-                if claims.keys().collect::<BTreeSet<_>>() != expected_fields
-                    || claims
-                        .values()
-                        .any(|claim| claim.as_str().is_none_or(str::is_empty))
-                {
-                    bail!(
-                        "authenticated-context valueClaims must cover the exact selector field set"
-                    );
-                }
-                subject["valueOrigin"] = json!("request");
-                subject
-                    .as_object_mut()
-                    .expect("authority subject remains a mapping")
-                    .remove("valueClaims");
-            }
-        }
-    }
-    let normalized = normalized
-        .as_object()
-        .expect("normalized target authority profiles remain a mapping");
-    let mut matched = BTreeSet::new();
-    for target_profile in normalized.values() {
-        let requester_tags = target_profile
-            .get("requesterTags")
-            .and_then(Value::as_array)
-            .filter(|tags| tags.len() == 1)
-            .context("preserved target authority profile needs one exact requester tag")?;
-        let requester_tag = requester_tags[0]
-            .as_str()
-            .context("preserved target authority requester tag is not a string")?;
-        let candidates = local_profiles
-            .iter()
-            .filter(|(_, local_profile)| {
-                local_profile.get("requesterTags") == Some(&json!([requester_tag]))
-            })
-            .collect::<Vec<_>>();
-        if candidates.len() != 1 || target_profile != candidates[0].1 {
-            bail!("the target authority differs from the compiled local access policy beyond its reviewed profile name and authenticated-context value claims");
-        }
-        if !matched.insert(candidates[0].0) {
-            bail!("two target authority profiles carry one compiled local requester tag");
-        }
-    }
-    local["authorityProfiles"] = Value::Object(target_profiles.clone());
-    Ok(())
 }
 
 fn local_resource_identity(audience: &str, role: &str) -> String {
@@ -4197,267 +1097,6 @@ fn local_resource_identity(audience: &str, role: &str) -> String {
     } else {
         format!("{audience}#{role}")
     }
-}
-
-/// The authority profiles a local bundle carries: one per authored access
-/// policy, holding only the grants of the questions that policy names, or a
-/// single implicit caller profile over every question when the project
-/// authored no policy at all.
-///
-/// Every local bundle this compiler renders, for `dev` and for a generated
-/// `target` baseline alike, takes its profiles from here, so no compiled
-/// target carries authority wider than the policies the author wrote.
-fn render_local_authority_profiles(
-    questions: &[QuestionPlan],
-    access_policies: &[AuthoredAccessPolicy],
-    active_client_policies: &BTreeMap<String, Vec<String>>,
-) -> Result<Map<String, Value>> {
-    if access_policies.is_empty() {
-        return Ok(Map::from_iter([(
-            AUTHORITY_PROFILE_ID.to_owned(),
-            render_authority_profile(AUTHORITY_PROFILE_ID, questions.iter())?,
-        )]));
-    }
-    let profiles = access_policies
-        .iter()
-        .map(|policy| {
-            let covered = policy.questions.iter().map(|question_id| {
-                questions
-                    .iter()
-                    .find(|question| question.question_id == *question_id)
-                    .expect("access policy questions were validated")
-            });
-            Ok((
-                access_policy_authority_profile_id(&policy.requester_tag),
-                render_policy_authority_profile(policy, covered, active_client_policies)?,
-            ))
-        })
-        .collect::<Result<Map<_, _>>>()?;
-    // A profile is named by part of its policy's tag, so two policies could in
-    // principle share a name; one would then replace the other in the map.
-    ensure!(
-        profiles.len() == access_policies.len(),
-        "two access policies compile to one authority profile name; rename one of them"
-    );
-    Ok(profiles)
-}
-
-fn render_policy_authority_profile<'a>(
-    policy: &AuthoredAccessPolicy,
-    covered: impl Iterator<Item = &'a QuestionPlan>,
-    active_client_policies: &BTreeMap<String, Vec<String>>,
-) -> Result<Value> {
-    let Some(task) = &policy.task_grant else {
-        return render_authority_profile(&policy.requester_tag, covered);
-    };
-    for client in &task.requester_clients {
-        if !active_client_policies
-            .get(client)
-            .is_some_and(|policies| policies.contains(&policy.id))
-        {
-            bail!("task grant requester client {client} must be active and assigned this policy");
-        }
-    }
-    let questions = covered.collect::<Vec<_>>();
-    let mut expected = BTreeMap::new();
-    for question in &questions {
-        for subject in &question.subjects {
-            for selector in &subject.selectors {
-                expected.insert(
-                    (
-                        question.question_id.as_str(),
-                        subject.role.as_str(),
-                        selector.profile.as_str(),
-                    ),
-                    selector
-                        .fields
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<BTreeSet<_>>(),
-                );
-            }
-        }
-    }
-    let supplied = task
-        .bindings
-        .iter()
-        .map(|binding| {
-            (
-                (
-                    binding.question.as_str(),
-                    binding.role.as_str(),
-                    binding.selector_profile.as_str(),
-                ),
-                binding
-                    .value_claims
-                    .keys()
-                    .map(LocalId::as_str)
-                    .collect::<BTreeSet<_>>(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    if supplied != expected {
-        bail!("task grant bindings must cover every named question, role, selector profile, and exact selector field set");
-    }
-    let mut grants = Vec::new();
-    for question in questions {
-        for mut grant in question.grants.iter().cloned() {
-            let subjects = grant["subjects"]
-                .as_array_mut()
-                .context("compiled grant has no subjects")?;
-            for subject in subjects {
-                let role = subject["role"]
-                    .as_str()
-                    .context("compiled grant role missing")?;
-                let profile = subject["selectorProfile"]
-                    .as_str()
-                    .context("compiled grant selector profile missing")?;
-                let binding = task
-                    .bindings
-                    .iter()
-                    .find(|binding| {
-                        binding.question == question.question_id
-                            && binding.role == role
-                            && binding.selector_profile == profile
-                    })
-                    .context("task grant selector binding missing")?;
-                subject["valueOrigin"] = json!("authenticated-grant");
-                subject["valueClaims"] = json!(binding.value_claims);
-            }
-            grants.push(grant);
-        }
-    }
-    if grants.is_empty() || grants.len() > MAX_PROFILE_AUTHORITY_GRANTS {
-        bail!("task grant authority profile needs a bounded grant set");
-    }
-    Ok(json!({
-        "kind": task.kind,
-        "requesterTags": [policy.requester_tag],
-        "requesterClients": task.requester_clients,
-        "grantSourceIssuer": task.source_issuer.as_str(),
-        "grants": grants,
-    }))
-}
-
-/// Gather the grants of the questions one generated profile covers, refusing
-/// here rather than leaving the runtime to refuse the loaded bundle.
-///
-/// A refusal names the questions so the author knows whose selector
-/// alternatives to reduce.
-fn render_authority_profile<'a>(
-    requester_tag: &str,
-    covered: impl Iterator<Item = &'a QuestionPlan>,
-) -> Result<Value> {
-    let mut grants = Vec::new();
-    let mut question_ids = Vec::new();
-    for question in covered {
-        grants.extend(question.grants.iter().cloned());
-        question_ids.push(question.question_id.as_str());
-    }
-    if grants.len() > MAX_PROFILE_AUTHORITY_GRANTS {
-        bail!(
-            "authority profile `{requester_tag}` would carry {} authority grants, more than the {MAX_PROFILE_AUTHORITY_GRANTS} one profile may hold; reduce the selector alternatives of {}",
-            grants.len(),
-            question_ids.join(", ")
-        );
-    }
-    Ok(json!({
-        "kind": "explicit-request",
-        "requesterTags": [requester_tag],
-        "grants": grants,
-    }))
-}
-
-fn render_production_bundle(
-    questions: &[QuestionPlan],
-    access_policies: &[AuthoredAccessPolicy],
-    active_client_policies: &BTreeMap<String, Vec<String>>,
-    mut governance: Value,
-) -> Result<Value> {
-    let object = governance
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("deployment governance must be an object"))?;
-    object.insert(
-        "selectorProfiles".to_owned(),
-        Value::Object(Map::from_iter(
-            questions
-                .iter()
-                .flat_map(|question| &question.subjects)
-                .flat_map(|subject| &subject.selectors)
-                .map(|selector| (selector.profile.clone(), selector.value.clone())),
-        )),
-    );
-    object.insert(
-        "sources".to_owned(),
-        Value::Object(Map::from_iter(questions.iter().map(|question| {
-            (question.source_id.clone(), question.source_value.clone())
-        }))),
-    );
-    object.insert(
-        "requirements".to_owned(),
-        Value::Array(
-            questions
-                .iter()
-                .map(|question| question.requirement.clone())
-                .collect(),
-        ),
-    );
-    // A local baseline target carries no authored grants or response formats:
-    // `dev` compiles the actual local ones from the authored questions, so the
-    // baseline this compile renders must do the same or the bundle it produces
-    // carries an authority profile with no grants and a bundle with no enabled
-    // format, both of which the Evidence contract refuses. Only the generated
-    // empty baseline is filled; an authored local governance that declares real
-    // grants or formats is kept exactly as reviewed.
-    //
-    // A project that authored access policies has the empty baseline profiles
-    // replaced by the profiles those policies grant, exactly as `dev` renders
-    // them, so the target never holds an implicit caller profile over every
-    // question the author never granted together.
-    if object.get("assuranceProfile").and_then(Value::as_str) == Some("local") {
-        if object
-            .get("responseFormats")
-            .and_then(Value::as_array)
-            .is_some_and(|formats| formats.is_empty())
-        {
-            let compiled = questions
-                .iter()
-                .flat_map(|question| question.response_formats.iter().copied())
-                .map(QuestionResponseFormat::as_str)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            object.insert("responseFormats".to_owned(), json!(compiled));
-        }
-        if let Some(profiles) = object
-            .get_mut("authorityProfiles")
-            .and_then(Value::as_object_mut)
-        {
-            let generated = |profile: &Value| {
-                profile
-                    .get("grants")
-                    .and_then(Value::as_array)
-                    .is_some_and(|grants| grants.is_empty())
-            };
-            if access_policies.is_empty() {
-                for (name, profile) in profiles.iter_mut() {
-                    if generated(profile) {
-                        let compiled = render_authority_profile(name, questions.iter())?;
-                        profile["grants"] = compiled["grants"].clone();
-                    }
-                }
-            } else if profiles.values().any(generated) {
-                let mut granted = render_local_authority_profiles(
-                    questions,
-                    access_policies,
-                    active_client_policies,
-                )?;
-                profiles.retain(|_, profile| !generated(profile));
-                profiles.append(&mut granted);
-            }
-        }
-    }
-    Ok(governance)
 }
 
 fn write_plan(
@@ -4475,7 +1114,7 @@ fn write_plan(
         .with_context(|| format!("resolving staging root {}", staging_root.display()))?;
     let secret_root = fs::canonicalize(project_root.join(SECRETS_DIRECTORY))
         .context("resolving local secret directory")?;
-    let runtime = json!({
+    let mut runtime = json!({
         "apiVersion": EVIDENCE_RUNTIME_API_VERSION,
         "kind": EVIDENCE_RUNTIME_KIND,
         "package": {"root": canonical_staging.join("bundle").to_string_lossy()},
@@ -4498,19 +1137,45 @@ fn write_plan(
         },
         "outboundTls": outbound_tls,
     });
+    let authority = plan
+        .authority_document
+        .as_ref()
+        .context("local target requires complete authored authority")?;
+    let authority_root = canonical_staging.join("authority");
+    create_private_directory(&authority_root)?;
+    runtime["authority"] = json!({"root":authority_root,"target":authority["target"]});
+    let authority_path = canonical_staging.join("compiled-authority.yaml");
+    write_private_file(&authority_path, &yaml_bytes(authority)?)?;
     let runtime_path = staging_root.join("runtime.yaml");
     write_private_file(&runtime_path, &yaml_bytes(&runtime)?)?;
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
         .with_context(|| format!("sealing {}", runtime_path.display()))?;
 
-    let questions = plan
-        .questions
+    let output = Command::new(evidence_bin)
+        .arg("authority")
+        .arg("activate")
+        .arg("--runtime-config")
+        .arg(&runtime_path)
+        .arg("--document")
+        .arg(&authority_path)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+        .output()
+        .context("activating the complete local target authority")?;
+    if !output.status.success() {
+        bail!(
+            "Evidence refused the complete local target authority: {}",
+            child_diagnostic(&output.stderr)
+        );
+    }
+
+    let definitions = plan
+        .definitions
         .iter()
-        .map(|question| CompiledQuestion {
-            question_alias: question.question_id.clone(),
-            requirement_uri: question.requirement_uri.clone(),
-            purpose: question.purpose.clone(),
-            subjects: question
+        .map(|definition| CompiledDefinition {
+            definition_alias: definition.definition_id.clone(),
+            requirement_uri: definition.requirement_uri.clone(),
+            purpose: definition.purpose.clone(),
+            subjects: definition
                 .subjects
                 .iter()
                 .map(|subject| CompiledSubject {
@@ -4525,7 +1190,7 @@ fn write_plan(
                         .collect(),
                 })
                 .collect(),
-            concepts: question
+            concepts: definition
                 .concepts
                 .iter()
                 .map(|concept| CompiledConcept {
@@ -4538,23 +1203,97 @@ fn write_plan(
         .collect();
     Ok(CompiledProject {
         runtime_path,
-        questions,
+        definitions,
         local_audience: plan.bundle["authentication"]["oidc"]["audience"]
             .as_str()
             .context("local Evidence audience missing")?
             .to_owned(),
-        requester_tag: AUTHORITY_PROFILE_ID.to_owned(),
-        caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
-        access_policies: plan
-            .access_policies
+        requester_tag: authority["accessProfiles"]
+            .as_object()
+            .and_then(|profiles| profiles.values().next())
+            .and_then(|profile| profile["requesterTags"].as_array())
+            .and_then(|tags| tags.first())
+            .and_then(Value::as_str)
+            .context("local target authority needs an identity tag")?
+            .to_owned(),
+        caller_evidence_audience: plan.bundle["requirements"]
+            .as_array()
+            .and_then(|definitions| definitions.first())
+            .and_then(|definition| definition["grantCeiling"]["audiences"].as_array())
+            .and_then(|audiences| audiences.first())
+            .and_then(Value::as_str)
+            .context("local definition needs an audience ceiling")?
+            .to_owned(),
+        required_scopes: plan.bundle["authentication"]["oidc"]["requiredScopes"]
+            .as_array()
+            .map_or_else(
+                || vec!["evidence:invoke".to_owned()],
+                |scopes| {
+                    scopes
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                },
+            ),
+        access_profiles: authority["accessProfiles"]
+            .as_object()
+            .context("compiled target profiles")?
             .iter()
-            .map(|policy| CompiledAccessPolicy {
-                id: policy.id.clone(),
-                requester_tag: policy.requester_tag.clone(),
-                questions: policy.questions.clone(),
-                task_grant: policy.task_grant.clone(),
+            .map(|(id, profile)| {
+                let grants = profile["grants"]
+                    .as_array()
+                    .context("complete profile grants")?;
+                let definitions = grants
+                    .iter()
+                    .filter_map(|grant| {
+                        plan.definitions
+                            .iter()
+                            .find(|definition| grant["requirement"] == definition.requirement_uri)
+                            .map(|definition| definition.definition_id.clone())
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                let has_task = grants
+                    .iter()
+                    .flat_map(|grant| grant["subjects"].as_array().into_iter().flatten())
+                    .any(|subject| subject["valueOrigin"] == "authenticated-grant");
+                let task_grant = if has_task {
+                    Some(crate::access::TaskGrantBinding {
+                        requester_clients: profile["requesterClients"]
+                            .as_array()
+                            .context("task profile requester clients")?
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect(),
+                        source_issuer: registry_platform_yaml::Url::new(
+                            profile["grantSourceIssuer"]
+                                .as_str()
+                                .context("task profile issuer")?,
+                        )
+                        .map_err(|_| anyhow!("task profile source issuer is invalid"))?,
+                    })
+                } else {
+                    None
+                };
+                Ok(CompiledAccessProfile {
+                    id: id.clone(),
+                    digest: crate::access::profile_digest(profile)?,
+                    requester_tags: profile["requesterTags"]
+                        .as_array()
+                        .context("profile tags")?
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect(),
+                    definitions,
+                    actor_kind: profile["actorKind"].as_str().map(str::to_owned),
+                    task_grant,
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
     })
 }
 
@@ -4566,24 +1305,90 @@ fn write_bundle(
     evidence_bin: &Path,
     revision: Option<&str>,
 ) -> Result<PathBuf> {
+    let config = yaml_bytes(&plan.bundle)?;
+    let mut artifacts = plan.generated_artifacts.clone();
+    for reserved in [
+        "evidence.yaml",
+        "catalog.jsonld",
+        registry_platform_config::SUM_FILE,
+        registry_platform_config::REVISION_FILE,
+    ] {
+        reserve_bundle_path(&artifacts, reserved)?;
+    }
+    insert_bundle_artifact(
+        &mut artifacts,
+        "evidence.yaml",
+        config,
+        "compiled Evidence configuration",
+    )?;
+    if let Some((path, bytes)) = &plan.local_public_jwk {
+        reserve_bundle_path(&artifacts, path)?;
+        insert_bundle_artifact(
+            &mut artifacts,
+            path,
+            bytes.clone(),
+            "local public signing key",
+        )?;
+    }
+    for definition in &plan.definitions {
+        if let Some(path) = &definition.fixture_artifact {
+            let bytes = read_project_artifact(
+                project_root,
+                path,
+                MAX_SOURCE_ARTIFACT_BYTES,
+                "deployment fixture",
+            )?;
+            insert_bundle_artifact(&mut artifacts, path, bytes, "deployment fixture")?;
+        }
+    }
+    let active_public_jwk_file = plan
+        .bundle
+        .pointer("/signing/activePublicJwkFile")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    for path in auxiliary_artifacts(&plan.bundle)? {
+        if artifacts.contains_key(&path) {
+            continue;
+        }
+        let governed_public_key = path.starts_with("public-keys/");
+        let artifact_root = if governed_public_key {
+            deployment_target_root.unwrap_or(project_root)
+        } else {
+            project_root
+        };
+        let bytes = read_project_artifact(
+            artifact_root,
+            &path,
+            MAX_SOURCE_ARTIFACT_BYTES,
+            if governed_public_key {
+                "governed deployment public key"
+            } else {
+                "referenced bundle artifact"
+            },
+        )
+        .map_err(|error| {
+            governed_public_key_fault(
+                &path,
+                active_public_jwk_file.as_deref(),
+                &plan.bundle["signing"]["publishedPublicJwkFiles"],
+                error,
+            )
+        })?;
+        insert_bundle_artifact(&mut artifacts, &path, bytes, "referenced bundle artifact")?;
+    }
+    ensure_no_bundle_path_aliases(artifacts.keys().map(String::as_str).chain([
+        "catalog.jsonld",
+        registry_platform_config::SUM_FILE,
+        registry_platform_config::REVISION_FILE,
+    ]))?;
+
     let bundle = staging_root.join("bundle");
     create_private_directory(&bundle)?;
-    for directory in ["adapters", "derivations", "schemas"] {
-        create_private_directory(&bundle.join(directory))?;
-    }
-    if plan
-        .questions
-        .iter()
-        .flat_map(|question| &question.concepts)
-        .any(|concept| concept.codelist.is_some())
-    {
-        create_private_directory(&bundle.join("codelists"))?;
-    }
-    if plan.local_public_jwk.is_some() {
-        create_private_directory(&bundle.join("public-keys"))?;
+    for (path, bytes) in &artifacts {
+        ensure_generated_parent(&bundle, path)?;
+        write_private_file(&bundle.join(path), bytes)?;
     }
     let config_path = bundle.join("evidence.yaml");
-    write_private_file(&config_path, &yaml_bytes(&plan.bundle)?)?;
     let description =
         render_discovery_description(evidence_bin, &config_path, deployment_target_root.is_some())?;
     // Evidence prints a description only for a bundle that declares a
@@ -4600,138 +1405,6 @@ fn write_bundle(
     if !description.is_empty() {
         write_private_file(&bundle.join("catalog.jsonld"), &description)?;
     }
-    let mut written_sources = BTreeSet::new();
-    let mut written_paths = BTreeSet::from(["evidence.yaml".to_owned()]);
-    if let Some((path, bytes)) = &plan.local_public_jwk {
-        write_private_file(&bundle.join(path), bytes)?;
-        written_paths.insert(path.clone());
-    }
-    for question in &plan.questions {
-        if written_sources.insert(question.source_artifact_id.clone()) {
-            if let Some(artifacts) = &question.authored_source_artifacts {
-                for artifact in artifacts {
-                    let bytes = read_project_artifact(
-                        project_root,
-                        artifact,
-                        MAX_SOURCE_ARTIFACT_BYTES,
-                        "referenced source artifact",
-                    )?;
-                    if !written_paths.insert(artifact.clone()) {
-                        continue;
-                    }
-                    ensure_generated_parent(&bundle, artifact)?;
-                    write_private_file(&bundle.join(artifact), &bytes)?;
-                }
-            } else {
-                write_private_file(
-                    &bundle.join(format!(
-                        "adapters/{}-source-prepare.rhai",
-                        question.question_id
-                    )),
-                    question.prepare_script.as_bytes(),
-                )?;
-                write_private_file(
-                    &bundle.join(format!(
-                        "adapters/{}-source-extract.rhai",
-                        question.question_id
-                    )),
-                    question.extract_script.as_bytes(),
-                )?;
-                write_private_file(
-                    &bundle.join(format!(
-                        "schemas/{}-source-response.schema.yaml",
-                        question.question_id
-                    )),
-                    &yaml_bytes(&question.response_schema)?,
-                )?;
-                write_private_file(
-                    &bundle.join(format!(
-                        "schemas/{}-source-facts.schema.yaml",
-                        question.question_id
-                    )),
-                    &yaml_bytes(&question.fact_schema)?,
-                )?;
-                write_private_file(
-                    &bundle.join(format!(
-                        "schemas/{}-source-adapter-parameters.schema.yaml",
-                        question.question_id
-                    )),
-                    &yaml_bytes(&question.adapter_parameters_schema)?,
-                )?;
-            }
-        }
-        write_private_file(
-            &bundle.join(&question.derivation_artifact),
-            question.derivation_script.as_bytes(),
-        )?;
-        written_paths.insert(question.derivation_artifact.clone());
-        for (path, codelist) in question
-            .concepts
-            .iter()
-            .filter_map(|concept| concept.codelist.as_ref())
-        {
-            if !written_paths.insert(path.clone()) {
-                continue;
-            }
-            write_private_file(&bundle.join(path), &yaml_bytes(codelist)?)?;
-        }
-        for (path, schema) in question
-            .concepts
-            .iter()
-            .filter_map(|concept| concept.schema.as_ref())
-        {
-            if written_paths.insert(path.clone()) {
-                write_private_file(&bundle.join(path), &yaml_bytes(schema)?)?;
-            }
-        }
-        if let Some(path) = &question.fixture_artifact {
-            if written_paths.insert(path.clone()) {
-                let bytes = read_project_artifact(
-                    project_root,
-                    path,
-                    MAX_SOURCE_ARTIFACT_BYTES,
-                    "deployment fixture",
-                )?;
-                ensure_generated_parent(&bundle, path)?;
-                write_private_file(&bundle.join(path), &bytes)?;
-            }
-        }
-    }
-    let active_public_jwk_file = plan
-        .bundle
-        .pointer("/signing/activePublicJwkFile")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    for path in auxiliary_artifacts(&plan.bundle)? {
-        if written_paths.insert(path.clone()) {
-            let governed_public_key = path.starts_with("public-keys/");
-            let artifact_root = if governed_public_key {
-                deployment_target_root.unwrap_or(project_root)
-            } else {
-                project_root
-            };
-            let bytes = read_project_artifact(
-                artifact_root,
-                &path,
-                MAX_SOURCE_ARTIFACT_BYTES,
-                if governed_public_key {
-                    "governed deployment public key"
-                } else {
-                    "referenced bundle artifact"
-                },
-            )
-            .map_err(|error| {
-                governed_public_key_fault(
-                    &path,
-                    active_public_jwk_file.as_deref(),
-                    &plan.bundle["signing"]["publishedPublicJwkFiles"],
-                    error,
-                )
-            })?;
-            ensure_generated_parent(&bundle, &path)?;
-            write_private_file(&bundle.join(path), &bytes)?;
-        }
-    }
     registry_platform_config::write_sum_file(
         &bundle,
         revision,
@@ -4740,6 +1413,59 @@ fn write_bundle(
     )?;
     set_bundle_modes(&bundle, 0o500, 0o400)?;
     Ok(bundle)
+}
+
+fn reserve_bundle_path(artifacts: &BTreeMap<String, Vec<u8>>, reserved: &str) -> Result<()> {
+    if artifacts.contains_key(reserved) {
+        bail!("bundle artifact path {reserved} is reserved for generated deployment output");
+    }
+    Ok(())
+}
+
+fn insert_bundle_artifact(
+    artifacts: &mut BTreeMap<String, Vec<u8>>,
+    path: &str,
+    bytes: Vec<u8>,
+    description: &str,
+) -> Result<()> {
+    if artifacts
+        .get(path)
+        .is_some_and(|existing| existing != &bytes)
+    {
+        bail!("bundle artifact path {path} assigns different content to {description}");
+    }
+    artifacts.entry(path.to_owned()).or_insert(bytes);
+    Ok(())
+}
+
+fn ensure_no_bundle_path_aliases<'a>(paths: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    let paths = paths.into_iter().collect::<BTreeSet<_>>();
+    let mut folded = BTreeMap::new();
+    for path in &paths {
+        let mut prefix = String::new();
+        for component in path.split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(component);
+            let is_file = prefix.len() == path.len();
+            if let Some((previous, previous_is_file)) =
+                folded.insert(prefix.to_ascii_lowercase(), (prefix.clone(), is_file))
+            {
+                if previous != prefix || previous_is_file || is_file {
+                    if previous == prefix {
+                        bail!(
+                            "bundle artifact path {previous} cannot also be a directory for {path}"
+                        );
+                    }
+                    bail!(
+                        "bundle artifact path {prefix} differs from {previous} only in letter case"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn package_limits() -> registry_platform_config::PackageLimits {
@@ -4776,14 +1502,14 @@ fn governed_public_key_fault(
     AuthoredDiagnostic {
         code: "evidence.target.signing-key-missing".to_owned(),
         path: if Some(path) == active {
-            "governance.yaml:/signing/activePublicJwkFile".to_owned()
+            "target.yaml:/signing/activePublicJwkFile".to_owned()
         } else {
             let index = published
                 .as_array()
                 .and_then(|files| files.iter().position(|file| file.as_str() == Some(path)));
             match index {
-                Some(index) => format!("governance.yaml:/signing/publishedPublicJwkFiles/{index}"),
-                None => "governance.yaml:/signing/publishedPublicJwkFiles".to_owned(),
+                Some(index) => format!("target.yaml:/signing/publishedPublicJwkFiles/{index}"),
+                None => "target.yaml:/signing/publishedPublicJwkFiles".to_owned(),
             }
         },
         message: "the deployment target does not provide the public key file this member names"
@@ -4818,7 +1544,10 @@ fn ensure_generated_parent(bundle: &Path, relative: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("generated artifact has no parent"))?
         .to_path_buf();
     if !parent.exists() {
-        fs::create_dir_all(&parent)
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        builder
+            .create(&parent)
             .with_context(|| format!("creating generated directory {}", parent.display()))?;
     }
     Ok(())
@@ -4974,7 +1703,7 @@ fn render_discovery_description(
     Err(AuthoredDiagnostic {
         code: "evidence.target.publication-invalid".to_owned(),
         path: if target_authored {
-            "governance.yaml:/publication".to_owned()
+            "target.yaml:/publication".to_owned()
         } else {
             "evidence.yaml:/publication".to_owned()
         },
@@ -5242,64 +1971,15 @@ fn local_uri(suffix: &str) -> String {
     format!("{LOCAL_URI_PREFIX}{suffix}")
 }
 
-fn json_string(value: &str) -> String {
-    serde_json::to_string(value).expect("strings serialize")
-}
-
-fn escape_pointer_segment(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
         clippy::disallowed_methods,
-        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+        reason = "support regressions inspect synthetic generated artifacts and stub processes"
     )]
     use super::*;
-
-    /// Every member the bundle schema gives a source or a selector profile is
-    /// one an authored file may write, so the reader's closed member sets
-    /// never refuse a shape the compiler accepts.
-    #[test]
-    fn the_readers_member_sets_cover_the_bundle_schema() {
-        let schema = authored::embedded_document("Evidence bundle schema", BUNDLE_SCHEMA).unwrap();
-        let mut cases = Vec::new();
-        let transports = schema
-            .pointer("/$defs/source/oneOf")
-            .and_then(Value::as_array)
-            .unwrap();
-        for branch in transports {
-            let name = branch["$ref"].as_str().unwrap().trim_start_matches('#');
-            cases.push((&SOURCE, schema.pointer(name).unwrap().clone()));
-        }
-        cases.push((
-            &SELECTOR,
-            schema.pointer("/$defs/selector-profile").unwrap().clone(),
-        ));
-        for (format, shape) in cases {
-            for member in shape["properties"].as_object().unwrap().keys() {
-                let text = format!(
-                    "apiVersion: {}\nkind: {}\n{member}: x\n",
-                    if format.kind == SOURCE.kind {
-                        registry_evidence_authoring::formats::SOURCE_API_VERSION
-                    } else {
-                        registry_evidence_authoring::formats::SELECTOR_API_VERSION
-                    },
-                    format.kind,
-                );
-                let refused = read_envelope_body("f.yaml", text.as_bytes(), format)
-                    .err()
-                    .map(|report| {
-                        report
-                            .diagnostics()
-                            .iter()
-                            .any(|diagnostic| diagnostic.code == "config.unknown-key")
-                    });
-                assert_ne!(refused, Some(true), "`{member}` is refused as unknown");
-            }
-        }
-    }
+    use crate::evidence_binary::retry_busy_stub;
+    use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
 
     #[test]
     fn generated_yaml_indents_sequences_beneath_their_keys() {
@@ -5307,3877 +1987,6 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).unwrap(),
             "required:\n  - a\n  - b\n"
-        );
-    }
-    use crate::evidence_binary::retry_busy_stub;
-    use registry_evidence_authoring::local_selector_profile_id;
-    use std::{
-        io::Write as _,
-        os::unix::fs::{symlink, OpenOptionsExt as _},
-    };
-
-    const OPENAPI: &str = r#"openapi: 3.1.0
-info: {title: Tutorial registry, version: 1.0.0}
-servers: [{url: 'http://127.0.0.1:8000'}]
-paths:
-  /people/{person_id}:
-    get:
-      operationId: getPerson
-      parameters:
-        - name: person_id
-          in: path
-          required: true
-          schema: {type: string}
-      responses:
-        '200':
-          description: A person
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [person_id, name, date_of_birth]
-                properties:
-                  person_id: {type: string}
-                  name: {type: string}
-                  date_of_birth: {type: string, format: date}
-"#;
-
-    const QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: adult-status
-question: Is the person at least 18 years old?
-purpose: age-check
-subject:
-  role: person
-  selector: person_id
-source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: is_adult
-    type: boolean
-derivation: derivations/adult-status.rhai
-disclosure:
-  allow: [is_adult]
-"#;
-
-    const RELATIONSHIP_OPENAPI: &str = r#"openapi: 3.1.0
-info: {title: Tutorial family registry, version: 1.0.0}
-servers: [{url: 'http://127.0.0.1:8000'}]
-paths:
-  /children/{child_id}/candidate-parents/{candidate_id}:
-    get:
-      operationId: getParentRelationship
-      parameters:
-        - name: child_id
-          in: path
-          required: true
-          schema: {type: string}
-        - name: candidate_id
-          in: path
-          required: true
-          schema: {type: string}
-      responses:
-        '200':
-          description: A governed relationship decision
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [relationship_confirmed]
-                properties:
-                  relationship_confirmed: {type: boolean}
-"#;
-
-    const RELATIONSHIP_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: parent-relationship
-question: Is the candidate registered as a parent of the child?
-purpose: relationship-check
-subjects:
-  - role: child
-    selector: child_id
-  - role: candidate-parent
-    selector: candidate_id
-source:
-  operation: getParentRelationship
-  facts:
-    - name: relationship_confirmed
-      path: /relationship_confirmed
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: relationship_confirmed
-    type: boolean
-derivation: derivations/parent-relationship.rhai
-disclosure:
-  allow: [relationship_confirmed]
-"#;
-
-    const RELATIONSHIP_ANSWER: &str = r#"fn answer(facts, selectors, context) {
-    #{relationship_confirmed: required(facts.relationship_confirmed, "relationship_missing")}
-}
-"#;
-
-    const ANSWER: &str = r#"fn answer(facts, selectors, context) {
-    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    let adult_on = add_calendar_years(born, 18);
-    #{is_adult: compare_dates(context.legal_local_date, adult_on) >= 0}
-}
-"#;
-
-    const AGE_BRACKET_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: age-bracket
-question: Which age bracket does this person belong to?
-purpose: service-path-selection
-subject:
-  role: person
-  selector: person_id
-source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: age_bracket
-    type: controlled-category
-    values: [under-18, 18-to-24, 25-to-64, 65-or-older]
-derivation: derivations/age-bracket.rhai
-disclosure:
-  allow: [age_bracket]
-"#;
-
-    const AGE_BRACKET_ANSWER: &str = r#"fn answer(facts, selectors, context) {
-    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
-    if compare_dates(context.legal_local_date, add_calendar_years(born, 18)) < 0 {
-        #{age_bracket: "under-18"}
-    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) < 0 {
-        #{age_bracket: "18-to-24"}
-    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 65)) < 0 {
-        #{age_bracket: "25-to-64"}
-    } else {
-        #{age_bracket: "65-or-older"}
-    }
-}
-"#;
-
-    const IMMUNIZATION_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: immunization-summary
-question: Is the immunization schedule complete, and how many doses are recorded?
-purpose: care-coordination
-subject:
-  role: person
-  selector: person_id
-source:
-  operation: getPerson
-  facts:
-    - name: dose_count
-      path: /dose_count
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: schedule_complete
-    type: boolean
-  - concept: dose_count
-    type: bounded-integer
-    minimum: 0
-    maximum: 20
-derivation: derivations/immunization-summary.rhai
-disclosure:
-  allow: [schedule_complete, dose_count]
-"#;
-
-    const IMMUNIZATION_ANSWER: &str = r#"fn answer(facts, selectors, context) {
-    let dose_count = required(facts.dose_count, "dose_count_missing");
-    #{schedule_complete: dose_count >= 3, dose_count: dose_count}
-}
-"#;
-
-    const MULTI_EVENT_OPENAPI: &str = r#"openapi: 3.1.0
-info: {title: Sanitized tracker API, version: 1.0.0}
-servers: [{url: 'http://127.0.0.1:8000'}]
-paths:
-  /records/{record_id}/events:
-    get:
-      operationId: listRecordEvents
-      parameters:
-        - name: record_id
-          in: path
-          required: true
-          schema: {type: string}
-      responses:
-        '200':
-          description: Bounded event history
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EventPage'
-components:
-  schemas:
-    EventPage:
-      type: object
-      additionalProperties: false
-      properties:
-        events:
-          type: array
-          items:
-            $ref: '#/components/schemas/Event'
-    Event:
-      type: object
-      additionalProperties: false
-      properties:
-        event: {type: string, minLength: 1, maxLength: 64}
-        status: {type: string, minLength: 1, maxLength: 32}
-        occurredAt: {type: string, format: date-time}
-"#;
-
-    const MULTI_EVENT_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: event-history
-question: Did the bounded event history satisfy the reviewed rule?
-purpose: history-review
-subject:
-  role: record
-  selector: record_id
-source:
-  operation: listRecordEvents
-  facts:
-    - name: event_statuses
-      path: /events/*/status
-      combine: collect
-    - name: event_times
-      path: /events/*/occurredAt
-      combine: collect
-  collectionBounds:
-    /events: 4
-answers:
-  - concept: history_satisfies_rule
-    type: boolean
-derivation: derivations/event-history.rhai
-disclosure:
-  allow: [history_satisfies_rule]
-"#;
-
-    const MULTI_EVENT_ANSWER: &str = r#"fn answer(facts, selectors, context) {
-    #{history_satisfies_rule: len(required(facts.event_statuses, "event_statuses_missing")) > 0}
-}
-"#;
-
-    const MULTI_EVENT_RESPONSE: &str = r#"{
-  "events": [
-    {"event": "evt-001", "status": "completed", "occurredAt": "2026-07-01T08:00:00Z"},
-    {"event": "evt-002", "status": "cancelled", "occurredAt": "2026-07-02T09:00:00Z"}
-  ]
-}"#;
-
-    const BIRTH_CERTIFICATE_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: birth-certificate
-question: What birth details are recorded for this person?
-purpose: birth-record-review
-subject:
-  role: person
-  selector: person_id
-source:
-  operation: getPerson
-  facts:
-    - name: name
-      path: /name
-      combine: exactly-one
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-answers:
-  - concept: birth_certificate
-    type: reviewed-structured-value
-    schema: schemas/birth-certificate.yaml
-    maximumSerializedBytes: 2048
-    sdJwtVc:
-      claim: birthCertificate
-      disclosure: top-level
-responseFormats: [signed-jws, sd-jwt-vc]
-derivation: derivations/birth-certificate.rhai
-disclosure:
-  allow: [birth_certificate]
-"#;
-
-    const BIRTH_CERTIFICATE_ANSWER: &str = r#"fn answer(facts, selectors, context) {
-    #{birth_certificate: #{
-        form: "reviewed-structured-value",
-        schema: "urn:example:schema:birth-certificate:v1",
-        fields: #{
-            givenName: required(facts.name, "name_missing"),
-            dateOfBirth: required(facts.date_of_birth, "date_of_birth_missing")
-        }
-    }}
-}
-"#;
-
-    const BIRTH_CERTIFICATE_SCHEMA: &str = r#"$schema: https://json-schema.org/draft/2020-12/schema
-$id: urn:example:schema:birth-certificate:v1
-type: object
-additionalProperties: false
-required: [givenName, dateOfBirth]
-properties:
-  givenName: {type: string, minLength: 1, maxLength: 200}
-  dateOfBirth: {type: string, format: date}
-"#;
-
-    #[test]
-    fn local_compilation_keeps_two_exact_evidence_resources_separate() {
-        for audience in [
-            "urn:seed-demo:evidence:growers",
-            "urn:seed-demo:evidence:laboratory",
-        ] {
-            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-            let evidence_bin = std::env::var_os("EVIDENCE_BIN")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| fixture.evidence.clone());
-            let compiled = compile_local_project_with_ports_and_resource(
-                &fixture.project,
-                &fixture.staging,
-                &evidence_bin,
-                LocalServicePorts::default(),
-                audience,
-                &LocalAdmission::default(),
-            )
-            .unwrap();
-            assert_eq!(compiled.local_audience, audience);
-            let bundle: Value = serde_norway::from_slice(
-                &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
-            )
-            .unwrap();
-            assert_eq!(
-                bundle["authentication"]["oidc"]["audience"],
-                json!(audience)
-            );
-            assert_eq!(
-                bundle["service"]["providerId"],
-                format!("{audience}:provider")
-            );
-            assert_eq!(bundle["issuer"]["uri"], format!("{audience}:issuer"));
-            assert_eq!(
-                bundle["publication"]["serviceId"],
-                format!("{audience}:service")
-            );
-        }
-    }
-
-    #[test]
-    fn a_local_bundle_admits_only_the_machine_clients_the_session_states() {
-        // A session sharing another product's issuer cannot leave admission to
-        // that issuer: it holds clients this Evidence project never activated.
-        // The bundle names the clients it admits, so the boundary is stated
-        // where Evidence enforces it rather than inferred from the issuer.
-        let own_issuer = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        compile_local_project_with_ports_and_resource(
-            &own_issuer.project,
-            &own_issuer.staging,
-            &own_issuer.evidence,
-            LocalServicePorts::default(),
-            LOCAL_AUDIENCE,
-            &LocalAdmission::default(),
-        )
-        .unwrap();
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(own_issuer.staging.join("bundle/evidence.yaml")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            bundle["authentication"]["oidc"]["allowedClients"], "unrestricted",
-            "a session that renders its own issuer states no client list: {}",
-            bundle["authentication"]
-        );
-
-        let shared_issuer = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        compile_local_project_with_ports_and_resource(
-            &shared_issuer.project,
-            &shared_issuer.staging,
-            &shared_issuer.evidence,
-            LocalServicePorts::default(),
-            LOCAL_AUDIENCE,
-            &LocalAdmission {
-                allowed_clients: vec!["age-checker".to_owned(), "records-reader".to_owned()],
-                assertion_issuers: BTreeMap::new(),
-            },
-        )
-        .unwrap();
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(shared_issuer.staging.join("bundle/evidence.yaml")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            bundle["authentication"]["oidc"]["allowedClients"],
-            json!(["age-checker", "records-reader"])
-        );
-        assert!(
-            bundle["authentication"].get("assertionIssuers").is_none(),
-            "a session whose clients exchange nothing states no pairing: {}",
-            bundle["authentication"]
-        );
-
-        // An admitted exchange client may present only the assertion
-        // authorities the issuer owner pairs it with, so the bundle carries
-        // that pairing rather than admitting any authority the issuer trusts.
-        let exchanging = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        compile_local_project_with_ports_and_resource(
-            &exchanging.project,
-            &exchanging.staging,
-            &exchanging.evidence,
-            LocalServicePorts::default(),
-            LOCAL_AUDIENCE,
-            &LocalAdmission {
-                allowed_clients: vec!["age-checker".to_owned(), "task-agent".to_owned()],
-                assertion_issuers: BTreeMap::from([(
-                    "task-agent".to_owned(),
-                    vec!["https://casework.invalid".to_owned()],
-                )]),
-            },
-        )
-        .unwrap();
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(exchanging.staging.join("bundle/evidence.yaml")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            bundle["authentication"]["oidc"]["assertionIssuers"],
-            json!({"task-agent": ["https://casework.invalid"]})
-        );
-    }
-
-    #[test]
-    fn compiles_only_the_canonical_private_local_generation() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("local compilation succeeds");
-
-        assert_eq!(compiled.runtime_path, fixture.staging.join("runtime.yaml"));
-        assert_eq!(compiled.questions.len(), 1);
-        let question = &compiled.questions[0];
-        assert_eq!(question.question_alias, "adult-status");
-        assert_eq!(
-            question.requirement_uri,
-            "urn:registrystack:evidence:local:requirement:adult-status"
-        );
-        assert_eq!(
-            question.concepts[0].concept_uri,
-            "urn:registrystack:evidence:local:concept:adult-status:is_adult"
-        );
-        assert_eq!(question.purpose, "age-check");
-        assert_eq!(question.subjects[0].role, "person");
-        assert_eq!(
-            question.subjects[0].selectors[0].profile,
-            local_selector_profile_id("adult-status")
-        );
-        assert_eq!(question.subjects[0].selectors[0].fields[0], "person_id");
-        assert_eq!(question.concepts[0].concept_alias, "is_adult");
-        assert_eq!(
-            question.concepts[0].concept_form,
-            CompiledConceptForm::Boolean
-        );
-        assert_eq!(compiled.local_audience, LOCAL_AUDIENCE);
-        assert_eq!(compiled.requester_tag, AUTHORITY_PROFILE_ID);
-        assert!(compiled.access_policies.is_empty());
-        assert_eq!(
-            compiled.caller_evidence_audience,
-            LOCAL_CALLER_EVIDENCE_AUDIENCE
-        );
-        let mut generated = tree(&fixture.staging);
-        let public_key_index = generated
-            .iter()
-            .position(|path| path.starts_with("bundle/public-keys/") && path.ends_with(".jwk.json"))
-            .expect("one governed local public JWK");
-        let public_key = generated.remove(public_key_index);
-        assert!(public_key.starts_with("bundle/public-keys/"));
-        assert!(public_key.ends_with(".jwk.json"));
-        generated.retain(|path| path != "bundle/public-keys/");
-        assert_eq!(
-            generated,
-            vec![
-                "audit/",
-                "bundle/",
-                "bundle/SHA256SUMS",
-                "bundle/adapters/",
-                "bundle/adapters/adult-status-source-extract.rhai",
-                "bundle/adapters/adult-status-source-prepare.rhai",
-                "bundle/catalog.jsonld",
-                "bundle/derivations/",
-                "bundle/derivations/adult-status.rhai",
-                "bundle/evidence.yaml",
-                "bundle/schemas/",
-                "bundle/schemas/adult-status-source-adapter-parameters.schema.yaml",
-                "bundle/schemas/adult-status-source-facts.schema.yaml",
-                "bundle/schemas/adult-status-source-response.schema.yaml",
-                "runtime.yaml",
-            ]
-        );
-        assert_mode(&fixture.staging, 0o700);
-        assert_mode(&fixture.staging.join("audit"), 0o700);
-        assert_mode(&fixture.staging.join("bundle"), 0o500);
-        assert_mode(&compiled.runtime_path, 0o400);
-
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        assert_eq!(bundle["assuranceProfile"], "local");
-        assert_eq!(bundle["service"]["publicOrigin"], "http://127.0.0.1:8080");
-        assert_eq!(bundle["responseFormats"], json!(["signed-jws"]));
-        let source_id = local_source_id("adult-status");
-        let selector_profile = local_selector_profile_id("adult-status");
-        assert_eq!(
-            bundle["sources"][&source_id]["authentication"],
-            json!({"type": "none"})
-        );
-        assert_eq!(
-            bundle["sources"][&source_id]["request"]["pathBindings"]["person_id"],
-            json!({"type": "selector", "role": "person", "profile": selector_profile, "field": "person_id"})
-        );
-        assert_eq!(
-            bundle["requirements"][0]["acquisition"],
-            json!({"type": "single", "source": source_id})
-        );
-        assert_eq!(bundle["requirements"][0]["handle"], "adult-status");
-        assert_eq!(
-            bundle["requirements"][0]["concepts"][0]["handle"],
-            "is_adult"
-        );
-        assert!(bundle["requirements"][0].get("fixtures").is_none());
-        assert_eq!(
-            bundle["requirements"][0]["concepts"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-
-        let derivation =
-            fs::read_to_string(fixture.staging.join("bundle/derivations/adult-status.rhai"))
-                .expect("derivation reads");
-        assert!(derivation.contains("fn answer(facts, selectors, context)"));
-        assert!(derivation.contains(
-            "concept_id: \"urn:registrystack:evidence:local:concept:adult-status:is_adult\""
-        ));
-        assert!(derivation
-            .contains("let governed_answers = answer(facts, selectors, evaluation_context)"));
-        assert!(derivation.contains("value: governed_answers[\"is_adult\"]"));
-        assert!(!derivation.contains("concept_id: \"is_adult\""));
-    }
-
-    #[test]
-    fn mock_generation_hints_do_not_change_the_compiled_source_schema() {
-        let baseline = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        compile_local_project(&baseline.project, &baseline.staging, &baseline.evidence)
-            .expect("baseline compilation succeeds");
-        let hinted_openapi = OPENAPI.replace(
-            "date_of_birth: {type: string, format: date}",
-            "date_of_birth:\n                    type: string\n                    format: date\n                    x-evidencectl-mock:\n                      distribution: {kind: age, min: 18, max: 90}",
-        );
-        let hinted = Fixture::new(&hinted_openapi, QUESTION, ANSWER, true);
-        compile_local_project(&hinted.project, &hinted.staging, &hinted.evidence)
-            .expect("hinted compilation succeeds");
-
-        let relative = "bundle/schemas/adult-status-source-response.schema.yaml";
-        assert_eq!(
-            fs::read(baseline.staging.join(relative)).expect("baseline schema"),
-            fs::read(hinted.staging.join(relative)).expect("hinted schema"),
-        );
-    }
-
-    #[test]
-    fn compiles_explicit_sd_jwt_vc_for_a_scalar_answer() {
-        let question = QUESTION.replace(
-            "derivation: derivations/adult-status.rhai",
-            "responseFormats: [signed-jws, sd-jwt-vc]\nderivation: derivations/adult-status.rhai",
-        );
-        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
-
-        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("scalar SD-JWT VC format compiles");
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-
-        assert_eq!(
-            bundle["responseFormats"],
-            json!(["signed-jws", "sd-jwt-vc"])
-        );
-        assert_eq!(
-            bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["responseFormats"],
-            json!(["signed-jws", "sd-jwt-vc"])
-        );
-        assert!(bundle["requirements"][0]["concepts"][0]
-            .get("sdJwtVc")
-            .is_none());
-    }
-
-    #[test]
-    fn refuses_response_formats_without_signed_jws() {
-        let question = QUESTION.replace(
-            "derivation: derivations/adult-status.rhai",
-            "responseFormats: [sd-jwt-vc]\nderivation: derivations/adult-status.rhai",
-        );
-        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("signed JWS remains mandatory");
-
-        assert!(error
-            .to_string()
-            .contains("responseFormats must contain signed-jws exactly once"));
-    }
-
-    #[test]
-    fn refuses_duplicate_or_unknown_response_formats() {
-        let duplicate = QUESTION.replace(
-            "derivation: derivations/adult-status.rhai",
-            "responseFormats: [signed-jws, signed-jws]\nderivation: derivations/adult-status.rhai",
-        );
-        let fixture = Fixture::new(OPENAPI, &duplicate, ANSWER, true);
-        assert!(
-            compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence).is_err()
-        );
-
-        let unknown = QUESTION.replace(
-            "derivation: derivations/adult-status.rhai",
-            "responseFormats: [signed-jws, unsigned-json]\nderivation: derivations/adult-status.rhai",
-        );
-        assert!(registry_evidence_authoring::formats::check_question(
-            "questions/adult-status.yaml",
-            unknown.as_bytes()
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn refuses_structured_projection_without_sd_jwt_vc_format() {
-        let question =
-            BIRTH_CERTIFICATE_QUESTION.replace("responseFormats: [signed-jws, sd-jwt-vc]\n", "");
-        let fixture = Fixture::new(OPENAPI, &question, BIRTH_CERTIFICATE_ANSWER, true);
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("a projection cannot silently enable SD-JWT VC");
-
-        assert!(error
-            .to_string()
-            .contains("an sdJwtVc projection requires responseFormats to include sd-jwt-vc"));
-    }
-
-    #[test]
-    fn compiles_a_structured_value_into_independent_sd_jwt_vc_fields() {
-        let openapi = OPENAPI.replace(
-            "                  name: {type: string}",
-            "                  name: {type: string, minLength: 1, maxLength: 200}",
-        );
-        let fixture = Fixture::new(
-            &openapi,
-            BIRTH_CERTIFICATE_QUESTION,
-            BIRTH_CERTIFICATE_ANSWER,
-            true,
-        );
-        fs::create_dir(fixture.project.join("schemas")).expect("schemas");
-        fs::write(
-            fixture.project.join("schemas/birth-certificate.yaml"),
-            BIRTH_CERTIFICATE_SCHEMA,
-        )
-        .expect("birth certificate schema");
-
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("structured value compiles");
-
-        assert_eq!(
-            compiled.questions[0].concepts[0].concept_form,
-            CompiledConceptForm::Structured
-        );
-        assert!(fixture
-            .staging
-            .join("bundle/schemas/birth-certificate.yaml")
-            .is_file());
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        assert_eq!(
-            bundle["responseFormats"],
-            json!(["signed-jws", "sd-jwt-vc"])
-        );
-        assert_eq!(
-            bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["responseFormats"],
-            json!(["signed-jws", "sd-jwt-vc"])
-        );
-        let concept = &bundle["requirements"][0]["concepts"][0];
-        assert_eq!(concept["type"], "reviewed-structured-value");
-        assert_eq!(
-            concept["constraints"],
-            json!({
-                "schema": "urn:example:schema:birth-certificate:v1",
-                "maximumSerializedBytes": 2048,
-            })
-        );
-        assert_eq!(
-            concept["sdJwtVc"],
-            json!({"claim": "birthCertificate", "disclosure": "top-level"})
-        );
-    }
-
-    #[test]
-    fn surfaced_authoring_findings_use_one_code_and_path_grammar() {
-        use registry_evidence_authoring::{FieldPath, Finding};
-
-        let report = authored::file_findings_report(
-            "derivations/x.rhai",
-            "derivation",
-            vec![
-                Finding::new(
-                    FieldPath::root().key("disclosure").key("allow"),
-                    "disclosure-allow",
-                    "sentence",
-                ),
-                Finding::new(FieldPath::root(), "derivation-encoding", "sentence"),
-                Finding::new(
-                    FieldPath::root().index(1),
-                    "evidence.answer-schema.open-object",
-                    "sentence",
-                ),
-            ],
-        );
-        let found = report
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| {
-                (
-                    diagnostic.code.as_str(),
-                    diagnostic.path.as_str(),
-                    diagnostic.source.as_ref().unwrap().file.as_str(),
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            found,
-            [
-                (
-                    "evidence.derivation.disclosure-allow",
-                    "/disclosure/allow",
-                    "derivations/x.rhai"
-                ),
-                ("evidence.derivation.encoding", "", "derivations/x.rhai"),
-                (
-                    "evidence.answer-schema.open-object",
-                    "/1",
-                    "derivations/x.rhai"
-                ),
-            ]
-        );
-
-        // Pointer tokens escape the characters RFC 6901 reserves.
-        assert_eq!(
-            FieldPath::root()
-                .map_key("a/b")
-                .key("c~d")
-                .to_json_pointer(),
-            "/a~1b/c~0d"
-        );
-    }
-
-    /// A question decoded the way the compiler reads one, envelope and all.
-    fn parsed_question(text: &str) -> Question {
-        registry_evidence_authoring::formats::decode_authored::<Question>(
-            "questions/question.yaml",
-            text.as_bytes(),
-            &registry_evidence_authoring::formats::QUESTION,
-        )
-        .expect("question decodes")
-        .value
-    }
-
-    /// The one diagnostic a refusal reports: its code, file, path, and
-    /// message.
-    fn only_diagnostic(error: &anyhow::Error) -> (&str, &str, &str, &str) {
-        let report = crate::authored::report_in(error).expect("the refusal is a report");
-        let [diagnostic] = report.diagnostics() else {
-            panic!("one diagnostic: {error:#}");
-        };
-        (
-            &diagnostic.code,
-            diagnostic.source.as_ref().map_or("", |source| &source.file),
-            &diagnostic.path,
-            &diagnostic.message,
-        )
-    }
-
-    #[test]
-    fn a_derivation_reading_a_fact_the_operation_does_not_declare_is_refused() {
-        let renamed = ANSWER.replace("facts.date_of_birth", "facts.birth_date");
-        let fixture = Fixture::new(OPENAPI, QUESTION, &renamed, true);
-
-        let error = read_inputs(&fixture.project, false)
-            .map(drop)
-            .expect_err("undeclared fact");
-        assert_eq!(
-            only_diagnostic(&error),
-            (
-                "evidence.derivation.fact-undeclared",
-                "derivations/adult-status.rhai",
-                "",
-                "authored derivation reads fact `birth_date`, which the question's source does not declare",
-            )
-        );
-        // The structural check `source diff` and `source update` run is the
-        // same one, so a source change that drops a fact is refused there too.
-        let error = validate_source_artifact_graph(&fixture.project).expect_err("structural");
-        assert_eq!(
-            only_diagnostic(&error).0,
-            "evidence.derivation.fact-undeclared"
-        );
-
-        fs::write(
-            fixture.project.join("derivations/adult-status.rhai"),
-            ANSWER,
-        )
-        .expect("declared derivation");
-        read_inputs(&fixture.project, false).expect("declared fact");
-    }
-
-    #[test]
-    fn a_derivation_reading_a_fact_the_referenced_source_no_longer_produces_is_refused() {
-        let question = QUESTION.replace(
-            "source:\n  operation: getPerson\n  facts:\n    - name: date_of_birth\n      path: /date_of_birth\n      combine: exactly-one\n  collectionBounds: {}\n",
-            "source:\n  ref: people\n",
-        );
-        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
-        for directory in ["sources", "schemas"] {
-            fs::create_dir(fixture.project.join(directory)).expect("directory");
-        }
-        fs::write(
-            fixture.project.join("sources/people.yaml"),
-            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nfactSchema: schemas/people-facts.yaml\n",
-        )
-        .expect("source");
-        let facts = |closed: bool, name: &str| {
-            format!(
-                "type: object\nadditionalProperties: {}\nrequired: [{name}]\nproperties:\n  {name}: {{type: string}}\n",
-                !closed
-            )
-        };
-        let schema = fixture.project.join("schemas/people-facts.yaml");
-
-        fs::write(&schema, facts(true, "birth_date")).expect("renamed facts");
-        let error = read_inputs(&fixture.project, false)
-            .map(drop)
-            .expect_err("renamed fact");
-        assert_eq!(
-            only_diagnostic(&error),
-            (
-                "evidence.derivation.fact-undeclared",
-                "derivations/adult-status.rhai",
-                "",
-                "authored derivation reads fact `date_of_birth`, which the question's source does not declare",
-            )
-        );
-
-        // An open fact schema names no closed set, so nothing is refused.
-        fs::write(&schema, facts(false, "birth_date")).expect("open facts");
-        read_inputs(&fixture.project, false).expect("open fact schema");
-
-        fs::write(&schema, facts(true, "date_of_birth")).expect("declared facts");
-        read_inputs(&fixture.project, false).expect("declared fact");
-    }
-
-    #[test]
-    fn refuses_an_open_object_answer_schema_naming_the_schema_file() {
-        let fixture = Fixture::new(
-            OPENAPI,
-            BIRTH_CERTIFICATE_QUESTION,
-            BIRTH_CERTIFICATE_ANSWER,
-            true,
-        );
-        fs::create_dir(fixture.project.join("schemas")).expect("schemas");
-        fs::write(
-            fixture.project.join("schemas/birth-certificate.yaml"),
-            BIRTH_CERTIFICATE_SCHEMA.replace("additionalProperties: false\n", ""),
-        )
-        .expect("open birth certificate schema");
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("an open object answer schema must not compile");
-
-        assert_eq!(
-            only_diagnostic(&error),
-            (
-                "evidence.answer-schema.open-object",
-                "schemas/birth-certificate.yaml",
-                "/additionalProperties",
-                "an object answer schema must set additionalProperties: false",
-            ),
-            "the refusal must name the schema document and its field"
-        );
-    }
-
-    #[test]
-    fn refuses_an_object_answer_schema_that_declares_no_properties() {
-        let fixture = Fixture::new(
-            OPENAPI,
-            BIRTH_CERTIFICATE_QUESTION,
-            BIRTH_CERTIFICATE_ANSWER,
-            true,
-        );
-        fs::create_dir(fixture.project.join("schemas")).expect("schemas");
-        fs::write(
-            fixture.project.join("schemas/birth-certificate.yaml"),
-            BIRTH_CERTIFICATE_SCHEMA.replace(
-                "required: [givenName, dateOfBirth]\nproperties:\n  givenName: {type: string, minLength: 1, maxLength: 200}\n  dateOfBirth: {type: string, format: date}\n",
-                "",
-            ),
-        )
-        .expect("propertyless birth certificate schema");
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("a propertyless object answer schema must not compile");
-
-        let (code, file, path, _) = only_diagnostic(&error);
-        assert_eq!(
-            (code, file, path),
-            (
-                "evidence.answer-schema.declared-properties",
-                "schemas/birth-certificate.yaml",
-                "/properties",
-            ),
-            "the refusal must name the schema document and its field"
-        );
-    }
-
-    #[test]
-    fn inline_openapi_question_compiles_multiple_role_bound_subjects() {
-        let fixture = Fixture::new(
-            RELATIONSHIP_OPENAPI,
-            RELATIONSHIP_QUESTION,
-            RELATIONSHIP_ANSWER,
-            true,
-        );
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("multi-subject local compilation succeeds");
-
-        let question = &compiled.questions[0];
-        assert_eq!(question.subjects.len(), 2);
-        assert_eq!(question.subjects[0].role, "child");
-        assert_eq!(question.subjects[0].selectors[0].fields[0], "child_id");
-        assert_eq!(question.subjects[1].role, "candidate-parent");
-        assert_eq!(question.subjects[1].selectors[0].fields[0], "candidate_id");
-
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        let source = &bundle["sources"][local_source_id("parent-relationship")];
-        assert_eq!(
-            source["request"]["pathBindings"]["child_id"]["role"],
-            "child"
-        );
-        assert_eq!(
-            source["request"]["pathBindings"]["candidate_id"]["role"],
-            "candidate-parent"
-        );
-        assert_eq!(
-            source["request"]["selectorInputs"]
-                .as_array()
-                .expect("selector inputs")
-                .len(),
-            2
-        );
-        assert_eq!(
-            bundle["requirements"][0]["subjectRoles"]
-                .as_array()
-                .expect("subject roles")
-                .len(),
-            2
-        );
-        assert_eq!(
-            bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["subjects"]
-                .as_array()
-                .expect("grant subjects")
-                .len(),
-            2
-        );
-
-        for invalid_question in [
-            RELATIONSHIP_QUESTION.replace(
-                "  - role: candidate-parent\n    selector: candidate_id\n",
-                "",
-            ),
-            RELATIONSHIP_QUESTION.replace("role: candidate-parent", "role: child"),
-            RELATIONSHIP_QUESTION.replace("selector: candidate_id", "selector: person_id"),
-        ] {
-            let fixture = Fixture::new(
-                RELATIONSHIP_OPENAPI,
-                &invalid_question,
-                RELATIONSHIP_ANSWER,
-                true,
-            );
-            compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                .expect_err("incomplete or ambiguous role binding is rejected");
-            assert!(fixture.staging_is_empty());
-        }
-    }
-
-    #[test]
-    fn inline_openapi_derivation_only_subject_never_widens_the_source_request() {
-        let question = QUESTION.replace(
-            "subject:\n  role: person\n  selector: person_id",
-            "subjects:\n  - role: person\n    selector: person_id\n    derivation: true\n  - role: expected-beneficiary\n    selector: beneficiary_id\n    derivation: true",
-        );
-        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
-
-        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("derivation-only subject compiles");
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        let source = &bundle["sources"][local_source_id("adult-status")];
-        assert_eq!(
-            source["request"]["pathBindings"]
-                .as_object()
-                .expect("path bindings")
-                .len(),
-            1
-        );
-        assert!(source["request"]["pathBindings"]
-            .get("beneficiary_id")
-            .is_none());
-        assert_eq!(
-            source["request"]["selectorInputs"]
-                .as_array()
-                .expect("source selector inputs")
-                .len(),
-            1,
-            "the derivation-only beneficiary never reaches the provider request"
-        );
-        assert_eq!(
-            bundle["requirements"][0]["derivation"]["selectorInputs"]
-                .as_array()
-                .expect("derivation selector inputs")
-                .len(),
-            2
-        );
-        assert_eq!(
-            bundle["requirements"][0]["subjectRoles"]
-                .as_array()
-                .expect("subject roles")
-                .len(),
-            2
-        );
-
-        let shared_selector = question
-            .replace(
-                "    selector: person_id\n    derivation: true",
-                "    selector: person_id\n    source: true\n    derivation: true",
-            )
-            .replace("    selector: beneficiary_id", "    selector: person_id");
-        let fixture = Fixture::new(OPENAPI, &shared_selector, ANSWER, true);
-        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("an explicit role disambiguates a shared selector field");
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        assert_eq!(
-            bundle["sources"][local_source_id("adult-status")]["request"]["selectorInputs"],
-            json!([{
-                "role": "person",
-                "alternatives": [{
-                    "profile": local_subject_selector_profile_id("adult-status", "person", 2),
-                    "fields": ["person_id"]
-                }]
-            }])
-        );
-
-        let ambiguous = shared_selector.replace("    source: true\n", "");
-        let fixture = Fixture::new(OPENAPI, &ambiguous, ANSWER, true);
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("a shared selector field needs one explicit source role");
-        assert!(error
-            .to_string()
-            .contains("shared selector fields require exactly one subject with source: true"));
-
-        let without_derivation = question.replace(
-            "  - role: expected-beneficiary\n    selector: beneficiary_id\n    derivation: true",
-            "  - role: expected-beneficiary\n    selector: beneficiary_id",
-        );
-        let fixture = Fixture::new(OPENAPI, &without_derivation, ANSWER, true);
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("an unused subject needs explicit derivation access");
-        assert!(error.to_string().contains(
-            "every question subject must be used by the source or declared for derivation"
-        ));
-    }
-
-    #[test]
-    fn inline_openapi_question_rejects_no_source_bound_subject() {
-        let openapi = OPENAPI
-            .replace("/people/{person_id}:", "/population-summary:")
-            .replace(
-                "      parameters:\n        - name: person_id\n          in: path\n          required: true\n          schema: {type: string}\n",
-                "",
-            );
-        let question = QUESTION.replace(
-            "  selector: person_id",
-            "  selector: person_id\n  derivation: true",
-        );
-        let fixture = Fixture::new(&openapi, &question, ANSWER, true);
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("a constant source path still needs one source-bound subject");
-        assert!(error.to_string().contains(
-            "an inline OpenAPI question must bind at least one subject to the source path"
-        ));
-        assert!(fixture.staging_is_empty());
-    }
-
-    #[test]
-    fn compiles_one_closed_controlled_category() {
-        let fixture = Fixture::new(OPENAPI, AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER, true);
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("controlled category compiles");
-
-        let package = registry_platform_config::verify_package(
-            &fixture.staging.join("bundle"),
-            &package_limits(),
-            "evidencectl package",
-        )
-        .expect("local development compilation produces a package");
-        assert!(package.digest().starts_with("sha256:"));
-
-        assert_eq!(
-            compiled.questions[0].concepts[0].concept_form,
-            CompiledConceptForm::ControlledCategory
-        );
-        let codelist: Value = serde_norway::from_slice(
-            &fs::read(
-                fixture
-                    .staging
-                    .join("bundle/codelists/age-bracket-age_bracket.yaml"),
-            )
-            .expect("codelist reads"),
-        )
-        .expect("codelist parses");
-        assert_eq!(
-            codelist["codes"],
-            json!(["under-18", "18-to-24", "25-to-64", "65-or-older"])
-        );
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        assert_eq!(bundle["requirements"][0]["kind"], "information-requirement");
-        assert_eq!(
-            bundle["requirements"][0]["concepts"][0]["type"],
-            "controlled-category"
-        );
-    }
-
-    #[test]
-    fn production_controlled_category_keeps_the_stable_concept_and_distinct_scheme_ids() {
-        let answer: QuestionAnswer = serde_norway::from_str(
-            r#"concept: age_bracket
-uri: urn:authority:concept:age-bracket:v1
-type: controlled-category
-values: [under-18, adult]
-"#,
-        )
-        .expect("production answer parses");
-        let concept = compile_concept("age-bracket", &answer, &BTreeMap::new())
-            .expect("controlled category compiles");
-
-        assert_eq!(concept.concept_uri, "urn:authority:concept:age-bracket:v1");
-        assert_eq!(
-            concept.constraints["categoryScheme"],
-            "urn:authority:concept:age-bracket:v1:categories"
-        );
-        assert_ne!(
-            concept.constraints["categoryScheme"],
-            concept.concept_uri.as_str(),
-            "the runtime-required category scheme remains distinct from the governed concept"
-        );
-        let (_, codelist) = concept.codelist.expect("controlled category codelist");
-        assert_eq!(
-            codelist["uri"],
-            "urn:authority:concept:age-bracket:v1:categories"
-        );
-    }
-
-    #[test]
-    fn bounded_identifier_compiles_to_governed_string_constraints_without_a_codelist() {
-        let answer: QuestionAnswer = serde_norway::from_str("concept: report\nuri: urn:example:concept:report\ntype: bounded-identifier\nprefix: 'urn:example:report:'\nminimumBytes: 20\nmaximumBytes: 64\n").expect("identifier answer parses");
-        assert!(registry_evidence_authoring::validate_answer(&answer).is_empty());
-        let concept = compile_concept("report-question", &answer, &BTreeMap::new())
-            .expect("identifier compiles");
-        assert_eq!(concept.concept_form, CompiledConceptForm::BoundedIdentifier);
-        assert_eq!(
-            concept.constraints,
-            json!({"prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":64})
-        );
-        assert!(concept.codelist.is_none());
-    }
-
-    #[test]
-    fn local_project_compiles_a_bounded_identifier_question() {
-        let question = AGE_BRACKET_QUESTION.replace(
-            "type: controlled-category\n    values: [under-18, 18-to-24, 25-to-64, 65-or-older]",
-            "type: bounded-identifier\n    prefix: 'urn:example:report:'\n    minimumBytes: 20\n    maximumBytes: 64",
-        );
-        let derivation =
-            "fn answer(facts, selectors, context) { #{age_bracket: \"urn:example:report:A-01\"} }";
-        let fixture = Fixture::new(OPENAPI, &question, derivation, true);
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("bounded identifier project compiles");
-        assert_eq!(
-            compiled.questions[0].concepts[0].concept_form,
-            CompiledConceptForm::BoundedIdentifier
-        );
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        assert_eq!(
-            bundle["requirements"][0]["concepts"][0]["type"],
-            "bounded-identifier"
-        );
-        assert_eq!(
-            bundle["requirements"][0]["concepts"][0]["constraints"],
-            json!({"prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":64})
-        );
-    }
-
-    #[test]
-    fn production_compiler_ignores_local_access_and_handles_all_neutral_question_shapes() {
-        fn referenced(question: &str, source: &str) -> String {
-            let start = question.find("source:\n").expect("source section");
-            let end = start
-                + question[start..]
-                    .find("answers:\n")
-                    .expect("answers section");
-            format!(
-                "{}source:\n  ref: {source}\n{}",
-                &question[..start],
-                &question[end..]
-            )
-        }
-
-        fn governed(mut question: String, question_id: &str, answers: &[(&str, &str)]) -> String {
-            for (alias, identifier) in answers {
-                question = question.replace(
-                    &format!("  - concept: {alias}\n"),
-                    &format!("  - concept: {alias}\n    uri: {identifier}\n"),
-                );
-            }
-            question.push_str(&format!(
-                r#"governance:
-  requirement: urn:authority:requirement:{question_id}:v1
-  kind: information-requirement
-  referenceFrameworks: [urn:authority:framework:neutral:v1]
-  evidenceType: urn:authority:evidence-type:{question_id}:v1
-  validitySeconds: 300
-  observationTimezone: UTC
-  fixtures: fixtures/{question_id}.yaml
-  disclosureFamilies: [urn:authority:disclosure-family:{question_id}:v1]
-"#,
-            ));
-            question
-        }
-
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        for directory in ["sources", "selectors", "adapters", "schemas", "fixtures"] {
-            fs::create_dir(fixture.project.join(directory))
-                .expect("production authoring directory");
-        }
-        for (profile, field) in [
-            ("person-reference-v1", "person_id"),
-            ("child-reference-v1", "child_id"),
-            ("candidate-reference-v1", "candidate_id"),
-        ] {
-            fs::write(
-                fixture.project.join(format!("selectors/{profile}.yaml")),
-                format!(
-                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
-kind: EvidenceSelector
-maximumAggregateBytes: 64\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 64\n"
-                ),
-            )
-            .expect("selector profile");
-        }
-        fs::write(
-            fixture.project.join("sources/people.yaml"),
-            r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
-kind: EvidenceSource
-type: http-json
-baseUrl: https://records.example.test
-posture: field-projected
-authentication: {type: static-authorization, tokenRef: 'secret:file/records-token'}
-request:
-  method: GET
-  path: /people/{person_id}
-  pathBindings:
-    person_id: {type: selector, role: person, profile: person-reference-v1, field: person_id}
-  fixedHeaders: [{name: Accept, value: application/json}]
-  selectorInputs:
-    - role: person
-      alternatives:
-        - {profile: person-reference-v1, fields: [person_id]}
-  prepareScript: adapters/source-prepare.rhai
-  adapterParameters: {}
-  adapterParametersSchema: schemas/source-parameters.schema.yaml
-  preparationLimits: {query: forbidden, jsonBody: forbidden, maximumNormalizedBytes: 4096}
-  projection: [/value]
-  redirects: deny
-  attemptTimeoutMilliseconds: 3000
-  maximumResponseBytes: 65536
-  maximumConcurrency: 8
-responseSchema: schemas/source-response.schema.yaml
-extractScript: adapters/source-extract.rhai
-factSchema: schemas/source-facts.schema.yaml
-"#,
-        )
-        .expect("people source");
-        fs::write(
-            fixture.project.join("sources/relationships.yaml"),
-            r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
-kind: EvidenceSource
-type: http-json
-baseUrl: https://relationships.example.test
-posture: field-projected
-authentication: {type: static-authorization, tokenRef: 'secret:file/relationships-token'}
-request:
-  method: GET
-  path: /children/{child_id}/candidates/{candidate_id}
-  pathBindings:
-    child_id: {type: selector, role: child, profile: child-reference-v1, field: child_id}
-    candidate_id: {type: selector, role: candidate-parent, profile: candidate-reference-v1, field: candidate_id}
-  fixedHeaders: [{name: Accept, value: application/json}]
-  selectorInputs:
-    - role: child
-      alternatives:
-        - {profile: child-reference-v1, fields: [child_id]}
-    - role: candidate-parent
-      alternatives:
-        - {profile: candidate-reference-v1, fields: [candidate_id]}
-  prepareScript: adapters/source-prepare.rhai
-  adapterParameters: {}
-  adapterParametersSchema: schemas/source-parameters.schema.yaml
-  preparationLimits: {query: forbidden, jsonBody: forbidden, maximumNormalizedBytes: 4096}
-  projection: [/value]
-  redirects: deny
-  attemptTimeoutMilliseconds: 3000
-  maximumResponseBytes: 65536
-  maximumConcurrency: 8
-responseSchema: schemas/source-response.schema.yaml
-extractScript: adapters/source-extract.rhai
-factSchema: schemas/source-facts.schema.yaml
-"#,
-        )
-        .expect("relationship source");
-        for (path, contents) in [
-            (
-                "adapters/source-prepare.rhai",
-                "fn prepare(selectors, context) { #{query: [], body: ()} }\n",
-            ),
-            (
-                "adapters/source-extract.rhai",
-                "fn extract(response, context) { #{outcome: \"match\", facts: response} }\n",
-            ),
-            (
-                "schemas/source-parameters.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
-            ),
-            (
-                "schemas/source-response.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
-            ),
-            (
-                "schemas/source-facts.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: []\nproperties:\n  date_of_birth: {type: string}\n  dose_count: {type: integer}\n  relationship_confirmed: {type: boolean}\n",
-            ),
-        ] {
-            fs::write(fixture.project.join(path), contents).expect("source artifact");
-        }
-
-        let questions = [
-            (
-                governed(
-                    referenced(QUESTION, "people"),
-                    "adult-status",
-                    &[("is_adult", "urn:authority:concept:is-adult:v1")],
-                ),
-                ANSWER,
-            ),
-            (
-                governed(
-                    referenced(AGE_BRACKET_QUESTION, "people"),
-                    "age-bracket",
-                    &[("age_bracket", "urn:authority:concept:age-bracket:v1")],
-                ),
-                AGE_BRACKET_ANSWER,
-            ),
-            (
-                governed(
-                    referenced(IMMUNIZATION_QUESTION, "people"),
-                    "immunization-summary",
-                    &[
-                        (
-                            "schedule_complete",
-                            "urn:authority:concept:schedule-complete:v1",
-                        ),
-                        ("dose_count", "urn:authority:concept:dose-count:v1"),
-                    ],
-                ),
-                IMMUNIZATION_ANSWER,
-            ),
-            (
-                governed(
-                    referenced(RELATIONSHIP_QUESTION, "relationships"),
-                    "parent-relationship",
-                    &[(
-                        "relationship_confirmed",
-                        "urn:authority:concept:relationship-confirmed:v1",
-                    )],
-                ),
-                RELATIONSHIP_ANSWER,
-            ),
-        ];
-        for (question, derivation) in questions {
-            fixture.add_question(&question, derivation);
-            let parsed: Value = serde_norway::from_str(&question).expect("governed question");
-            fs::write(
-                fixture.project.join(format!(
-                    "fixtures/{}.yaml",
-                    parsed["id"].as_str().expect("question id")
-                )),
-                "version: 1\ncases: []\n",
-            )
-            .expect("governed fixture");
-        }
-
-        symlink(
-            fixture.project.join("questions"),
-            fixture.project.join(ACCESS_DIRECTORY),
-        )
-        .expect("malformed local access link");
-
-        let target = json!({
-            "apiVersion": EVIDENCE_BUNDLE_API_VERSION,
-            "kind": EVIDENCE_BUNDLE_KIND,
-            "assuranceProfile": "production",
-            "service": {
-                "providerId": "urn:authority:provider",
-                "trustDomain": "urn:authority:trust",
-                "publicOrigin": "https://evidence.example.test"
-            },
-            "issuer": {"uri": "urn:authority:issuer"},
-            "authentication": {},
-            "audit": {},
-            "subjectBinding": {},
-            "rateLimits": {},
-            "signing": {},
-            "authorityProfiles": {"authority": {"kind": "explicit-request"}},
-        });
-        let project = fs::canonicalize(&fixture.project).expect("canonical authoring project");
-        let compiled = compile_production_project(
-            &project,
-            &project,
-            &fixture.staging,
-            target,
-            &fixture.evidence,
-        )
-        .expect("all neutral shapes compile through production");
-        let bundle = compiled.bundle;
-        let requirements = bundle["requirements"].as_array().expect("requirements");
-
-        assert_eq!(requirements.len(), 4);
-        assert_eq!(
-            requirements
-                .iter()
-                .map(|requirement| requirement["uri"].as_str().expect("requirement URI"))
-                .collect::<Vec<_>>(),
-            [
-                "urn:authority:requirement:adult-status:v1",
-                "urn:authority:requirement:age-bracket:v1",
-                "urn:authority:requirement:immunization-summary:v1",
-                "urn:authority:requirement:parent-relationship:v1",
-            ]
-        );
-        assert_eq!(requirements[0]["concepts"][0]["type"], "boolean");
-        assert_eq!(requirements[0]["handle"], "adult-status");
-        assert_eq!(requirements[0]["concepts"][0]["handle"], "is_adult");
-        assert_eq!(
-            requirements[1]["concepts"][0]["type"],
-            "controlled-category"
-        );
-        assert_eq!(requirements[2]["concepts"].as_array().unwrap().len(), 2);
-        assert_eq!(requirements[2]["concepts"][1]["type"], "bounded-integer");
-        assert_eq!(requirements[3]["subjectRoles"].as_array().unwrap().len(), 2);
-        assert_eq!(compiled.fixture_paths.len(), 4);
-        assert!(!serde_json::to_string(&bundle)
-            .expect("bundle JSON")
-            .contains(LOCAL_URI_PREFIX));
-    }
-
-    fn production_http_source() -> Value {
-        json!({
-            "type": "http-json",
-            "baseUrl": "https://records.example.test",
-            "authentication": {
-                "type": "static-authorization",
-                "tokenRef": "secret:file/records-token",
-            },
-        })
-    }
-
-    fn production_statement_source() -> Value {
-        json!({
-            "type": "sqlite-extract",
-            "extractProfile": "licence-register-extract",
-            "maximumExtractAgeSeconds": 604800,
-        })
-    }
-
-    #[test]
-    fn local_dev_refuses_an_unbound_statement_source_with_the_fixture_next_step() {
-        let sources = BTreeMap::from([("records".to_owned(), json!({"type": "sqlite-extract"}))]);
-        let error = validate_local_dev_sources(&sources)
-            .expect_err("local serving accepted an unbound statement source");
-        let refusal = error
-            .downcast_ref::<crate::dev::DevRefusal>()
-            .expect("the refusal is typed so both output formats keep its cause");
-        assert_eq!(refusal.code, "evidence.dev.local-transport-refused");
-        assert_eq!(refusal.path, "sources/records.yaml:/type");
-        assert!(refusal.suggested_action.contains("evidencectl test <dir>"));
-
-        validate_local_dev_sources(&BTreeMap::from([(
-            "records".to_owned(),
-            json!({"type": "http-json"}),
-        )]))
-        .expect("HTTP local development remains supported");
-    }
-
-    #[test]
-    fn production_statement_source_carries_no_channel_to_hold_conditions_over() {
-        let bundle = json!({"sources": {"licence-register": production_statement_source()}});
-        validate_production_sources(&bundle).expect("a statement source opens no channel");
-    }
-
-    #[test]
-    fn production_statement_source_does_not_relax_a_transport_beside_it() {
-        let mut plaintext = production_http_source();
-        plaintext["baseUrl"] = json!("http://records.example.test");
-        let mut unauthenticated = production_http_source();
-        unauthenticated["authentication"] = json!({"type": "none"});
-        for broken in [plaintext, unauthenticated] {
-            let bundle = json!({
-                "sources": {
-                    "licence-register": production_statement_source(),
-                    "people": broken,
-                },
-            });
-            assert_eq!(
-                validate_production_sources(&bundle)
-                    .expect_err("the HTTP source is still held to its own conditions")
-                    .to_string(),
-                "every production source must use authenticated HTTPS"
-            );
-        }
-        let bundle = json!({
-            "sources": {
-                "licence-register": production_statement_source(),
-                "people": production_http_source(),
-            },
-        });
-        validate_production_sources(&bundle).expect("both transports meet their own conditions");
-    }
-
-    #[test]
-    fn production_http_source_still_requires_an_authenticated_https_channel() {
-        let mut plaintext = production_http_source();
-        plaintext["baseUrl"] = json!("http://records.example.test");
-        let mut unauthenticated = production_http_source();
-        unauthenticated["authentication"] = json!({"type": "none"});
-        let mut unreviewed = production_http_source();
-        unreviewed["authentication"] = json!({"type": "review-required"});
-        for broken in [plaintext, unauthenticated, unreviewed] {
-            let bundle = json!({"sources": {"people": broken}});
-            assert_eq!(
-                validate_production_sources(&bundle)
-                    .expect_err("an unauthenticated or plaintext channel is refused")
-                    .to_string(),
-                "every production source must use authenticated HTTPS"
-            );
-        }
-    }
-
-    #[test]
-    fn production_source_transport_without_stated_conditions_is_refused() {
-        let bundle = json!({"sources": {"people": {"type": "carrier-pigeon"}}});
-        assert_eq!(
-            validate_production_sources(&bundle)
-                .expect_err("an ungoverned transport is refused rather than waved through")
-                .to_string(),
-            "the production source transport has no stated production conditions"
-        );
-        let bundle = json!({"sources": {"people": {"baseUrl": "https://records.example.test"}}});
-        assert_eq!(
-            validate_production_sources(&bundle)
-                .expect_err("a source naming no transport is refused")
-                .to_string(),
-            "every production source must declare its transport"
-        );
-    }
-
-    #[test]
-    fn local_compiler_uses_exact_optional_governance_but_keeps_local_assurance() {
-        let question = QUESTION.replace(
-            "  - concept: is_adult\n",
-            "  - concept: is_adult\n    uri: urn:authority:concept:is-adult:v1\n",
-        ) + r#"governance:
-  requirement: urn:authority:requirement:adult-status:v1
-  kind: criterion
-  referenceFrameworks: [urn:authority:framework:adult-status:v1]
-  evidenceType: urn:authority:evidence-type:adult-status:v1
-  validitySeconds: 900
-  observationTimezone: Asia/Bangkok
-  fixtures: fixtures/adult-status.yaml
-  disclosureFamilies: [urn:authority:disclosure-family:adult-status:v1]
-"#;
-        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
-        fs::create_dir(fixture.project.join("fixtures")).expect("fixtures");
-        fs::write(
-            fixture.project.join("fixtures/adult-status.yaml"),
-            "version: 1\ncases: []\n",
-        )
-        .expect("fixture");
-
-        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("governed local compilation");
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("local bundle"),
-        )
-        .expect("local bundle YAML");
-        let requirement = &bundle["requirements"][0];
-
-        assert_eq!(bundle["assuranceProfile"], "local");
-        assert_eq!(
-            bundle["authentication"]["oidc"]["issuer"],
-            "http://127.0.0.1:8081"
-        );
-        assert_eq!(bundle["signing"]["algorithm"], "ES256");
-        let public_key = bundle["signing"]["activePublicJwkFile"]
-            .as_str()
-            .expect("active public JWK file");
-        assert!(fixture.staging.join("bundle").join(public_key).is_file());
-        assert_eq!(
-            requirement["uri"],
-            "urn:authority:requirement:adult-status:v1"
-        );
-        assert_eq!(requirement["validitySeconds"], 900);
-        assert_eq!(requirement["observationTimezone"], "Asia/Bangkok");
-        assert_eq!(
-            requirement["concepts"][0]["uri"],
-            "urn:authority:concept:is-adult:v1"
-        );
-        assert!(fixture
-            .staging
-            .join("bundle/fixtures/adult-status.yaml")
-            .is_file());
-    }
-
-    #[test]
-    fn local_target_compilation_keeps_target_governance_without_local_secrets() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let question = write_referenced_people_project(&fixture, "authentication: {type: none}\n");
-        let mut question: Value = serde_norway::from_str(&question).unwrap();
-        question["answers"][0]["uri"] = json!("urn:authority:concept:is-adult:v1");
-        question["governance"] = json!({
-            "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
-            "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
-            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":900,
-            "observationTimezone":"Asia/Bangkok", "fixtures":"fixtures/adult-status.yaml",
-            "disclosureFamilies":["urn:authority:disclosure-family:adult-status:v1"]
-        });
-        fs::write(
-            fixture.project.join("questions/adult-status.yaml"),
-            serde_norway::to_string(&question).unwrap(),
-        )
-        .unwrap();
-        fs::create_dir(fixture.project.join("fixtures")).unwrap();
-        fs::write(
-            fixture.project.join("fixtures/adult-status.yaml"),
-            "version: 1\ncases: []\n",
-        )
-        .unwrap();
-        fs::remove_dir_all(fixture.project.join(SECRETS_DIRECTORY)).unwrap();
-        let target = json!({
-            "apiVersion":EVIDENCE_BUNDLE_API_VERSION, "kind":EVIDENCE_BUNDLE_KIND, "assuranceProfile":"local", "service":{"publicOrigin":"http://127.0.0.1:9444"},
-            "authentication":{"issuer":"http://127.0.0.1:9445"},
-            "authorityProfiles":{"operator":{"kind":"explicit-request"}},
-            "signing":{}, "audit":{"hashKeyVersion":"target-version"}
-        });
-        let project = fs::canonicalize(&fixture.project).unwrap();
-        let compiled = compile_target_project(
-            &project,
-            &project,
-            &fixture.staging,
-            target.clone(),
-            &fixture.evidence,
-        )
-        .expect("local target permits its declared HTTP/authentication posture");
-        for field in [
-            "assuranceProfile",
-            "service",
-            "authentication",
-            "authorityProfiles",
-            "signing",
-            "audit",
-        ] {
-            assert_eq!(
-                compiled.bundle[field], target[field],
-                "target controls {field}"
-            );
-        }
-        assert_eq!(
-            compiled.bundle["sources"]["people"]["authentication"]["type"],
-            "none"
-        );
-        assert_eq!(
-            compiled.bundle["requirements"][0]["observationTimezone"],
-            "Asia/Bangkok"
-        );
-        assert_eq!(compiled.fixture_paths, ["fixtures/adult-status.yaml"]);
-    }
-
-    /// The generated local baseline is compiled, not authored: its empty
-    /// grants and empty response formats are filled from the project's
-    /// questions exactly as a `dev` compile would, or every check, explain,
-    /// and fixtures run against the target would be refused by the Evidence
-    /// contract for an empty collection.
-    #[test]
-    fn a_local_baseline_target_compiles_its_grants_and_formats_from_the_questions() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_governed_referenced_people_project(&fixture, "authentication: {type: none}\n");
-        fs::create_dir(fixture.project.join("public-keys")).unwrap();
-        fs::write(
-            fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
-            OFFLINE_CHECK_PUBLIC_JWK,
-        )
-        .unwrap();
-        let governed = local_target_governance(OFFLINE_CHECK_PUBLIC_JWK_FILE).unwrap();
-        assert!(
-            governed["authorityProfiles"]["local-caller"]["grants"]
-                .as_array()
-                .unwrap()
-                .is_empty(),
-            "the generated baseline carries no grants"
-        );
-        let project = fs::canonicalize(&fixture.project).unwrap();
-        let compiled = compile_target_project(
-            &project,
-            &project,
-            &fixture.staging,
-            governed,
-            &fixture.evidence,
-        )
-        .expect("the baseline compiles against its own project");
-        let grants = compiled.bundle["authorityProfiles"]["local-caller"]["grants"]
-            .as_array()
-            .unwrap();
-        assert!(!grants.is_empty(), "grants are compiled from the questions");
-        assert_eq!(
-            grants[0]["requirement"],
-            "urn:authority:requirement:adult-status:v1"
-        );
-        assert_eq!(
-            compiled.bundle["responseFormats"],
-            json!(["signed-jws"]),
-            "formats are compiled from the questions"
-        );
-    }
-
-    /// An authored local governance keeps the grants and formats it declares:
-    /// only the generated empty baseline is filled, so an operator's reviewed
-    /// authority is never silently widened or replaced.
-    #[test]
-    fn an_authored_local_governance_keeps_its_own_grants_and_formats() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_governed_referenced_people_project(&fixture, "authentication: {type: none}\n");
-        fs::create_dir(fixture.project.join("public-keys")).unwrap();
-        fs::write(
-            fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
-            OFFLINE_CHECK_PUBLIC_JWK,
-        )
-        .unwrap();
-        let authored_grants = json!([{
-            "requirement": "urn:authority:requirement:adult-status:v1",
-            "purpose": "age-check",
-            "audienceFrom": "authenticated-requester",
-            "subjects": [{"role": "person", "selectorProfile": "person-reference-v1", "valueOrigin": "authenticated-token"}],
-        }]);
-        let governed = local_target_governance(OFFLINE_CHECK_PUBLIC_JWK_FILE).unwrap();
-        let mut governed = governed;
-        governed["authorityProfiles"]["local-caller"]["grants"] = authored_grants.clone();
-        governed["responseFormats"] = json!(["signed-jws", "unsigned-json"]);
-        let project = fs::canonicalize(&fixture.project).unwrap();
-        let compiled = compile_target_project(
-            &project,
-            &project,
-            &fixture.staging,
-            governed,
-            &fixture.evidence,
-        )
-        .expect("authored local governance compiles unchanged");
-        assert_eq!(
-            compiled.bundle["authorityProfiles"]["local-caller"]["grants"], authored_grants,
-            "authored grants are preserved exactly"
-        );
-        assert_eq!(
-            compiled.bundle["responseFormats"],
-            json!(["signed-jws", "unsigned-json"]),
-            "authored formats are preserved exactly"
-        );
-    }
-
-    /// A generated local baseline carries the authority the project's access
-    /// policies grant. A policy naming one of two questions compiles into a
-    /// profile that answers that question alone, so no target holds authority
-    /// wider than a policy the author wrote.
-    #[test]
-    fn a_local_baseline_target_compiles_only_the_grants_its_access_policies_name() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_governed_referenced_people_project(&fixture, "authentication: {type: none}\n");
-        add_governed_age_bracket_question(&fixture);
-        fixture.add_access_policy("age-checks", &["adult-status"]);
-        fs::create_dir(fixture.project.join("public-keys")).unwrap();
-        fs::write(
-            fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
-            OFFLINE_CHECK_PUBLIC_JWK,
-        )
-        .unwrap();
-        let governed = local_target_governance(OFFLINE_CHECK_PUBLIC_JWK_FILE).unwrap();
-        let project = fs::canonicalize(&fixture.project).unwrap();
-        let compiled = compile_target_project(
-            &project,
-            &project,
-            &fixture.staging,
-            governed,
-            &fixture.evidence,
-        )
-        .expect("the baseline compiles against its own project");
-        let profiles = compiled.bundle["authorityProfiles"]
-            .as_object()
-            .expect("authority profiles");
-        let tag = access_policy_requester_tag("age-checks", &["adult-status".to_owned()]).unwrap();
-        let profile = access_policy_authority_profile_id(&tag);
-        assert_eq!(
-            profiles.keys().collect::<Vec<_>>(),
-            [&profile],
-            "the policy replaces the generated baseline profile"
-        );
-        assert_eq!(profiles[&profile]["requesterTags"], json!([tag]));
-        let requirements = profiles[&profile]["grants"]
-            .as_array()
-            .expect("compiled grants")
-            .iter()
-            .map(|grant| grant["requirement"].as_str().expect("grant requirement"))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            requirements,
-            ["urn:authority:requirement:adult-status:v1"],
-            "the question the policy does not name is never granted"
-        );
-    }
-
-    /// Author the referenced-people project shape the two baseline tests use:
-    /// one governed question with stable deployment governance and a fixture.
-    /// Its validity stays within the generated local baseline's 300 second
-    /// signing maximum, which a target compile enforces.
-    fn write_governed_referenced_people_project(fixture: &Fixture, authentication: &str) {
-        let question = write_referenced_people_project(fixture, authentication);
-        let mut question: Value = serde_norway::from_str(&question).unwrap();
-        question["answers"][0]["uri"] = json!("urn:authority:concept:is-adult:v1");
-        question["governance"] = json!({
-            "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
-            "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
-            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":300,
-            "observationTimezone":"Asia/Bangkok", "fixtures":"fixtures/adult-status.yaml",
-            "disclosureFamilies":["urn:authority:disclosure-family:adult-status:v1"]
-        });
-        fs::write(
-            fixture.project.join("questions/adult-status.yaml"),
-            serde_norway::to_string(&question).unwrap(),
-        )
-        .unwrap();
-        fs::create_dir(fixture.project.join("fixtures")).unwrap();
-        fs::write(
-            fixture.project.join("fixtures/adult-status.yaml"),
-            "version: 1\ncases: []\n",
-        )
-        .unwrap();
-    }
-
-    /// Author a second governed question beside the baseline project's first,
-    /// so a target compile holds two question grants an access policy may
-    /// name one of.
-    fn add_governed_age_bracket_question(fixture: &Fixture) {
-        let mut question: Value = serde_norway::from_str(AGE_BRACKET_QUESTION).unwrap();
-        question["answers"][0]["uri"] = json!("urn:authority:concept:age-bracket:v1");
-        question["governance"] = json!({
-            "requirement": "urn:authority:requirement:age-bracket:v1",
-            "kind": "information-requirement",
-            "referenceFrameworks": ["urn:authority:framework:age-bracket:v1"],
-            "evidenceType": "urn:authority:evidence-type:age-bracket:v1", "validitySeconds": 300,
-            "observationTimezone": "Asia/Bangkok", "fixtures": "fixtures/age-bracket.yaml",
-            "disclosureFamilies": ["urn:authority:disclosure-family:age-bracket:v1"]
-        });
-        fixture.add_question(
-            &serde_norway::to_string(&question).unwrap(),
-            AGE_BRACKET_ANSWER,
-        );
-        fs::write(
-            fixture.project.join("fixtures/age-bracket.yaml"),
-            "version: 1\ncases: []\n",
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn a_missing_referenced_source_is_refused_as_a_field_addressed_diagnostic() {
-        let inline = r#"source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-"#;
-        let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
-        let question = parsed_question(&referenced);
-        let authored = AuthoredQuestion {
-            question,
-            derivation: ANSWER.to_owned(),
-        };
-        let error = match compile_referenced_question(
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            authored,
-        ) {
-            Ok(_) => panic!("the referenced source is absent"),
-            Err(error) => error,
-        };
-        let diagnostic = error
-            .downcast_ref::<AuthoredDiagnostic>()
-            .expect("the refusal is field-addressed");
-        assert_eq!(diagnostic.code, "evidence.question.source-missing");
-        assert_eq!(diagnostic.path, "questions/adult-status.yaml:/source/ref");
-        assert_eq!(
-            diagnostic.message,
-            "the source this ref names has no file under sources/"
-        );
-    }
-
-    #[test]
-    fn a_missing_selector_profile_is_refused_as_a_field_addressed_diagnostic() {
-        let inline = r#"source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-"#;
-        let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
-        let question = parsed_question(&referenced);
-        let source: Value = serde_norway::from_str(&format!(
-            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\nauthentication: {{type: none}}\n{REFERENCED_SOURCE_TAIL}"
-        ))
-        .unwrap();
-        let sources = BTreeMap::from([("people".to_owned(), source)]);
-        let authored = AuthoredQuestion {
-            question,
-            derivation: ANSWER.to_owned(),
-        };
-        let error = match compile_referenced_question(
-            &BTreeMap::new(),
-            &sources,
-            &BTreeMap::new(),
-            authored,
-        ) {
-            Ok(_) => panic!("the referenced selector profile is absent"),
-            Err(error) => error,
-        };
-        let diagnostic = error
-            .downcast_ref::<AuthoredDiagnostic>()
-            .expect("the refusal is field-addressed");
-        assert_eq!(diagnostic.code, "evidence.question.selector-missing");
-        assert_eq!(
-            diagnostic.path, "questions/adult-status.yaml:/subjectProfiles/0",
-            "the path names the subject alternative index"
-        );
-        assert!(
-            diagnostic
-                .message
-                .contains("the selector profile this member names has no file under selectors/"),
-            "{}",
-            diagnostic.message
-        );
-    }
-
-    #[test]
-    fn a_missing_governed_public_key_is_refused_as_a_field_addressed_diagnostic() {
-        let not_found: anyhow::Error = std::io::Error::from(std::io::ErrorKind::NotFound).into();
-        let wrapped = not_found.context("opening governed deployment public key");
-        let active = "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json";
-        let error = governed_public_key_fault(active, Some(active), &json!([]), wrapped);
-        let diagnostic = error
-            .downcast_ref::<AuthoredDiagnostic>()
-            .expect("a missing key names its governance field");
-        assert_eq!(diagnostic.code, "evidence.target.signing-key-missing");
-        assert_eq!(
-            diagnostic.path,
-            "governance.yaml:/signing/activePublicJwkFile"
-        );
-        assert!(
-            !diagnostic.message.contains(active),
-            "the refusal names the member, not its value: {}",
-            diagnostic.message
-        );
-
-        let published = "public-keys/retired.jwk.json";
-        let error = governed_public_key_fault(
-            published,
-            Some(active),
-            &json!(["public-keys/current.jwk.json", published]),
-            std::io::Error::from(std::io::ErrorKind::NotFound).into(),
-        );
-        assert_eq!(
-            error.downcast_ref::<AuthoredDiagnostic>().unwrap().path,
-            "governance.yaml:/signing/publishedPublicJwkFiles/1"
-        );
-
-        // A read failure that is not an absent file stays operational.
-        let denied: anyhow::Error =
-            std::io::Error::from(std::io::ErrorKind::PermissionDenied).into();
-        let error = governed_public_key_fault(active, Some(active), &json!([]), denied);
-        assert!(error.downcast_ref::<AuthoredDiagnostic>().is_none());
-    }
-
-    /// Build the same referenced-people target project as
-    /// `local_target_compilation_keeps_target_governance_without_local_secrets`,
-    /// but under the given assurance profile and source authentication, and
-    /// compile it. Used to compare what the production and evidence-grade
-    /// arms of `compile_target_project` report for the same shape of input.
-    fn compile_referenced_people_target(
-        assurance_profile: &str,
-        source_authentication: &str,
-    ) -> Result<CompiledProductionProject> {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let question = write_referenced_people_project(&fixture, source_authentication);
-        let mut question: Value = serde_norway::from_str(&question).unwrap();
-        question["answers"][0]["uri"] = json!("urn:authority:concept:is-adult:v1");
-        question["governance"] = json!({
-            "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
-            "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
-            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":900,
-            "observationTimezone":"Asia/Bangkok", "fixtures":"fixtures/adult-status.yaml",
-            "disclosureFamilies":["urn:authority:disclosure-family:adult-status:v1"]
-        });
-        fs::write(
-            fixture.project.join("questions/adult-status.yaml"),
-            serde_norway::to_string(&question).unwrap(),
-        )
-        .unwrap();
-        fs::create_dir(fixture.project.join("fixtures")).unwrap();
-        fs::write(
-            fixture.project.join("fixtures/adult-status.yaml"),
-            "version: 1\ncases: []\n",
-        )
-        .unwrap();
-        fs::remove_dir_all(fixture.project.join(SECRETS_DIRECTORY)).unwrap();
-        let target = json!({
-            "apiVersion":EVIDENCE_BUNDLE_API_VERSION, "kind":EVIDENCE_BUNDLE_KIND, "assuranceProfile":assurance_profile, "service":{"publicOrigin":"http://127.0.0.1:9444"},
-            "authentication":{"issuer":"http://127.0.0.1:9445"},
-            "authorityProfiles":{"operator":{"kind":"explicit-request"}},
-            "signing":{}, "audit":{"hashKeyVersion":"target-version"}
-        });
-        let project = fs::canonicalize(&fixture.project).unwrap();
-        compile_target_project(
-            &project,
-            &project,
-            &fixture.staging,
-            target,
-            &fixture.evidence,
-        )
-    }
-
-    #[test]
-    fn evidence_grade_target_is_held_to_the_production_checks() {
-        let production_error =
-            compile_referenced_people_target("production", "authentication: {type: none}\n")
-                .expect_err("an unauthenticated HTTP source is refused under production checks");
-        let evidence_grade_error =
-            compile_referenced_people_target("evidence-grade", "authentication: {type: none}\n")
-                .expect_err("evidence-grade is held to the same production checks");
-        let production_message = format!("{production_error:#}");
-        let evidence_grade_message = format!("{evidence_grade_error:#}");
-        assert_eq!(
-            production_message, evidence_grade_message,
-            "evidence-grade must report the identical production check failure"
-        );
-        assert!(!evidence_grade_message.contains("must declare"));
-        assert!(!evidence_grade_message.contains("assuranceProfile"));
-    }
-
-    #[test]
-    fn evidence_grade_target_compiles_through_the_production_path() {
-        let compiled = compile_referenced_people_target(
-            "evidence-grade",
-            "authentication: {type: static-authorization, tokenRef: secret:file/records-token}\n",
-        )
-        .expect("an evidence-grade target compiles through the production checks");
-        assert_eq!(compiled.bundle["assuranceProfile"], "evidence-grade");
-    }
-
-    #[test]
-    fn an_unknown_assurance_profile_is_refused_by_name() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let target = json!({"apiVersion": EVIDENCE_BUNDLE_API_VERSION, "kind": EVIDENCE_BUNDLE_KIND, "assuranceProfile": "staging"});
-        let project = fs::canonicalize(&fixture.project).unwrap();
-        let error = compile_target_project(
-            &project,
-            &project,
-            &fixture.staging,
-            target,
-            &fixture.evidence,
-        )
-        .expect_err("an unrecognized assurance profile is refused");
-        assert!(format!("{error:#}").contains("evidence-grade"));
-    }
-
-    #[test]
-    fn a_valid_project_marker_is_accepted() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fixture.write_marker(registry_evidence_authoring::default_project_marker_document());
-
-        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("a project root with a valid marker compiles exactly as one without it");
-    }
-
-    #[test]
-    fn a_corrupt_project_marker_is_rejected() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fixture.write_marker(&format!(
-            "{}project: [\n",
-            registry_evidence_authoring::default_project_marker_document()
-        ));
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("a project root with a corrupt marker must not compile");
-        let codes = crate::authored::report_in(&error)
-            .expect("the marker refusal is the reader's report")
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| diagnostic.code.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(codes, ["yaml.unexpected-end"], "unexpected error: {error}");
-    }
-
-    #[test]
-    fn a_project_marker_without_its_envelope_is_rejected() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fixture.write_marker("version: 2\nproject: evidence-authoring\n");
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("a project root with a marker that has no envelope must not compile");
-        let codes = crate::authored::report_in(&error)
-            .expect("the marker refusal is the reader's report")
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| diagnostic.code.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            codes,
-            [
-                "config.missing-envelope",
-                "config.removed-key",
-                "config.removed-key"
-            ],
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn copied_project_artifacts_reject_symlinked_parent_directories() {
-        let temporary = tempfile::tempdir().expect("tempdir");
-        let project = temporary.path().join("project");
-        let outside = temporary.path().join("outside");
-        fs::create_dir(&project).expect("project");
-        fs::create_dir(&outside).expect("outside");
-
-        for (directory, file) in [
-            ("adapters", "prepare.rhai"),
-            ("schemas", "facts.schema.yaml"),
-            ("codelists", "categories.yaml"),
-            ("public-keys", "retired.jwk.json"),
-        ] {
-            fs::write(outside.join(file), b"outside\n").expect("outside artifact");
-            symlink(&outside, project.join(directory)).expect("artifact directory symlink");
-            assert!(
-                read_project_artifact(
-                    &project,
-                    &format!("{directory}/{file}"),
-                    1024,
-                    "copied artifact",
-                )
-                .is_err(),
-                "{directory} symlink must not be followed"
-            );
-            fs::remove_file(project.join(directory)).expect("remove test symlink");
-            fs::remove_file(outside.join(file)).expect("remove outside artifact");
-        }
-    }
-
-    #[test]
-    fn compiles_boolean_and_bounded_integer_into_one_signed_assertion_bundle() {
-        let openapi = OPENAPI
-            .replace(
-                "required: [person_id, name, date_of_birth]",
-                "required: [person_id, name, date_of_birth, dose_count]",
-            )
-            .replace(
-                "                  date_of_birth: {type: string, format: date}",
-                "                  date_of_birth: {type: string, format: date}\n                  dose_count: {type: integer, minimum: 0, maximum: 20}",
-            );
-        let fixture = Fixture::new(&openapi, IMMUNIZATION_QUESTION, IMMUNIZATION_ANSWER, true);
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("multiple governed answers compile");
-
-        assert_eq!(
-            compiled.questions[0]
-                .concepts
-                .iter()
-                .map(|concept| (concept.concept_alias.as_str(), concept.concept_form))
-                .collect::<Vec<_>>(),
-            [
-                ("schedule_complete", CompiledConceptForm::Boolean),
-                ("dose_count", CompiledConceptForm::BoundedInteger),
-            ]
-        );
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        let requirement = &bundle["requirements"][0];
-        assert_eq!(requirement["kind"], "information-requirement");
-        assert_eq!(requirement["concepts"].as_array().unwrap().len(), 2);
-        assert_eq!(requirement["concepts"][0]["type"], "boolean");
-        assert_eq!(requirement["concepts"][1]["type"], "bounded-integer");
-        assert_eq!(
-            requirement["concepts"][1]["constraints"],
-            json!({"minimum": 0, "maximum": 20})
-        );
-        let derivation = fs::read_to_string(
-            fixture
-                .staging
-                .join("bundle/derivations/immunization-summary.rhai"),
-        )
-        .expect("derivation reads");
-        assert!(derivation.contains("value: governed_answers[\"schedule_complete\"]"));
-        assert!(derivation.contains("value: governed_answers[\"dose_count\"]"));
-        assert!(derivation.contains(
-            "urn:registrystack:evidence:local:concept:immunization-summary:schedule_complete"
-        ));
-        assert!(derivation
-            .contains("urn:registrystack:evidence:local:concept:immunization-summary:dose_count"));
-    }
-
-    #[test]
-    fn compiles_every_authored_question_into_one_generation() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fixture.add_question(AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER);
-
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("multiple questions compile");
-
-        assert_eq!(
-            compiled
-                .questions
-                .iter()
-                .map(|question| question.question_alias.as_str())
-                .collect::<Vec<_>>(),
-            ["adult-status", "age-bracket"]
-        );
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        assert_eq!(bundle["selectorProfiles"].as_object().unwrap().len(), 2);
-        assert_eq!(bundle["sources"].as_object().unwrap().len(), 2);
-        assert_eq!(
-            bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(bundle["requirements"].as_array().unwrap().len(), 2);
-        assert!(fixture
-            .staging
-            .join("bundle/derivations/adult-status.rhai")
-            .is_file());
-        assert!(fixture
-            .staging
-            .join("bundle/derivations/age-bracket.rhai")
-            .is_file());
-    }
-
-    #[test]
-    fn explicit_access_policies_replace_the_implicit_caller_profile() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fixture.add_question(AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER);
-        fixture.add_access_policy("age-checks", &["adult-status", "age-bracket"]);
-        fixture.add_access_policy("service-routing", &["age-bracket"]);
-
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("explicit access policies compile");
-
-        assert_eq!(
-            compiled
-                .access_policies
-                .iter()
-                .map(|policy| (policy.id.as_str(), policy.questions.as_slice()))
-                .collect::<Vec<_>>(),
-            [
-                (
-                    "age-checks",
-                    ["adult-status".to_owned(), "age-bracket".to_owned()].as_slice()
-                ),
-                ("service-routing", ["age-bracket".to_owned()].as_slice()),
-            ]
-        );
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        let profiles = bundle["authorityProfiles"]
-            .as_object()
-            .expect("authority profiles");
-        assert_eq!(profiles.len(), 2);
-        assert!(!profiles.contains_key(AUTHORITY_PROFILE_ID));
-        for policy in &compiled.access_policies {
-            let profile = &profiles[&access_policy_authority_profile_id(&policy.requester_tag)];
-            assert_eq!(profile["kind"], "explicit-request");
-            assert_eq!(profile["requesterTags"], json!([policy.requester_tag]));
-            let grants = profile["grants"].as_array().unwrap();
-            assert_eq!(grants.len(), policy.questions.len());
-            for (grant, question) in grants.iter().zip(&policy.questions) {
-                assert_eq!(
-                    grant["requirement"],
-                    local_uri(&format!("requirement:{question}"))
-                );
-            }
-        }
-    }
-
-    /// The `evidence` binary built from this commit, for the gates that hold a
-    /// compiled bundle to the real reader rather than to the stub.
-    fn evidence_built_from_this_commit() -> PathBuf {
-        PathBuf::from(
-            std::env::var_os("EVIDENCE_BIN")
-                .expect("EVIDENCE_BIN names the evidence binary built from this commit"),
-        )
-    }
-
-    #[test]
-    fn an_access_policy_names_its_authority_profile_with_a_local_identifier() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fixture.add_access_policy("age-checks", &["adult-status"]);
-
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("an access policy compiles");
-
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        let profiles = bundle["authorityProfiles"]
-            .as_object()
-            .expect("authority profiles");
-        let policy = &compiled.access_policies[0];
-        assert_eq!(
-            profiles.keys().collect::<Vec<_>>(),
-            [&access_policy_authority_profile_id(&policy.requester_tag)]
-        );
-        for (name, profile) in profiles {
-            assert!(
-                registry_platform_yaml::LocalId::new(name.as_str()).is_ok(),
-                "the bundle reader refuses the authority profile name `{name}`"
-            );
-            assert_eq!(profile["requesterTags"], json!([policy.requester_tag]));
-        }
-    }
-
-    #[test]
-    #[ignore = "run with EVIDENCE_BIN naming the evidence binary built from this commit"]
-    fn an_access_policy_compiles_to_a_bundle_the_reader_accepts() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fixture.add_access_policy("age-checks", &["adult-status"]);
-
-        compile_local_project(
-            &fixture.project,
-            &fixture.staging,
-            &evidence_built_from_this_commit(),
-        )
-        .expect("the reader accepts the bundle an access policy compiles to");
-    }
-
-    #[test]
-    #[ignore = "run with EVIDENCE_BIN naming the evidence binary built from this commit"]
-    fn the_longest_question_names_the_form_accepts_compile_to_a_bundle_the_reader_accepts() {
-        // One subject: `local-subject-<id>-v1` holds 64 characters at an id of 47.
-        let longest_id = format!("adult-status-{}", "a".repeat(34));
-        assert_eq!(longest_id.len(), 47);
-        let fixture = Fixture::new(
-            OPENAPI,
-            &QUESTION.replace("adult-status", &longest_id),
-            ANSWER,
-            true,
-        );
-        compile_local_project(
-            &fixture.project,
-            &fixture.staging,
-            &evidence_built_from_this_commit(),
-        )
-        .expect("the reader accepts the longest single-subject question id");
-
-        // Several subjects: `local-subject-<id>-<role>-v1` holds 64 characters
-        // when the id and the role are 46 together.
-        let longest_role = format!("candidate-parent-{}", "a".repeat(10));
-        assert_eq!("parent-relationship".len() + longest_role.len(), 46);
-        let fixture = Fixture::new(
-            RELATIONSHIP_OPENAPI,
-            &RELATIONSHIP_QUESTION
-                .replace("role: candidate-parent", &format!("role: {longest_role}")),
-            RELATIONSHIP_ANSWER,
-            true,
-        );
-        compile_local_project(
-            &fixture.project,
-            &fixture.staging,
-            &evidence_built_from_this_commit(),
-        )
-        .expect("the reader accepts the longest id and role of a several-subject question");
-    }
-
-    #[test]
-    fn task_grant_policy_binds_verified_claims_and_refuses_revoked_requester() {
-        fn fixture_with_task_client(status: &str, claim: &str) -> Fixture {
-            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-            fixture.add_access_policy("casework-task", &["adult-status"]);
-            let policy = json!({
-                "apiVersion": registry_evidence_authoring::formats::ACCESS_POLICY_API_VERSION,
-                "kind": registry_evidence_authoring::formats::ACCESS_POLICY_KIND,
-                "id": "casework-task",
-                "questions": ["adult-status"],
-                "taskGrant": {
-                    "kind": "delegated",
-                    "sourceIssuer": "https://casework.invalid",
-                    "requesterClients": ["task-agent"],
-                    "bindings": [{
-                        "question": "adult-status",
-                        "role": "person",
-                        "selectorProfile": "local-subject-adult-status-v1",
-                        "valueClaims": {"person_id": claim},
-                    }],
-                },
-            });
-            fs::write(
-                fixture.project.join("access/policies/casework-task.yaml"),
-                serde_norway::to_string(&policy).unwrap(),
-            )
-            .unwrap();
-            fs::create_dir_all(fixture.project.join("access/clients")).unwrap();
-            let key: Value = serde_json::from_str(OFFLINE_CHECK_PUBLIC_JWK).unwrap();
-            let client = json!({
-                "apiVersion": registry_evidence_authoring::formats::ACCESS_CLIENT_API_VERSION,
-                "kind": registry_evidence_authoring::formats::ACCESS_CLIENT_KIND,
-                "clientId": "task-agent", "status": status,
-                "policies": ["casework-task"],
-                "principal": "urn:registrystack:evidence:local:client:task-agent",
-                "evidenceAudience": "urn:registrystack:evidence:local:client:task-agent",
-                "keys": [key],
-            });
-            fs::write(
-                fixture.project.join("access/clients/task-agent.yaml"),
-                serde_norway::to_string(&client).unwrap(),
-            )
-            .unwrap();
-            fixture
-        }
-
-        let fixture = fixture_with_task_client("active", "identity.person_reference");
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("closed task grant compiles");
-        let policy = &compiled.access_policies[0];
-        assert!(policy.requester_tag.starts_with("policy-v2-"));
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            bundle["authentication"]["oidc"]["allowedClients"],
-            json!(["task-agent"])
-        );
-        let profile = &bundle["authorityProfiles"]
-            [&access_policy_authority_profile_id(&policy.requester_tag)];
-        assert_eq!(profile["kind"], "delegated");
-        assert_eq!(profile["grantSourceIssuer"], "https://casework.invalid");
-        assert_eq!(profile["requesterClients"], json!(["task-agent"]));
-        assert_eq!(
-            profile["grants"][0]["subjects"][0]["valueOrigin"],
-            "authenticated-grant"
-        );
-        assert_eq!(
-            profile["grants"][0]["subjects"][0]["valueClaims"],
-            json!({"person_id":"identity.person_reference"})
-        );
-
-        let changed = fixture_with_task_client("active", "identity.other_reference");
-        let changed_compiled =
-            compile_local_project(&changed.project, &changed.staging, &changed.evidence).unwrap();
-        assert_ne!(
-            policy.requester_tag,
-            changed_compiled.access_policies[0].requester_tag
-        );
-
-        let revoked = fixture_with_task_client("revoked", "identity.person_reference");
-        let error = compile_local_project(&revoked.project, &revoked.staging, &revoked.evidence)
-            .expect_err("revoked task agent cannot be admitted through policy declaration");
-        assert!(error.to_string().contains("must be active"));
-        assert!(revoked.staging_is_empty());
-
-        let incomplete = fixture_with_task_client("active", "identity.person_reference");
-        let policy_path = incomplete
-            .project
-            .join("access/policies/casework-task.yaml");
-        let mut policy: Value = serde_norway::from_slice(&fs::read(&policy_path).unwrap()).unwrap();
-        policy["taskGrant"]["bindings"][0]["valueClaims"] =
-            json!({"wrong_field":"identity.person_reference"});
-        fs::write(&policy_path, serde_norway::to_string(&policy).unwrap()).unwrap();
-        let error = compile_local_project(
-            &incomplete.project,
-            &incomplete.staging,
-            &incomplete.evidence,
-        )
-        .expect_err("task binding cannot omit the selector's exact field");
-        assert!(error.to_string().contains("exact selector field set"));
-        assert!(incomplete.staging_is_empty());
-
-        if let Some(evidence_bin) = std::env::var_os("EVIDENCE_BIN") {
-            let live = fixture_with_task_client("active", "identity.person_reference");
-            compile_local_project(&live.project, &live.staging, Path::new(&evidence_bin))
-                .expect("real Evidence binary accepts the task-grant bundle");
-        }
-    }
-
-    #[test]
-    fn preserved_target_authenticated_context_is_the_only_local_authority_delta() {
-        fn generated() -> Value {
-            json!({
-                "assuranceProfile": "local",
-                "authentication": {"oidc": {
-                    "allowedClients": ["citizen-download"],
-                    "assertionIssuers": {"citizen-download": ["https://app.invalid"]},
-                }},
-                "selectorProfiles": {
-                    "person-reference": {"fields": {"person-reference": {"type": "string"}}},
-                    "registration-number": {"fields": {"registration-number": {"type": "string"}}},
-                },
-                "authorityProfiles": {"citizen-record-holder": {
-                    "kind": "explicit-request",
-                    "requesterTags": ["policy-v1-example"],
-                    "grants": [{
-                        "requirement": "urn:example:requirement",
-                        "purpose": "download",
-                        "audienceFrom": "authenticated-requester",
-                        "responseFormats": ["signed-jws"],
-                        "subjects": [
-                            {"role": "person", "selectorProfile": "person-reference", "valueOrigin": "request"},
-                            {"role": "record", "selectorProfile": "registration-number", "valueOrigin": "request"},
-                        ],
-                    }],
-                }},
-            })
-        }
-        fn target() -> Value {
-            let mut target = generated();
-            let subjects = target["authorityProfiles"]["citizen-record-holder"]["grants"][0]
-                ["subjects"]
-                .as_array_mut()
-                .unwrap();
-            subjects[0]["valueOrigin"] = json!("authenticated-context");
-            subjects[0]["valueClaims"] = json!({"person-reference": "identity.person_reference"});
-            subjects[1]["valueOrigin"] = json!("authenticated-context");
-            subjects[1]["valueClaims"] =
-                json!({"registration-number": "identity.record_reference"});
-            target
-        }
-
-        let mut local = generated();
-        let reviewed = target();
-        preserve_target_authenticated_context(&mut local, &reviewed)
-            .expect("the exact reviewed human binding is preserved");
-        assert_eq!(local["authorityProfiles"], reviewed["authorityProfiles"]);
-
-        let mut local = generated();
-        let mut reviewed_name = target();
-        let profile = reviewed_name["authorityProfiles"]
-            .as_object_mut()
-            .unwrap()
-            .remove("citizen-record-holder")
-            .unwrap();
-        reviewed_name["authorityProfiles"]["reviewed-citizen-name"] = profile;
-        preserve_target_authenticated_context(&mut local, &reviewed_name)
-            .expect("the reviewed profile name is retained through its exact requester tag");
-        assert!(local["authorityProfiles"]
-            .get("reviewed-citizen-name")
-            .is_some());
-
-        type RefusedMutation = (&'static str, Box<dyn Fn(&mut Value)>);
-        let cases: Vec<RefusedMutation> = vec![
-            (
-                "allowed client",
-                Box::new(|value| {
-                    value["authentication"]["oidc"]["allowedClients"] = json!(["other"])
-                }),
-            ),
-            (
-                "assertion issuer",
-                Box::new(|value| {
-                    value["authentication"]["oidc"]["assertionIssuers"] =
-                        json!({"citizen-download": ["https://other.invalid"]})
-                }),
-            ),
-            (
-                "extra profile",
-                Box::new(|value| {
-                    value["authorityProfiles"]["other"] =
-                        value["authorityProfiles"]["citizen-record-holder"].clone();
-                }),
-            ),
-            (
-                "requester tag",
-                Box::new(|value| {
-                    value["authorityProfiles"]["citizen-record-holder"]["requesterTags"] =
-                        json!(["other"])
-                }),
-            ),
-            (
-                "claim keys",
-                Box::new(|value| {
-                    value["authorityProfiles"]["citizen-record-holder"]["grants"][0]["subjects"]
-                        [0]["valueClaims"] = json!({"other": "identity.person_reference"})
-                }),
-            ),
-            (
-                "extra grant",
-                Box::new(|value| {
-                    let extra =
-                        value["authorityProfiles"]["citizen-record-holder"]["grants"][0].clone();
-                    value["authorityProfiles"]["citizen-record-holder"]["grants"]
-                        .as_array_mut()
-                        .unwrap()
-                        .push(extra);
-                }),
-            ),
-            (
-                "mixed origin",
-                Box::new(|value| {
-                    value["authorityProfiles"]["citizen-record-holder"]["grants"][0]["subjects"]
-                        [1]["valueOrigin"] = json!("request")
-                }),
-            ),
-        ];
-        for (name, mutate) in cases {
-            let mut local = generated();
-            let mut reviewed = target();
-            mutate(&mut reviewed);
-            assert!(
-                preserve_target_authenticated_context(&mut local, &reviewed).is_err(),
-                "{name} drift was preserved"
-            );
-            assert_eq!(local, generated(), "{name} refusal changed local authority");
-        }
-    }
-
-    #[test]
-    fn local_compile_seals_the_preserved_authenticated_context_binding() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("compile generated request-origin baseline");
-        let mut target: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
-        )
-        .unwrap();
-        let subject =
-            &mut target["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["subjects"][0];
-        subject["valueOrigin"] = json!("authenticated-context");
-        subject["valueClaims"] = json!({"person_id": "identity.person_reference"});
-
-        let preserved_staging = fixture.project.parent().unwrap().join("preserved-staging");
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&preserved_staging)
-            .unwrap();
-        compile_local_project_with_target_authenticated_context(
-            &fixture.project,
-            &preserved_staging,
-            &fixture.evidence,
-            LocalServicePorts::default(),
-            json!({}),
-            json!({"systemRoots": true, "trustProfiles": {}}),
-            LOCAL_AUDIENCE,
-            &LocalAdmission::default(),
-            &target,
-        )
-        .expect("compile and seal reviewed authenticated context");
-        let compiled: Value = serde_norway::from_slice(
-            &fs::read(preserved_staging.join("bundle/evidence.yaml")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            compiled["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["subjects"][0],
-            target["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["subjects"][0]
-        );
-    }
-
-    #[test]
-    fn source_artifact_graph_validates_without_questions_target_or_secrets() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_referenced_people_project(&fixture, "authentication: {type: none}\n");
-        fs::remove_file(fixture.project.join("questions/adult-status.yaml")).unwrap();
-        fs::remove_dir_all(fixture.project.join(SECRETS_DIRECTORY)).unwrap();
-        fs::write(fixture.project.join("adapters/people-prepare.rhai"), r#"
-fn prepare(selectors, context) {
-    let subject = selectors["person"];
-    if subject["profile"] == "person-reference-v1" {
-        return #{query: [#{name: "projection", value: "personId"}], body: #{selector: "by-key", values: #{"personId": subject["values"]["person_id"]}}};
-    }
-    throw "unsupported selector";
-}
-"#).unwrap();
-        validate_source_artifact_graph(&fixture.project)
-            .expect("standalone source graph validates");
-        let extractor = fixture.project.join("adapters/people-extract.rhai");
-        fs::write(
-            &extractor,
-            "fn extract(r, selectors, context) { #{outcome: \"no_match\"} }",
-        )
-        .unwrap();
-        validate_source_artifact_graph(&fixture.project).expect("selector-aware source validates");
-        fs::write(
-            &extractor,
-            "fn extract(r, context) { () } fn extract(r, selectors, context) { () }",
-        )
-        .unwrap();
-        assert!(validate_source_artifact_graph(&fixture.project)
-            .unwrap_err()
-            .to_string()
-            .contains("invalid entry point"));
-        fs::write(&extractor, "fn extract(r, context) { () }").unwrap();
-        fs::remove_file(fixture.project.join("selectors/person-reference-v1.yaml")).unwrap();
-        assert!(validate_source_artifact_graph(&fixture.project)
-            .unwrap_err()
-            .to_string()
-            .contains("missing selector profile"));
-    }
-
-    #[test]
-    fn target_bound_source_shape_validates_without_resolving_a_target() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_referenced_people_project(&fixture, "authentication: {type: none}\n");
-        let source_path = fixture.project.join("sources/people.yaml");
-        let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
-        for field in ["baseUrl", "authentication"] {
-            source.as_object_mut().unwrap().remove(field);
-        }
-        source["request"]
-            .as_object_mut()
-            .unwrap()
-            .remove("maximumConcurrency");
-        source["connection"] = json!("records");
-        fs::write(&source_path, serde_norway::to_string(&source).unwrap()).unwrap();
-
-        let target_bound = target_bound_sources(&fixture.project)
-            .expect("the authored connection reference and source shape validate");
-
-        assert_eq!(
-            target_bound,
-            [TargetBoundSource {
-                source_id: "people".to_owned(),
-            }]
-        );
-
-        source["baseUrl"] = json!("https://author-cannot-retarget.example");
-        fs::write(&source_path, serde_norway::to_string(&source).unwrap()).unwrap();
-        let error = target_bound_sources(&fixture.project)
-            .expect_err("a target-bound source cannot override connection-owned values");
-        assert_eq!(
-            error.to_string(),
-            "source `people` must leave connection-owned fields to `records`"
-        );
-    }
-
-    #[test]
-    fn one_question_compiles_explicit_overlapping_and_composite_profiles() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let question = write_referenced_people_project(&fixture, "authentication: {type: none}\n");
-        let mut question: Value = serde_norway::from_str(&question).unwrap();
-        question["subject"] = json!({"role":"person", "profiles":["person-reference-v1","person-composite-v1"], "derivation":true});
-        fs::write(
-            fixture.project.join("questions/adult-status.yaml"),
-            serde_norway::to_string(&question).unwrap(),
-        )
-        .unwrap();
-        fs::write(fixture.project.join("selectors/person-composite-v1.yaml"), "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
-kind: EvidenceSelector
-maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n  region: {type: integer, minimum: 1, maximum: 99}\n").unwrap();
-        let source_path = fixture.project.join("sources/people.yaml");
-        let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
-        source["baseUrl"] = json!("http://127.0.0.1:8082");
-        let request = source["request"].as_object_mut().unwrap();
-        request.remove("pathBindings");
-        request.insert("path".to_owned(), json!("/lookup"));
-        request["selectorInputs"][0]["alternatives"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"profile":"person-composite-v1","fields":["person_id","region"]}));
-        fs::write(source_path, serde_norway::to_string(&source).unwrap()).unwrap();
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("one question accepts both alternatives");
-        assert_eq!(compiled.questions.len(), 1);
-        assert_eq!(compiled.questions[0].subjects[0].selectors.len(), 2);
-        assert_eq!(
-            compiled.questions[0].subjects[0].selectors[1].fields,
-            ["person_id", "region"]
-        );
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(bundle["requirements"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            bundle["requirements"][0]["subjectRoles"][0]["selectorProfiles"],
-            json!(["person-reference-v1", "person-composite-v1"])
-        );
-        assert_eq!(
-            bundle["requirements"][0]["derivation"]["selectorInputs"][0]["alternatives"],
-            source["request"]["selectorInputs"][0]["alternatives"]
-        );
-        let grants = bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"]
-            .as_array()
-            .unwrap();
-        assert_eq!(grants.len(), 2);
-        assert_ne!(
-            grants[0]["subjects"][0]["selectorProfile"],
-            grants[1]["subjects"][0]["selectorProfile"]
-        );
-
-        question["subject"]["profiles"] = json!(["person-reference-v1"]);
-        fs::write(
-            fixture.project.join("questions/adult-status.yaml"),
-            serde_norway::to_string(&question).unwrap(),
-        )
-        .unwrap();
-        let selected = compile_plan(
-            read_inputs(&fixture.project, false).unwrap(),
-            CompileProfile::Local {
-                ports: LocalServicePorts::default(),
-                audience: LOCAL_AUDIENCE.to_owned(),
-                active_public_jwk_file: "public-keys/test.jwk".to_owned(),
-                active_public_jwk: vec![],
-                admission: LocalAdmission::default(),
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            selected.bundle["sources"]["people"]["request"]["selectorInputs"][0]["alternatives"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            source["request"]["selectorInputs"][0]["alternatives"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2,
-            "the authored source remains reusable"
-        );
-    }
-
-    #[test]
-    fn question_alternatives_refuse_missing_profiles_and_incomplete_composites() {
-        let mut question = parsed_question(QUESTION);
-        question.source.source_ref = Some("records".to_owned());
-        question.source.operation = None;
-        let subject = question.subject.as_mut().unwrap();
-        subject.selector.clear();
-        subject.profiles = vec!["by-key".to_owned(), "by-composite".to_owned()];
-        let source = json!({"request":{"selectorInputs":[{"role":"person","alternatives":[{"profile":"by-key","fields":["key"]},{"profile":"by-composite","fields":["key"]}]}]}});
-        let mut profiles = BTreeMap::from([(
-            "by-key".to_owned(),
-            json!({"fields":{"key":{"type":"string"}}}),
-        )]);
-        assert!(compile_referenced_subjects(&question, &source, &profiles)
-            .unwrap_err()
-            .to_string()
-            .contains("has no file under selectors/"));
-        profiles.insert(
-            "by-composite".to_owned(),
-            json!({"fields":{"key":{"type":"string"},"region":{"type":"integer"}}}),
-        );
-        assert!(compile_referenced_subjects(&question, &source, &profiles)
-            .unwrap_err()
-            .to_string()
-            .contains("alternative"));
-    }
-
-    #[test]
-    fn source_connections_fill_only_owned_slots_and_preserve_ordinary_sources() {
-        let original = json!({"type":"http-json", "baseUrl":"https://ordinary.example", "authentication":{"type":"static-authorization","tokenRef":"secret:file/existing"}, "request":{"maximumConcurrency":8}});
-        let connected = json!({"type":"http-json", "connection":"records", "request":{}});
-        let connections = json!({"records":{"baseUrl":"https://records.example", "authentication":{"type":"static-authorization","tokenRef":"secret:file/records"}, "tlsTrustProfile":"private-ca"}});
-        let mut sources = BTreeMap::from([
-            ("ordinary".to_owned(), original.clone()),
-            ("connected".to_owned(), connected.clone()),
-        ]);
-        resolve_source_connections(&mut sources, &connections).unwrap();
-        assert_eq!(sources["ordinary"], original);
-        assert_eq!(sources["connected"]["connection"], "records");
-        assert_eq!(
-            sources["connected"]["baseUrl"],
-            connections["records"]["baseUrl"]
-        );
-        assert_eq!(sources["connected"]["request"]["maximumConcurrency"], 4);
-        assert_eq!(
-            sources["connected"]["authentication"],
-            connections["records"]["authentication"]
-        );
-        for pointer in ["baseUrl", "authentication", "tlsTrustProfile"] {
-            let mut override_source = connected.clone();
-            override_source[pointer] = json!("override");
-            assert!(resolve_source_connections(
-                &mut BTreeMap::from([("connected".to_owned(), override_source)]),
-                &connections
-            )
-            .is_err());
-        }
-        let error = resolve_source_connections(
-            &mut BTreeMap::from([("connected".to_owned(), connected)]),
-            &json!({}),
-        )
-        .expect_err("explicit target compilation requires the named connection");
-        assert_eq!(
-            error.to_string(),
-            "source connection `records` is not declared by the selected target"
-        );
-    }
-
-    #[test]
-    fn local_dev_reuses_connection_and_tls_inputs_with_generated_local_governance() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_referenced_people_project(&fixture, "authentication: {type: none}\n");
-        let source_path = fixture.project.join("sources/people.yaml");
-        let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
-        source.as_object_mut().unwrap().remove("baseUrl");
-        source.as_object_mut().unwrap().remove("authentication");
-        source["request"]
-            .as_object_mut()
-            .unwrap()
-            .remove("maximumConcurrency");
-        source["connection"] = json!("records");
-        fs::write(source_path, serde_norway::to_string(&source).unwrap()).unwrap();
-        let connections = json!({"records":{"baseUrl":"http://127.0.0.1:8082", "authentication":{"type":"none"}, "maximumConcurrency":3}});
-        let tls = json!({"systemRoots":false, "trustProfiles":{}});
-        let compiled = compile_local_project_with_target_inputs(
-            &fixture.project,
-            &fixture.staging,
-            &fixture.evidence,
-            LocalServicePorts::default(),
-            connections.clone(),
-            tls.clone(),
-        )
-        .unwrap();
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
-        )
-        .unwrap();
-        let runtime: Value =
-            serde_norway::from_slice(&fs::read(compiled.runtime_path).unwrap()).unwrap();
-        assert_eq!(bundle["sourceConnections"], connections);
-        assert_eq!(
-            bundle["sources"]["people"]["request"]["maximumConcurrency"],
-            3
-        );
-        assert_eq!(
-            bundle["authentication"]["oidc"]["issuer"],
-            "http://127.0.0.1:8081"
-        );
-        assert_eq!(bundle["assuranceProfile"], "local");
-        assert_eq!(runtime["outboundTls"], tls);
-        assert_eq!(runtime["signer"]["type"], "local-jwk");
-    }
-
-    #[test]
-    fn access_policy_tags_are_stable_and_revision_bound() {
-        let first = access_policy_requester_tag("age-checks", &["adult-status".to_owned()])
-            .expect("first tag");
-        let same = access_policy_requester_tag("age-checks", &["adult-status".to_owned()])
-            .expect("same tag");
-        let changed = access_policy_requester_tag(
-            "age-checks",
-            &["adult-status".to_owned(), "age-bracket".to_owned()],
-        )
-        .expect("changed tag");
-
-        assert_eq!(first, same);
-        assert_ne!(first, changed);
-        assert!(first.starts_with("policy-v1-"));
-        assert_eq!(first.len(), "policy-v1-".len() + 64);
-    }
-
-    #[test]
-    fn explicit_access_policies_reject_unknown_questions_before_writing() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fixture.add_access_policy("unknown-access", &["missing-question"]);
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("unknown question must fail");
-
-        let (code, file, path, _) = only_diagnostic(&error);
-        assert_eq!(
-            (code, file, path),
-            (
-                "evidence.access-policy.question-missing",
-                "access/policies/unknown-access.yaml",
-                "/questions/0"
-            )
-        );
-        assert!(fixture.staging_is_empty());
-    }
-
-    #[test]
-    fn explicit_access_directory_cannot_escape_through_a_symlink() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let outside = fixture.project.parent().unwrap().join("outside-access");
-        fs::create_dir(&outside).expect("outside access");
-        symlink(&outside, fixture.project.join("access")).expect("access symlink");
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("access symlink must fail");
-
-        assert!(error.to_string().contains("plain project directory"));
-        assert!(fixture.staging_is_empty());
-    }
-
-    /// Everything a referenced `people` source declares after its credential
-    /// posture. The posture itself is written by the caller, so one project
-    /// shape covers every authentication declaration the referenced route has
-    /// to settle.
-    const REFERENCED_SOURCE_TAIL: &str = r#"request:
-  method: GET
-  path: /people/{person_id}
-  pathBindings:
-    person_id: {type: selector, role: person, profile: person-reference-v1, field: person_id}
-  fixedHeaders: [{name: Accept, value: application/json}]
-  selectorInputs:
-    - role: person
-      alternatives:
-        - {profile: person-reference-v1, fields: [person_id]}
-  prepareScript: adapters/people-prepare.rhai
-  adapterParameters: {}
-  adapterParametersSchema: schemas/people-parameters.schema.yaml
-  preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
-  projection: [/date_of_birth]
-  redirects: deny
-  attemptTimeoutMilliseconds: 3000
-  maximumResponseBytes: 65536
-  maximumConcurrency: 8
-responseSchema: schemas/people-response.schema.yaml
-extractScript: adapters/people-extract.rhai
-factSchema: schemas/people-facts.schema.yaml
-"#;
-
-    /// Write a project whose one question reads `sources/people.yaml`, with
-    /// the authentication block under test, and return the question text.
-    fn write_referenced_people_project(fixture: &Fixture, authentication: &str) -> String {
-        for directory in ["sources", "selectors", "adapters", "schemas"] {
-            fs::create_dir(fixture.project.join(directory)).expect("authoring directory");
-        }
-        fs::write(
-            fixture.project.join("selectors/person-reference-v1.yaml"),
-            "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
-kind: EvidenceSelector
-maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n",
-        )
-        .expect("selector");
-        fs::write(
-            fixture.project.join("sources/people.yaml"),
-            format!(
-                "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\n{authentication}{REFERENCED_SOURCE_TAIL}"
-            ),
-        )
-        .expect("source");
-        for (path, contents) in [
-            (
-                "adapters/people-prepare.rhai",
-                "fn prepare(s, context) { #{query: [], body: ()} }\n",
-            ),
-            (
-                "adapters/people-extract.rhai",
-                "fn extract(r, context) { #{outcome: \"match\", facts: r} }\n",
-            ),
-            (
-                "schemas/people-parameters.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
-            ),
-            (
-                "schemas/people-response.schema.yaml",
-                "type: object\nadditionalProperties: false\nproperties: {}\n",
-            ),
-            (
-                "schemas/people-facts.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: []\nproperties:\n  date_of_birth: {type: string}\n",
-            ),
-        ] {
-            fs::write(fixture.project.join(path), contents).expect("source artifact");
-        }
-        let inline = r#"source:
-  operation: getPerson
-  facts:
-    - name: date_of_birth
-      path: /date_of_birth
-      combine: exactly-one
-  collectionBounds: {}
-"#;
-        let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
-        fs::write(
-            fixture.project.join("questions/adult-status.yaml"),
-            &referenced,
-        )
-        .expect("referenced question");
-        referenced
-    }
-
-    #[test]
-    fn referenced_v1_source_and_selector_are_reused_by_questions() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let referenced = write_referenced_people_project(
-            &fixture,
-            "authentication:\n  type: basic\n  usernameRef: secret:file/records-username\n  passwordRef: secret:file/records-password\n",
-        );
-        let copied = referenced
-            .replace("id: adult-status", "id: adult-status-copy")
-            .replace(
-                "derivations/adult-status.rhai",
-                "derivations/adult-status-copy.rhai",
-            );
-        fixture.add_question(&copied, ANSWER);
-
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("referenced source compiles");
-        assert_eq!(compiled.questions.len(), 2);
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle"),
-        )
-        .expect("bundle yaml");
-        assert_eq!(bundle["sources"].as_object().expect("sources").len(), 1);
-        assert_eq!(
-            bundle["selectorProfiles"]
-                .as_object()
-                .expect("selectors")
-                .len(),
-            1
-        );
-        assert_eq!(
-            bundle["sources"]["people"]["authentication"]["usernameRef"],
-            "secret:file/records-username"
-        );
-        assert!(fixture
-            .staging
-            .join("bundle/adapters/people-extract.rhai")
-            .is_file());
-    }
-
-    #[test]
-    fn referenced_http_source_without_an_authentication_declaration_is_refused() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        write_referenced_people_project(&fixture, "");
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("an undeclared credential posture must not compile")
-            .to_string();
-
-        assert_eq!(
-            error,
-            "the referenced source sends no credential, and an absent field does not decide \
-that: question `adult-status` must declare the posture itself by adding an `authentication:` \
-mapping naming the `type:` its channel uses, in sources/people.yaml"
-        );
-        assert!(fixture.staging_is_empty());
-    }
-
-    #[test]
-    fn a_null_authentication_in_a_source_is_refused_by_the_shared_reader() {
-        for authentication in ["authentication:\n", "authentication: {kind: null}\n"] {
-            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-            write_referenced_people_project(&fixture, authentication);
-
-            let error =
-                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                    .expect_err("a null is never a value")
-                    .to_string();
-
-            assert!(
-                error.starts_with("error[config.null-value] sources/people.yaml:"),
-                "{authentication:?}: {error}"
-            );
-            assert!(fixture.staging_is_empty());
-        }
-    }
-
-    #[test]
-    fn referenced_http_source_with_an_unnamed_authentication_kind_is_refused() {
-        for authentication in [
-            "authentication: {}\n",
-            "authentication: {kind: 3}\n",
-            "authentication: {kind: ' '}\n",
-            "authentication: basic\n",
-        ] {
-            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-            write_referenced_people_project(&fixture, authentication);
-
-            let error =
-                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                    .expect_err("a posture the source never names must not compile")
-                    .to_string();
-
-            assert_eq!(
-                error,
-                "the referenced source states `authentication:` without naming a `type`, and an \
-undecided mapping is not a posture: question `adult-status` must name the `type:` its channel \
-uses under `authentication:` in sources/people.yaml",
-                "{authentication:?} was not refused as an unnamed kind"
-            );
-            assert!(fixture.staging_is_empty());
-        }
-    }
-
-    #[test]
-    fn referenced_http_source_compiles_every_declared_authentication_posture() {
-        for authentication in [
-            "authentication: {type: none}\n",
-            "authentication: {type: static-authorization, tokenRef: 'secret:file/records-token'}\n",
-            // The runtime owns the closed set of types. evidencectl settles
-            // only that the source named one, so an unrecognized type reaches
-            // the runtime rather than being judged twice.
-            "authentication: {type: type-this-tool-does-not-enumerate}\n",
-        ] {
-            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-            write_referenced_people_project(&fixture, authentication);
-
-            compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                .expect("a declared credential posture compiles");
-            let bundle: Value = serde_norway::from_slice(
-                &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle"),
-            )
-            .expect("bundle yaml");
-            assert_eq!(
-                bundle["sources"]["people"]["authentication"],
-                serde_norway::from_str::<Value>(authentication).expect("posture")["authentication"],
-            );
-        }
-    }
-
-    #[test]
-    fn referenced_question_consumes_the_shared_subject_source_finding() {
-        let question = QUESTION
-            .replace(
-                "  selector: person_id\n",
-                "  selector: person_id\n  source: true\n",
-            )
-            .replace(
-                "source:\n  operation: getPerson\n  facts:\n    - name: date_of_birth\n      path: /date_of_birth\n      combine: exactly-one\n  collectionBounds: {}",
-                "source:\n  ref: people",
-            );
-        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("a referenced source cannot use the inline source marker");
-
-        let (code, file, path, message) = only_diagnostic(&error);
-        assert_eq!(
-            (code, file, path, message),
-            (
-                "evidence.question.subject-source-context",
-                "questions/adult-status.yaml",
-                "/subject/source",
-                "subject.source is available only to an inline OpenAPI operation"
-            )
-        );
-        assert!(fixture.staging_is_empty());
-    }
-
-    #[test]
-    fn referenced_question_compiles_multiple_role_bound_subjects() {
-        let question = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
-kind: EvidenceQuestion
-id: relationship-check
-question: Does the governed relationship hold?
-purpose: relationship-review
-subjects:
-  - role: child
-    selector: child_reference
-    profile: child-reference-v1
-    derivation: true
-  - role: candidate
-    selector: person_reference
-    profile: person-reference-v1
-    derivation: true
-source:
-  ref: family-record
-answers:
-  - concept: relationship_confirmed
-    type: boolean
-derivation: derivations/relationship-check.rhai
-disclosure:
-  allow: [relationship_confirmed]
-"#;
-        let answer = r#"fn answer(facts, selectors, context) {
-    let child = required(selectors["child"], "child_missing");
-    let candidate = required(selectors["candidate"], "candidate_missing");
-    #{relationship_confirmed: child["values"]["child_reference"] != candidate["values"]["person_reference"]}
-}
-"#;
-        let fixture = Fixture::new(OPENAPI, question, answer, true);
-        for directory in ["sources", "selectors", "adapters", "schemas"] {
-            fs::create_dir(fixture.project.join(directory)).expect("authoring directory");
-        }
-        for (name, field) in [
-            ("child-reference-v1", "child_reference"),
-            ("person-reference-v1", "person_reference"),
-        ] {
-            fs::write(
-                fixture.project.join(format!("selectors/{name}.yaml")),
-                format!(
-                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
-kind: EvidenceSelector
-maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"
-                ),
-            )
-            .expect("selector");
-        }
-        fs::write(
-            fixture.project.join("sources/family-record.yaml"),
-            r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
-kind: EvidenceSource
-type: http-json
-baseUrl: https://records.example.test
-posture: field-projected
-authentication: {type: static-authorization, tokenRef: 'secret:file/records-token'}
-request:
-  method: GET
-  path: /children/{child_reference}/relationships
-  pathBindings:
-    child_reference: {type: selector, role: child, profile: child-reference-v1, field: child_reference}
-  selectorInputs:
-    - role: child
-      alternatives:
-        - {profile: child-reference-v1, fields: [child_reference]}
-  prepareScript: adapters/family-prepare.rhai
-  adapterParameters: {}
-  adapterParametersSchema: schemas/family-parameters.schema.yaml
-  preparationLimits: {query: forbidden, jsonBody: forbidden, maximumNormalizedBytes: 4096}
-  projection: [/relationship_complete]
-  redirects: deny
-  attemptTimeoutMilliseconds: 3000
-  maximumResponseBytes: 65536
-  maximumConcurrency: 8
-responseSchema: schemas/family-response.schema.yaml
-extractScript: adapters/family-extract.rhai
-factSchema: schemas/family-facts.schema.yaml
-"#,
-        )
-        .expect("source");
-        for (path, contents) in [
-            (
-                "adapters/family-prepare.rhai",
-                "fn prepare(s, context) { #{query: [], body: ()} }\n",
-            ),
-            (
-                "adapters/family-extract.rhai",
-                "fn extract(r, context) { #{outcome: \"match\", facts: r} }\n",
-            ),
-            (
-                "schemas/family-parameters.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
-            ),
-            (
-                "schemas/family-response.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [relationship_complete]\nproperties:\n  relationship_complete: {type: boolean}\n",
-            ),
-            (
-                "schemas/family-facts.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [relationship_complete]\nproperties:\n  relationship_complete: {type: boolean}\n",
-            ),
-        ] {
-            fs::write(fixture.project.join(path), contents).expect("source artifact");
-        }
-
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("multi-subject question compiles");
-        assert_eq!(
-            compiled.questions[0]
-                .subjects
-                .iter()
-                .map(|subject| (subject.role.as_str(), subject.selectors[0].profile.as_str()))
-                .collect::<Vec<_>>(),
-            [
-                ("child", "child-reference-v1"),
-                ("candidate", "person-reference-v1"),
-            ]
-        );
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle"),
-        )
-        .expect("bundle YAML");
-        assert_eq!(bundle["selectorProfiles"].as_object().unwrap().len(), 2);
-        let grant = &bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0];
-        assert_eq!(grant["subjects"].as_array().unwrap().len(), 2);
-        let requirement = &bundle["requirements"][0];
-        assert_eq!(requirement["subjectRoles"].as_array().unwrap().len(), 2);
-        assert_eq!(
-            requirement["derivation"]["selectorInputs"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(
-            bundle["sources"]["family-record"]["request"]["selectorInputs"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1,
-            "the derivation-only candidate never widens the provider request"
-        );
-    }
-
-    #[test]
-    fn compiles_nested_multi_event_leaves_without_reducing_to_the_first_event() {
-        let fixture = Fixture::new(
-            MULTI_EVENT_OPENAPI,
-            MULTI_EVENT_QUESTION,
-            MULTI_EVENT_ANSWER,
-            true,
-        );
-        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("nested repeated facts compile");
-
-        let response: Value = serde_norway::from_slice(
-            &fs::read(
-                fixture
-                    .staging
-                    .join("bundle/schemas/event-history-source-response.schema.yaml"),
-            )
-            .expect("response schema"),
-        )
-        .expect("response schema parses");
-        assert_eq!(response["additionalProperties"], false);
-        assert_eq!(response["required"], json!(["events"]));
-        assert_eq!(response["properties"]["events"]["minItems"], 1);
-        assert_eq!(response["properties"]["events"]["maxItems"], 4);
-        assert_eq!(
-            response["properties"]["events"]["items"]["required"],
-            json!(["status", "occurredAt"])
-        );
-
-        let facts: Value = serde_norway::from_slice(
-            &fs::read(
-                fixture
-                    .staging
-                    .join("bundle/schemas/event-history-source-facts.schema.yaml"),
-            )
-            .expect("fact schema"),
-        )
-        .expect("fact schema parses");
-        assert_eq!(facts["additionalProperties"], false);
-        assert_eq!(facts["properties"]["event_statuses"]["minItems"], 1);
-        assert_eq!(facts["properties"]["event_statuses"]["maxItems"], 4);
-
-        let extract = fs::read_to_string(
-            fixture
-                .staging
-                .join("bundle/adapters/event-history-source-extract.rhai"),
-        )
-        .expect("extract script");
-        assert!(extract.contains("for item_0_0 in items_0_0"), "{extract}");
-        assert!(extract.contains("collected_0.push"), "{extract}");
-        assert!(extract.contains("for item_1_0 in items_1_0"), "{extract}");
-        assert!(!extract.contains("/events/0"), "{extract}");
-
-        let sample: Value = serde_json::from_str(MULTI_EVENT_RESPONSE).expect("sanitized sample");
-        assert_eq!(sample["events"].as_array().expect("events").len(), 2);
-        assert_ne!(sample["events"][0]["status"], sample["events"][1]["status"]);
-    }
-
-    #[test]
-    fn repeated_fact_selection_requires_an_explicit_closed_combination_rule_and_bounds() {
-        let cases = [
-            MULTI_EVENT_QUESTION.replace("combine: collect", "combine: exactly-one"),
-            MULTI_EVENT_QUESTION.replace(
-                "  collectionBounds:\n    /events: 4",
-                "  collectionBounds: {}",
-            ),
-            MULTI_EVENT_QUESTION.replace("    /events: 4", "    /events: 257"),
-            MULTI_EVENT_QUESTION.replace("    /events: 4", "    /events: 4\n    /unused: 2"),
-        ];
-        for question in cases {
-            let fixture = Fixture::new(MULTI_EVENT_OPENAPI, &question, MULTI_EVENT_ANSWER, true);
-            let error =
-                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                    .expect_err("unsafe repeated fact selection is rejected");
-            assert!(fixture.staging_is_empty(), "{error:#}");
-        }
-    }
-
-    #[test]
-    fn selected_scalar_leaf_must_have_a_reviewed_closed_bound() {
-        let unbounded = MULTI_EVENT_OPENAPI.replace(
-            "status: {type: string, minLength: 1, maxLength: 32}",
-            "status: {type: string}",
-        );
-        let fixture = Fixture::new(&unbounded, MULTI_EVENT_QUESTION, MULTI_EVENT_ANSWER, true);
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("unbounded selected leaf is rejected");
-        assert!(error.to_string().contains("unbounded"), "{error:#}");
-        assert!(fixture.staging_is_empty());
-    }
-
-    #[test]
-    fn collection_extraction_visits_nested_arrays_and_scalar_array_items() {
-        let extract = render_fact_extraction(&[QuestionFact {
-            name: "observations".to_owned(),
-            path: "/events/*/groups/*/*".to_owned(),
-            combine: FactCombination::Collect,
-        }]);
-        assert!(extract.contains("get_path(source_response, \"/events\")"));
-        assert!(extract.contains("get_path(item_0_0, \"/groups\")"));
-        assert!(extract.contains("let items_0_2 = required(item_0_1"));
-        assert!(extract.contains("collected_0.push(required(item_0_2"));
-        assert!(!extract.contains("/0"));
-    }
-
-    #[test]
-    fn question_is_closed_and_disclosure_cannot_be_widened() {
-        for mutation in [
-            QUESTION.replace("  allow: [is_adult]", "  allow: []"),
-            QUESTION.replace("  allow: [is_adult]", "  allow: [is_adult, another_answer]"),
-            QUESTION.replace("  allow: [is_adult]", "  allow: [is_adult, is_adult]"),
-            QUESTION.replace("      path: /date_of_birth", "      path: /missing"),
-            format!("{QUESTION}unknown: true\n"),
-        ] {
-            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-            fs::write(
-                fixture.project.join("questions/adult-status.yaml"),
-                mutation,
-            )
-            .expect("mutated question");
-            let error =
-                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                    .expect_err("widened question is rejected");
-            assert!(fixture.staging_is_empty(), "{error:#}");
-        }
-    }
-
-    #[test]
-    fn multi_answer_constraints_and_exact_disclosure_fail_closed() {
-        let openapi = OPENAPI
-            .replace(
-                "required: [person_id, name, date_of_birth]",
-                "required: [person_id, name, date_of_birth, dose_count]",
-            )
-            .replace(
-                "                  date_of_birth: {type: string, format: date}",
-                "                  date_of_birth: {type: string, format: date}\n                  dose_count: {type: integer, minimum: 0, maximum: 20}",
-            );
-        for question in [
-            IMMUNIZATION_QUESTION.replace("    minimum: 0\n", ""),
-            IMMUNIZATION_QUESTION.replace("    maximum: 20", "    maximum: -1"),
-            IMMUNIZATION_QUESTION.replace(
-                "  allow: [schedule_complete, dose_count]",
-                "  allow: [schedule_complete, undeclared]",
-            ),
-            IMMUNIZATION_QUESTION
-                .replace("  - concept: dose_count", "  - concept: schedule_complete"),
-            IMMUNIZATION_QUESTION.replace(
-                "    type: boolean\n  - concept: dose_count",
-                "    type: boolean\n    minimum: 0\n  - concept: dose_count",
-            ),
-        ] {
-            let fixture = Fixture::new(&openapi, &question, IMMUNIZATION_ANSWER, true);
-            let error =
-                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                    .expect_err("invalid governed answers are rejected");
-            assert!(fixture.staging_is_empty(), "{error:#}");
-        }
-    }
-
-    #[test]
-    fn authored_code_cannot_replace_or_bypass_the_generated_concept_binding() {
-        let authored = r#"fn answer(facts, selectors, context) {
-    [#{concept_id: "urn:attacker:extra", value: true}]
-}
-"#;
-        let fixture = Fixture::new(OPENAPI, QUESTION, authored, true);
-        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("authored function stays behind the generated binding");
-
-        let derivation =
-            fs::read_to_string(fixture.staging.join("bundle/derivations/adult-status.rhai"))
-                .expect("rejected generated derivation remains inspectable");
-        let wrapper = derivation.rsplit_once("fn derive").unwrap().1;
-        assert!(wrapper.contains("urn:registrystack:evidence:local:concept:adult-status:is_adult"));
-        assert!(!wrapper.contains("urn:attacker"));
-        assert!(
-            wrapper.contains("let governed_answers = answer(facts, selectors, evaluation_context)")
-        );
-        assert!(wrapper.contains("value: governed_answers[\"is_adult\"]"));
-
-        for rejected in [
-            "fn helper(facts, selectors, context) { true }",
-            "fn answer(facts) { true }",
-            "fn answer(facts, selectors, context) { true } fn derive(facts, selectors, context) { [] }",
-            "fn answer(facts, selectors, context) { true } fn answer(facts) { false }",
-        ] {
-            let fixture = Fixture::new(OPENAPI, QUESTION, rejected, true);
-            let error =
-                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                    .expect_err("authored entry-point bypass is rejected");
-            assert!(fixture.staging_is_empty(), "{error:#}");
-        }
-    }
-
-    #[test]
-    fn ambiguous_or_nonlocal_openapi_fails_before_staging() {
-        let cases = [
-            OPENAPI.replace("127.0.0.1", "example.test"),
-            OPENAPI.replace(
-                "servers: [{url: 'http://127.0.0.1:8000'}]",
-                "servers: [{url: 'http://127.0.0.1:8000'}, {url: 'http://127.0.0.1:8001'}]",
-            ),
-            OPENAPI.replace("paths:", "security: []\npaths:"),
-            OPENAPI.replace("    get:", "    post:"),
-            OPENAPI.replace("      responses:", "      security: []\n      responses:"),
-            OPENAPI.replace("        '200':", "        default:"),
-            OPENAPI.replace(
-                "                  date_of_birth: {type: string, format: date}",
-                "                  date_of_birth: {type: object}",
-            ),
-        ];
-        for openapi in cases {
-            let fixture = Fixture::new(&openapi, QUESTION, ANSWER, true);
-            let error =
-                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                    .expect_err("unsupported OpenAPI is rejected");
-            assert!(fixture.staging_is_empty(), "{error:#}");
-        }
-    }
-
-    #[test]
-    fn unsupported_openapi_constraints_fail_before_staging() {
-        let cases = [
-            OPENAPI.replace(
-                "date_of_birth: {type: string, format: date}",
-                "date_of_birth: {type: string, maxLength: 32, pattern: '^2000-'}",
-            ),
-            OPENAPI.replace(
-                "date_of_birth: {type: string, format: date}",
-                "date_of_birth: {type: integer, exclusiveMinimum: 0}",
-            ),
-            OPENAPI.replace(
-                "date_of_birth: {type: string, format: date}",
-                "date_of_birth: {type: string, format: date, x-extra: true}",
-            ),
-            OPENAPI.replace(
-                "                type: object\n                required:",
-                "                type: object\n                minProperties: 1\n                required:",
-            ),
-        ];
-        for openapi in cases {
-            let fixture = Fixture::new(&openapi, QUESTION, ANSWER, true);
-            let error =
-                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                    .expect_err("unpreserved OpenAPI constraint is rejected");
-            assert!(error.to_string().contains("unsupported key"), "{error:#}");
-            assert!(fixture.staging_is_empty(), "{error:#}");
-        }
-    }
-
-    #[test]
-    fn punctuated_selector_and_fact_names_are_safely_quoted() {
-        let (openapi, question, answer) = punctuated_inputs();
-        let fixture = Fixture::new(&openapi, &question, &answer, true);
-        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("punctuated names compile");
-
-        assert_eq!(
-            compiled.questions[0].subjects[0].selectors[0].fields[0],
-            "person-id_v1"
-        );
-        let extract = fs::read_to_string(
-            fixture
-                .staging
-                .join("bundle/adapters/adult-status-source-extract.rhai"),
-        )
-        .expect("extract script reads");
-        assert!(extract.contains(
-            "facts[\"date-of.birth\"] = required(get_path(source_response, \"/date-of.birth\")"
-        ));
-    }
-
-    #[test]
-    fn input_files_and_private_staging_are_fail_closed() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fs::set_permissions(&fixture.staging, fs::Permissions::from_mode(0o755))
-            .expect("change staging mode");
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("public staging rejected");
-        assert!(error.to_string().contains("0700"));
-
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fs::write(
-            fixture.project.join("questions/notes.txt"),
-            b"not a question",
-        )
-        .expect("write unexpected entry");
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("unexpected question entry rejected");
-        assert!(error.to_string().contains("only questions/*.yaml"));
-        assert!(fixture.staging_is_empty());
-    }
-
-    #[test]
-    #[ignore = "run after building the sibling evidence binary with local source authentication"]
-    fn real_evidence_loader_accepts_the_compiled_tutorial_generation() {
-        let evidence = std::env::var_os("EVIDENCE_BIN")
-            .map(PathBuf::from)
-            .expect("set EVIDENCE_BIN to the built evidence binary");
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        compile_local_project(&fixture.project, &fixture.staging, &evidence)
-            .expect("real Evidence loader accepts generated inputs");
-
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        fixture.add_question(AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER);
-        fixture.add_access_policy("age-checks", &["adult-status"]);
-        fixture.add_access_policy("service-routing", &["age-bracket"]);
-        compile_local_project(&fixture.project, &fixture.staging, &evidence)
-            .expect("real Evidence loader accepts explicit access profiles");
-
-        let fixture = Fixture::new(OPENAPI, AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER, true);
-        compile_local_project(&fixture.project, &fixture.staging, &evidence)
-            .expect("real Evidence loader accepts the controlled category");
-
-        let openapi = OPENAPI
-            .replace(
-                "required: [person_id, name, date_of_birth]",
-                "required: [person_id, name, date_of_birth, dose_count]",
-            )
-            .replace(
-                "                  date_of_birth: {type: string, format: date}",
-                "                  date_of_birth: {type: string, format: date}\n                  dose_count: {type: integer, minimum: 0, maximum: 20}",
-            );
-        let fixture = Fixture::new(&openapi, IMMUNIZATION_QUESTION, IMMUNIZATION_ANSWER, true);
-        compile_local_project(&fixture.project, &fixture.staging, &evidence)
-            .expect("real Evidence loader accepts multiple governed answers");
-
-        let (openapi, question, answer) = punctuated_inputs();
-        let fixture = Fixture::new(&openapi, &question, &answer, true);
-        compile_local_project(&fixture.project, &fixture.staging, &evidence)
-            .expect("real Evidence loader accepts safely quoted punctuated names");
-
-        let fixture = Fixture::new(
-            MULTI_EVENT_OPENAPI,
-            MULTI_EVENT_QUESTION,
-            MULTI_EVENT_ANSWER,
-            true,
-        );
-        compile_local_project(&fixture.project, &fixture.staging, &evidence)
-            .expect("real Evidence loader accepts nested repeated fact extraction");
-
-        let fixture = Fixture::new(
-            RELATIONSHIP_OPENAPI,
-            RELATIONSHIP_QUESTION,
-            RELATIONSHIP_ANSWER,
-            true,
-        );
-        compile_local_project(&fixture.project, &fixture.staging, &evidence)
-            .expect("real Evidence loader accepts multiple role-bound subjects");
-    }
-
-    #[test]
-    fn a_failed_unseal_after_a_rejection_reports_the_rejection_and_the_cleanup() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, false);
-        fs::write(
-            &fixture.evidence,
-            "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\nbundle=\"$(dirname \"$3\")/bundle\"\nchmod -R u+rwX \"$bundle\"\nrm -rf \"$bundle\"\necho 'script rejected' >&2\nexit 1\n",
-        )
-        .expect("stub that removes the generation it rejects");
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("a rejected generation fails");
-
-        let reported = format!("{error:#}");
-        assert!(reported.contains("script rejected"), "{reported}");
-        assert!(
-            reported.contains("restoring owner write on the rejected generation"),
-            "{reported}"
-        );
-    }
-
-    #[test]
-    fn a_failed_runtime_unseal_after_a_rejection_reports_the_rejection_and_the_cleanup() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, false);
-        fs::write(
-            &fixture.evidence,
-            "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\nrm -f \"$3\"\necho 'script rejected' >&2\nexit 1\n",
-        )
-        .expect("stub that removes the settings it rejects");
-
-        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect_err("a rejected generation fails");
-
-        let reported = format!("{error:#}");
-        assert!(reported.contains("script rejected"), "{reported}");
-        assert!(
-            reported.contains("restoring owner write on the rejected runtime settings"),
-            "{reported}"
         );
     }
 
@@ -9191,304 +2000,6 @@ factSchema: schemas/family-facts.schema.yaml
             line,
             "evidencectl: failed to restore owner write on /staging/bundle: sealed generation: reading /staging/bundle"
         );
-    }
-
-    #[test]
-    fn generated_profile_grants_stay_under_the_bound_the_runtime_enforces() {
-        fn selector_profiles(
-            fixture: &Fixture,
-            role: &str,
-            field: &str,
-            count: usize,
-        ) -> Vec<String> {
-            (0..count)
-                .map(|index| {
-                    let profile = format!("{role}-alt-{index:02}-v1");
-                    fs::write(
-                        fixture.project.join(format!("selectors/{profile}.yaml")),
-                        format!("apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
-kind: EvidenceSelector
-maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"),
-                    )
-                    .expect("selector profile");
-                    profile
-                })
-                .collect()
-        }
-
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        let referenced =
-            write_referenced_people_project(&fixture, "authentication: {type: none}\n");
-        let people = selector_profiles(&fixture, "person", "person_id", 16);
-        let guardians = selector_profiles(&fixture, "guardian", "guardian_id", 5);
-
-        let source_path = fixture.project.join("sources/people.yaml");
-        let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
-        let request = source["request"].as_object_mut().unwrap();
-        request.remove("pathBindings");
-        request.insert("path".to_owned(), json!("/lookup"));
-        request.insert(
-            "selectorInputs".to_owned(),
-            json!([
-                {
-                    "role": "person",
-                    "alternatives": people
-                        .iter()
-                        .map(|profile| json!({"profile": profile, "fields": ["person_id"]}))
-                        .collect::<Vec<_>>(),
-                },
-                {
-                    "role": "guardian",
-                    "alternatives": guardians
-                        .iter()
-                        .map(|profile| json!({"profile": profile, "fields": ["guardian_id"]}))
-                        .collect::<Vec<_>>(),
-                },
-            ]),
-        );
-        fs::write(&source_path, serde_norway::to_string(&source).unwrap()).unwrap();
-
-        let subjects = json!([
-            {"role": "person", "profiles": people, "derivation": true},
-            {"role": "guardian", "profiles": guardians, "derivation": true},
-        ]);
-        let mut adult: Value = serde_norway::from_str(&referenced).unwrap();
-        let object = adult.as_object_mut().unwrap();
-        object.remove("subject");
-        object.insert("subjects".to_owned(), subjects.clone());
-        fs::write(
-            fixture.project.join("questions/adult-status.yaml"),
-            serde_norway::to_string(&adult).unwrap(),
-        )
-        .unwrap();
-        let mut bracket: Value = serde_norway::from_str(AGE_BRACKET_QUESTION).unwrap();
-        let object = bracket.as_object_mut().unwrap();
-        object.remove("subject");
-        object.insert("source".to_owned(), json!({"ref": "people"}));
-        object.insert("subjects".to_owned(), subjects);
-        fixture.add_question(
-            &serde_norway::to_string(&bracket).unwrap(),
-            AGE_BRACKET_ANSWER,
-        );
-
-        let Err(error) =
-            compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-        else {
-            panic!("160 grants exceed what one profile may carry");
-        };
-
-        let reported = error.to_string();
-        assert!(reported.contains("160 authority grants"), "{reported}");
-        assert!(reported.contains(AUTHORITY_PROFILE_ID), "{reported}");
-        assert!(reported.contains("adult-status"), "{reported}");
-        assert!(reported.contains("age-bracket"), "{reported}");
-    }
-
-    /// The generated bound is a restatement of the published bundle contract,
-    /// which the runtime enforces. Pin the two together so a contract change
-    /// cannot leave evidencectl refusing what the runtime accepts or accepting
-    /// what it refuses.
-    #[test]
-    fn the_generated_grant_bound_matches_the_published_bundle_contract() {
-        let contract = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../products/evidence/contracts/bundle.schema.yaml"
-        );
-        let schema: Value = serde_norway::from_slice(
-            &fs::read(contract).expect("the published bundle contract is readable"),
-        )
-        .expect("the published bundle contract parses");
-        assert_eq!(
-            schema["$defs"]["authority-profile"]["properties"]["grants"]["maxItems"].as_u64(),
-            Some(MAX_PROFILE_AUTHORITY_GRANTS as u64)
-        );
-    }
-
-    #[test]
-    fn a_selector_input_role_that_is_not_a_string_is_refused_by_name() {
-        assert_eq!(
-            selector_input_role(&json!({"role": "person"})).expect("a string role reads"),
-            "person"
-        );
-        let Err(error) = selector_input_role(&json!({"role": 7})) else {
-            panic!("a numeric role is refused");
-        };
-        assert_eq!(
-            error.to_string(),
-            "source selectorInputs entry must name a string `role`"
-        );
-        let Err(error) = selector_input_role(&json!({})) else {
-            panic!("a missing role is refused");
-        };
-        assert_eq!(
-            error.to_string(),
-            "source selectorInputs entry must name a string `role`"
-        );
-    }
-
-    /// The tutorial project with every punctuation mark its names may carry: a
-    /// selector takes `-` and `_`, the bundle's grammar for a selector field,
-    /// and a fact name also takes a dot.
-    fn punctuated_inputs() -> (String, String, String) {
-        let openapi = OPENAPI
-            .replace("person_id", "person-id_v1")
-            .replace("date_of_birth", "date-of.birth");
-        let question = QUESTION
-            .replace("person_id", "person-id_v1")
-            .replace("date_of_birth", "date-of.birth");
-        let answer = ANSWER.replace("facts.date_of_birth", "facts[\"date-of.birth\"]");
-        (openapi, question, answer)
-    }
-
-    struct Fixture {
-        _root: tempfile::TempDir,
-        project: PathBuf,
-        staging: PathBuf,
-        evidence: PathBuf,
-    }
-
-    impl Fixture {
-        fn new(openapi: &str, question: &str, derivation: &str, check_succeeds: bool) -> Self {
-            let root = tempfile::tempdir().expect("tempdir");
-            let project = root.path().join("project");
-            fs::create_dir(&project).expect("project");
-            fs::create_dir(project.join("questions")).expect("questions");
-            fs::create_dir(project.join("derivations")).expect("derivations");
-            let mut secrets = fs::DirBuilder::new();
-            secrets.mode(0o700);
-            secrets.create(project.join("secrets")).expect("secrets");
-            crate::keygen::generate_scaffold_key_material(&project.join("secrets"))
-                .expect("local key material");
-            fs::write(project.join(OPENAPI_FILE), openapi).expect("OpenAPI");
-
-            let staging = root.path().join("staging");
-            let mut private = fs::DirBuilder::new();
-            private.mode(0o700);
-            private.create(&staging).expect("staging");
-
-            let evidence = root.path().join("evidence-stub");
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o700)
-                .open(&evidence)
-                .expect("stub");
-            let script = if check_succeeds {
-                "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\ntest \"$1\" = check && test \"$2\" = --runtime-config\n"
-            } else {
-                "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\necho 'script rejected' >&2\nexit 1\n"
-            };
-            file.write_all(script.as_bytes()).expect("write stub");
-
-            let fixture = Self {
-                _root: root,
-                project,
-                staging,
-                evidence,
-            };
-            fixture.add_question(question, derivation);
-            fixture
-        }
-
-        fn add_question(&self, question: &str, derivation: &str) {
-            let parsed: Value = serde_norway::from_str(question).expect("question parses");
-            let id = parsed["id"].as_str().expect("question id");
-            let derivation_file = parsed["derivation"].as_str().expect("question derivation");
-            fs::write(
-                self.project.join("questions").join(format!("{id}.yaml")),
-                question,
-            )
-            .expect("question");
-            fs::write(self.project.join(derivation_file), derivation).expect("derivation");
-        }
-
-        fn add_access_policy(&self, id: &str, questions: &[&str]) {
-            fs::create_dir_all(self.project.join("access/policies")).expect("policy directory");
-            let policy = json!({
-                "apiVersion": registry_evidence_authoring::formats::ACCESS_POLICY_API_VERSION,
-                "kind": registry_evidence_authoring::formats::ACCESS_POLICY_KIND,
-                "id": id,
-                "questions": questions
-            });
-            fs::write(
-                self.project
-                    .join("access/policies")
-                    .join(format!("{id}.yaml")),
-                serde_norway::to_string(&policy).expect("policy YAML"),
-            )
-            .expect("policy");
-        }
-
-        fn staging_is_empty(&self) -> bool {
-            fs::read_dir(&self.staging)
-                .expect("read staging")
-                .next()
-                .is_none()
-        }
-
-        fn write_marker(&self, contents: &str) {
-            fs::write(
-                self.project
-                    .join(registry_evidence_authoring::PROJECT_MARKER_FILE),
-                contents,
-            )
-            .expect("project marker");
-        }
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let bundle = self.staging.join("bundle");
-            if bundle.is_dir() {
-                if let Err(error) = set_bundle_modes(&bundle, 0o700, 0o600) {
-                    report_fixture_cleanup(&bundle, &error);
-                }
-            }
-            let runtime = self.staging.join("runtime.yaml");
-            if runtime.is_file() {
-                if let Err(error) = fs::set_permissions(&runtime, fs::Permissions::from_mode(0o600))
-                {
-                    report_fixture_cleanup(&runtime, &anyhow::Error::from(error));
-                }
-            }
-        }
-    }
-
-    /// Fails the test a fixture cleanup failure belongs to, unless the test is
-    /// already unwinding and would lose its own failure to this one.
-    fn report_fixture_cleanup(path: &Path, error: &anyhow::Error) {
-        if thread::panicking() {
-            return;
-        }
-        panic!("{}", cleanup_failure_line(path, error));
-    }
-
-    fn tree(root: &Path) -> Vec<String> {
-        fn visit(root: &Path, current: &Path, output: &mut Vec<String>) {
-            let mut entries = fs::read_dir(current)
-                .expect("read directory")
-                .collect::<std::io::Result<Vec<_>>>()
-                .expect("entries");
-            entries.sort_by_key(|entry| entry.file_name());
-            for entry in entries {
-                let path = entry.path();
-                let relative = path.strip_prefix(root).unwrap().to_string_lossy();
-                if path.is_dir() {
-                    output.push(format!("{relative}/"));
-                    visit(root, &path, output);
-                } else {
-                    output.push(relative.into_owned());
-                }
-            }
-        }
-        let mut output = Vec::new();
-        visit(root, root, &mut output);
-        output
-    }
-
-    fn assert_mode(path: &Path, expected: u32) {
-        let actual = fs::metadata(path).unwrap().permissions().mode() & 0o7777;
-        assert_eq!(actual, expected, "mode of {}", path.display());
     }
 
     fn write_stub_evidence(path: &Path, script: &str) {
@@ -9742,55 +2253,26 @@ maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBy
         );
     }
 
-    fn minimal_question_plan(question_id: &str, validity_seconds: u64) -> QuestionPlan {
-        QuestionPlan {
-            question_id: question_id.to_owned(),
-            source_artifact_id: String::new(),
-            authored_source_artifacts: None,
-            derivation_artifact: String::new(),
+    fn minimal_definition_plan(definition_id: &str, validity_seconds: u64) -> DefinitionPlan {
+        DefinitionPlan {
+            definition_id: definition_id.to_owned(),
             fixture_artifact: None,
             purpose: String::new(),
             requirement_uri: String::new(),
-            response_formats: Vec::new(),
             concepts: Vec::new(),
             subjects: Vec::new(),
-            source_id: String::new(),
-            source_value: json!({}),
-            grants: Vec::new(),
             requirement: json!({"validitySeconds": validity_seconds}),
-            response_schema: json!({}),
-            fact_schema: json!({}),
-            adapter_parameters_schema: json!({}),
-            prepare_script: String::new(),
-            extract_script: String::new(),
-            derivation_script: String::new(),
         }
     }
 
     fn plan_with_validity(validity_seconds: u64, signing: Value) -> CompilePlan {
         CompilePlan {
-            questions: vec![minimal_question_plan("record-status", validity_seconds)],
-            access_policies: Vec::new(),
+            definitions: vec![minimal_definition_plan("record-status", validity_seconds)],
             bundle: json!({ "signing": signing }),
             local_public_jwk: None,
+            generated_artifacts: BTreeMap::new(),
+            authority_document: None,
         }
-    }
-
-    #[test]
-    fn check_only_signing_ceiling_covers_authored_validity_without_lowering_baseline() {
-        let mut long = json!({
-            "requirements": [{"validitySeconds": 86_400}],
-            "signing": {"maximumAssertionValiditySeconds": 300},
-        });
-        expand_check_signing_validity(&mut long);
-        assert_eq!(long["signing"]["maximumAssertionValiditySeconds"], 86_400);
-
-        let mut short = json!({
-            "requirements": [{"validitySeconds": 60}],
-            "signing": {"maximumAssertionValiditySeconds": 300},
-        });
-        expand_check_signing_validity(&mut short);
-        assert_eq!(short["signing"]["maximumAssertionValiditySeconds"], 300);
     }
 
     #[test]
@@ -9814,15 +2296,15 @@ maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBy
             .expect("a signing validity refusal is an authored diagnostic");
         assert_eq!(
             diagnostic.code,
-            "evidence.question.validity-exceeds-signing-maximum"
+            "evidence.definition.validity-exceeds-signing-maximum"
         );
         assert_eq!(
             diagnostic.path,
-            "questions/record-status.yaml:/governance/validitySeconds"
+            "evidence.yaml:/assertionDefinitions/record-status/validitySeconds"
         );
         assert_eq!(
             diagnostic.message,
-            "the requirement validity exceeds the deployment target's signing maximum at governance.yaml /signing/maximumAssertionValiditySeconds"
+            "the requirement validity exceeds the deployment target's signing maximum at target.yaml /signing/maximumAssertionValiditySeconds"
         );
         assert!(!diagnostic.message.contains("900") && !diagnostic.message.contains("300"));
     }
@@ -9831,5 +2313,190 @@ maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBy
     fn target_signing_validity_leaves_an_unstated_target_maximum_to_the_runtime() {
         check_target_signing_validity(&plan_with_validity(900, json!({})))
             .expect("a target stating no maximum is validated by the runtime, not assumed");
+    }
+
+    #[test]
+    fn normalized_plan_preserves_sources_definitions_and_ceiling_enforcement() {
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        let inputs = read_inputs(&project_root, false).unwrap();
+        let expected =
+            registry_evidence_authoring::compile::compile(&inputs.project, &inputs.scripts)
+                .unwrap();
+        let (connections, _) =
+            crate::build::local_dev_target_inputs(&project_root.join("local-target.yaml")).unwrap();
+        let plan = compile_plan_with_connections(
+            inputs,
+            CompileProfile::Local {
+                ports: LocalServicePorts::default(),
+                audience: LOCAL_AUDIENCE.to_owned(),
+                active_public_jwk_file: OFFLINE_CHECK_PUBLIC_JWK_FILE.to_owned(),
+                active_public_jwk: OFFLINE_CHECK_PUBLIC_JWK.as_bytes().to_vec(),
+                admission: LocalAdmission::default(),
+            },
+            connections,
+        )
+        .unwrap();
+        assert_eq!(plan.bundle["requirements"], expected.model["requirements"]);
+        assert_eq!(
+            plan.bundle["selectorProfiles"],
+            expected.model["selectorProfiles"]
+        );
+        assert_eq!(plan.bundle["sources"].as_object().unwrap().len(), 3);
+        assert_eq!(plan.bundle["requirements"].as_array().unwrap().len(), 4);
+        assert_eq!(plan.bundle["authorityProfiles"], json!({}));
+        assert!(plan.bundle["sources"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|source| {
+                source
+                    .get("connection")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| plan.bundle["sourceConnections"].get(id).is_some())
+            }));
+        assert!(plan.bundle["requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|definition| {
+                definition["grantCeiling"]["authorities"]
+                    .as_array()
+                    .is_some_and(|values| !values.is_empty())
+                    && definition["representations"]
+                        .as_array()
+                        .is_some_and(|values| !values.is_empty())
+                    && !definition["concepts"].as_array().unwrap().is_empty()
+            }));
+        assert!(plan
+            .generated_artifacts
+            .contains_key("derivations/adult-status.rhai"));
+    }
+    #[test]
+    fn package_writer_creates_only_referenced_artifact_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(&evidence, "#!/bin/sh\nexit 0\n");
+        let stage = root.path().join("candidate");
+        create_private_directory(&stage).unwrap();
+        let plan = CompilePlan {
+            definitions: Vec::new(),
+            bundle: json!({}),
+            local_public_jwk: None,
+            generated_artifacts: BTreeMap::from([(
+                "derivations/check.rhai".to_owned(),
+                b"fn derive(a,b,c){[]}\n".to_vec(),
+            )]),
+            authority_document: None,
+        };
+        let bundle = write_bundle(root.path(), None, &stage, &plan, &evidence, None).unwrap();
+        assert!(bundle.join("derivations/check.rhai").is_file());
+        for absent in ["codelists", "adapters", "schemas", "public-keys"] {
+            assert!(
+                !bundle.join(absent).exists(),
+                "unreferenced package directory created"
+            );
+        }
+        set_bundle_modes(&bundle, 0o700, 0o600).unwrap();
+    }
+
+    #[test]
+    fn package_writer_refuses_reserved_and_directory_aliases_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(&evidence, "#!/bin/sh\nexit 0\n");
+        for (index, reserved) in [
+            "evidence.yaml",
+            "catalog.jsonld",
+            registry_platform_config::SUM_FILE,
+            registry_platform_config::REVISION_FILE,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let stage = root.path().join(format!("reserved-{index}"));
+            create_private_directory(&stage).unwrap();
+            let plan = CompilePlan {
+                definitions: Vec::new(),
+                bundle: json!({}),
+                local_public_jwk: None,
+                generated_artifacts: BTreeMap::from([(
+                    reserved.to_owned(),
+                    b"authored overwrite".to_vec(),
+                )]),
+                authority_document: None,
+            };
+            let error = write_bundle(root.path(), None, &stage, &plan, &evidence, None)
+                .expect_err("reserved output must be refused");
+            assert!(format!("{error:#}").contains("is reserved"));
+            assert!(!stage.join("bundle").exists());
+        }
+        let error = ensure_no_bundle_path_aliases([
+            "schemas/source-response",
+            "schemas/source-response/person.schema.json",
+        ])
+        .expect_err("one artifact cannot also be a directory");
+        assert!(format!("{error:#}").contains("cannot also be a directory"));
+        let error =
+            ensure_no_bundle_path_aliases([registry_platform_config::SUM_FILE, "sha256sums"])
+                .expect_err("case-folded names must be refused before writing");
+        assert!(format!("{error:#}").contains("only in letter case"));
+    }
+
+    #[test]
+    fn package_writer_compares_colliding_fixture_bytes_and_reuses_identical_assets() {
+        let root = tempfile::tempdir().unwrap();
+        let fixture_path = root.path().join("fixtures/shared.yaml");
+        fs::create_dir_all(fixture_path.parent().unwrap()).unwrap();
+        fs::write(&fixture_path, b"fixture: authored\n").unwrap();
+        let evidence = root.path().join("evidence-stub");
+        write_stub_evidence(&evidence, "#!/bin/sh\nexit 0\n");
+
+        let different_stage = root.path().join("different");
+        create_private_directory(&different_stage).unwrap();
+        let mut definition = minimal_definition_plan("record-status", 60);
+        definition.fixture_artifact = Some("fixtures/shared.yaml".to_owned());
+        let different = CompilePlan {
+            definitions: vec![definition],
+            bundle: json!({}),
+            local_public_jwk: None,
+            generated_artifacts: BTreeMap::from([(
+                "fixtures/shared.yaml".to_owned(),
+                b"fixture: generated\n".to_vec(),
+            )]),
+            authority_document: None,
+        };
+        let error = write_bundle(
+            root.path(),
+            None,
+            &different_stage,
+            &different,
+            &evidence,
+            None,
+        )
+        .expect_err("different bytes at one path must be refused");
+        assert!(format!("{error:#}").contains("assigns different content"));
+        assert!(!different_stage.join("bundle").exists());
+
+        let shared_stage = root.path().join("shared");
+        create_private_directory(&shared_stage).unwrap();
+        let mut first = minimal_definition_plan("first", 60);
+        first.fixture_artifact = Some("fixtures/shared.yaml".to_owned());
+        let mut second = minimal_definition_plan("second", 60);
+        second.fixture_artifact = Some("fixtures/shared.yaml".to_owned());
+        let shared = CompilePlan {
+            definitions: vec![first, second],
+            bundle: json!({}),
+            local_public_jwk: None,
+            generated_artifacts: BTreeMap::new(),
+            authority_document: None,
+        };
+        let bundle =
+            write_bundle(root.path(), None, &shared_stage, &shared, &evidence, None).unwrap();
+        assert_eq!(
+            fs::read(bundle.join("fixtures/shared.yaml")).unwrap(),
+            b"fixture: authored\n"
+        );
+        set_bundle_modes(&bundle, 0o700, 0o600).unwrap();
     }
 }
