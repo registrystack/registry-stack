@@ -42,6 +42,16 @@ pub fn review_cancel_path(request_id: Uuid) -> String {
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ContentDigest(String);
 
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ContentDigest {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ContentDigest".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type":"string","pattern":"^sha256:[0-9a-f]{64}$","minLength":71,"maxLength":71})
+    }
+}
+
 impl ContentDigest {
     pub fn parse(value: &str) -> Result<Self, ProtocolError> {
         let suffix = value.strip_prefix("sha256:").ok_or(ProtocolError::Digest)?;
@@ -109,6 +119,7 @@ impl<'de> Deserialize<'de> for ContentDigest {
 pub type SubmissionDigest = ContentDigest;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubjectBinding {
     pub source: String,
@@ -129,6 +140,7 @@ impl SubjectBinding {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PolicyBinding {
     pub id: String,
@@ -137,6 +149,7 @@ pub struct PolicyBinding {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HumanIdentity {
     pub issuer: String,
@@ -151,6 +164,7 @@ impl HumanIdentity {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceContextBinding {
     pub reference: String,
@@ -170,15 +184,21 @@ impl PolicyBinding {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
-    tag = "strategy",
+    tag = "mode",
     rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
 pub enum ReviewContext {
-    Submitted { snapshot: Value },
-    Source { binding: SourceContextBinding },
+    Submitted {
+        #[cfg_attr(feature="schema",schemars(with="serde_json::Map<String,Value>",extend("x-maximum-canonical-bytes"=MAXIMUM_CONTEXT_BYTES,"x-maximum-json-depth"=MAXIMUM_JSON_DEPTH,"x-maximum-json-nodes"=MAXIMUM_JSON_NODES)))]
+        snapshot: Value,
+    },
+    CurrentSource {
+        binding: SourceContextBinding,
+    },
 }
 
 impl ReviewContext {
@@ -192,16 +212,17 @@ impl ReviewContext {
                     return Err(ProtocolError::ContextTooLarge);
                 }
             }
-            Self::Source { binding } => binding.check()?,
+            Self::CurrentSource { binding } => binding.check()?,
         }
         Ok(())
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCreateRequest {
-    pub kind: String,
+    pub policy: PolicyBinding,
     pub subject: SubjectBinding,
     pub requester_reference: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -212,6 +233,7 @@ pub struct ReviewCreateRequest {
         deserialize_with = "deserialize_present_value",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature="schema",schemars(with="serde_json::Map<String,Value>",extend("x-maximum-canonical-bytes"=MAXIMUM_RESULT_BYTES)))]
     pub result_constraints: Option<Value>,
 }
 
@@ -226,7 +248,7 @@ where
 
 impl ReviewCreateRequest {
     pub fn check(&self) -> Result<(), ProtocolError> {
-        check_bounded_text(&self.kind, MAXIMUM_IDENTIFIER_BYTES)?;
+        self.policy.check()?;
         check_bounded_text(&self.requester_reference, MAXIMUM_REFERENCE_BYTES)?;
         if let Some(initiator) = &self.initiator {
             initiator.check()?;
@@ -249,6 +271,7 @@ impl ReviewCreateRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SubmissionIdentity<'a> {
     pub producer: &'a str,
@@ -273,6 +296,7 @@ pub fn submission_digest(
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRequestAccepted {
     pub request_id: Uuid,
@@ -282,6 +306,7 @@ pub struct ReviewRequestAccepted {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewRequestLifecycle {
     Reviewing,
@@ -294,6 +319,7 @@ pub enum ReviewRequestLifecycle {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRequestView {
     pub request_id: Uuid,
@@ -309,6 +335,7 @@ pub struct ReviewRequestView {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewResultStatus {
     Approved,
@@ -320,6 +347,7 @@ pub enum ReviewResultStatus {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewResult {
     pub result_id: Uuid,
@@ -331,6 +359,7 @@ pub struct ReviewResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature="schema",schemars(with="serde_json::Map<String,Value>",extend("x-maximum-canonical-bytes"=MAXIMUM_RESULT_BYTES)))]
     pub result: Option<Value>,
     pub completed_at: DateTime<Utc>,
     pub available_until: DateTime<Utc>,
@@ -380,6 +409,7 @@ impl ReviewResult {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewResultFeedEntry {
     pub event_id: Uuid,
@@ -389,6 +419,7 @@ pub struct ReviewResultFeedEntry {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewResultFeedPage {
     pub items: Vec<ReviewResultFeedEntry>,
@@ -417,6 +448,7 @@ impl ReviewResultLookup {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCancelRequest {
     pub subject: SubjectBinding,
@@ -431,6 +463,7 @@ impl ReviewCancelRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "outcome",
     rename_all = "kebab-case",
@@ -443,6 +476,7 @@ pub enum ReviewCancelResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCompletion {
     #[serde(rename = "type")]
@@ -454,6 +488,7 @@ pub struct ReviewCompletion {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ReviewCompletionType {
     #[serde(rename = "review.completed")]
     ReviewCompleted,
@@ -550,7 +585,11 @@ mod tests {
 
     fn request() -> ReviewCreateRequest {
         ReviewCreateRequest {
-            kind: "registry-correction".to_owned(),
+            policy: PolicyBinding {
+                id: "registry-correction".to_owned(),
+                version: "1".to_owned(),
+                digest: ContentDigest::for_bytes(b"policy"),
+            },
             subject: SubjectBinding {
                 source: "registry".to_owned(),
                 subject_type: "change-request".to_owned(),
@@ -563,7 +602,7 @@ mod tests {
                 issuer: "https://issuer.example".to_owned(),
                 subject: "person-2".to_owned(),
             }),
-            context: ReviewContext::Source {
+            context: ReviewContext::CurrentSource {
                 binding: SourceContextBinding {
                     reference: "proposal-7".to_owned(),
                 },
@@ -637,7 +676,7 @@ mod tests {
         assert_eq!(explicit_null.result_constraints, Some(Value::Null));
 
         let omitted: ReviewCreateRequest = serde_json::from_value(json!({
-            "kind": "registry-correction",
+            "policy": {"id":"registry-correction","version":"1","digest":ContentDigest::for_bytes(b"policy")},
             "subject": {
                 "source": "registry",
                 "type": "change-request",
@@ -647,7 +686,7 @@ mod tests {
             },
             "requesterReference": "source-request-7",
             "context": {
-                "strategy": "source",
+                "mode": "current-source",
                 "binding": {"reference": "proposal-7"}
             }
         }))
@@ -857,5 +896,30 @@ mod tests {
         }
         .check()
         .is_ok());
+    }
+}
+
+#[cfg(test)]
+mod policy_binding_tests {
+    use super::*;
+    #[test]
+    fn expected_policy_is_required_and_old_kind_or_strategy_wire_is_refused() {
+        let value = serde_json::json!({"policy":{"id":"review","version":"1","digest":ContentDigest::for_bytes(b"policy")},"subject":{"source":"source","type":"subject","id":"1","version":"1","digest":ContentDigest::for_bytes(b"subject")},"requesterReference":"request","context":{"mode":"submitted","snapshot":{}}});
+        let request: ReviewCreateRequest = serde_json::from_value(value.clone()).unwrap();
+        request.check().unwrap();
+        let mut retired = value.clone();
+        retired.as_object_mut().unwrap().remove("policy");
+        retired["kind"] = serde_json::json!("review");
+        assert!(serde_json::from_value::<ReviewCreateRequest>(retired).is_err());
+        let mut retired = value;
+        retired["context"] = serde_json::json!({"strategy":"submitted","snapshot":{}});
+        assert!(serde_json::from_value::<ReviewCreateRequest>(retired).is_err());
+        let original = submission_digest("producer", "source", &request).unwrap();
+        let mut changed = request;
+        changed.policy.version = "2".into();
+        assert_ne!(
+            original,
+            submission_digest("producer", "source", &changed).unwrap()
+        );
     }
 }

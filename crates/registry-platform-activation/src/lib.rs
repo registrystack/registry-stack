@@ -122,6 +122,7 @@ pub enum Error {
 
 /// Whether the runtime credential can write the activation ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum RoleMode {
     Single,
@@ -148,6 +149,7 @@ impl RoleMode {
 
 /// Whether an activation is the database's first or follows another.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum PlanKind {
     Initial,
@@ -174,6 +176,7 @@ impl PlanKind {
 
 /// One append-only package activation ledger row.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Activation {
     pub activation_id: Uuid,
@@ -204,6 +207,7 @@ pub struct NewActivation<'a> {
 
 /// How a configured deployment identity compares with the ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum DatabaseIdCheck {
     NotRecorded,

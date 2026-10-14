@@ -17,7 +17,7 @@ URL, or digest that is not written in its form is refused at its position with
 
 `caseworkctl check PROJECT --runtime-config FILE` reads the file the same
 way, offline and against the authored project, without the package, the
-database, the issuer, a source, or a secret. It reports every problem in the
+database, the issuer, a context provider, or a secret. It reports every problem in the
 file at its position, as the runtime does when it refuses the file at
 startup. A `${VAR}` expression, and every rule that reads its value, is left
 unchecked unless `--environment` fills the expressions from the current
@@ -53,8 +53,8 @@ is refused with the key to add.
 `package.root/casework.yaml`; no second project selector can override it. In
 every listener mode, with or without `package.expectedDigest`, the directory
 must be a package `caseworkctl package` wrote: a `SHA256SUMS` file listing
-exactly `casework.yaml` and the source descriptions it names, each matching its
-digest. A directory without `SHA256SUMS`, such as an authored project, is
+exactly `casework.yaml`, its referenced display schemas, and the context provider
+exports it names, each matching its digest. A directory without `SHA256SUMS`, such as an authored project, is
 refused and names `caseworkctl package`. `caseworkctl dev` packages the authored
 project on every start and serves that package.
 
@@ -69,27 +69,13 @@ Set it to the digest printed by `caseworkctl package` for the package you
 reviewed, so that replacing the files under `package.root` cannot change the
 policy a restart loads.
 
-`package.acknowledgeStrandedWork` is optional and takes the same digest form.
-Before it registers any source generation, `caseworkctl apply` compares the
-package it is about to activate with the in-flight work retained in the
-database. Review
-requests still under review pinned their kind's policy when they were
-admitted and keep the id of the review producer that submitted them, and open
-work items keep the queue they were routed to. Apply refuses a package that
-removes a queue or access profile that work still needs, that no longer
-declares the review producer of a request still under review, that declares a
-pinned review kind version with different content, that
-removes the source of a source-context review, or whose source read would
-disclose a field the pinned display schema does not declare or omit one it
-requires. The refusal names each conflict with its counts and the package
-digest. Let that work finish under the earlier package, or set
-`package.acknowledgeStrandedWork` to that exact digest to activate the package
-anyway; the acknowledgement admits only the package it names, so it never
-carries over to a later one.
-`caseworkctl plan` runs the same comparison, so pointing it at a runtime file
-whose `package.root` holds the next package previews the refusal before the
-apply. `caseworkctl doctor` repeats it for the active package as its
-`pinnedWork` check.
+Before activation, `caseworkctl plan` compares the candidate package with
+in-flight reviews retained in the database. `caseworkctl apply` refuses a
+package that removes a policy, profile, team, producer, provider or contract
+those reviews still need, or changes pinned policy content under the same
+version. Let the affected reviews finish under the active package before
+applying the candidate. `caseworkctl doctor` repeats the check for the active
+package. There is no override for orphaned work.
 
 `listener` is required. `listener.bind` is required and is one numeric socket
 address, including bracketed IPv6 forms. `listener.tlsTermination` is required. Use
@@ -178,45 +164,33 @@ commits; a destination that refuses either fails the request with
 place. A requested operation that records no domain event, such as an
 idempotent replay, writes one response entry whose `outcome` is `replayed` or
 `unchanged`, and returns its result only after that entry is accepted.
-Background work no caller requested, such as source reconciliation or a
-maintenance pass, writes no request entry: it opens its transaction only while
-the writer reports ready, and its response entries share a correlation that
-identifies the run. The database holds no audit state. `sources` is keyed by the exact source ids declared by the
-selected policy; missing, extra, or empty ids are refused, and each key is a
-local identifier (`^[a-z][a-z0-9_-]{0,63}$`). Source access remains
-bound to each source's configured reader profile and does not grant a caller a
-Casework access profile.
+Background work no caller requested, such as a review clock or retention pass,
+writes no request entry: it opens its transaction only while the writer reports
+ready, and its response entries share a correlation that identifies the run.
+The database holds no audit state.
 
-The BReg source binding generation keys every source-backed work item, task
-grant, and saved attempt. It is computed from the source id, the binding's
-`eventSource`, and the SHA-256 digest of the imported source description, and
-from nothing else. Changing one of those three means the source now says
-something different, so the next observation supersedes the work items opened
-under the earlier generation and opens fresh ones. Every other binding field is
-operational: `baseUrl`, `readerProfile`, `tokenEndpoint`,
-`clientAssertionAudience`, `resource`, `scopes`, the client and key references,
-`trustedRootCertificatesRef`, both timeouts, `displayReference`,
-`contextProjection`, and `reconciliationIntervalMilliseconds`. Rotating a
-credential, moving the token endpoint, or tuning a timeout keeps the generation,
-the in-flight work items, their claims, and their durable attempts.
+`contextProviders` binds declared `deploymentRef` values under
+`casework.yaml:contextProviders`. Unknown keys are refused; an omitted provider
+leaves only its current-source operations unavailable, while submitted-context
+reviews continue to work. Each binding provides the BReg base URL,
+`tokenEndpoint`, `clientIdRef`, `clientAssertionKeyRef`, and
+`statusProfile`. The status profile must equal the authored
+`serviceProfiles.service-status` for that provider. Optional
+`clientAssertionAudience`, `resource`, and `scopes` configure the OAuth
+client-assertion and token request for the status reader; use the exact values
+registered by the issuer and BReg deployment. The status credential reads only
+review status. It does not supply fields shown to a human reviewer.
 
-`sources.<id>.reconciliationIntervalMilliseconds` controls how often Casework
-schedules source readback. When a readback pass lasts longer than the
-interval, Casework skips missed ticks instead of replaying them back-to-back
-against the source. It also sets how long a reconciled source counts as
-current for an empty inbox view: the larger of twice the interval and 2
-minutes.
-
-For a BREG source, `tokenEndpoint` selects the reader's OAuth endpoint.
-`clientAssertionAudience` explicitly overrides the JWT client assertion audience;
-when omitted, it remains the token endpoint. `resource` is the exact RFC 8707
-resource indicator and `scopes` is the reader's nonempty bounded OAuth scope
-list. Omission preserves an existing issuer's default behavior. Stock ThunderID
-1.0.1 deployments must configure all three: its issuer URL as the assertion
-audience, the exact BREG resource, and the registered reader scopes. Use the
-actual deployment or `bregctl dev export-client` values, not a guessed resource
-based on the project directory name. Changing these fields keeps the source
-binding generation.
+For a current-source review, the human request selects a BReg source profile
+with the `Registry-Source-Profile` header. Casework forwards that human's
+bearer to BReg for the current display read. BReg authorizes the profile,
+subject and disclosure. The compiled Casework policy pins the producer's
+context contract and vendored schema; the verified package also includes the
+provider's exported description. `caseworkctl check --against-breg-package`
+compares that export with a checked native BReg package offline. Rotate
+transport credentials by updating their secret references without changing
+the policy. A changed BReg context contract needs a new export, schema pin and
+Casework package.
 
 `reviewCompletionDestinations` is keyed by the logical destination ids a
 producer's `completion` block names, kept as written: 1 to 512 characters
@@ -233,7 +207,7 @@ secret is visible ASCII, is never logged, and redirects are not followed.
 `caseworkctl doctor` reports the same refusal before the runtime starts.
 
 See the complete maintained
-[`runtime.example.yaml`](examples/professional-review/runtime.example.yaml) and
+[`runtime.example.yaml`](examples/canonical-review/runtime.example.yaml) and
 the generated editor schema at
 [`generated/runtime/runtime.schema.json`](generated/runtime/runtime.schema.json).
 Regenerate the schema from the owning Rust type with:

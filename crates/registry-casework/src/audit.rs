@@ -144,7 +144,7 @@ impl CaseworkAudit {
 }
 
 /// `identifiers` is a JSON object of the identifiers the request names, keyed
-/// by the record field that carries them (`itemId`, `grantId`, `teamId`,
+/// by the record field that carries them (`reviewTaskId`, `grantId`, `teamId`,
 /// `queueId`, `reviewRequestId`); minimization keeps only their keyed
 /// pseudonyms.
 ///
@@ -344,11 +344,11 @@ impl AuditOperation {
     ) -> Result<(), StoreError> {
         let rows = transaction
             .query(
-                "SELECT event_id,item_id,detail->>'grantId' FROM casework_history
-                 WHERE kind='task-invalidated' AND profile_id=$1 AND occurred_at=now()
+                "SELECT event_id,task_id,detail->>'grantId' FROM casework_review_history
+                 WHERE kind='task-grant-invalidated'
                    AND xmin=pg_current_xact_id()::xid
                  ORDER BY event_id",
-                &[&TASK_GRANT_SYSTEM_PROFILE],
+                &[],
             )
             .await?;
         for row in rows {
@@ -365,9 +365,9 @@ impl AuditOperation {
             self.record(
                 event_id,
                 json!({
-                    "event": "casework.task-invalidated",
+                    "event": "casework.task-grant-invalidated",
                     "eventId": event_id,
-                    "itemId": item_id,
+                    "reviewTaskId": item_id,
                     "grantId": grant_id.ok_or(StoreError::Corrupt)?,
                     "profileId": TASK_GRANT_SYSTEM_PROFILE,
                 }),
@@ -593,8 +593,9 @@ fn published_audit_record(record: Value, identifiers: &AuditKeyHasher) -> Result
         "event",
         "eventId",
         "profileId",
-        "itemRevision",
+        "taskRevision",
         "directoryRevision",
+        "erasedCount",
         "actorRef",
         "accountabilityEventId",
         "outcome",
@@ -611,7 +612,7 @@ fn published_audit_record(record: Value, identifiers: &AuditKeyHasher) -> Result
         }
     }
     for (field, output) in [
-        ("itemId", "itemPseudonym"),
+        ("reviewTaskId", "reviewTaskPseudonym"),
         ("grantId", "grantPseudonym"),
         ("teamId", "teamPseudonym"),
         ("queueId", "queuePseudonym"),
@@ -884,17 +885,17 @@ mod tests {
                 "claimed",
                 Some(&actor),
                 &actor.profile_id,
-                json!({"itemId": item}),
+                json!({"reviewTaskId": item}),
             ))
             .await
             .unwrap();
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
         operation
-            .record(first, json!({"event": "casework.claimed", "eventId": first, "itemId": item, "itemRevision": 2, "profileId": "officer"}))
+            .record(first, json!({"event": "casework.claimed", "eventId": first, "reviewTaskId": item, "taskRevision": 2, "profileId": "officer"}))
             .unwrap();
         operation
-            .record(second, json!({"event": "casework.task-invalidated", "itemId": item, "grantId": Uuid::new_v4().to_string(), "profileId": "system:task-grants"}))
+            .record(second, json!({"event": "casework.task-grant-invalidated", "reviewTaskId": item, "grantId": Uuid::new_v4().to_string(), "profileId": "system:task-grants"}))
             .unwrap();
         operation.complete().await.unwrap();
 
@@ -913,11 +914,16 @@ mod tests {
         fields.sort_unstable();
         assert_eq!(
             fields,
-            ["event", "itemPseudonym", "principalPseudonym", "profileId"]
+            [
+                "event",
+                "principalPseudonym",
+                "profileId",
+                "reviewTaskPseudonym"
+            ]
         );
         assert_eq!(request["event"], "casework.claimed");
         assert_eq!(entries[1]["record"]["eventId"], first.to_string());
-        assert_eq!(entries[1]["record"]["itemRevision"], 2);
+        assert_eq!(entries[1]["record"]["taskRevision"], 2);
         assert_eq!(entries[2]["record"]["eventId"], second.to_string());
         let rendered = serde_json::to_string(&entries).unwrap();
         for raw in [
@@ -941,8 +947,8 @@ mod tests {
             .unwrap();
         for event in [
             "casework.claimed",
-            "casework.task-invalidated",
-            "casework.task-invalidated",
+            "casework.task-grant-invalidated",
+            "casework.task-grant-invalidated",
         ] {
             operation
                 .record(
@@ -1048,7 +1054,7 @@ mod tests {
                 "review-decided",
                 Some(&actor),
                 &actor.profile_id,
-                json!({"itemId": Uuid::new_v4()}),
+                json!({"reviewTaskId": Uuid::new_v4()}),
             ))
             .await
             .unwrap();
@@ -1098,7 +1104,7 @@ mod tests {
         operation
             .record(
                 event,
-                json!({"event": "casework.task-invalidated", "profileId": "system:task-grants"}),
+                json!({"event": "casework.task-grant-invalidated", "profileId": "system:task-grants"}),
             )
             .unwrap();
         operation.complete().await.unwrap();
@@ -1125,13 +1131,13 @@ mod tests {
         operation
             .record(
                 first,
-                json!({"event": "casework.clock-expired", "itemId": "raw-item", "profileId": "system:clocks"}),
+                json!({"event": "casework.clock-expired", "reviewTaskId": "raw-item", "profileId": "system:clocks"}),
             )
             .unwrap();
         operation
             .record(
                 second,
-                json!({"event": "casework.task-invalidated", "profileId": "system:task-grants"}),
+                json!({"event": "casework.task-grant-invalidated", "profileId": "system:task-grants"}),
             )
             .unwrap();
         operation.abandon_unresolved().await.unwrap();
@@ -1139,7 +1145,7 @@ mod tests {
         assert_eq!(entries.len(), 2, "{entries:?}");
         for (entry, (event, event_id)) in entries.iter().zip([
             ("casework.clock-expired", first),
-            ("casework.task-invalidated", second),
+            ("casework.task-grant-invalidated", second),
         ]) {
             assert_eq!(entry["phase"], "response");
             assert_eq!(entry["correlation"], entries[0]["correlation"]);
@@ -1177,7 +1183,7 @@ mod tests {
     fn a_record_that_cannot_be_minimized_is_refused_before_commit() {
         let hasher = AuditKeyHasher::unkeyed_dev_only();
         assert!(published_audit_record(json!(["not", "an", "object"]), &hasher).is_err());
-        assert!(published_audit_record(json!({"itemId": 7}), &hasher).is_err());
+        assert!(published_audit_record(json!({"reviewTaskId": 7}), &hasher).is_err());
         assert!(
             published_audit_record(json!({"actor": {"subject": "officer-7"}}), &hasher).is_err()
         );
@@ -1186,9 +1192,22 @@ mod tests {
     }
 
     #[test]
+    fn retention_publication_keeps_only_generated_count_and_event_metadata() {
+        let hasher = AuditKeyHasher::unkeyed_dev_only();
+        let published = published_audit_record(
+            json!({"event":"casework.review-discovery-retention-erased","eventId":"event","profileId":"system:review-retention","erasedCount":3,"cursorToken":"private-token","preview":{"private":"source-fields"}}),
+            &hasher,
+        ).unwrap();
+        assert_eq!(
+            published,
+            json!({"event":"casework.review-discovery-retention-erased","eventId":"event","profileId":"system:review-retention","erasedCount":3})
+        );
+    }
+
+    #[test]
     fn audit_publication_separates_protected_identity_and_source_data() {
         let hasher = AuditKeyHasher::unkeyed_dev_only();
-        let raw = json!({"event":"casework.task-approved", "eventId":"event", "actor":{"issuer":"https://issuer.test","subject":"raw-human"}, "itemId":"raw-item", "grantId":"raw-grant", "detail":{"person_reference":"raw-person"}, "reason":"private reason", "sourceReceipt":{"body":"private body"}, "profileId":"staff"});
+        let raw = json!({"event":"casework.task-approved", "eventId":"event", "actor":{"issuer":"https://issuer.test","subject":"raw-human"}, "reviewTaskId":"raw-item", "grantId":"raw-grant", "detail":{"person_reference":"raw-person"}, "reason":"private reason", "sourceReceipt":{"body":"private body"}, "profileId":"staff"});
         let published = published_audit_record(raw.clone(), &hasher).unwrap();
         let serialized = published.to_string();
         for secret in [
@@ -1205,7 +1224,10 @@ mod tests {
         assert_eq!(published["eventId"], "event");
         assert_eq!(published["profileId"], "staff");
         assert!(published["principalPseudonym"].as_str().is_some());
-        assert_ne!(published["itemPseudonym"], published["grantPseudonym"]);
+        assert_ne!(
+            published["reviewTaskPseudonym"],
+            published["grantPseudonym"]
+        );
         assert_eq!(published, published_audit_record(raw, &hasher).unwrap());
         assert!(
             published_audit_record(json!({"actor":{"subject":"missing-issuer"}}), &hasher).is_err()

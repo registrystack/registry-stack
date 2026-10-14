@@ -481,6 +481,64 @@ pub struct BRegProposalGetBinding {
     profile: String,
     path: String,
 }
+/// Purpose-specific authority to read one Proposal review document by UUID.
+/// Constructed only from the caller-visible runtime metadata inventory.
+#[derive(Clone)]
+pub struct BRegProposalReviewBinding {
+    source: String,
+    profile: String,
+    action: String,
+    operation: &'static str,
+    suffix: &'static str,
+}
+impl BRegProposalReviewBinding {
+    pub(crate) fn from_metadata(
+        actions: &Value,
+        source: &str,
+        profile: &str,
+        action: &str,
+        status: bool,
+    ) -> Result<Self, BaseRegistryClientError> {
+        let operation = if status {
+            "get-review-status"
+        } else {
+            "get-review-context"
+        };
+        let suffix = if status {
+            "review-status"
+        } else {
+            "review-context"
+        };
+        if !identifier(profile)
+            || !identifier(action)
+            || !actions.as_array().is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry["actionId"].as_str() == Some(action)
+                        && entry["accessProfile"].as_str() == Some(profile)
+                        && entry["operations"].as_array().is_some_and(|operations| {
+                            operations
+                                .iter()
+                                .any(|value| value.as_str() == Some(operation))
+                        })
+                })
+            })
+        {
+            return Err(refusal());
+        }
+        Ok(Self {
+            source: source.to_owned(),
+            profile: profile.to_owned(),
+            action: action.to_owned(),
+            operation,
+            suffix,
+        })
+    }
+}
+impl fmt::Debug for BRegProposalReviewBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegProposalReviewBinding(<bound>)")
+    }
+}
 impl BRegProposalGetBinding {
     pub(crate) fn from_metadata(
         value: &Value,
@@ -619,6 +677,77 @@ impl fmt::Debug for BRegPreparedProposal {
     }
 }
 impl BaseRegistryClient {
+    /// Read the native review endpoint using only its advertised purpose grant.
+    /// The caller need not hold the broader Proposal Get permission.
+    pub async fn read_proposal_review_by_id(
+        &self,
+        binding: &BRegProposalReviewBinding,
+        id: &str,
+    ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
+        if binding.source != self.source_binding()
+            || !Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
+        {
+            return Err(refusal());
+        }
+        let link = BRegProposalLink {
+            method: "GET".to_owned(),
+            path: format!("/v1/proposals/{id}/{}", binding.suffix),
+            access_profile: binding.profile.clone(),
+            operation: binding.operation.to_owned(),
+            if_match: None,
+            availability: None,
+        };
+        let response = self.proposal_exchange(&link, None, None).await?;
+        let value =
+            crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
+        let document: BRegProposalReviewDocument =
+            serde_json::from_value(value).map_err(|_| refusal())?;
+        let is_context = binding.operation == "get-review-context";
+        if document.id != id
+            || document.action_id != binding.action
+            || !digest(&document.action_revision)
+            || document.submission_version == 0
+            || document.revision == 0
+            || !digest(&document.effect_digest)
+            || document.subject.subject_type != "proposal"
+            || document.subject.id != id
+            || document.subject.version != document.submission_version.to_string()
+            || document.subject.digest != document.effect_digest
+            || document.subject.source.is_empty()
+            || document.subject.source.len() > 512
+            || document.context.reference.is_empty()
+            || document.context.reference.len() > 2048
+            || document.authority.is_some() != document.policy.is_some()
+            || document.policy.as_ref().is_some_and(|policy| {
+                !digest(&policy.digest) || policy.id.is_empty() || policy.version.is_empty()
+            })
+            || document.result.as_ref().is_some_and(|result| {
+                !matches!(
+                    result.state.as_str(),
+                    "pending"
+                        | "approved"
+                        | "rejected"
+                        | "changes-requested"
+                        | "answered"
+                        | "cancelled"
+                        | "superseded"
+                        | "expired"
+                ) || result
+                    .result_id
+                    .as_deref()
+                    .is_some_and(|id| Uuid::parse_str(id).is_err())
+            })
+            || is_context && (document.context.id.is_none() || document.context.fields.is_none())
+            || !is_context && (document.context.id.is_some() || document.context.fields.is_some())
+        {
+            return Err(refusal());
+        }
+        Ok(BRegComplete {
+            value: document,
+            metadata: response.metadata,
+        })
+    }
+
     /// Resolve a UUID through an advertised Get capability, without requiring List.
     pub async fn get_proposal(
         &self,
@@ -1132,6 +1261,75 @@ mod tests {
     const REVISION: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ID: &str = "00000000-0000-4000-8000-000000000001";
+    #[test]
+    fn purpose_bindings_require_the_exact_advertised_action_and_profile() {
+        let actions = json!([
+            {"actionId":"correct-address","accessProfile":"reviewer","operations":["get-review-context"]},
+            {"actionId":"correct-address","accessProfile":"status","operations":["get-review-status"]},
+        ]);
+        let source = "https://registry.example/";
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "reviewer",
+            "correct-address",
+            false
+        )
+        .is_ok());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "status",
+            "correct-address",
+            true
+        )
+        .is_ok());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "status",
+            "correct-address",
+            false
+        )
+        .is_err());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "reviewer",
+            "correct-address",
+            true
+        )
+        .is_err());
+        assert!(BRegProposalReviewBinding::from_metadata(
+            &actions,
+            source,
+            "reviewer",
+            "other-action",
+            false
+        )
+        .is_err());
+    }
+    #[tokio::test]
+    async fn direct_review_read_refuses_foreign_binding_and_noncanonical_id_before_io() {
+        let source = client("https://registry.example/");
+        let actions = json!([{"actionId":"correct-address","accessProfile":"reviewer","operations":["get-review-context"]}]);
+        let binding = BRegProposalReviewBinding::from_metadata(
+            &actions,
+            &source.source_binding(),
+            "reviewer",
+            "correct-address",
+            false,
+        )
+        .unwrap();
+        assert!(client("https://other.example/")
+            .read_proposal_review_by_id(&binding, ID)
+            .await
+            .is_err());
+        assert!(source
+            .read_proposal_review_by_id(&binding, "../other")
+            .await
+            .is_err());
+    }
     #[test]
     fn application_receipts_refuse_internal_actor_and_reason_projections() {
         let mut value = document();

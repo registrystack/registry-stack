@@ -25,11 +25,15 @@ type Observations = Arc<Mutex<Vec<(Method, String, HeaderMap)>>>;
 
 fn create_request() -> ReviewCreateRequest {
     ReviewCreateRequest {
-        kind: "registry-correction".to_owned(),
+        policy: registry_review_client::PolicyBinding {
+            id: "registry-correction".into(),
+            version: "1".into(),
+            digest: ContentDigest::parse(DIGEST).unwrap(),
+        },
         subject: subject(),
         requester_reference: "proposal-7".to_owned(),
         initiator: None,
-        context: ReviewContext::Source {
+        context: ReviewContext::CurrentSource {
             binding: SourceContextBinding {
                 reference: "proposal-7".to_owned(),
             },
@@ -866,4 +870,42 @@ async fn excess_headers() -> Response<Body> {
             .insert(name, HeaderValue::from_static("value"));
     }
     response
+}
+
+#[tokio::test]
+async fn create_refuses_each_changed_expected_policy_binding_component() {
+    for field in ["id", "version", "digest"] {
+        let mut body = accepted_json(Uuid::from_u128(7));
+        body["policy"][field] = if field == "digest" {
+            json!(OTHER_DIGEST)
+        } else {
+            json!("different")
+        };
+        let app = Router::new().route(
+            "/v1/review-requests",
+            post(move || {
+                let body = body.clone();
+                async move { json_response(StatusCode::CREATED, body) }
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let token = BearerToken::new("one-call-secret").unwrap();
+        let error = client
+            .create_or_recover_request(
+                ReviewAuth::new(&token, "producer"),
+                "request-key",
+                &create_request(),
+                &expected_submission_digest(),
+            )
+            .await
+            .expect_err("acceptance must bind every expected policy component");
+        assert!(matches!(
+            error,
+            ReviewClientError::Protocol {
+                failure: ReviewProtocolFailure::Body,
+                ..
+            }
+        ));
+        server.abort();
+    }
 }

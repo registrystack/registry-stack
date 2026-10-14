@@ -18,13 +18,12 @@ use registry_casework::{
     PostgresStore, ReviewResultRead, ReviewTaskDecisionRequest,
 };
 use registry_casework_core::{
-    AccessProfile, ActorContext, CaseworkProject, CaseworkRole, ContentDigest, InboxPolicy,
-    IssuerPrincipal, ProjectIdentity, QueuePolicy, ReviewCompletion,
-    ReviewCompletionDestinationPolicy, ReviewCompletionType, ReviewContext, ReviewContextStrategy,
-    ReviewCreateRequest, ReviewKindPolicy, ReviewKindPurpose, ReviewProducerPolicy,
-    ReviewRequestAccepted, ReviewResult, ReviewResultFeedPage, ReviewResultStatus,
-    ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskPage, ReviewerDecisionKind, SubjectBinding,
-    CASEWORK_PROFILE_HEADER,
+    AccessProfile, ActorContext, CaseworkProject, CaseworkRole, ContentDigest, DecisionKind,
+    InboxPolicy, IssuerPrincipal, ProjectIdentity, QueuePolicy, ReviewCompletion,
+    ReviewCompletionDestinationPolicy, ReviewCompletionType, ReviewContext, ReviewContextPolicy,
+    ReviewCreateRequest, ReviewPolicy, ReviewProducerPolicy, ReviewPurpose, ReviewRequestAccepted,
+    ReviewResult, ReviewResultFeedPage, ReviewResultStatus, ReviewRetentionPolicy,
+    ReviewStagePolicy, ReviewTaskPage, SubjectBinding, CASEWORK_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
@@ -227,7 +226,10 @@ impl PaymentStore {
         Ok(())
     }
 
-    fn submit_for_review(&self) -> Result<ReviewCreateRequest, PaymentError> {
+    fn submit_for_review(
+        &self,
+        policy: registry_casework_core::PolicyBinding,
+    ) -> Result<ReviewCreateRequest, PaymentError> {
         let mut guard = self.batch.lock().expect("payment batch lock");
         let batch = guard.as_mut().ok_or(PaymentError::InvalidBatch)?;
         if batch.state != PaymentBatchState::Draft || batch.amount_minor == 0 {
@@ -235,7 +237,7 @@ impl PaymentStore {
         }
         batch.state = PaymentBatchState::Submitted;
         Ok(ReviewCreateRequest {
-            kind: "payment-batch".to_owned(),
+            policy,
             subject: SubjectBinding {
                 source: "payments".to_owned(),
                 subject_type: "payment_batch".to_owned(),
@@ -339,12 +341,14 @@ fn project(issuer: &str) -> CaseworkProject {
             id: "payment-review".to_owned(),
             label: "Payment review".to_owned(),
         }],
-        sources: Vec::new(),
-        review_kinds: vec![ReviewKindPolicy {
+        teams: Vec::new(),
+        context_providers: Vec::new(),
+        review_policies: vec![ReviewPolicy {
             id: "payment-batch".to_owned(),
             version: "1".to_owned(),
-            purpose: ReviewKindPurpose::Approval,
-            context_strategy: ReviewContextStrategy::Submitted,
+            purpose: ReviewPurpose::Approval,
+            context: ReviewContextPolicy::Submitted,
+            routing: Vec::new(),
             stages: vec![ReviewStagePolicy {
                 id: "verification".to_owned(),
                 queue: "payment-review".to_owned(),
@@ -369,9 +373,13 @@ fn project(issuer: &str) -> CaseworkProject {
                 }
             }),
             result_schema: None,
-            outcomes: Vec::new(),
+            outcomes: serde_json::from_value(json!([
+                {"id":"approved","label":"Approve","settlement":"approved","reasonRequired":false},
+                {"id":"rejected","label":"Reject","settlement":"rejected","reasonRequired":true}
+            ]))
+            .expect("payment outcome policies"),
         }],
-        review_producers: vec![ReviewProducerPolicy {
+        trusted_producers: vec![ReviewProducerPolicy {
             id: "payments".to_owned(),
             profile: "payments".to_owned(),
             issuer: issuer.to_owned(),
@@ -379,7 +387,7 @@ fn project(issuer: &str) -> CaseworkProject {
             trusted_initiator_issuer: None,
             initiator_profile: None,
             source_namespaces: vec!["payments".to_owned()],
-            kinds: vec!["payment-batch".to_owned()],
+            review_policies: vec!["payment-batch".to_owned()],
             recovery_days: 7,
             completion: Some(ReviewCompletionDestinationPolicy {
                 destination_id: "payment-results".to_owned(),
@@ -460,7 +468,7 @@ async fn fixture_for_issuer(
     let service = CaseworkService::new(
         store.clone(),
         project.clone(),
-        Vec::<Arc<dyn registry_casework_core::SourceAdapter>>::new(),
+        Vec::<Arc<dyn registry_casework_core::ReviewContextProvider>>::new(),
     )
     .expect("payment review service");
     (service, store, database, project)
@@ -476,7 +484,14 @@ async fn independent_payment_source_uses_casework_but_retains_release_authority(
     let (service, database) = fixture().await;
     let payments = PaymentStore::default();
     payments.create(12_500).expect("valid payment batch");
-    let request = payments.submit_for_review().expect("freeze payment batch");
+    let request = payments
+        .submit_for_review(
+            project(ISSUER)
+                .compile_policy("payment-batch")
+                .unwrap()
+                .binding(),
+        )
+        .expect("freeze payment batch");
     let producer = actor("payment-service", CaseworkRole::Requester, "payments");
     let reviewer = actor("reviewer", CaseworkRole::Staff, "reviewer");
     let accepted = service
@@ -501,7 +516,7 @@ async fn independent_payment_source_uses_casework_but_retains_release_authority(
             &reviewer,
             task_id,
             ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Approve,
+                decision: DecisionKind::Approve,
             },
             None,
             "",
@@ -554,6 +569,7 @@ async fn independent_payment_source_uses_casework_but_retains_release_authority(
 async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_boundaries() {
     let idp = MockIdp::start().await;
     let (service, _, database, project) = fixture_for_issuer(&idp.issuer()).await;
+    let expected_policy = project.compile_policy("payment-batch").unwrap().binding();
     let authenticator = CaseworkAuthenticator::new(
         &project,
         oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
@@ -589,7 +605,9 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
 
     let payments = PaymentStore::default();
     payments.create(12_500).expect("valid payment batch");
-    let request = payments.submit_for_review().expect("freeze payment batch");
+    let request = payments
+        .submit_for_review(expected_policy)
+        .expect("freeze payment batch");
     let created = client
         .post(format!("{}/v1/review-requests", casework.base_url))
         .bearer_auth(&producer_token)
@@ -701,7 +719,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
         .header("if-match", "\"2\"")
         .header("idempotency-key", "approve-payment-over-http")
         .json(&ReviewTaskDecisionRequest {
-            decision: ReviewerDecisionKind::Approve,
+            decision: DecisionKind::Approve,
         })
         .send()
         .await

@@ -15,11 +15,8 @@ mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;
 mod service;
-mod source_retention;
 mod store;
 mod task_grants;
-
-pub(crate) use clocks::{reconcile_clock_observation, ResolvedClockPolicy};
 
 pub use activation::*;
 #[cfg(any(test, feature = "postgres-test"))]

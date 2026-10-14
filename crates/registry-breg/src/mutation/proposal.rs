@@ -7,7 +7,7 @@ use crate::model::{
     CompiledActionExecution, CompiledProposalReview, ProposalOperation, ProposalOwnership,
 };
 use crate::postgres::{
-    ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase, begin_proposal_transaction,
+    begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase,
 };
 use crate::proposal_prepare::{self, ProposalTargetSnapshot};
 use crate::proposal_store::{self, ProposalDocument};
@@ -2301,13 +2301,13 @@ impl MutationCoordinator {
             || row.get::<_, String>(1) != frozen.effect_digest().as_str()
             || row.get::<_, Value>(2)
                 != serde_json::to_value(policy).map_err(|_| MutationError::Unavailable)?
-            || create.kind != policy.id
+            || create.policy != *policy
             || create.subject.source != *source
             || create.subject.subject_type != "proposal"
             || create.subject.id != document.proposal_id.to_string()
             || create.subject.version != frozen.version().get().to_string()
             || create.subject.digest.as_str() != frozen.effect_digest().as_str()
-            || !matches!(&create.context,registry_review_client::ReviewContext::Source { binding }
+            || !matches!(&create.context,registry_review_client::ReviewContext::CurrentSource { binding }
                 if binding.reference == context_reference)
             || expected_digest.as_str() != row.get::<_, String>(5)
         {

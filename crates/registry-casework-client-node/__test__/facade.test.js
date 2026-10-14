@@ -66,7 +66,7 @@ test('review task context uses the exact route and forwards the optional source 
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({
+      response.end(fixtureStringify({
         taskId: '00000000-0000-0000-0000-000000000000',
         requestId: '10000000-0000-4000-8000-000000000001',
         subject: {
@@ -75,7 +75,7 @@ test('review task context uses the exact route and forwards the optional source 
         },
         requesterReference: 'correction-42',
         policy: { id: 'registry-correction', version: '1', digest: POLICY_DIGEST },
-        policySnapshot: {
+        policyClosure: {
           identity: { id: 'registry-correction', version: '1', digest: POLICY_DIGEST },
           purpose: 'approval', contextStrategy: 'source',
           stages: [{ id: 'review', queue: 'review', decidingProfiles: ['staff'], requiredApprovals: 1, excludeInitiator: false, excludePreviousStageReviewers: false }],
@@ -128,7 +128,7 @@ test('supervisory review task discovery preserves the bounded row and query', as
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({
+      response.end(fixtureStringify({
         items: [{
           taskId: '00000000-0000-0000-0000-000000000007',
           requestId: '00000000-0000-0000-0000-000000000009',
@@ -183,7 +183,7 @@ test('own decisions preserve the reference and pinned receipt through the native
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({
+      response.end(fixtureStringify({
         items: [{
           taskId: '00000000-0000-0000-0000-000000000007',
           requestId: '00000000-0000-0000-0000-000000000009',
@@ -226,7 +226,7 @@ test('review note forwards the optional source profile and idempotency key', asy
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({
+      response.end(fixtureStringify({
         eventId: '10000000-0000-4000-8000-000000000001',
         requestId: '00000000-0000-0000-0000-000000000000',
         kind: 'note',
@@ -319,25 +319,9 @@ test('decision forwards the selected source profile with mutation headers', asyn
   const { port } = server.address();
   const { CaseworkClient } = require('../client');
   const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
-  const binding = {
-    sourceRevision: 'revision-9',
-    version: 'version-9',
-    generation: 'generation-9',
-  };
-  await assert.rejects(client.decideWorkItem(
-    'one-call-secret',
-    'staff',
-    'reviewer',
-    {
-      operation: 'approve',
-      href: '/v1/work-items/00000000-0000-0000-0000-000000000000/decisions',
-      ifMatch: '"9"',
-    },
-    'attempt-9',
-    {
-      displayedBinding: binding,
-      operation: 'approve',
-    },
+  await assert.rejects(client.decideReviewTask(
+    'one-call-secret', 'staff', '00000000-0000-0000-0000-000000000009',
+    9, 'attempt-9', { decision: { type: 'approve' } }, 'reviewer',
   ), (error) => error.kind === 'protocol');
 
   assert.equal(observed.authorization, 'Bearer one-call-secret');
@@ -345,184 +329,6 @@ test('decision forwards the selected source profile with mutation headers', asyn
   assert.equal(observed['registry-source-profile'], 'reviewer');
   assert.equal(observed['if-match'], '"9"');
   assert.equal(observed['idempotency-key'], 'attempt-9');
-});
-
-test('source history forwards cursor and limit and returns the continuation', async (context) => {
-  let observed;
-  const server = http.createServer((request, response) => {
-    observed = { path: request.url, headers: request.headers };
-    request.resume();
-    request.on('end', () => {
-      response.writeHead(200, {
-        'content-type': 'application/json',
-        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
-      });
-      const reviewHistory = request.url.startsWith('/v1/review-requests/');
-      response.end(JSON.stringify(reviewHistory
-        ? {
-            // Review history pages bind a present cursor to the final
-            // returned event, so the fixture serves the entry it names.
-            items: [{
-              eventId: '10000000-0000-4000-8000-000000000001',
-              requestId: '00000000-0000-0000-0000-000000000000',
-              kind: 'note',
-              detail: {},
-              occurredAt: '2026-09-20T00:00:00Z',
-            }],
-            nextCursor: '10000000-0000-4000-8000-000000000001',
-          }
-        : { items: [], nextCursor: 'next-cursor', status: 'complete' }));
-    });
-  });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  context.after(() => new Promise((resolve) => server.close(resolve)));
-
-  const { port } = server.address();
-  const { CaseworkClient } = require('../client');
-  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
-  const page = await client.workItemHistory(
-    'one-call-secret',
-    'staff',
-    'reviewer',
-    '00000000-0000-0000-0000-000000000000',
-    { cursor: 'opaque-cursor', limit: 25 },
-  );
-
-  assert.equal(page.value.nextCursor, 'next-cursor');
-  assert.equal(
-    observed.path,
-    '/v1/work-items/00000000-0000-0000-0000-000000000000/history?cursor=opaque-cursor&limit=25',
-  );
-  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
-
-  const reviewPage = await client.reviewHistory(
-    'one-call-secret',
-    'staff',
-    '00000000-0000-0000-0000-000000000000',
-    { limit: 25 },
-    'reviewer',
-  );
-  assert.equal(reviewPage.value.nextCursor, '10000000-0000-4000-8000-000000000001');
-  assert.equal(
-    observed.path,
-    '/v1/review-requests/00000000-0000-0000-0000-000000000000/history?limit=25',
-  );
-  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
-});
-
-test('holdings forwards cursor and limit and returns the continuation', async (context) => {
-  let observed;
-  const server = http.createServer((request, response) => {
-    observed = { path: request.url, headers: request.headers };
-    request.resume();
-    request.on('end', () => {
-      response.writeHead(200, {
-        'content-type': 'application/json',
-        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
-      });
-      response.end(JSON.stringify({ items: [], nextCursor: 'next-holdings', status: 'complete' }));
-    });
-  });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  context.after(() => new Promise((resolve) => server.close(resolve)));
-
-  const { port } = server.address();
-  const { CaseworkClient } = require('../client');
-  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
-  const page = await client.holdings(
-    'one-call-secret',
-    'staff',
-    'reviewer',
-    { cursor: 'opaque-holdings', limit: 25 },
-  );
-
-  assert.equal(page.value.nextCursor, 'next-holdings');
-  assert.equal(observed.path, '/v1/holdings?cursor=opaque-holdings&limit=25');
-  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
-});
-
-test('next work item preserves an empty budget-exhausted page and its cursor', async (context) => {
-  let observed;
-  const server = http.createServer((request, response) => {
-    observed = { path: request.url, headers: request.headers };
-    request.resume();
-    request.on('end', () => {
-      response.writeHead(200, {
-        'content-type': 'application/json',
-        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
-      });
-      response.end(JSON.stringify({
-        items: [],
-        nextCursor: 'resume-next',
-        status: 'budget-exhausted',
-        servedQueues: ['review'],
-      }));
-    });
-  });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  context.after(() => new Promise((resolve) => server.close(resolve)));
-
-  const { port } = server.address();
-  const { CaseworkClient } = require('../client');
-  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
-  const page = await client.nextWorkItem(
-    'one-call-secret',
-    'staff',
-    'reviewer',
-    { queue: 'review', cursor: 'opaque-next' },
-  );
-
-  assert.deepEqual(page.value, {
-    items: [],
-    nextCursor: 'resume-next',
-    status: 'budget-exhausted',
-    servedQueues: ['review'],
-  });
-  assert.equal(observed.path, '/v1/work-items/next?queue=review&cursor=opaque-next');
-  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
-});
-
-test('source inbox forwards one complete exact subject selector', async (context) => {
-  let observed;
-  const server = http.createServer((request, response) => {
-    observed = { url: request.url, headers: request.headers };
-    request.resume();
-    request.on('end', () => {
-      response.writeHead(200, {
-        'content-type': 'application/json',
-        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
-      });
-      response.end(JSON.stringify({ items: [], servedQueues: ['appeals', 'review'], status: 'complete' }));
-    });
-  });
-  await listen(server);
-  context.after(() => new Promise((resolve) => server.close(resolve)));
-
-  const { CaseworkClient } = require('../client');
-  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
-  const page = await client.listWorkItems('one-call-secret', 'staff', 'reviewer', {
-    view: 'my-teams',
-    sourceId: 'source-one',
-    subjectKind: 'resident-record',
-    subjectId: 'human-reference-42',
-    limit: 25,
-  });
-
-  const query = new URL(observed.url, 'http://fixture.invalid').searchParams;
-  assert.equal(query.get('sourceId'), 'source-one');
-  assert.equal(query.get('subjectKind'), 'resident-record');
-  assert.equal(query.get('subjectId'), 'human-reference-42');
-  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
-  assert.deepEqual(page.value.servedQueues, ['appeals', 'review']);
 });
 
 test('directory target discovery preserves its exact purpose context without source authority', async (context) => {
@@ -535,7 +341,7 @@ test('directory target discovery preserves its exact purpose context without sou
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({
+      response.end(fixtureStringify({
         items: [{ issuer: 'https://id.example', subject: 'cover-officer', displayName: 'Cover Officer' }],
         nextCursor: 'target-next',
         status: 'complete',
@@ -580,7 +386,7 @@ test('absence list carries caller pagination and the next cursor', async (contex
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({ directoryRevision: 12, items: [], nextCursor: 'absence-next' }));
+      response.end(fixtureStringify({ directoryRevision: 12, items: [], nextCursor: 'absence-next' }));
     });
   });
   await listen(server);
@@ -603,74 +409,8 @@ test('absence list carries caller pagination and the next cursor', async (contex
   assert.equal(observed.headers['registry-source-profile'], undefined);
 });
 
-test('native client preserves the optional held timestamp', async (context) => {
-  const itemId = '00000000-0000-4000-8000-000000000001';
-  const heldSince = '2026-09-11T03:04:05Z';
-  const server = http.createServer((request, response) => {
-    request.resume();
-    request.on('end', () => {
-      response.writeHead(200, {
-        'content-type': 'application/json',
-        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
-      });
-      response.end(JSON.stringify({
-        itemId,
-        subject: { sourceId: 'source-one', kind: 'case', id: 'case-one' },
-        occurrenceKind: 'review',
-        binding: { sourceRevision: 'revision-1', version: 'version-1', generation: 'generation-1' },
-        bindingReference: 'binding-one',
-        state: 'claimed',
-        queueId: 'review',
-        holder: { issuer: 'https://id.example', subject: 'officer-one' },
-        heldSince,
-        revision: 2,
-        firstObservedAt: '2026-09-11T03:00:00Z',
-        updatedAt: heldSince,
-        actions: [],
-      }));
-    });
-  });
-  await listen(server);
-  context.after(() => new Promise((resolve) => server.close(resolve)));
-
-  const { CaseworkClient } = require('../client');
-  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
-  const outcome = await client.getWorkItem('one-call-secret', 'staff', 'reviewer', itemId);
-
-  assert.equal(outcome.value.heldSince, heldSince);
-});
-
-test('recovery-pending problem preserves the original attempt reference', async (context) => {
-  const originalAttemptId = '10000000-0000-4000-8000-000000000001';
-  const server = problemServer('work-item.recovery-pending', {
-    'registry-casework-attempt': originalAttemptId,
-  });
-  await listen(server);
-  context.after(() => new Promise((resolve) => server.close(resolve)));
-
-  const { port } = server.address();
-  const { CaseworkClient, CaseworkClientError } = require('../client');
-  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
-  await assert.rejects(
-    client.description('one-call-secret', 'staff'),
-    (error) => {
-      assert.ok(error instanceof CaseworkClientError);
-      assert.equal(error.kind, 'problem');
-      assert.equal(error.status, 409);
-      assert.equal(error.code, 'work-item.recovery-pending');
-      assert.equal(
-        error.detail,
-        'We could not confirm the result of your last action. Recover the original attempt; do not decide again.',
-      );
-      assert.equal(error.message, error.detail);
-      assert.equal(error.originalAttemptId, originalAttemptId);
-      return true;
-    },
-  );
-});
-
 test('unknown future problem code stays a problem without recovery metadata', async (context) => {
-  const server = problemServer('work-item.future-safe');
+  const server = problemServer('review.future-safe');
   await listen(server);
   context.after(() => new Promise((resolve) => server.close(resolve)));
 
@@ -681,141 +421,13 @@ test('unknown future problem code stays a problem without recovery metadata', as
     client.description('one-call-secret', 'staff'),
     (error) => {
       assert.equal(error.kind, 'problem');
-      assert.equal(error.code, 'work-item.future-safe');
+      assert.equal(error.code, 'review.future-safe');
       assert.equal(error.detail, undefined);
       assert.equal(error.message, 'Registry Casework refused the request');
       assert.equal(error.originalAttemptId, undefined);
       return true;
     },
   );
-});
-
-test('absence creation and reviewed caseload selection preserve exact mutation context', async (context) => {
-  const observed = [];
-  const itemId = '10000000-0000-4000-8000-000000000001';
-  const server = http.createServer((request, response) => {
-    let bytes = '';
-    request.on('data', (chunk) => { bytes += chunk; });
-    request.on('end', () => {
-      const body = JSON.parse(bytes);
-      observed.push({ path: request.url, headers: request.headers, body });
-      const creating = request.url === '/v1/directory/absences';
-      const updatingTeam = request.url === '/v1/directory/teams/review-team';
-      response.writeHead(creating ? 201 : 200, {
-        'content-type': 'application/json',
-        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
-      });
-      response.end(JSON.stringify(creating
-        ? { ...body, absenceId: itemId, revision: 3 }
-        : updatingTeam ? {
-          revision: 4,
-          teams: [{
-            id: 'review-team',
-            members: body.staff,
-            supervisors: body.supervisors,
-            servedQueues: body.servedQueues,
-            revision: 4,
-          }],
-        } : [{ itemId, result: 'moved', revision: 8 }]));
-    });
-  });
-  await listen(server);
-  context.after(() => new Promise((resolve) => server.close(resolve)));
-  const { CaseworkClient } = require('../client');
-  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
-  const person = { issuer: 'https://idp.example', subject: 'officer' };
-  const cover = { issuer: 'https://idp.example', subject: 'cover' };
-  const absence = { person, cover, from: '2026-09-14T00:00:00Z', until: '2026-09-19T00:00:00Z' };
-  const created = await client.createAbsence('synthetic-token', 'administrator', 2, 'absence-2', absence);
-  assert.equal(created.value.revision, 3);
-  const request = {
-    movement: { from: person, to: cover, reason: 'Cover the absence' },
-    items: [{ itemId, expectedRevision: 7 }],
-  };
-  const moved = await client.applyCaseloadMove('synthetic-token', 'supervisor', 'move-7', request, 'reviewer');
-  assert.equal(moved.value[0].result, 'moved');
-  assert.equal(moved.value[0].revision, 8);
-  assert.equal(observed.length, 2, 'each mutation is sent once');
-  assert.equal(observed[0].headers['if-match'], '"2"');
-  assert.equal(observed[0].headers['idempotency-key'], 'absence-2');
-  assert.equal(observed[0].headers['registry-source-profile'], undefined);
-  assert.equal(observed[1].path, '/v1/directory/caseload/apply');
-  assert.equal(observed[1].headers['registry-casework-profile'], 'supervisor');
-  assert.equal(observed[1].headers['registry-source-profile'], 'reviewer');
-  assert.equal(observed[1].headers['idempotency-key'], 'move-7');
-  assert.equal(observed[1].headers['if-match'], undefined, 'the reviewed items each carry their own revision');
-  assert.deepEqual(observed[1].body, request);
-  await assert.rejects(client.applyCaseloadMove('synthetic-token', 'supervisor', 'duplicate', {
-    ...request, items: [request.items[0], request.items[0]],
-  }), (error) => error.kind === 'invalid-request');
-  assert.equal(observed.length, 2, 'ambiguous selections never reach the service');
-  const team = { staff: [{ ...person, displayName: 'Staff Officer' }], supervisors: [cover], servedQueues: ['review'] };
-  const directory = await client.updateDirectoryTeam('synthetic-token', 'administrator', 'review-team', 3, 'team-update', team);
-  assert.equal(directory.value.revision, 4);
-  assert.equal(directory.value.teams[0].members[0].displayName, 'Staff Officer');
-  assert.equal(observed.length, 3);
-  assert.equal(observed[2].headers['if-match'], '"3"');
-  assert.equal(observed[2].headers['idempotency-key'], 'team-update');
-  assert.equal(observed[2].headers['registry-source-profile'], undefined);
-  assert.deepEqual(observed[2].body, team);
-
-});
-
-test('clock views and recompute expiry preserve source authority and explicit recovery', async (context) => {
-  const observed = [];
-  const previewId = '10000000-0000-4000-8000-000000000002';
-  const server = http.createServer((request, response) => {
-    let bytes = '';
-    request.on('data', (chunk) => { bytes += chunk; });
-    request.on('end', () => {
-      const body = bytes ? JSON.parse(bytes) : undefined;
-      observed.push({ path: request.url, headers: request.headers, body });
-      const expired = request.url.endsWith('/recompute/apply');
-      const creating = request.url === '/v1/directory/holidays';
-      const readingClocks = request.url.endsWith('/clocks');
-      response.writeHead(expired ? 410 : creating ? 201 : 200, {
-        'content-type': expired ? 'application/problem+json' : 'application/json',
-        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
-      });
-      response.end(JSON.stringify(expired ? {
-        type: 'https://id.registrystack.org/problems/registry-casework/clock/recompute-preview-expired',
-        code: 'clock.recompute-preview-expired', title: 'Clock recompute preview expired',
-        status: 410, detail: 'Create a new recompute preview and review it before applying.',
-        traceId: '0123456789abcdef0123456789abcdef',
-      } : creating ? body.document : readingClocks ? [{
-        clockOccurrenceId: previewId,
-        subject: { sourceId: 'source-one', kind: 'case', id: 'case-one' },
-        clockId: 'decision-due', state: 'running',
-        policyDigest: `sha256:${'1'.repeat(64)}`,
-        calculationGeneration: 1, recomputeGeneration: 0,
-        nextEffect: { kind: 'reminder', id: 'at-risk', at: '2026-09-12T00:00:00Z' },
-        upcomingEffects: [
-          { kind: 'reminder', id: 'at-risk', at: '2026-09-12T00:00:00Z' },
-          { kind: 'reassign', id: 'escalate', at: '2026-09-14T00:00:00Z', because: 'Deadline reached', queueId: 'appeals' },
-        ],
-      }] : []));
-    });
-  });
-  await listen(server);
-  context.after(() => new Promise((resolve) => server.close(resolve)));
-  const { CaseworkClient } = require('../client');
-  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
-  const clocks = (await client.workItemClocks('synthetic-token', 'staff', 'reviewer', previewId)).value;
-  assert.equal(clocks[0].nextEffect.id, 'at-risk');
-  assert.deepEqual(clocks[0].upcomingEffects.map((effect) => effect.id), ['at-risk', 'escalate']);
-  const document = { holidaySet: 'office', revision: 7, dates: ['2026-09-07'] };
-  assert.deepEqual((await client.createHolidayRevision('synthetic-token', 'administrator', 'holiday-7', { document })).value, document);
-  await assert.rejects(client.applyClockRecompute('synthetic-token', 'administrator', 'apply-reviewed-preview', { previewId }), (error) => {
-    assert.equal(error.code, 'clock.recompute-preview-expired');
-    assert.equal(error.status, 410);
-    assert.equal(error.detail, 'Create a new recompute preview and review it before applying.');
-    return true;
-  });
-  assert.equal(observed.length, 3, 'an expired preview is never retried automatically');
-  assert.equal(observed[0].headers['registry-source-profile'], 'reviewer');
-  assert.equal(observed[1].headers['registry-source-profile'], undefined);
-  assert.equal(observed[2].headers['idempotency-key'], 'apply-reviewed-preview');
-  assert.deepEqual(observed[2].body, { previewId });
 });
 
 test('native client refuses nested unsafe integers before HTTP and preserves safe numbers', async (context) => {
@@ -829,7 +441,7 @@ test('native client refuses nested unsafe integers before HTTP and preserves saf
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({
+      response.end(fixtureStringify({
         itemId: '00000000-0000-4000-8000-000000000001',
         requesterReference: requests.at(-1).body.requesterReference,
         kind: requests.at(-1).body.kind,
@@ -857,10 +469,10 @@ test('native client refuses nested unsafe integers before HTTP and preserves saf
   );
   const digest = `sha256:${'a'.repeat(64)}`;
   const review = {
-    kind: 'decision',
+    policy: { id: 'decision', version: '1', digest },
     subject: { source: 'standalone', type: 'batch', id: 'batch-1', version: '1', digest },
     requesterReference: 'batch-1',
-    context: { strategy: 'submitted', snapshot: { count: 1 } },
+    context: { mode: 'submitted', snapshot: { count: 1 } },
     resultConstraints: [],
   };
   await assert.rejects(
@@ -899,7 +511,7 @@ test('review cancellation sends the full accepted binding', async (context) => {
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({
+      response.end(fixtureStringify({
         outcome: 'cancelled',
         result: {
           resultId: '10000000-0000-4000-8000-000000000001',
@@ -942,18 +554,40 @@ function problemServer(code, extraHeaders = {}) {
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
         ...extraHeaders,
       });
-      response.end(JSON.stringify({
+      response.end(fixtureStringify({
         type: `https://id.registrystack.org/problems/registry-casework/${code.replaceAll('.', '/')}`,
-        title: code === 'work-item.recovery-pending'
-          ? 'Work item recovery pending'
-          : code,
+        title: code,
         status: 409,
-        detail: code === 'work-item.recovery-pending'
-          ? 'We could not confirm the result of your last action. Recover the original attempt; do not decide again.'
-          : 'Safe detail.',
+        detail: 'Safe detail.',
         code,
         traceId: '0123456789abcdef0123456789abcdef',
       }));
     });
   });
+}
+
+// The canonical serializer is exercised by the Rust closure fixture. These
+// language fixtures bind the same policy/dependency envelope with synthetic data.
+function fixtureStringify(document) {
+  if (document?.policyClosure) {
+    const closure = document.policyClosure;
+    const policy = {
+      id: closure.identity.id, version: closure.identity.version,
+      purpose: closure.purpose,
+      context: closure.contextStrategy === 'source'
+        ? { mode: 'current-source', provider: 'registry', contract: { id: 'registry-context', revision: POLICY_DIGEST, schemaDigest: POLICY_DIGEST } }
+        : { mode: 'submitted' },
+      stages: closure.stages, retention: closure.retention, displaySchema: closure.displaySchema,
+    };
+    const dependencies = { accessProfiles: [], queues: [], teams: [], clocks: [], calendars: [], contextProvider: null, taskTemplates: [], trustedProducers: [], inbox: { defaultPageSize: 25, maximumCandidateScan: 100, maximumSourceReads: 25, maximumConcurrentSourceReads: 4, pageDeadlineMilliseconds: 2000 } };
+    const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+    const digest = 'sha256:' + require('node:crypto').createHash('sha256').update(JSON.stringify(canonical({ schema: 'registry-casework-review-policy/v1', policy, dependencies }))).digest('hex');
+    const { id, version, ...fields } = policy;
+    document.policy = { id, version, digest };
+    document.policyClosure = { identity: document.policy, ...fields, dependencies };
+    document.context.mode = document.context.strategy === 'source' ? 'current-source' : 'submitted';
+    delete document.context.strategy;
+    if (document.context.projection) document.context.projection.binding = document.subject;
+  }
+  return JSON.stringify(document);
 }

@@ -5110,6 +5110,7 @@ dependencies = [
  "jsonschema",
  "jsonwebtoken",
  "registry-breg",
+ "registry-breg-client",
  "registry-bregctl",
  "registry-casework-breg",
  "registry-casework-client",
@@ -5127,6 +5128,7 @@ dependencies = [
  "registry-platform-oidc",
  "registry-platform-testing",
  "registry-platform-yaml",
+ "registry-review-client",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustls",
@@ -5155,12 +5157,13 @@ version = "0.42.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
+ "jsonschema",
  "registry-breg-client",
  "registry-casework-core",
  "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",
- "registry-platform-hooks",
  "registry-platform-httputil",
  "registry-platform-yaml",
  "schemars",
@@ -5187,6 +5190,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "registry-casework-core",
+ "registry-platform-canonical-json",
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
@@ -5273,6 +5277,7 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-httputil",
  "registry-platform-yaml",
+ "registry-stack-client",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustix 1.1.5",
@@ -5925,6 +5930,7 @@ name = "registry-platform-activation"
 version = "0.42.0"
 dependencies = [
  "chrono",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -6303,6 +6309,7 @@ version = "0.42.0"
 dependencies = [
  "chrono",
  "registry-platform-canonical-json",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -6944,6 +6951,7 @@ dependencies = [
  "schemars_derive",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

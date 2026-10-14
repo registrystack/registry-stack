@@ -36,7 +36,7 @@ secretProviders: {{file: {{root: {root}/secrets}}, environment: {{}}}}
 database: {{runtimeUrlRef: secret:env/RUNTIME, migrationUrlRef: secret:env/MIGRATION}}
 authentication: {{oidc: {{issuer: http://127.0.0.1:8091, audience: urn:example:casework, allowedClients: unrestricted}}}}
 audit: {{path: {root}/audit.ndjson, hashKeyRef: secret:file/audit}}
-sources: {{}}
+contextProviders: {{}}
 {tail}",
             package = package.display(),
             root = root.display(),
@@ -73,7 +73,9 @@ fn a_refused_project_prints_every_reader_line_to_stderr() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
-    let policy = package.join(POLICY_FILE);
+    // Captured package diagnostics name the verified package member, rather
+    // than an ambient path that would be read again after verification.
+    let policy = POLICY_FILE;
     let label_line = project
         .lines()
         .position(|line| line == "    lable: Decisions")
@@ -90,7 +92,7 @@ error[config.unknown-key] {policy}:{queuez_line}:1 /queuez
   next: Rename `queuez` to `queues`, or remove it.
 2 errors, 0 warnings in 1 file
 ",
-        policy = policy.display(),
+        policy = policy,
     );
     assert_eq!(stderr, expected);
 }
@@ -148,7 +150,7 @@ error[config.unknown-key] {runtime}:{two}:1 /unknownTwo
         two = line_of("unknownTwo"),
         accepted = "`apiVersion`, `kind`, `identity`, `package`, `listener`, \
             `metricsListener`, `secretProviders`, `database`, `authentication`, `audit`, \
-            `taskAuthority`, `sources`, `reviewCompletionDestinations`",
+            `taskAuthority`, `contextProviders`, `reviewCompletionDestinations`",
     );
     assert_eq!(stderr, expected);
 }

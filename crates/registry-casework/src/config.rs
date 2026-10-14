@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use jsonwebtoken::Algorithm;
-use registry_casework_core::{check_routing_policy, CaseworkProject, ConfigLoadError};
+use registry_casework_core::{CaseworkProject, ConfigLoadError};
 use registry_platform_audit::{
     AuditDestination, AuditDestinationError, AuditDestinationKind, MAX_AUDIT_RETAIN_DAYS,
     MIN_AUDIT_ROTATE_BYTES,
@@ -12,10 +12,10 @@ use registry_platform_audit::{
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    is_sha256_label, sha256_uri, ConfigBlockError, ConfigBlockErrorKind, PackageConfig,
-    PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
-    VerifiedPackage, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    sha256_uri, ConfigBlockError, ConfigBlockErrorKind, PackageConfig, PackageDigestMismatch,
+    PackageError, PackageErrorKind, PackageLimits, RemovedKey, RuntimeConfigLoader,
+    RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver, VerifiedPackage,
+    DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -68,10 +68,6 @@ pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "Rename audit.retainDays to audit.retentionDays",
     },
     RemovedKey {
-        path: "sources.*.requestTimeoutMilliseconds",
-        replacement: "Rename requestTimeoutMilliseconds to attemptTimeoutMilliseconds",
-    },
-    RemovedKey {
         path: "reviewCompletionDestinations.*.timeoutMilliseconds",
         replacement: "Rename timeoutMilliseconds to attemptTimeoutMilliseconds",
     },
@@ -108,15 +104,29 @@ pub fn package_limits() -> PackageLimits {
 }
 
 /// The files a Casework package holds besides `SHA256SUMS` and `REVISION`:
-/// `casework.yaml` and every source description the project names.
-pub fn package_inputs(project: &CaseworkProject) -> Result<BTreeSet<String>, RuntimeConfigError> {
+/// `casework.yaml`, captured display schemas, and context exports it names.
+pub fn package_inputs(
+    project: &CaseworkProject,
+    policy_bytes: &[u8],
+) -> Result<BTreeSet<String>, RuntimeConfigError> {
     let mut inputs = BTreeSet::from([POLICY_FILE.to_owned()]);
-    for source in &project.sources {
-        if normalized_relative_path(&source.description).is_none()
-            || !inputs.insert(source.description.clone())
-        {
-            return Err(RuntimeConfigError::SourceDescription);
+    for reference in CaseworkProject::schema_references(POLICY_FILE, policy_bytes)
+        .map_err(|report| RuntimeConfigError::Project(ConfigLoadError::Refused(report)))?
+    {
+        if normalized_relative_path(&reference).is_none() {
+            return Err(RuntimeConfigError::ContextExport);
         }
+        inputs.insert(reference);
+    }
+    for provider in &project.context_providers {
+        let description = provider
+            .description
+            .as_ref()
+            .ok_or(RuntimeConfigError::ContextExport)?;
+        if normalized_relative_path(description).is_none() {
+            return Err(RuntimeConfigError::ContextExport);
+        }
+        inputs.insert(description.clone());
     }
     Ok(inputs)
 }
@@ -129,7 +139,8 @@ pub fn verify_casework_package(
     project: &CaseworkProject,
 ) -> Result<VerifiedPackage, RuntimeConfigError> {
     let verified = verify_casework_envelope(package)?;
-    verify_casework_contents(project, &verified)?;
+    let policy_bytes = capture_verified_file(&package.root, &verified, POLICY_FILE)?;
+    verify_casework_contents(project, &policy_bytes, &verified)?;
     Ok(verified)
 }
 
@@ -150,9 +161,10 @@ fn verify_casework_envelope(
 
 fn verify_casework_contents(
     project: &CaseworkProject,
+    policy_bytes: &[u8],
     verified: &VerifiedPackage,
 ) -> Result<(), RuntimeConfigError> {
-    let expected = package_inputs(project)?;
+    let expected = package_inputs(project, policy_bytes)?;
     let found = verified
         .files()
         .filter(|path| !is_envelope_file(path))
@@ -171,7 +183,7 @@ fn verify_casework_contents(
 pub struct LoadedCaseworkPackage {
     digest: String,
     project: CaseworkProject,
-    source_descriptions: BTreeMap<String, Vec<u8>>,
+    context_exports: BTreeMap<String, Vec<u8>>,
 }
 
 impl LoadedCaseworkPackage {
@@ -186,8 +198,8 @@ impl LoadedCaseworkPackage {
     }
 
     #[must_use]
-    pub fn source_description(&self, path: &str) -> Option<&[u8]> {
-        self.source_descriptions.get(path).map(Vec::as_slice)
+    pub fn context_export(&self, path: &str) -> Option<&[u8]> {
+        self.context_exports.get(path).map(Vec::as_slice)
     }
 }
 
@@ -234,21 +246,6 @@ fn capture_verified_file(
     Ok(bytes)
 }
 
-/// Validate one imported BReg description through the adapter's owning strict
-/// decoder without resolving runtime bindings or secrets. Returns each request
-/// entity's routing metadata, keyed by entity. A refusal distinguishes a
-/// policy that names a field the description does not publish from a
-/// description that does not meet the adapter contract.
-pub fn validate_breg_source_description(
-    source: &registry_casework_core::SourcePolicy,
-    bytes: &[u8],
-) -> Result<
-    BTreeMap<String, registry_casework_core::RoutingSourceMetadata>,
-    registry_casework_breg::DescriptionRefusal,
-> {
-    registry_casework_breg::check_description_input(source, bytes)
-}
-
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -270,7 +267,7 @@ pub struct RuntimeConfig {
     pub audit: AuditConfig,
     #[serde(default)]
     pub task_authority: Option<TaskAuthorityConfig>,
-    /// Source bindings keyed by the source id `casework.yaml` declares.
+    /// Provider transport bindings keyed by the deploymentRef `casework.yaml` declares.
     #[serde(
         default,
         deserialize_with = "registry_casework_core::typed::local_id_keys"
@@ -281,7 +278,7 @@ pub struct RuntimeConfig {
             with = "BTreeMap<registry_platform_yaml::LocalId, registry_casework_breg::BregBinding>"
         )
     )]
-    pub sources: BTreeMap<String, registry_casework_breg::BregBinding>,
+    pub context_providers: BTreeMap<String, registry_casework_breg::BregBinding>,
     /// Completion destinations keyed by the destination id a review producer
     /// names in `casework.yaml`, kept as written.
     #[serde(
@@ -581,20 +578,6 @@ pub struct RuntimePackageConfig {
         schemars(with = "Option<registry_platform_yaml::Digest>")
     )]
     pub expected_digest: Option<String>,
-    /// The package digest of a package the operator has accepted will strand
-    /// in-flight work pinned under an earlier package. Startup and `doctor`
-    /// refuse such a package unless this names its exact digest, so an
-    /// acknowledgement never carries over to a later package. Omitted, no
-    /// stranding package is accepted.
-    #[serde(
-        default,
-        deserialize_with = "registry_casework_core::typed::optional_digest"
-    )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::Digest>")
-    )]
-    pub acknowledge_stranded_work: Option<String>,
 }
 
 impl RuntimePackageConfig {
@@ -861,26 +844,43 @@ impl RuntimeConfig {
         after_verification();
 
         let policy_bytes = capture_verified_file(&self.package.root, &verified, POLICY_FILE)?;
-        let project = CaseworkProject::read(
-            &self.package.root.join(POLICY_FILE).display().to_string(),
-            &policy_bytes,
-        )
-        .map(|decoded| decoded.value)
-        .map_err(|report| RuntimeConfigError::Project(ConfigLoadError::Refused(report)))?;
-        verify_casework_contents(&project, &verified)?;
+        let schema_references = CaseworkProject::schema_references(POLICY_FILE, &policy_bytes)
+            .map_err(|report| RuntimeConfigError::Project(ConfigLoadError::Refused(report)))?;
+        let schemas = schema_references
+            .into_iter()
+            .map(|reference| {
+                let bytes = capture_verified_file(&self.package.root, &verified, &reference)?;
+                Ok((reference, bytes))
+            })
+            .collect::<Result<BTreeMap<_, _>, RuntimeConfigError>>()?;
+        let project = CaseworkProject::read_with_schemas(POLICY_FILE, &policy_bytes, &schemas)
+            .map(|decoded| decoded.value)
+            .map_err(|report| RuntimeConfigError::Project(ConfigLoadError::Refused(report)))?;
+        verify_casework_contents(&project, &policy_bytes, &verified)?;
 
-        let mut source_descriptions = BTreeMap::new();
-        for source in &project.sources {
-            let bytes =
-                capture_verified_file(&self.package.root, &verified, source.description.as_str())?;
-            source_descriptions.insert(source.description.clone(), bytes);
+        let mut context_exports = BTreeMap::new();
+        for provider in &project.context_providers {
+            let Some(path) = &provider.description else {
+                continue;
+            };
+            let bytes = capture_verified_file(&self.package.root, &verified, path)?;
+            let export: registry_casework_breg::BregContextExport =
+                serde_json::from_slice(&bytes).map_err(|_| RuntimeConfigError::ContextExport)?;
+            export
+                .check()
+                .map_err(|_| RuntimeConfigError::ContextExport)?;
+            if export.source_namespace != provider.source_namespace || project.review_policies.iter().any(|policy| {
+                matches!(&policy.context, registry_casework_core::ReviewContextPolicy::CurrentSource { provider: id, contract } if id == &provider.id && contract != &export.contract)
+            }) {
+                return Err(RuntimeConfigError::ContextExport);
+            }
+            context_exports.insert(path.clone(), bytes);
         }
-        validate_project_source_description_bytes(&project, &source_descriptions)?;
 
         Ok(LoadedCaseworkPackage {
             digest: verified.digest().to_owned(),
             project,
-            source_descriptions,
+            context_exports,
         })
     }
 
@@ -906,14 +906,6 @@ impl RuntimeConfig {
     fn check_package_block(&self, findings: &mut Vec<RuntimeConfigError>) {
         if let Err(error) = self.package.shared().check() {
             findings.push(error.into());
-        }
-        if self
-            .package
-            .acknowledge_stranded_work
-            .as_deref()
-            .is_some_and(|acknowledged| !is_sha256_label(acknowledged))
-        {
-            findings.push(RuntimeConfigError::InvalidStrandedWorkAcknowledgement);
         }
     }
 
@@ -962,18 +954,14 @@ impl RuntimeConfig {
                 findings.push(error.into());
             }
         }
-        for (source_id, binding) in &self.sources {
+        for (source_id, binding) in &self.context_providers {
             for (member, reference) in [
                 ("clientIdRef", &binding.client_id_ref),
                 ("clientAssertionKeyRef", &binding.client_assertion_key_ref),
-                ("webhookSecretRef", &binding.webhook_secret_ref),
             ] {
-                self.check_binding_reference(findings, &["sources", source_id, member], reference);
-            }
-            if let Some(reference) = &binding.trusted_root_certificates_ref {
                 self.check_binding_reference(
                     findings,
-                    &["sources", source_id, "trustedRootCertificatesRef"],
+                    &["contextProviders", source_id, member],
                     reference,
                 );
             }
@@ -1125,24 +1113,6 @@ impl RuntimeConfig {
         }
     }
 
-    /// Refuse a bound source that breaks one of the adapter's binding rules.
-    /// This runs at configuration load, before secrets are resolved or any
-    /// adapter is built, so an operator sees the refusal without the runtime
-    /// ever starting. The refusal names the member that broke the rule and
-    /// the rule itself, never the configured value.
-    fn check_source_bindings(&self, findings: &mut Vec<RuntimeConfigError>) {
-        for (source_id, binding) in &self.sources {
-            if let Err(rule) = registry_casework_breg::validate_binding_input(binding) {
-                let segments = ["sources", source_id.as_str(), rule.field()];
-                findings.push(RuntimeConfigError::InvalidSourceBinding {
-                    path: segments.join("."),
-                    pointer: pointer_to(&segments),
-                    reason: rule.reason(),
-                });
-            }
-        }
-    }
-
     fn check_principal_claims(
         &self,
         project: &CaseworkProject,
@@ -1249,46 +1219,25 @@ impl RuntimeConfig {
         }
     }
 
-    fn check_source_set(&self, project: &CaseworkProject, findings: &mut Vec<RuntimeConfigError>) {
-        let declared_sources = project
-            .sources
-            .iter()
-            .map(|source| source.id.as_str())
-            .collect::<BTreeSet<_>>();
-        let configured_sources = self
-            .sources
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-        if self.sources.keys().any(String::is_empty) || configured_sources != declared_sources {
-            findings.push(RuntimeConfigError::InvalidSourceBindings);
-        }
-    }
-
-    fn check_review_source_namespaces(
+    fn check_context_provider_set(
         &self,
         project: &CaseworkProject,
         findings: &mut Vec<RuntimeConfigError>,
     ) {
-        let source_context_kinds = project
-            .review_kinds
+        let declared_providers = project
+            .context_providers
             .iter()
-            .filter(|kind| {
-                kind.context_strategy == registry_casework_core::ReviewContextStrategy::Source
-            })
-            .map(|kind| kind.id.as_str())
+            .map(|provider| provider.deployment_ref.as_str())
             .collect::<BTreeSet<_>>();
-        if project.review_producers.iter().any(|producer| {
-            producer
-                .kinds
-                .iter()
-                .any(|kind| source_context_kinds.contains(kind.as_str()))
-                && producer
-                    .source_namespaces
-                    .iter()
-                    .any(|namespace| !self.sources.contains_key(namespace))
-        }) {
-            findings.push(RuntimeConfigError::InactiveReviewSourceNamespace);
+        let configured_providers = self
+            .context_providers
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if self.context_providers.keys().any(String::is_empty)
+            || !configured_providers.is_subset(&declared_providers)
+        {
+            findings.push(RuntimeConfigError::InvalidContextProviders);
         }
     }
 
@@ -1298,7 +1247,7 @@ impl RuntimeConfig {
         findings: &mut Vec<RuntimeConfigError>,
     ) {
         if project
-            .review_producers
+            .trusted_producers
             .iter()
             .filter_map(|producer| producer.completion.as_ref())
             .any(|completion| {
@@ -1388,15 +1337,13 @@ const FILE_RULES: &[FileRule] = &[
     RuntimeConfig::check_oidc,
     RuntimeConfig::check_database,
     RuntimeConfig::check_review_completion_destinations,
-    RuntimeConfig::check_source_bindings,
 ];
 
 /// The rules a runtime file satisfies against the project it binds.
 const PROJECT_RULES: &[ProjectRule] = &[
     RuntimeConfig::check_principal_claims,
     RuntimeConfig::check_task_authority,
-    RuntimeConfig::check_source_set,
-    RuntimeConfig::check_review_source_namespaces,
+    RuntimeConfig::check_context_provider_set,
     RuntimeConfig::check_completion_destinations_configured,
 ];
 
@@ -1444,45 +1391,6 @@ fn valid_review_completion_url(raw: &str) -> bool {
         "http" => matches!(url.host_str(), Some("127.0.0.1" | "::1" | "[::1]")),
         _ => false,
     }
-}
-
-fn validate_project_source_description_bytes(
-    project: &CaseworkProject,
-    descriptions: &BTreeMap<String, Vec<u8>>,
-) -> Result<(), RuntimeConfigError> {
-    let queues = project
-        .queues
-        .iter()
-        .map(|queue| queue.id.clone())
-        .collect::<BTreeSet<_>>();
-    for source in &project.sources {
-        if source.adapter != "breg"
-            || source.requests.is_empty()
-            || source.requests.len() > registry_casework_breg::MAXIMUM_REQUEST_ENTITIES
-        {
-            return Err(RuntimeConfigError::SourceDescription);
-        }
-        let bytes = descriptions
-            .get(&source.description)
-            .ok_or(RuntimeConfigError::SourceDescription)?;
-        let metadata = validate_breg_source_description(source, bytes)
-            .map_err(|_| RuntimeConfigError::SourceDescription)?;
-        for request in &source.requests {
-            check_routing_policy(
-                &request.queue,
-                &request.projection,
-                &request.routing,
-                &queues,
-                Some(
-                    metadata
-                        .get(&request.entity)
-                        .ok_or(RuntimeConfigError::SourceDescription)?,
-                ),
-            )
-            .map_err(|_| RuntimeConfigError::SourceDescription)?;
-        }
-    }
-    Ok(())
 }
 
 fn is_unique_local(address: Ipv6Addr) -> bool {
@@ -1641,16 +1549,15 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["package", "root"] | ["audit", "path"] | ["secretProviders", "file", "root"] => {
             "/deferred"
         }
-        ["package", "expectedDigest" | "acknowledgeStrandedWork"] => {
+        ["package", "expectedDigest"] => {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         }
         ["authentication", "oidc", "issuer"]
         | ["authentication", "oidc", "jwksSource", "uri"]
         | ["taskAuthority", "issuer" | "exchangeAudience"]
         | ["taskAuthority", "statusClients", _]
-        | ["sources", _, "baseUrl" | "tokenEndpoint" | "clientAssertionAudience" | "resource"]
+        | ["contextProviders", _, "baseUrl" | "tokenEndpoint" | "clientAssertionAudience" | "resource"]
         | ["reviewCompletionDestinations", _, "url"] => "https://deferred.invalid",
-        ["sources", _, "eventSource"] => "urn:registrystack:registry:deferred:instance:deferred",
         _ => DEFAULT_STAND_IN,
     }
 }
@@ -1658,2376 +1565,111 @@ fn stand_in_for(pointer: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_platform_config::{
-        MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,
-        MAX_ASSERTION_ISSUER_CLIENT_BYTES, SUM_FILE,
-    };
-    use registry_platform_oidc::is_access_token_typ_pair;
+    use registry_platform_config::write_package;
+    use serde_json::json;
 
-    #[test]
-    fn completion_destination_requires_a_complete_credential_free_url() {
-        for valid in [
-            "https://casework.example.test/v1/completions",
-            "http://127.0.0.1:8080/completions",
-            "http://[::1]:8080/completions",
-        ] {
-            assert!(valid_review_completion_url(valid), "{valid}");
-        }
-        for invalid in [
-            "https://",
-            "https://user@casework.example.test/completions",
-            "https://casework.example.test/completions?token=secret",
-            "https://casework.example.test/completions#fragment",
-            "http://casework.example.test/completions",
-        ] {
-            assert!(!valid_review_completion_url(invalid), "{invalid}");
-        }
-    }
+    const STANDALONE: &str =
+        include_str!("../../../products/casework/examples/standalone-decision/casework.yaml");
+    const SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","reference"],"properties":{"summary":{"type":"string","maxLength":160},"reference":{"type":"string","maxLength":120}}}"#;
 
-    const SOURCE_PROJECT: &str = r#"apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
-kind: CaseworkProject
-project: {id: packaged-review, version: "1"}
-accessProfiles:
-  - {id: staff, principalClaim: sub, requiredScopes: [staff], role: staff}
-  - {id: supervisor, principalClaim: sub, requiredScopes: [supervisor], role: supervisor}
-  - {id: administrator, principalClaim: sub, requiredScopes: [admin], role: administrator}
-queues: [{id: review, label: Review}]
-sources:
-  - id: professional
-    adapter: breg
-    description: sources/professional.json
-    requests: [{entity: correction, queue: review}]
-"#;
-
-    const SOURCE_CONTEXT_REVIEW_PROJECT: &str = r#"apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
-kind: CaseworkProject
-project: {id: packaged-review, version: "1"}
-accessProfiles:
-  - {id: staff, principalClaim: sub, requiredScopes: [staff], role: staff}
-  - {id: supervisor, principalClaim: sub, requiredScopes: [supervisor], role: supervisor}
-  - {id: administrator, principalClaim: sub, requiredScopes: [admin], role: administrator}
-  - {id: requester, principalClaim: sub, requiredScopes: [requester], role: requester}
-queues: [{id: review, label: Review}]
-sources:
-  - id: professional
-    adapter: breg
-    description: sources/professional.json
-    requests: [{entity: correction, queue: review}]
-reviewKinds:
-  - id: correction
-    version: "1"
-    purpose: approval
-    contextStrategy: source
-    stages:
-      - {id: review, queue: review, decidingProfiles: [staff], requiredApprovals: 1}
-    retention: {terminalDays: 30, accountabilityDays: 90}
-    displaySchema:
-      type: object
-      additionalProperties: false
-      required: [summary]
-      properties: {summary: {type: string, maxLength: 160}}
-reviewProducers:
-  - id: registry
-    profile: requester
-    issuer: https://registry.example.test
-    subject: registry-service
-    sourceNamespaces: [professional]
-    kinds: [correction]
-    recoveryDays: 7
-"#;
-
-    const SOURCE_DESCRIPTION: &str = r#"{
-  "apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
-  "kind":"CaseworkBregSourceDescription",
-  "origin":"bregctl explain change-requests",
-  "authority":"none",
-  "sourceId":"professional",
-  "sourceRevision":"sha256:source-revision",
-  "requests":[{
-    "requestEntity":"correction",
-    "requestRoute":"corrections",
-    "review":{"type":"required","authority":"casework-main","policyId":"registry-correction"},
-    "onApproved":{"mode":"manual"},
-    "fields":[],
-    "contractFingerprint":"sha256:contract",
-    "application":{}
-  }]
-}
-"#;
-
-    fn write_package_with_project(root: &Path, project: &str) -> VerifiedPackage {
-        std::fs::create_dir_all(root.join("sources")).unwrap();
-        std::fs::write(root.join("casework.yaml"), project).unwrap();
-        std::fs::write(root.join("sources/professional.json"), SOURCE_DESCRIPTION).unwrap();
-        registry_platform_config::write_sum_file(root, None, &package_limits(), PACKAGE_COMMAND)
+    fn read_operator(value: &serde_json::Value, directory: &Path) -> RuntimeConfig {
+        let path = directory.join("runtime.yaml");
+        std::fs::write(&path, serde_norway::to_string(value).unwrap()).unwrap();
+        RuntimeConfig::loader()
+            .load::<RuntimeConfig>(&path)
             .unwrap()
+            .config
     }
 
-    fn canonical_tempdir() -> tempfile::TempDir {
-        tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap()
-    }
-
-    fn write_operator(root: &Path, document: &serde_json::Value) -> PathBuf {
-        let operator = root.join("operator.yaml");
-        std::fs::write(&operator, serde_norway::to_string(document).unwrap()).unwrap();
-        operator
-    }
-
-    fn write_package(root: &Path) -> VerifiedPackage {
-        write_package_with_project(root, SOURCE_PROJECT)
-    }
-
-    fn operator_document(package: &Path, tls: &str) -> String {
-        serde_norway::to_string(&operator_value(package, tls)).unwrap()
-    }
-
-    /// A production fixture names the one client it admits, as a production
-    /// deployment must; a loopback fixture admits every client.
-    fn operator_value(package: &Path, tls: &str) -> serde_json::Value {
-        let root = package.parent().expect("package parent");
-        let mut document = serde_json::json!({
-            "apiVersion": RUNTIME_CONFIG_API_VERSION,
-            "kind": RUNTIME_CONFIG_KIND,
-            "identity": {"databaseId": "casework-test"},
-            "package": {"root": package},
-            "listener": {"bind": "127.0.0.1:8100", "tlsTermination": tls},
-            "secretProviders": {"file": {"root": root.join("secrets")}, "environment": {}},
-            "database": {
-                "runtimeUrlRef": "secret:env/RUNTIME",
-                "migrationUrlRef": "secret:env/MIGRATION"
-            },
-            "authentication": {"oidc": {
-                "issuer": "https://identity.example.test",
-                "audience": "urn:example:casework",
-                "allowedClients": "unrestricted"
-            }},
-            "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:file/audit"},
-            "sources": {"professional": {
-                "baseUrl": "https://registry.example.test",
-                "readerProfile": "casework-reader",
-                "tokenEndpoint": "https://identity.example.test/token",
-                "clientIdRef": "secret:file/client-id",
-                "clientAssertionKeyRef": "secret:file/client-key",
-                "webhookSecretRef": "secret:file/webhook",
-                "eventSource": "urn:registrystack:registry:professional:instance:pilot"
-            }}
-        });
-        if tls == "operator-controlled-upstream" {
-            document["authentication"]["oidc"]["allowedClients"] =
-                serde_json::json!(["casework-console"]);
-        }
-        document
-    }
-
-    /// The commented alternative in the operator example must be loadable
-    /// exactly as written, and its refusal must name the member an operator
-    /// has to go and fix.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_static_jwks_source_loads_and_is_refused_without_its_reference() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let secrets_root = root.path().join("secrets");
-        std::fs::create_dir(&secrets_root).unwrap();
-        std::fs::write(
-            secrets_root.join("jwks.json"),
-            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
+    fn referenced_policy() -> (Vec<u8>, BTreeMap<String, Vec<u8>>, CaseworkProject) {
+        let start = STANDALONE.find("    displaySchema:\n").unwrap();
+        let end = STANDALONE[start..].find("    outcomes:\n").unwrap() + start;
+        let authored = format!(
+            "{}    displaySchema:\n      $ref: schemas/review.json\n{}",
+            &STANDALONE[..start],
+            &STANDALONE[end..]
         )
-        .unwrap();
-        std::fs::set_permissions(
-            secrets_root.join("jwks.json"),
-            std::fs::Permissions::from_mode(0o644),
-        )
-        .unwrap();
-
-        let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"type": "static", "documentRef": "secret:file/jwks.json"});
-        let operator = root.path().join("operator.yaml");
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-
-        let mut config = RuntimeConfig::load(&operator).expect("static JWKS source is accepted");
-        assert!(matches!(
-            &config.authentication.oidc.provider.jwks_source,
-            JwksSource::Static { document_ref } if document_ref == "secret:file/jwks.json"
-        ));
-
-        let secrets = SecretResolver::new(
-            [registry_platform_config::SecretProvider::File],
-            &secrets_root,
-        )
-        .unwrap();
-        let message = config
-            .oidc_verifier(&secrets)
-            .await
-            .map(|_| ())
-            .expect_err("a group-readable JWKS document is refused")
-            .to_string();
-        assert!(
-            !message.contains("secret:file/jwks.json") && message.contains("0400 or 0600"),
-            "the failure repeats the reference or omits the mode rule: {message}"
-        );
-
-        let literal_secret = "literal-jwks-credential-canary";
-        let JwksSource::Static { document_ref } =
-            &mut config.authentication.oidc.provider.jwks_source
-        else {
-            panic!("configured static JWKS source changed kind")
-        };
-        *document_ref = literal_secret.to_owned();
-        let message = config
-            .oidc_verifier(&secrets)
-            .await
-            .map(|_| ())
-            .expect_err("a literal credential is not a secret reference")
-            .to_string();
-        assert!(
-            message.contains("authentication.oidc.jwksSource.documentRef")
-                && message.contains("secret:env/NAME or secret:file/name"),
-            "the failure does not name the field and reference grammar: {message}"
-        );
-        assert!(
-            !message.contains(literal_secret),
-            "the failure renders the literal credential: {message}"
-        );
-    }
-
-    /// The runtime's static JWKS arm hands the resolved document to the
-    /// shared parser and refuses a key set it cannot trust before any
-    /// verifier exists: a symmetric key, an unnamed key, two keys sharing a
-    /// name, or no key at all.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn static_jwks_requires_unique_named_asymmetric_keys() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let secrets_root = root.path().join("secrets");
-        std::fs::create_dir(&secrets_root).unwrap();
-        let mut document = operator_value(&package, "development-loopback");
-        document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"type": "static", "documentRef": "secret:file/jwks.json"});
-        let config = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap();
-        let secrets = config.secret_providers.resolver().unwrap();
-        let jwks = secrets_root.join("jwks.json");
-
-        let write_jwks = |bytes: &[u8]| {
-            std::fs::write(&jwks, bytes).unwrap();
-            std::fs::set_permissions(&jwks, std::fs::Permissions::from_mode(0o600)).unwrap();
-        };
-
-        write_jwks(br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#);
-        config
-            .oidc_verifier(&secrets)
-            .await
-            .expect("one named asymmetric key is accepted");
-
-        for (case, invalid) in [
-            ("symmetric", br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#.as_slice()),
-            ("unnamed", br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB"}]}"#),
-            (
-                "duplicate name",
-                br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
-            ),
-            ("empty", br#"{"keys":[]}"#),
-        ] {
-            write_jwks(invalid);
-            let error = config
-                .oidc_verifier(&secrets)
-                .await
-                .map(|_| ())
-                .expect_err(case);
-            assert!(
-                matches!(error, RuntimeConfigError::Oidc),
-                "{case}: {error}"
-            );
-            assert_eq!(error.pointer(), "/authentication/oidc", "{case}");
-        }
-    }
-
-    #[test]
-    fn the_runtime_configuration_is_read_through_the_shared_loader() {
-        let error = RuntimeConfig::load("runtime.yaml").unwrap_err();
-        assert!(error.to_string().contains("absolute"), "{error}");
-
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let mut document = operator_value(&package, "development-loopback");
-        document["listener"].as_object_mut().unwrap().remove("bind");
-        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-        assert_eq!(error.pointer(), "/listener");
-        assert!(error.to_string().contains("bind"), "{error}");
-    }
-
-    /// A runtime file that breaks several rules, each away from the others.
-    fn file_breaking_three_rules(root: &Path) -> PathBuf {
-        let package = root.join("package");
-        let mut document = operator_value(&package, "development-loopback");
-        document["identity"]["databaseId"] = serde_json::json!(" padded ");
-        document["listener"]["bind"] = serde_json::json!("10.0.0.5:8100");
-        document["reviewCompletionDestinations"] = serde_json::json!({
-            "outcomes": {
-                "url": "http://outcomes.example.test/complete",
-                "bearerTokenRef": "secret:env/OUTCOMES"
-            }
-        });
-        write_operator(root, &document)
-    }
-
-    #[test]
-    fn cfg_check_1_every_rule_a_runtime_file_breaks_is_reported_at_its_position() {
-        let root = canonical_tempdir();
-        let path = file_breaking_three_rules(root.path());
-        let check = check_runtime(&path, None, false);
-        assert!(!check.unavailable);
-        let found: Vec<(&str, &str)> = check
-            .diagnostics
-            .iter()
-            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
-            .collect();
-        assert_eq!(
-            found,
-            [
-                (
-                    "casework.runtime.invalid-database-id",
-                    "/identity/databaseId"
-                ),
-                ("casework.runtime.invalid-listener", "/listener/bind"),
-                (
-                    "casework.runtime.invalid-review-completion-destination",
-                    "/reviewCompletionDestinations/outcomes/url"
-                ),
-            ]
-        );
-        for diagnostic in &check.diagnostics {
-            let source = diagnostic.source.as_ref().expect("a positioned finding");
-            assert_eq!(source.file, path.display().to_string());
-            assert!(source.line.is_some(), "{diagnostic:?}");
-            assert!(!diagnostic.suggested_action.is_empty(), "{diagnostic:?}");
-            for value in ["padded", "10.0.0.5", "outcomes.example.test"] {
-                assert!(!diagnostic.message.contains(value), "{diagnostic:?}");
-                assert!(
-                    !diagnostic.suggested_action.contains(value),
-                    "{diagnostic:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn cfg_check_1_runtime_findings_are_reported_in_file_order() {
-        let root = canonical_tempdir();
-        let mut document = operator_value(&root.path().join("package"), "development-loopback");
-        document["listener"]["bind"] = serde_json::json!("10.0.0.5:8100");
-        document["secretProviders"]["file"]["root"] = serde_json::json!("secrets");
-        let path = write_operator(root.path(), &document);
-        let text = std::fs::read_to_string(&path).unwrap();
-        let line_of = |key: &str| {
-            text.lines()
-                .position(|line| line.trim_start().starts_with(key))
-                .unwrap()
-        };
-        assert!(line_of("bind:") < line_of("root: secrets"));
-
-        let check = check_runtime(&path, None, false);
-        let error = RuntimeConfig::load(&path).unwrap_err();
-        let startup = startup_report(&path, &error).expect("a rule of the file");
-        for diagnostics in [check.diagnostics.as_slice(), startup.diagnostics()] {
-            let paths: Vec<&str> = diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.path.as_str())
-                .collect();
-            assert_eq!(paths, ["/listener/bind", "/secretProviders/file/root"]);
-        }
-    }
-
-    #[test]
-    fn cfg_check_1_an_absent_member_is_located_at_the_mapping_that_lacks_it() {
-        let root = canonical_tempdir();
-        let mut document = operator_value(&root.path().join("package"), "development-loopback");
-        document.as_object_mut().unwrap().remove("identity");
-        let path = write_operator(root.path(), &document);
-        let check = check_runtime(&path, None, false);
-        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
-        let diagnostic = &check.diagnostics[0];
-        assert_eq!(diagnostic.code, "casework.runtime.missing-identity");
-        assert_eq!(diagnostic.path, "/identity");
-        assert_eq!(diagnostic.source.as_ref().unwrap().line, Some(1));
-    }
-
-    #[test]
-    fn cfg_check_1_a_rule_reading_a_deferred_expression_is_left_out() {
-        let root = canonical_tempdir();
-        let mut document = operator_value(&root.path().join("package"), "development-loopback");
-        document["listener"]["bind"] = serde_json::json!("${CASEWORK_OFFLINE_CHECK_UNSET_BIND}");
-        // Beside the bind's stand-in this would occupy the API port; the
-        // rule reads the deferred bind, so the check leaves it out.
-        document["metricsListener"] = serde_json::json!({"bind": "127.0.0.1:8100"});
-        let path = write_operator(root.path(), &document);
-        let deferred = check_runtime(&path, None, false);
-        assert!(
-            deferred.diagnostics.is_empty(),
-            "{:?}",
-            deferred.diagnostics
-        );
-
-        let substituted = check_runtime(&path, None, true);
-        assert_eq!(substituted.diagnostics.len(), 1);
-        assert_eq!(substituted.diagnostics[0].code, "config.substitution");
-        assert_eq!(substituted.diagnostics[0].path, "/listener/bind");
-    }
-
-    #[test]
-    fn cfg_check_1_the_project_rules_run_against_the_given_project() {
-        let root = canonical_tempdir();
-        let mut document = operator_value(&root.path().join("package"), "development-loopback");
-        document["sources"] = serde_json::json!({});
-        let path = write_operator(root.path(), &document);
-        assert!(check_runtime(&path, None, false).diagnostics.is_empty());
-
-        let project = CaseworkProject::read(POLICY_FILE, SOURCE_PROJECT.as_bytes())
+        .into_bytes();
+        let schemas =
+            BTreeMap::from([("schemas/review.json".to_owned(), SCHEMA.as_bytes().to_vec())]);
+        let project = CaseworkProject::read_with_schemas(POLICY_FILE, &authored, &schemas)
             .unwrap()
             .value;
-        let check = check_runtime(&path, Some(&project), false);
-        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        (authored, schemas, project)
+    }
+
+    #[test]
+    fn package_inputs_include_exact_referenced_schema_bytes() {
+        let (authored, _, project) = referenced_policy();
+        let inputs = package_inputs(&project, &authored).unwrap();
         assert_eq!(
-            check.diagnostics[0].code,
-            "casework.runtime.source-bindings-mismatch"
-        );
-        assert_eq!(check.diagnostics[0].path, "/sources");
-        assert!(check.diagnostics[0].source.as_ref().unwrap().line.is_some());
-    }
-
-    #[test]
-    fn a_startup_refusal_reports_every_rule_the_runtime_file_breaks() {
-        let root = canonical_tempdir();
-        let path = file_breaking_three_rules(root.path());
-        let error = RuntimeConfig::load(&path).unwrap_err();
-        assert_eq!(error.code(), "casework.runtime.invalid-database-id");
-        let report = startup_report(&path, &error).expect("a rule of the file");
-        assert_eq!(report.error_count(), 3);
-        assert!(report.diagnostics().iter().all(|diagnostic| diagnostic
-            .source
-            .as_ref()
-            .unwrap()
-            .line
-            .is_some()));
-
-        let mut document = operator_value(&root.path().join("package"), "development-loopback");
-        document["listener"]["unknownOne"] = serde_json::json!(1);
-        document["audit"]["unknownTwo"] = serde_json::json!(2);
-        let path = write_operator(root.path(), &document);
-        let error = RuntimeConfig::load(&path).unwrap_err();
-        let report = startup_report(&path, &error).expect("a loader refusal");
-        let unknown: Vec<&str> = report
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| diagnostic.path.as_str())
-            .collect();
-        assert_eq!(unknown, ["/audit/unknownTwo", "/listener/unknownOne"]);
-    }
-
-    #[test]
-    fn a_removed_jwks_uri_names_its_replacement() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let mut document = operator_value(&package, "development-loopback");
-        document["authentication"]["oidc"]["jwksUri"] =
-            serde_json::json!("https://identity.example.test/jwks");
-        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-        assert_eq!(error.pointer(), "/authentication/oidc/jwksUri");
-        assert!(
-            error.to_string().contains("authentication.oidc.jwksSource"),
-            "{error}"
-        );
-
-        let mut document = operator_value(&package, "development-loopback");
-        document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"type": "uri", "uri": "https://identity.example.test/jwks"});
-        let config = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap();
-        assert_eq!(
-            config.authentication.oidc.provider.jwks_source.uri(),
-            Some("https://identity.example.test/jwks")
+            inputs,
+            BTreeSet::from(["casework.yaml".to_owned(), "schemas/review.json".to_owned()])
         );
     }
 
     #[test]
-    fn renamed_runtime_keys_name_their_replacements() {
-        let destination = serde_json::json!({
-            "url": "https://payments.example.test/review-completed",
-            "bearerTokenRef": "secret:file/payment-completion-token"
+    fn package_capture_refuses_a_schema_changed_after_verification() {
+        let temp =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let package = temp.path().join("package");
+        let (authored, schemas, _) = referenced_policy();
+        let mut inputs = schemas;
+        inputs.insert(POLICY_FILE.to_owned(), authored);
+        write_package(&package, &inputs, None, &package_limits(), PACKAGE_COMMAND).unwrap();
+        let operator = json!({
+            "apiVersion":RUNTIME_CONFIG_API_VERSION,"kind":RUNTIME_CONFIG_KIND,
+            "identity":{"databaseId":"test"},"package":{"root":package},
+            "listener":{"bind":"127.0.0.1:8100","tlsTermination":"development-loopback","networkExposure":"private-address"},
+            "secretProviders":{"file":{"root":temp.path().join("secrets")}},
+            "database":{"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url"},
+            "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+            "audit":{"path":temp.path().join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
         });
-        for (parent, old, pointer, replacement) in [
-            (
-                &["audit"][..],
-                "retainDays",
-                "/audit/retainDays",
-                "audit.retentionDays",
-            ),
-            (
-                &["sources", "professional"][..],
-                "requestTimeoutMilliseconds",
-                "/sources/professional/requestTimeoutMilliseconds",
-                "attemptTimeoutMilliseconds",
-            ),
-            (
-                &["reviewCompletionDestinations", "payment-results"][..],
-                "timeoutMilliseconds",
-                "/reviewCompletionDestinations/payment-results/timeoutMilliseconds",
-                "attemptTimeoutMilliseconds",
-            ),
-            (
-                &["reviewCompletionDestinations", "payment-results"][..],
-                "retrySeconds",
-                "/reviewCompletionDestinations/payment-results/retrySeconds",
-                "retryDelaySeconds",
-            ),
-        ] {
-            let root = canonical_tempdir();
-            let package = root.path().join("package");
-            std::fs::create_dir(&package).unwrap();
-            write_package(&package);
-            let mut document = operator_value(&package, "development-loopback");
-            document["reviewCompletionDestinations"]["payment-results"] = destination.clone();
-            let mut target = &mut document;
-            for segment in parent {
-                target = &mut target[*segment];
-            }
-            target[old] = serde_json::json!(7);
-            let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-            assert_eq!(error.code(), "config.removed-key", "{old}: {error}");
-            assert_eq!(error.pointer(), pointer);
-            assert!(
-                error.to_string().contains(replacement),
-                "{old} does not name {replacement}: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_retired_runtime_api_version_names_its_replacement() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let mut document = operator_value(&package, "development-loopback");
-        assert_eq!(
-            document["apiVersion"],
-            "id.registrystack.org/formats/casework/runtime/v1alpha1"
-        );
-        document["apiVersion"] = serde_json::json!(RETIRED_RUNTIME_CONFIG_API_VERSION);
-        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-        assert_eq!(error.code(), "config.retired-api-version");
-        assert_eq!(error.pointer(), "/apiVersion");
+        let config = read_operator(&operator, temp.path());
+        let loaded = config.load_package().unwrap();
+        assert_eq!(loaded.project().review_policies.len(), 1);
+        let changed = config.load_package_after_verification(|| {
+            std::fs::write(package.join("schemas/review.json"), b"{}\n").unwrap();
+        });
         assert!(
-            error
-                .suggested_action()
-                .contains(RUNTIME_CONFIG_API_VERSION),
-            "{}",
-            error.suggested_action()
+            matches!(changed, Err(RuntimeConfigError::PackageFileChanged { path }) if path == "schemas/review.json")
         );
     }
 
     #[test]
-    fn a_jwks_source_tagged_by_kind_names_type() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let mut document = operator_value(&package, "development-loopback");
-        document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"kind": "uri", "uri": "https://identity.example.test/jwks"});
-        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-        assert_eq!(error.pointer(), "/authentication/oidc/jwksSource/kind");
-        assert!(
-            error
-                .to_string()
-                .contains("authentication.oidc.jwksSource.type"),
-            "{error}"
-        );
-        assert!(
-            !error.to_string().contains("identity.example.test"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn the_oidc_issuer_and_clients_are_the_shared_blocks() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-
-        let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["authentication"]["oidc"]["issuer"] =
-            serde_json::json!("http://identity.example.test");
-        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-        assert_eq!(error.pointer(), "/authentication/oidc/issuer");
-
-        let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["authentication"]["oidc"]["issuerr"] =
-            serde_json::json!("https://identity.example.test");
-        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-        assert!(error.to_string().contains("issuerr"), "{error}");
-    }
-
-    #[test]
-    fn environment_expressions_substitute_values_but_never_secret_references() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let mut document = operator_value(&package, "development-loopback");
-        document["authentication"]["oidc"]["audience"] =
-            serde_json::json!("${CASEWORK_TEST_AUDIENCE:-urn:example:substituted}");
-        let config = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap();
-        assert_eq!(
-            config.authentication.oidc.provider.audience,
-            "urn:example:substituted"
-        );
-
-        for pointer in ["/database/runtimeUrlRef", "/audit/hashKeyRef"] {
-            let mut document = operator_value(&package, "development-loopback");
-            *document.pointer_mut(pointer).unwrap() =
-                serde_json::json!("${CASEWORK_TEST_REFERENCE:-secret:env/RUNTIME}");
-            let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-            assert!(
-                matches!(
-                    &error,
-                    RuntimeConfigError::Load(load)
-                        if load.deciding_diagnostic().code == "config.substitution-not-allowed"
-                ),
-                "{error}"
-            );
-            assert_eq!(error.pointer(), pointer);
-        }
-    }
-
-    #[test]
-    fn an_authored_project_carrying_an_environment_expression_is_refused() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package_with_project(
-            &package,
-            &SOURCE_PROJECT.replace("label: Review", "label: \"${QUEUE_LABEL}\""),
-        );
-        let operator = write_operator(
-            root.path(),
-            &operator_value(&package, "development-loopback"),
-        );
-        let error = RuntimeConfig::load(&operator).unwrap_err();
-        let diagnostics = project_refusal(&error);
-        assert_eq!(
-            diagnostics,
-            [(
-                "config.substitution-not-allowed".to_owned(),
-                "/queues/0/label".to_owned()
-            )],
-            "{error}"
-        );
-        assert_eq!(error.pointer(), "/package/root");
-    }
-
-    /// The `code` and `path` of every diagnostic of a refused project.
-    fn project_refusal(error: &RuntimeConfigError) -> Vec<(String, String)> {
-        let RuntimeConfigError::Project(ConfigLoadError::Refused(report)) = error else {
-            panic!("expected a refused project, got {error}");
-        };
-        report
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
-            .collect()
-    }
-
-    /// A typed field holding an expression would otherwise fail the typed
-    /// project read first, with a type error that quotes the expression.
-    #[test]
-    fn an_environment_expression_in_a_non_string_field_is_the_authored_refusal() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        let project = SOURCE_CONTEXT_REVIEW_PROJECT
-            .replace("recoveryDays: 7", "recoveryDays: ${RECOVERY_DAYS}");
-        assert_ne!(project, SOURCE_CONTEXT_REVIEW_PROJECT);
-        write_package_with_project(&package, &project);
-        let operator = write_operator(
-            root.path(),
-            &operator_value(&package, "development-loopback"),
-        );
-        let error = RuntimeConfig::load(&operator).unwrap_err();
-        assert_eq!(
-            project_refusal(&error),
-            [(
-                "config.substitution-not-allowed".to_owned(),
-                "/reviewProducers/0/recoveryDays".to_owned()
-            )],
-            "{error}"
-        );
-        let RuntimeConfigError::Project(project) = &error else {
-            unreachable!()
-        };
-        assert!(!project.to_string().contains("RECOVERY_DAYS"), "{project}");
-    }
-
-    #[test]
-    fn production_names_its_allowed_clients_while_loopback_may_leave_them_empty() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-
-        let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["authentication"]["oidc"]["allowedClients"] = serde_json::json!("unrestricted");
-        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
-        assert!(
-            matches!(error, RuntimeConfigError::AllowedClientsRequired),
-            "{error}"
-        );
-        assert_eq!(error.pointer(), "/authentication/oidc/allowedClients");
-        assert!(
-            error.to_string().contains("operator-controlled-upstream"),
-            "{error}"
-        );
-
-        // The decision is written in every file, in either listener mode: an
-        // omitted member and an empty list are refused by the reader.
-        for tls in ["operator-controlled-upstream", "development-loopback"] {
-            let mut omitted = operator_value(&package, tls);
-            omitted["authentication"]["oidc"]
-                .as_object_mut()
-                .unwrap()
-                .remove("allowedClients");
-            let error = RuntimeConfig::load(write_operator(root.path(), &omitted)).unwrap_err();
-            assert_eq!(error.code(), "config.missing-key", "{tls}: {error}");
-            assert!(error.to_string().contains("allowedClients"), "{error}");
-
-            let mut empty = operator_value(&package, tls);
-            empty["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
-            let error = RuntimeConfig::load(write_operator(root.path(), &empty)).unwrap_err();
-            assert_eq!(error.code(), "config.invalid-value", "{tls}: {error}");
-            assert_eq!(error.pointer(), "/authentication/oidc/allowedClients");
-            assert!(
-                error.suggested_action().contains("write unrestricted"),
-                "{error}"
-            );
-
-            let mut repeated = operator_value(&package, tls);
-            repeated["authentication"]["oidc"]["allowedClients"] =
-                serde_json::json!(["casework-console", "casework-console"]);
-            let error = RuntimeConfig::load(write_operator(root.path(), &repeated)).unwrap_err();
-            assert_eq!(error.code(), "config.duplicate-item", "{tls}: {error}");
-            assert_eq!(error.pointer(), "/authentication/oidc/allowedClients/1");
-        }
-
-        document["authentication"]["oidc"]["allowedClients"] =
-            serde_json::json!(["casework-console"]);
-        let config = RuntimeConfig::load(write_operator(root.path(), &document))
-            .expect("a named client list is accepted");
-        assert_eq!(
-            config.authentication.oidc.clients.allowed_clients,
-            ["casework-console"]
-        );
-        assert!(config.task_authority.is_none());
-
-        let config = RuntimeConfig::load(write_operator(
-            root.path(),
-            &operator_value(&package, "development-loopback"),
+    fn omitted_context_provider_does_not_block_a_submitted_review() {
+        let temp =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let project = CaseworkProject::load(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/casework/examples/canonical-review/casework.yaml"
         ))
-        .expect("development loopback admits every client when it says so");
-        assert!(config
-            .authentication
-            .oidc
-            .clients
-            .allowed_clients
-            .is_empty());
-        assert!(config.task_authority.is_none());
-    }
-
-    #[test]
-    fn static_source_uses_document_ref_camel_case() {
-        let source: JwksSource =
-            serde_json::from_str(r#"{"type":"static","documentRef":"secret:file/keys.json"}"#)
-                .expect("static source");
-        assert!(
-            matches!(source,JwksSource::Static{document_ref} if document_ref=="secret:file/keys.json")
-        );
-    }
-
-    /// Decode a runtime document through the shared reader without the
-    /// product checks that need a package on disk.
-    fn parse_runtime(document: &serde_json::Value) -> Result<RuntimeConfig, RuntimeConfigError> {
-        let text = serde_norway::to_string(document).unwrap();
-        RuntimeConfig::loader()
-            .parse_str::<RuntimeConfig>(&text, |_| None)
-            .map(|loaded| loaded.config)
-            .map_err(RuntimeConfigError::Load)
-    }
-
-    /// The keys of the three id-keyed runtime maps are typed: a source id is
-    /// a local identifier, and a completion destination or a status client is
-    /// accepted as its owner writes it, so only an unusable key is refused.
-    #[test]
-    fn id_keyed_runtime_maps_refuse_a_malformed_key_at_its_pointer() {
-        let root = canonical_tempdir();
-        let base = operator_value(&root.path().join("package"), "development-loopback");
-        let destination = serde_json::json!({
-            "url": "https://payments.example.test/review-completed",
-            "bearerTokenRef": "secret:file/payment-completion-token"
-        });
-        let task_authority = |client: &str| {
-            serde_json::json!({
-                "issuer": "https://casework.example.test",
-                "exchangeAudience": "urn:example:casework:exchange",
-                "signingKeyRef": "secret:file/task-authority",
-                "statusClients": {client: "urn:example:status"}
-            })
-        };
-
-        let mut accepted = base.clone();
-        accepted["reviewCompletionDestinations"]["Payment.Results:v1"] = destination.clone();
-        accepted["taskAuthority"] = task_authority("Status Client 1");
-        parse_runtime(&accepted).expect("external identifiers are kept as written");
-
-        let mut source = base.clone();
-        let binding = source["sources"]["professional"].take();
-        source["sources"] = serde_json::json!({"Professional Registry": binding});
-        let mut completion = base.clone();
-        completion["reviewCompletionDestinations"][""] = destination;
-        let mut status_client = base;
-        status_client["taskAuthority"] = task_authority("");
-        for (document, pointer) in [
-            (source, "/sources/Professional Registry"),
-            (completion, "/reviewCompletionDestinations/"),
-            (status_client, "/taskAuthority/statusClients/"),
-        ] {
-            let error = parse_runtime(&document).expect_err("a malformed key is refused");
-            assert_eq!(error.pointer(), pointer, "{error}");
-            assert_eq!(error.code(), "config.invalid-value", "{error}");
-        }
-    }
-
-    #[test]
-    fn an_empty_assertion_issuer_map_is_refused_at_its_pointer() {
-        let root = canonical_tempdir();
-        let mut document = operator_value(&root.path().join("package"), "development-loopback");
-        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({});
-        let error = parse_runtime(&document).expect_err("an empty map is refused");
-        assert_eq!(error.pointer(), "/authentication/oidc/assertionIssuers");
-    }
-
-    #[test]
-    fn a_listed_client_with_no_assertion_issuers_is_refused_at_that_client() {
-        let root = canonical_tempdir();
-        let mut document = operator_value(&root.path().join("package"), "development-loopback");
-        document["authentication"]["oidc"]["assertionIssuers"] =
-            serde_json::json!({"case-portal": []});
-        let error = parse_runtime(&document).expect_err("an empty issuer list is refused");
-        assert_eq!(error.code(), "config.invalid-value", "{error}");
-        assert_eq!(
-            error.pointer(),
-            "/authentication/oidc/assertionIssuers/case-portal"
-        );
-    }
-
-    #[test]
-    fn human_identity_defaults_to_an_explicit_fail_closed_claim_contract() {
-        let root = canonical_tempdir();
-        let document = operator_value(&root.path().join("package"), "development-loopback");
-        let oidc = parse_runtime(&document)
-            .expect("runtime configuration")
-            .authentication
-            .oidc;
-        assert_eq!(
-            oidc.human_identity,
-            HumanIdentityConfig {
-                claim: "registry_actor_kind".to_owned(),
-                value: "human".to_owned(),
-            }
-        );
-        assert_eq!(oidc.scope_claim, "registry_scopes");
-    }
-
-    /// The platform blocks are read through the shared-block recipe rather
-    /// than serde `flatten`, so every unknown key inside one is reported, each
-    /// at its own line and column, not only the first.
-    #[test]
-    fn two_unknown_keys_inside_each_shared_block_are_all_reported_with_positions() {
-        let root = canonical_tempdir();
-        let document = operator_document(&root.path().join("package"), "development-loopback");
-        let insert_after = |text: String, line: &str, added: &str| {
-            assert!(text.contains(line), "the fixture holds {line:?}");
-            text.replacen(line, &format!("{line}{added}"), 1)
-        };
-        let text = insert_after(
-            document,
-            "    issuer: https://identity.example.test\n",
-            "    issuers: canary-a\n    allowedClient: canary-b\n",
-        );
-        let text = insert_after(
-            text,
-            "  hashKeyRef: secret:file/audit\n",
-            "  hashKey: canary-c\n  paths: canary-d\n",
-        );
-        let error = RuntimeConfig::loader()
-            .parse_str::<RuntimeConfig>(&text, |_| None)
-            .expect_err("unknown keys inside the shared blocks are refused");
-        let line_of = |key: &str| {
-            text.lines()
-                .position(|line| line.trim_start().starts_with(&format!("{key}: canary-")))
-                .map(|index| index + 1)
-                .expect("the fixture holds the key")
-        };
-        let reported: Vec<(String, String, Option<usize>, Option<usize>)> = error
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| {
-                let source = diagnostic
-                    .source
-                    .as_ref()
-                    .expect("a reader diagnostic has a source");
-                (
-                    diagnostic.code.clone(),
-                    diagnostic.path.clone(),
-                    source.line,
-                    source.column,
-                )
-            })
-            .collect();
-        for (path, key, column) in [
-            ("/authentication/oidc/issuers", "issuers", 5),
-            ("/authentication/oidc/allowedClient", "allowedClient", 5),
-            ("/audit/hashKey", "hashKey", 3),
-            ("/audit/paths", "paths", 3),
-        ] {
-            let expected = (
-                "config.unknown-key".to_owned(),
-                path.to_owned(),
-                Some(line_of(key)),
-                Some(column),
-            );
-            assert!(reported.contains(&expected), "{expected:?} in {reported:?}");
-        }
-        let human = error.to_string();
-        assert!(!human.contains("canary-"), "{human}");
-    }
-
-    #[test]
-    fn an_explicit_null_is_refused_where_an_omitted_member_would_load() {
-        let root = canonical_tempdir();
-        let mut document = operator_value(&root.path().join("package"), "development-loopback");
-        document["audit"] = serde_json::json!({
-            "hashKeyRef": "secret:env/AUDIT_HASH_KEY",
-            "destination": "stdout"
-        });
-        let audit = parse_runtime(&document)
-            .expect("an omitted path loads")
-            .audit;
-        assert_eq!(
-            audit.destination().expect("stdout takes no file settings"),
-            AuditDestination::Stdout
-        );
-
-        let mut null_path = document.clone();
-        null_path["audit"]["path"] = serde_json::Value::Null;
-        let mut null_scope_claim = document.clone();
-        null_scope_claim["authentication"]["oidc"]["scopeClaim"] = serde_json::Value::Null;
-        for (nulled, member) in [
-            (null_path, "/audit/path"),
-            (null_scope_claim, "/authentication/oidc/scopeClaim"),
-        ] {
-            let error = parse_runtime(&nulled).expect_err("an explicit null is refused");
-            assert!(
-                matches!(error, RuntimeConfigError::Load(_)),
-                "{member}: {error:?}"
-            );
-            assert_eq!(error.pointer(), member, "{error}");
-        }
-    }
-
-    /// Build a runtime configuration with a static JWKS source (so building the
-    /// verifier never performs a real discovery fetch) and return the verifier
-    /// configuration it produces, optionally with an authored assertionIssuers
-    /// value.
-    #[cfg(unix)]
-    async fn built_verifier(assertion_issuers: Option<serde_json::Value>) -> TokenVerifierConfig {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let secrets_root = root.path().join("secrets");
-        std::fs::create_dir(&secrets_root).unwrap();
-        std::fs::write(
-            secrets_root.join("jwks.json"),
-            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
-        )
         .unwrap();
-        std::fs::set_permissions(
-            secrets_root.join("jwks.json"),
-            std::fs::Permissions::from_mode(0o600),
-        )
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Mutate this maintained fixture before exercising the governed operator loader."
+        )]
+        let mut operator: serde_json::Value = serde_norway::from_str(include_str!(
+            "../../../products/casework/examples/canonical-review/runtime.example.yaml"
+        ))
         .unwrap();
+        let binding = operator["contextProviders"]["facility-registry"].clone();
+        operator["contextProviders"] = json!({});
+        let config = read_operator(&operator, temp.path());
+        let mut findings = Vec::new();
+        config.check_context_provider_set(&project, &mut findings);
+        assert!(findings.is_empty());
+        assert!(project.compile_policy("decision").is_ok());
 
-        let mut document = operator_value(&package, "development-loopback");
-        document["authentication"]["oidc"]["jwksSource"] =
-            serde_json::json!({"type": "static", "documentRef": "secret:file/jwks.json"});
-        if let Some(assertion_issuers) = assertion_issuers {
-            document["authentication"]["oidc"]["assertionIssuers"] = assertion_issuers;
-        }
-        let operator = root.path().join("operator.yaml");
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-
-        let config = RuntimeConfig::load(&operator).expect("configuration is accepted");
-        let secrets = SecretResolver::new(
-            [registry_platform_config::SecretProvider::File],
-            &secrets_root,
-        )
-        .unwrap();
-        config
-            .oidc_verifier(&secrets)
-            .await
-            .expect("the verifier is built")
-            .0
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn assertion_issuers_defaults_to_an_empty_map_leaving_the_verifier_with_no_rule() {
-        let verifier = built_verifier(None).await;
-        assert!(verifier.assertion_issuers.is_empty());
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_configured_assertion_issuers_map_reaches_the_built_verifier() {
-        let verifier = built_verifier(Some(serde_json::json!({
-            "task-agent": ["https://exchange.example.test"]
-        })))
-        .await;
-        let mut expected = BTreeMap::new();
-        expected.insert(
-            "task-agent".to_owned(),
-            vec!["https://exchange.example.test".to_owned()],
-        );
-        assert_eq!(verifier.assertion_issuers, expected);
-    }
-
-    #[test]
-    fn a_duplicate_issuer_within_one_clients_assertion_issuer_list_is_refused() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let mut document = operator_value(&package, "development-loopback");
-        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
-            "task-agent": [
-                "https://exchange.example.test",
-                "https://exchange.example.test"
-            ]
-        });
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        operator["contextProviders"]["unknown"] = binding;
+        let config = read_operator(&operator, temp.path());
+        let mut findings = Vec::new();
+        config.check_context_provider_set(&project, &mut findings);
         assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
+            findings.as_slice(),
+            [RuntimeConfigError::InvalidContextProviders]
         ));
-    }
-
-    #[test]
-    fn an_empty_assertion_issuer_string_is_refused() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let mut document = operator_value(&package, "development-loopback");
-        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
-            "task-agent": [""]
-        });
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
-        ));
-    }
-
-    #[test]
-    fn an_empty_assertion_issuer_client_key_is_refused() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let mut document = operator_value(&package, "development-loopback");
-        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
-            "": ["https://exchange.example.test"]
-        });
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
-        ));
-    }
-
-    #[test]
-    fn an_over_long_assertion_issuer_client_key_is_refused() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let mut document = operator_value(&package, "development-loopback");
-        let client = "a".repeat(MAX_ASSERTION_ISSUER_CLIENT_BYTES + 1);
-        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
-            client: ["https://exchange.example.test"]
-        });
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
-        ));
-    }
-
-    #[test]
-    fn an_over_long_assertion_issuer_value_is_refused() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let mut document = operator_value(&package, "development-loopback");
-        let issuer = format!(
-            "https://{}.example.test",
-            "a".repeat(MAX_ASSERTION_ISSUER_BYTES)
-        );
-        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
-            "task-agent": [issuer]
-        });
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
-        ));
-    }
-
-    #[test]
-    fn too_many_assertion_issuer_clients_is_refused() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let mut document = operator_value(&package, "development-loopback");
-        let mut assertion_issuers = serde_json::Map::new();
-        for index in 0..=MAX_ASSERTION_ISSUER_CLIENTS {
-            assertion_issuers.insert(
-                format!("task-agent-{index}"),
-                serde_json::json!(["https://exchange.example.test"]),
-            );
-        }
-        document["authentication"]["oidc"]["assertionIssuers"] =
-            serde_json::Value::Object(assertion_issuers);
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
-        ));
-    }
-
-    #[test]
-    fn too_many_issuers_for_one_assertion_issuer_client_is_refused() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let mut document = operator_value(&package, "development-loopback");
-        let issuers: Vec<String> = (0..=MAX_ASSERTION_ISSUERS_PER_CLIENT)
-            .map(|index| format!("https://exchange-{index}.example.test"))
-            .collect();
-        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
-            "task-agent": issuers
-        });
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
-        ));
-    }
-
-    fn packaged_operator(root: &Path, tls: &str) -> (PathBuf, PathBuf, VerifiedPackage) {
-        let package = root.join("package");
-        std::fs::create_dir(&package).unwrap();
-        let verified = write_package(&package);
-        let operator = write_operator(root, &operator_value(&package, tls));
-        (package, operator, verified)
-    }
-
-    #[test]
-    fn a_missing_identity_block_is_refused_with_the_key_to_add() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let mut document = operator_value(&package, "operator-controlled-upstream");
-        document.as_object_mut().unwrap().remove("identity");
-        let operator = write_operator(root.path(), &document);
-
-        let error = RuntimeConfig::load(&operator).expect_err("identity is required");
-        assert!(
-            matches!(error, RuntimeConfigError::MissingIdentity),
-            "{error:?}"
-        );
-        assert_eq!(error.pointer(), "/identity");
-        let message = error.to_string();
-        assert!(
-            message.contains("identity:") && message.contains("databaseId:"),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn an_invalid_database_id_is_refused() {
-        let long = "d".repeat(MAX_DATABASE_ID_BYTES + 1);
-        for invalid in ["", " casework", "casework ", "case\twork", long.as_str()] {
-            let root = canonical_tempdir();
-            let package = root.path().join("package");
-            std::fs::create_dir(&package).unwrap();
-            write_package(&package);
-            let mut document = operator_value(&package, "operator-controlled-upstream");
-            document["identity"]["databaseId"] = serde_json::json!(invalid);
-            let operator = write_operator(root.path(), &document);
-
-            let error = RuntimeConfig::load(&operator).expect_err("invalid databaseId");
-            assert!(
-                matches!(error, RuntimeConfigError::InvalidDatabaseId),
-                "{invalid:?}: {error:?}"
-            );
-            assert_eq!(error.pointer(), "/identity/databaseId");
-        }
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let mut document = operator_value(&package, "operator-controlled-upstream");
-        let longest = "d".repeat(MAX_DATABASE_ID_BYTES);
-        document["identity"]["databaseId"] = serde_json::json!(longest);
-        let operator = write_operator(root.path(), &document);
-        let config = RuntimeConfig::load(&operator).expect("the longest id is accepted");
-        assert_eq!(config.database_id(), longest);
-    }
-
-    #[test]
-    fn a_packaged_project_is_verified_against_its_sum_file() {
-        let root = canonical_tempdir();
-        let (package, operator, verified) =
-            packaged_operator(root.path(), "operator-controlled-upstream");
-        let config = RuntimeConfig::load(&operator).unwrap();
-        assert_eq!(config.package_digest().unwrap(), verified.digest());
-
-        std::fs::write(package.join("sources/professional.json"), b"changed").unwrap();
-        let error = RuntimeConfig::load(&operator).expect_err("a changed file is refused");
-        assert_eq!(error.pointer(), "/package/root");
-        let message = error.to_string();
-        assert!(
-            message.contains("changed: sources/professional.json"),
-            "{message}"
-        );
-        assert!(message.contains(PACKAGE_COMMAND), "{message}");
-    }
-
-    #[test]
-    fn final_package_load_binds_captured_policy_and_source_bytes_to_the_verified_digest() {
-        for (changed_path, replacement) in [
-            ("casework.yaml", b"changed policy\n".as_slice()),
-            (
-                "sources/professional.json",
-                b"{\"changed\":true}\n".as_slice(),
-            ),
-        ] {
-            let root = canonical_tempdir();
-            let (package, operator, _) =
-                packaged_operator(root.path(), "operator-controlled-upstream");
-            let config = RuntimeConfig::load(&operator).expect("the original package loads");
-
-            let error = config
-                .load_package_after_verification(|| {
-                    std::fs::write(package.join(changed_path), replacement).unwrap();
-                })
-                .expect_err("bytes replaced after verification are refused");
-            assert!(
-                matches!(
-                    error,
-                    RuntimeConfigError::PackageFileChanged { ref path } if path == changed_path
-                ),
-                "{changed_path}: {error:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn final_unpinned_package_load_revalidates_project_bindings_after_replacement() {
-        let root = canonical_tempdir();
-        let (package, operator, _) = packaged_operator(root.path(), "operator-controlled-upstream");
-        let config = RuntimeConfig::load(&operator).expect("package A is valid");
-
-        std::fs::remove_file(package.join(SUM_FILE)).unwrap();
-        let replacement =
-            SOURCE_PROJECT.replace("principalClaim: sub", "principalClaim: registry_actor_kind");
-        std::fs::write(package.join(POLICY_FILE), replacement).unwrap();
-        registry_platform_config::write_sum_file(
-            &package,
-            None,
-            &package_limits(),
-            PACKAGE_COMMAND,
-        )
-        .unwrap();
-
-        let error = config
-            .load_package()
-            .expect_err("package B conflicts with the configured human identity claim");
-        assert!(matches!(error, RuntimeConfigError::PrincipalClaimConflict));
-    }
-
-    #[test]
-    fn a_missing_or_extra_package_file_is_refused_by_name() {
-        let root = canonical_tempdir();
-        let (package, operator, _) = packaged_operator(root.path(), "operator-controlled-upstream");
-        std::fs::write(package.join("sources/stale.json"), b"stale").unwrap();
-        let message = RuntimeConfig::load(&operator)
-            .expect_err("an extra file is refused")
-            .to_string();
-        assert!(message.contains("extra: sources/stale.json"), "{message}");
-        std::fs::remove_file(package.join("sources/stale.json")).unwrap();
-
-        std::fs::remove_file(package.join("sources/professional.json")).unwrap();
-        let message = RuntimeConfig::load(&operator)
-            .expect_err("a missing file is refused")
-            .to_string();
-        assert!(
-            message.contains("missing: sources/professional.json"),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn a_package_holds_exactly_the_policy_and_its_source_descriptions() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir_all(package.join("sources")).unwrap();
-        std::fs::write(package.join("casework.yaml"), SOURCE_PROJECT).unwrap();
-        std::fs::write(
-            package.join("sources/professional.json"),
-            SOURCE_DESCRIPTION,
-        )
-        .unwrap();
-        std::fs::write(package.join("notes.txt"), b"not an input").unwrap();
-        registry_platform_config::write_sum_file(
-            &package,
-            None,
-            &package_limits(),
-            PACKAGE_COMMAND,
-        )
-        .unwrap();
-        let operator = write_operator(
-            root.path(),
-            &operator_value(&package, "operator-controlled-upstream"),
-        );
-        let error = RuntimeConfig::load(&operator).expect_err("a stray input is refused");
-        assert!(matches!(
-            &error,
-            RuntimeConfigError::PackageContents { missing, extra }
-                if missing.is_empty() && extra == &["notes.txt".to_owned()]
-        ));
-        assert!(error.to_string().contains("extra: notes.txt"), "{error}");
-    }
-
-    /// The runtime knows no file named `casework.package.json`: one found in
-    /// a package root is refused as any file the package does not list is.
-    #[test]
-    fn a_stray_casework_package_json_is_refused_as_any_file_the_package_does_not_list() {
-        const STRAY: &str = "casework.package.json";
-        let root = canonical_tempdir();
-        let (package, operator, _) = packaged_operator(root.path(), "development-loopback");
-        let refused = || RuntimeConfig::load(&operator).expect_err("the stray file is refused");
-
-        // Beside a package's own files, SHA256SUMS does not list it.
-        std::fs::write(package.join(STRAY), b"{}").unwrap();
-        let error = refused();
-        assert!(
-            matches!(
-                &error,
-                RuntimeConfigError::Package(error)
-                    if matches!(
-                        error.kind(),
-                        PackageErrorKind::Mismatch { changed, missing, extra }
-                            if changed.is_empty() && missing.is_empty() && extra == &[STRAY.to_owned()]
-                    )
-            ),
-            "{error:?}"
-        );
-        assert_eq!(error.code(), "casework.package.invalid");
-        assert_eq!(error.pointer(), "/package/root");
-        let message = error.to_string();
-        assert!(
-            message.contains("extra: casework.package.json"),
-            "{message}"
-        );
-        assert!(message.contains(PACKAGE_COMMAND), "{message}");
-
-        // Listed by SHA256SUMS, it is a file casework.yaml does not name.
-        std::fs::remove_file(package.join(SUM_FILE)).unwrap();
-        registry_platform_config::write_sum_file(
-            &package,
-            None,
-            &package_limits(),
-            PACKAGE_COMMAND,
-        )
-        .unwrap();
-        let error = refused();
-        assert!(
-            matches!(
-                &error,
-                RuntimeConfigError::PackageContents { missing, extra }
-                    if missing.is_empty() && extra == &[STRAY.to_owned()]
-            ),
-            "{error:?}"
-        );
-        assert_eq!(error.code(), "casework.package.unexpected-contents");
-        assert!(error.to_string().contains(PACKAGE_COMMAND), "{error}");
-
-        // Without SHA256SUMS, the directory is refused as any directory
-        // `caseworkctl package` did not write is.
-        std::fs::remove_file(package.join(SUM_FILE)).unwrap();
-        let error = refused();
-        assert!(
-            matches!(
-                &error,
-                RuntimeConfigError::Package(error)
-                    if matches!(error.kind(), PackageErrorKind::SumFileMissing)
-            ),
-            "{error:?}"
-        );
-        assert_eq!(error.code(), "casework.package.invalid");
-        assert!(error.to_string().contains(PACKAGE_COMMAND), "{error}");
-    }
-
-    #[test]
-    fn every_listener_mode_verifies_the_package_without_a_pin() {
-        for tls in ["operator-controlled-upstream", "development-loopback"] {
-            let root = canonical_tempdir();
-            let (package, operator, verified) = packaged_operator(root.path(), tls);
-            let config = RuntimeConfig::load(&operator).expect("the package is admitted");
-            assert!(config.package.expected_digest.is_none());
-            assert_eq!(config.package_digest().unwrap(), verified.digest());
-
-            let refusal = |expected: &str| {
-                let error = RuntimeConfig::load(&operator).expect_err(expected);
-                assert_eq!(error.pointer(), "/package/root", "{tls}: {error}");
-                let message = error.to_string();
-                assert!(message.contains(expected), "{tls}: {message}");
-                assert!(message.contains(PACKAGE_COMMAND), "{tls}: {message}");
-            };
-
-            std::fs::write(
-                package.join("casework.yaml"),
-                format!("{SOURCE_PROJECT}\n# changed\n"),
-            )
-            .unwrap();
-            refusal("changed: casework.yaml");
-            std::fs::write(package.join("casework.yaml"), SOURCE_PROJECT).unwrap();
-
-            std::fs::write(package.join("sources/stale.json"), b"stale").unwrap();
-            refusal("extra: sources/stale.json");
-            std::fs::remove_file(package.join("sources/stale.json")).unwrap();
-
-            std::fs::remove_file(package.join("sources/professional.json")).unwrap();
-            refusal("missing: sources/professional.json");
-            std::fs::write(
-                package.join("sources/professional.json"),
-                SOURCE_DESCRIPTION,
-            )
-            .unwrap();
-            assert!(RuntimeConfig::load(&operator).is_ok(), "{tls}");
-
-            std::fs::remove_file(package.join(SUM_FILE)).unwrap();
-            let error = RuntimeConfig::load(&operator).expect_err("an authored project is refused");
-            assert!(matches!(
-                &error,
-                RuntimeConfigError::Package(error)
-                    if matches!(error.kind(), PackageErrorKind::SumFileMissing)
-            ));
-            assert!(error.to_string().contains("has no SHA256SUMS"), "{error}");
-            assert!(error.to_string().contains(PACKAGE_COMMAND), "{error}");
-        }
-    }
-
-    #[test]
-    fn a_package_digest_mismatch_is_refused_in_the_shared_shape() {
-        let root = canonical_tempdir();
-        let (package, operator, verified) =
-            packaged_operator(root.path(), "operator-controlled-upstream");
-        let write = |expected: &str| {
-            let mut document = operator_value(&package, "operator-controlled-upstream");
-            document["package"]["expectedDigest"] = serde_json::json!(expected);
-            write_operator(root.path(), &document);
-        };
-
-        write(verified.digest());
-        let config = RuntimeConfig::load(&operator).expect("the pinned package is admitted");
-        assert_eq!(
-            config.package.expected_digest.as_deref(),
-            Some(verified.digest())
-        );
-
-        let pinned = format!("sha256:{}", "0".repeat(64));
-        write(&pinned);
-        let error = RuntimeConfig::load(&operator).expect_err("a different package is refused");
-        assert!(matches!(
-            &error,
-            RuntimeConfigError::PackageDigest(PackageDigestMismatch { expected, found })
-                if expected == &pinned && found == verified.digest()
-        ));
-        assert_eq!(error.pointer(), "/package/expectedDigest");
-        assert_eq!(
-            error.to_string(),
-            PackageDigestMismatch {
-                expected: pinned,
-                found: verified.digest().to_owned(),
-            }
-            .to_string()
-        );
-    }
-
-    #[test]
-    fn an_expected_digest_refuses_an_unpackaged_project() {
-        let root = canonical_tempdir();
-        let (package, _, verified) = packaged_operator(root.path(), "development-loopback");
-        std::fs::remove_file(package.join(SUM_FILE)).unwrap();
-        let mut document = operator_value(&package, "development-loopback");
-        document["package"]["expectedDigest"] = serde_json::json!(verified.digest());
-        let operator = write_operator(root.path(), &document);
-
-        let error = RuntimeConfig::load(&operator).expect_err("an unpackaged project is refused");
-        assert!(matches!(
-            &error,
-            RuntimeConfigError::Package(error)
-                if matches!(error.kind(), PackageErrorKind::SumFileMissing)
-        ));
-        assert_eq!(error.pointer(), "/package/root");
-    }
-
-    #[test]
-    fn a_malformed_expected_digest_is_refused() {
-        let root = canonical_tempdir();
-        let (package, _, verified) = packaged_operator(root.path(), "operator-controlled-upstream");
-        for malformed in [
-            String::new(),
-            verified.digest().to_uppercase(),
-            verified.digest().trim_start_matches("sha256:").to_owned(),
-            format!("{}0", verified.digest()),
-            format!("sha512:{}", "0".repeat(64)),
-        ] {
-            let mut document = operator_value(&package, "operator-controlled-upstream");
-            document["package"]["expectedDigest"] = serde_json::json!(malformed);
-            let operator = write_operator(root.path(), &document);
-            let error = RuntimeConfig::load(&operator).expect_err("a malformed digest is refused");
-            assert_reader_refusal(
-                &error,
-                "package.expectedDigest",
-                "config.invalid-value",
-                &[],
-            );
-        }
-    }
-
-    #[test]
-    fn the_retired_expected_policy_digest_key_names_its_replacement() {
-        let root = canonical_tempdir();
-        let (package, _, verified) = packaged_operator(root.path(), "operator-controlled-upstream");
-        let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["package"]["expectedPolicyDigest"] = serde_json::json!(verified.digest());
-        let operator = write_operator(root.path(), &document);
-        let message = RuntimeConfig::load(&operator)
-            .expect_err("the retired key is refused")
-            .to_string();
-        assert!(
-            message.contains("/package/expectedPolicyDigest"),
-            "{message}"
-        );
-        assert!(message.contains("package.expectedDigest"), "{message}");
-        // Keys are case-sensitive, so the suggested action never opens with one.
-        assert!(!message.contains("Package.expectedDigest"), "{message}");
-    }
-
-    #[test]
-    fn a_stranded_work_acknowledgement_names_one_package_digest() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        let manifest = write_package(&package);
-        let operator = root.path().join("operator.yaml");
-        let write = |acknowledged: &str| {
-            let mut document = operator_value(&package, "operator-controlled-upstream");
-            document["package"]["acknowledgeStrandedWork"] = serde_json::json!(acknowledged);
-            std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-        };
-
-        write(manifest.digest());
-        let config = RuntimeConfig::load(&operator).expect("a digest acknowledgement loads");
-        assert_eq!(
-            config.package.acknowledge_stranded_work.as_deref(),
-            Some(manifest.digest())
-        );
-
-        for malformed in ["yes", "sha256:ABC"] {
-            write(malformed);
-            let error = RuntimeConfig::load(&operator).expect_err("a malformed digest is refused");
-            assert_reader_refusal(
-                &error,
-                "package.acknowledgeStrandedWork",
-                "config.invalid-value",
-                &[malformed],
-            );
-        }
-    }
-
-    #[test]
-    fn source_context_review_namespaces_require_activated_adapters() {
-        let root = canonical_tempdir();
-        let package = root.path().join("source-context");
-        std::fs::create_dir(&package).unwrap();
-        write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
-        let runtime = root.path().join("source-context.yaml");
-        std::fs::write(
-            &runtime,
-            operator_document(&package, "operator-controlled-upstream"),
-        )
-        .unwrap();
-        RuntimeConfig::load(&runtime).expect("the source namespace has an activated adapter");
-
-        let canary = "UNACTIVATED_SOURCE_NAMESPACE_CANARY";
-        let project =
-            SOURCE_CONTEXT_REVIEW_PROJECT.replace("[professional]", &format!("[{canary}]"));
-        let package = root.path().join("missing-source-context-adapter");
-        std::fs::create_dir(&package).unwrap();
-        write_package_with_project(&package, &project);
-        let runtime = root.path().join("missing-source-context-adapter.yaml");
-        std::fs::write(
-            &runtime,
-            operator_document(&package, "operator-controlled-upstream"),
-        )
-        .unwrap();
-        let error = RuntimeConfig::load(&runtime).expect_err("the absent adapter is refused");
-        assert!(matches!(
-            &error,
-            RuntimeConfigError::InactiveReviewSourceNamespace
-        ));
-        assert_eq!(error.pointer(), "/sources");
-        assert!(!error.to_string().contains(canary));
-
-        let project = project.replace("contextStrategy: source", "contextStrategy: submitted");
-        let package = root.path().join("submitted-context");
-        std::fs::create_dir(&package).unwrap();
-        write_package_with_project(&package, &project);
-        let runtime = root.path().join("submitted-context.yaml");
-        std::fs::write(
-            &runtime,
-            operator_document(&package, "operator-controlled-upstream"),
-        )
-        .unwrap();
-        RuntimeConfig::load(&runtime)
-            .expect("submitted context does not require a source adapter for its namespace");
-    }
-
-    #[test]
-    fn retained_completion_destinations_may_remain_configured_after_policy_removal() {
-        let root = canonical_tempdir();
-        let package = root.path().join("source-context");
-        std::fs::create_dir(&package).unwrap();
-        write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
-        let runtime = root.path().join("source-context.yaml");
-        let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["reviewCompletionDestinations"] = serde_json::json!({
-            "retained-destination": {
-                "url": "https://completion.example.test/v1/reviews",
-                "bearerTokenRef": "secret:file/completion-token"
-            }
-        });
-        std::fs::write(&runtime, serde_norway::to_string(&document).unwrap()).unwrap();
-        RuntimeConfig::load(&runtime)
-            .expect("an undeclared retained destination stays operable during drain");
-    }
-
-    #[test]
-    fn a_completion_destination_names_a_safe_header_for_its_secret() {
-        let root = canonical_tempdir();
-        let package = root.path().join("source-context");
-        std::fs::create_dir(&package).unwrap();
-        write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
-        let runtime = root.path().join("completion-auth.yaml");
-        let load = |destination: serde_json::Value| {
-            let mut document = operator_value(&package, "operator-controlled-upstream");
-            document["reviewCompletionDestinations"] =
-                serde_json::json!({ "receiver": destination });
-            std::fs::write(&runtime, serde_norway::to_string(&document).unwrap()).unwrap();
-            RuntimeConfig::load(&runtime)
-        };
-        let url = "https://completion.example.test/v1/reviews";
-
-        let custom = load(serde_json::json!({
-            "url": url,
-            "auth": {"header": "X-Api-Key", "secretRef": "secret:file/completion-key"}
-        }))
-        .expect("a custom header is accepted");
-        let auth = custom.review_completion_destinations["receiver"]
-            .auth
-            .as_ref()
-            .expect("configured auth");
-        assert_eq!(auth.header.as_deref(), Some("X-Api-Key"));
-        assert_eq!(
-            custom.review_completion_destinations["receiver"].secret_header(),
-            Some("X-Api-Key")
-        );
-        assert_eq!(
-            custom.review_completion_destinations["receiver"].secret_ref(),
-            Some("secret:file/completion-key")
-        );
-        let defaulted = load(serde_json::json!({
-            "url": url,
-            "auth": {"secretRef": "secret:file/completion-key"}
-        }))
-        .expect("auth without a header keeps the bearer default");
-        assert_eq!(
-            defaulted.review_completion_destinations["receiver"].secret_ref(),
-            Some("secret:file/completion-key")
-        );
-        let shorthand = load(serde_json::json!({
-            "url": url,
-            "bearerTokenRef": "secret:file/completion-token"
-        }))
-        .expect("bearerTokenRef stays the shorthand for the default");
-        assert_eq!(
-            shorthand.review_completion_destinations["receiver"].secret_ref(),
-            Some("secret:file/completion-token")
-        );
-        // `null` is never a value (CFG-EMPTY-1): absence is spelled by
-        // leaving the key out.
-        let null_shorthand = load(serde_json::json!({
-            "url": url,
-            "bearerTokenRef": null,
-            "auth": {"secretRef": "secret:file/completion-key"}
-        }))
-        .expect_err("a null bearerTokenRef is refused")
-        .to_string();
-        assert!(
-            null_shorthand.contains("error[config.null-value]"),
-            "{null_shorthand}"
-        );
-        assert!(load(serde_json::json!({"url": url, "bearerTokenRef": null})).is_err());
-
-        for header in [
-            "Authorization",
-            "proxy-authorization",
-            "Host",
-            "Content-Length",
-            "Content-Type",
-            "Transfer-Encoding",
-            "Connection",
-            "Keep-Alive",
-            "TE",
-            "Trailer",
-            "Upgrade",
-            "Cookie",
-            "Idempotency-Key",
-            "Registry-Recipient-Binding",
-            "registry-anything",
-            "X-Forwarded-For",
-            "Traceparent",
-            "",
-            "x api key",
-            "x-api-key\r\nhost",
-            &"x".repeat(65),
-        ] {
-            let refused = load(serde_json::json!({
-                "url": url,
-                "auth": {"header": header, "secretRef": "secret:file/completion-key"}
-            }))
-            .expect_err(header);
-            assert_eq!(
-                refused.pointer(),
-                "/reviewCompletionDestinations/receiver/auth/header",
-                "{header}"
-            );
-        }
-        for destination in [
-            serde_json::json!({"url": url}),
-            serde_json::json!({
-                "url": url,
-                "bearerTokenRef": "secret:file/completion-token",
-                "auth": {"header": "x-api-key", "secretRef": "secret:file/completion-key"}
-            }),
-        ] {
-            let refused = load(destination).expect_err("exactly one credential");
-            assert_eq!(
-                refused.pointer(),
-                "/reviewCompletionDestinations/receiver/auth"
-            );
-        }
-        let unknown = load(serde_json::json!({
-            "url": url,
-            "auth": {"header": "x-api-key", "secretRef": "secret:file/completion-key", "scheme": "Basic"}
-        }))
-        .expect_err("closed auth object");
-        assert!(matches!(unknown, RuntimeConfigError::Load(_)));
-    }
-
-    #[test]
-    fn the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let load = |metrics: Option<serde_json::Value>, listener: &str| {
-            let mut document = operator_value(&package, "operator-controlled-upstream");
-            document["listener"]["bind"] = serde_json::json!(listener);
-            document["listener"]["networkExposure"] = serde_json::json!("container-private");
-            if let Some(metrics) = metrics {
-                document["metricsListener"] = metrics;
-            }
-            std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-            RuntimeConfig::load(&operator)
-        };
-
-        assert!(load(None, "127.0.0.1:8100")
-            .unwrap()
-            .metrics_listener
-            .is_none());
-        for accepted in [
-            "127.0.0.1:9100",
-            "10.0.0.5:9100",
-            "[fd00::1]:9100",
-            "[::1]:9100",
-        ] {
-            let config = load(
-                Some(serde_json::json!({"bind": accepted})),
-                "127.0.0.1:8100",
-            )
-            .unwrap_or_else(|error| panic!("{accepted}: {error}"));
-            assert_eq!(
-                config.metrics_listener.expect("metrics listener").bind,
-                accepted.parse().unwrap()
-            );
-        }
-        for (refused, listener) in [
-            ("0.0.0.0:9100", "127.0.0.1:8100"),
-            ("[::]:9100", "127.0.0.1:8100"),
-            ("203.0.113.9:9100", "127.0.0.1:8100"),
-            ("127.0.0.1:0", "127.0.0.1:8100"),
-            ("127.0.0.1:8100", "127.0.0.1:8100"),
-            ("10.0.0.5:8100", "0.0.0.0:8100"),
-            ("[fd00::1]:8100", "[::]:8100"),
-            ("10.0.0.5:8100", "[::]:8100"),
-        ] {
-            let error =
-                load(Some(serde_json::json!({"bind": refused})), listener).expect_err(refused);
-            assert!(
-                matches!(error, RuntimeConfigError::InvalidMetricsListener),
-                "{refused} beside {listener}: {error}"
-            );
-            assert_eq!(error.pointer(), "/metricsListener/bind");
-        }
-        assert!(load(
-            Some(serde_json::json!({"bind": "10.0.0.5:8100"})),
-            "[fd00::1]:8100"
-        )
-        .is_ok());
-        assert!(matches!(
-            load(
-                Some(serde_json::json!({"bind": "127.0.0.1:9100", "path": "/metrics"})),
-                "127.0.0.1:8100"
-            ),
-            Err(RuntimeConfigError::Load(_))
-        ));
-    }
-
-    #[test]
-    fn runtime_envelope_listener_and_operated_paths_are_strict() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let valid = operator_document(&package, "operator-controlled-upstream");
-        let omitted_bind = valid.replace("  bind: 127.0.0.1:8100\n", "");
-        std::fs::write(&operator, &omitted_bind).unwrap();
-        assert_eq!(
-            RuntimeConfig::load(&operator).unwrap_err().pointer(),
-            "/listener"
-        );
-
-        assert!(matches!(
-            RuntimeConfig::load("runtime.yaml"),
-            Err(RuntimeConfigError::Load(load)) if load.deciding_diagnostic().code == "platform.runtime-config.path"
-        ));
-
-        std::fs::write(
-            &operator,
-            valid.replace(RUNTIME_CONFIG_API_VERSION, "registry.example/unsupported"),
-        )
-        .unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Load(load)) if load.deciding_diagnostic().code == "config.unsupported-api-version"
-        ));
-
-        std::fs::write(
-            &operator,
-            valid.replace("  tlsTermination: operator-controlled-upstream\n", ""),
-        )
-        .unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Load(_))
-        ));
-    }
-
-    #[test]
-    fn removed_runtime_principal_claim_names_the_authored_replacement() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let document = operator_document(&package, "operator-controlled-upstream");
-        let document = document.replace(
-            "    audience: urn:example:casework\n",
-            "    audience: urn:example:casework\n    principalClaim: sub\n",
-        );
-        std::fs::write(&operator, document).unwrap();
-        let error = RuntimeConfig::load(&operator).unwrap_err();
-        assert!(matches!(
-            &error,
-            RuntimeConfigError::Load(load) if load.deciding_diagnostic().code == "config.removed-key"
-        ));
-        assert_eq!(error.pointer(), "/authentication/oidc/principalClaim");
-        assert!(error
-            .to_string()
-            .contains("accessProfiles[].principalClaim"));
-    }
-
-    /// Load the operator fixture with one member of its only source binding
-    /// replaced, and return the refusal. Each binding rule is refused at load
-    /// with its own key path and reason, never the value that broke it.
-    fn source_binding_refusal(member: &str, value: serde_json::Value) -> RuntimeConfigError {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let mut document = operator_value(&package, "development-loopback");
-        document["sources"]["professional"][member] = value;
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
-        RuntimeConfig::load(&operator).unwrap_err()
-    }
-
-    fn assert_source_binding_rule(
-        error: &RuntimeConfigError,
-        member: &str,
-        reason_names: &[&str],
-        withheld: &[&str],
-    ) {
-        let expected = format!("sources.professional.{member}");
-        assert!(
-            matches!(
-                error,
-                RuntimeConfigError::InvalidSourceBinding { path, .. } if *path == expected
-            ),
-            "the refusal does not name {expected}: {error:?}"
-        );
-        assert_eq!(error.pointer(), format!("/sources/professional/{member}"));
-        let message = error.to_string();
-        assert!(
-            !message.contains("accepted range"),
-            "the refusal collapses to the generic sentence: {message}"
-        );
-        for name in reason_names {
-            assert!(
-                message.contains(name),
-                "the refusal does not state {name:?}: {message}"
-            );
-        }
-        for value in withheld {
-            assert!(
-                !message.contains(value),
-                "the refusal echoes the configured value {value:?}: {message}"
-            );
-        }
-    }
-
-    /// Assert the shared reader refused one member with `code` at its dotted
-    /// path, named its bounds or form, and repeated none of `withheld`.
-    fn assert_reader_refusal(
-        error: &RuntimeConfigError,
-        field: &str,
-        code: &str,
-        withheld: &[&str],
-    ) {
-        let RuntimeConfigError::Load(load) = error else {
-            panic!("the reader did not refuse {field}: {error:?}");
-        };
-        assert_eq!(load.deciding_diagnostic().code, code, "{error}");
-        assert_eq!(error.pointer(), format!("/{}", field.replace('.', "/")));
-        // The rendered refusal also names the file, whose temporary name is
-        // random, so the withheld values are looked for in the wording only.
-        for diagnostic in load.diagnostics() {
-            for value in withheld {
-                assert!(
-                    !diagnostic.message.contains(value)
-                        && !diagnostic.suggested_action.contains(value),
-                    "the refusal echoes the configured value {value:?}: {error}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn an_out_of_range_source_binding_interval_is_refused_at_load() {
-        for (interval, withheld) in [(999, "999"), (3_600_001, "3600001")] {
-            let error = source_binding_refusal(
-                "reconciliationIntervalMilliseconds",
-                serde_json::json!(interval),
-            );
-            assert_reader_refusal(
-                &error,
-                "sources.professional.reconciliationIntervalMilliseconds",
-                "config.out-of-range",
-                &[withheld],
-            );
-            let message = error.to_string();
-            assert!(
-                message.contains("from 1000 to 3600000"),
-                "the refusal does not name the bounds: {message}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_request_timeout_shorter_than_the_connect_timeout_names_that_rule() {
-        let error = source_binding_refusal("attemptTimeoutMilliseconds", serde_json::json!(9_000));
-        assert_source_binding_rule(
-            &error,
-            "attemptTimeoutMilliseconds",
-            &["attemptTimeoutMilliseconds", "connectTimeoutMilliseconds"],
-            &["9000"],
-        );
-    }
-
-    #[test]
-    fn an_invalid_reader_profile_names_that_rule() {
-        let error = source_binding_refusal("readerProfile", serde_json::json!(" casework-reader"));
-        assert_source_binding_rule(
-            &error,
-            "readerProfile",
-            &["readerProfile", "512"],
-            &["casework-reader"],
-        );
-        let error = source_binding_refusal("readerProfile", serde_json::json!("r".repeat(513)));
-        assert_source_binding_rule(&error, "readerProfile", &["readerProfile"], &["rrrr"]);
-    }
-
-    #[test]
-    fn an_out_of_range_source_binding_timeout_names_its_bounds() {
-        for (member, value, withheld) in [
-            ("connectTimeoutMilliseconds", 0, &[][..]),
-            ("attemptTimeoutMilliseconds", 0, &[][..]),
-            ("connectTimeoutMilliseconds", 300_001, &["300001"][..]),
-            ("attemptTimeoutMilliseconds", 300_001, &["300001"][..]),
-        ] {
-            let error = source_binding_refusal(member, serde_json::json!(value));
-            assert_reader_refusal(
-                &error,
-                &format!("sources.professional.{member}"),
-                "config.out-of-range",
-                withheld,
-            );
-            let message = error.to_string();
-            assert!(
-                message.contains("from 1 to 300000"),
-                "{member}: the refusal does not name the bounds: {message}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_malformed_event_source_names_that_rule() {
-        let error = source_binding_refusal(
-            "eventSource",
-            serde_json::json!("urn:registrystack:registry:professional:pilot"),
-        );
-        assert_source_binding_rule(
-            &error,
-            "eventSource",
-            &[
-                "eventSource",
-                "urn:registrystack:registry:<package>:instance:<instance>",
-            ],
-            &["professional:pilot"],
-        );
-    }
-
-    #[test]
-    fn an_invalid_client_assertion_audience_names_that_rule() {
-        let error = source_binding_refusal(
-            "clientAssertionAudience",
-            serde_json::json!("https://identity.example.test/#assertion"),
-        );
-        assert_source_binding_rule(
-            &error,
-            "clientAssertionAudience",
-            &["clientAssertionAudience", "absolute URI"],
-            &["identity.example.test/#assertion"],
-        );
-    }
-
-    #[test]
-    fn an_invalid_resource_names_that_rule() {
-        let error = source_binding_refusal("resource", serde_json::json!(" urn:breg:professional"));
-        assert_source_binding_rule(
-            &error,
-            "resource",
-            &["resource", "absolute URI"],
-            &["urn:breg:professional"],
-        );
-    }
-
-    #[test]
-    fn an_empty_scope_list_names_that_rule() {
-        let error = source_binding_refusal("scopes", serde_json::json!([]));
-        assert_source_binding_rule(&error, "scopes", &["scopes", "at least one"], &[]);
-    }
-
-    #[test]
-    fn too_many_scopes_names_that_rule() {
-        let scopes = (0..33)
-            .map(|index| format!("casework:scope-{index}"))
-            .collect::<Vec<_>>();
-        let error = source_binding_refusal("scopes", serde_json::json!(scopes));
-        assert_source_binding_rule(
-            &error,
-            "scopes",
-            &["scopes", "at most 32"],
-            &["casework:scope-"],
-        );
-    }
-
-    #[test]
-    fn a_repeated_scope_names_that_rule() {
-        let error = source_binding_refusal(
-            "scopes",
-            serde_json::json!(["casework:source-reader", "casework:source-reader"]),
-        );
-        assert_source_binding_rule(
-            &error,
-            "scopes",
-            &["scopes", "repeat"],
-            &["casework:source-reader"],
-        );
-    }
-
-    #[test]
-    fn a_scope_that_is_not_a_scope_token_names_that_rule() {
-        let error = source_binding_refusal("scopes", serde_json::json!(["casework source-reader"]));
-        assert_source_binding_rule(
-            &error,
-            "scopes",
-            &["scopes", "scope-token"],
-            &["casework source-reader"],
-        );
-    }
-
-    #[test]
-    fn a_scope_longer_than_the_maximum_names_that_rule() {
-        let error = source_binding_refusal("scopes", serde_json::json!(["s".repeat(257)]));
-        assert_source_binding_rule(&error, "scopes", &["scopes", "256 bytes"], &["ssss"]);
-    }
-
-    #[test]
-    fn environment_secret_references_require_the_explicit_provider() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("runtime.yaml");
-        let document = operator_document(&package, "operator-controlled-upstream")
-            .replace("  environment: {}\n", "");
-        std::fs::write(&operator, document).unwrap();
-        let error = RuntimeConfig::load(&operator).unwrap_err();
-        assert!(matches!(
-            &error,
-            RuntimeConfigError::Block(block)
-                if block.kind() == registry_platform_config::ConfigBlockErrorKind::SecretProviderDisabled
-        ));
-        assert_eq!(error.pointer(), "/database/runtimeUrlRef");
-    }
-
-    /// The task signing key is resolved at startup, so the offline check must
-    /// refuse a reference to a provider the runtime does not enable.
-    #[test]
-    fn the_task_signing_key_reference_names_a_provider_that_is_enabled() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["secretProviders"] = serde_json::json!({"environment": {}});
-        document["audit"]["hashKeyRef"] = "secret:env/AUDIT".into();
-        let source = &mut document["sources"]["professional"];
-        for member in ["clientIdRef", "clientAssertionKeyRef", "webhookSecretRef"] {
-            source[member] = "secret:env/SOURCE".into();
-        }
-        document["taskAuthority"] = serde_json::json!({
-            "issuer": "https://casework.example.test",
-            "exchangeAudience": "https://casework.example.test/exchange",
-            "signingKeyRef": "secret:file/task-key",
-            "statusClients": {}
-        });
-        let operator = write_operator(root.path(), &document);
-        let config = RuntimeConfig::loader()
-            .load::<RuntimeConfig>(&operator)
-            .unwrap()
-            .config;
-        let secret_findings: Vec<_> = config
-            .findings(None)
-            .into_iter()
-            .filter(|finding| finding.code() == "casework.runtime.secret-provider-disabled")
-            .collect();
-        assert_eq!(secret_findings.len(), 1, "{secret_findings:?}");
-        assert_eq!(secret_findings[0].pointer(), "/taskAuthority/signingKeyRef");
-    }
-
-    /// RFC 9068 gives the access token one media type spelled two ways,
-    /// `at+jwt` and `application/at+jwt`, and requires a resource server to
-    /// accept that pair and refuse every other `typ`. A plain `JWT` is not
-    /// that type: an ID token, a UserInfo JWT, or any other JWT this issuer
-    /// mints for this audience would otherwise be admitted as a Casework
-    /// access token and act with the scopes it carries.
-    #[test]
-    fn the_verifier_admits_only_the_rfc_9068_access_token_type() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let runtime = root.path().join("runtime.yaml");
-        std::fs::write(
-            &runtime,
-            operator_document(&package, "operator-controlled-upstream"),
-        )
-        .unwrap();
-        let profile = RuntimeConfig::load(&runtime).unwrap().verifier_profile();
-        assert!(
-            is_access_token_typ_pair(&profile.allowed_typ),
-            "the verifier admits {:?}",
-            profile.allowed_typ
-        );
-    }
-
-    /// `serde_path_to_error` renders a refusal it never attributed to a
-    /// member as `.`, which names nothing an operator can look up. A document
-    /// refused whole is reported at the empty pointer, the root every other
-    /// whole-document refusal here already names.
-    #[test]
-    fn a_document_refused_whole_is_reported_at_its_root() {
-        let root = canonical_tempdir();
-        let runtime = root.path().join("runtime.yaml");
-        std::fs::write(&runtime, "a scalar, not a runtime configuration\n").unwrap();
-        let error = RuntimeConfig::load(&runtime).unwrap_err();
-        assert!(matches!(error, RuntimeConfigError::Load(_)));
-        assert_eq!(error.pointer(), "");
-    }
-
-    #[test]
-    fn typed_parse_path_does_not_echo_the_rejected_value() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let runtime = root.path().join("runtime.yaml");
-        let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
-        let document = operator_document(&package, "operator-controlled-upstream").replace(
-            "  migrationUrlRef: secret:env/MIGRATION\n",
-            &format!("  migrationUrlRef: secret:env/MIGRATION\n  testOnlyPlaintext: {canary}\n"),
-        );
-        std::fs::write(&runtime, document).unwrap();
-        let error = RuntimeConfig::load(&runtime).unwrap_err();
-        assert_eq!(error.pointer(), "/database/testOnlyPlaintext");
-        assert!(!error.to_string().contains(canary));
-    }
-
-    #[test]
-    fn startup_redecodes_packaged_source_metadata_instead_of_trusting_its_hash() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir_all(package.join("sources")).unwrap();
-        std::fs::write(package.join("casework.yaml"), SOURCE_PROJECT).unwrap();
-        std::fs::write(package.join("sources/professional.json"), b"{}\n").unwrap();
-        registry_platform_config::write_sum_file(
-            &package,
-            None,
-            &package_limits(),
-            PACKAGE_COMMAND,
-        )
-        .unwrap();
-        let operator = root.path().join("operator.yaml");
-        std::fs::write(
-            &operator,
-            operator_document(&package, "operator-controlled-upstream"),
-        )
-        .unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(operator),
-            Err(RuntimeConfigError::SourceDescription)
-        ));
-    }
-
-    #[test]
-    fn listener_requires_a_private_address_or_explicit_container_network() {
-        let valid = |bind: &str, exposure, tls_termination| {
-            ListenerConfig {
-                bind: bind.parse().expect("listener address"),
-                tls_termination,
-                network_exposure: exposure,
-            }
-            .is_valid()
-        };
-        let upstream = TlsTermination::OperatorControlledUpstream;
-        let loopback = TlsTermination::DevelopmentLoopback;
-        let private = ListenerNetworkExposure::PrivateAddress;
-        let container = ListenerNetworkExposure::ContainerPrivate;
-
-        assert!(valid("127.0.0.1:8100", private, upstream));
-        assert!(valid("10.20.30.40:8100", private, upstream));
-        assert!(!valid("0.0.0.0:8100", private, upstream));
-        assert!(valid("[::]:8100", container, upstream));
-        assert!(!valid("203.0.113.10:8100", container, upstream));
-        assert!(valid("127.0.0.1:8100", private, loopback));
-        assert!(!valid("10.20.30.40:8100", private, loopback));
-        assert!(!valid("0.0.0.0:8100", container, loopback));
     }
 }
 
@@ -4070,7 +1712,7 @@ pub enum RuntimeConfigError {
     #[error(transparent)]
     PackageDigest(PackageDigestMismatch),
     #[error(
-        "the package at package.root must hold exactly casework.yaml and the source descriptions it names{}{}; rebuild it with `caseworkctl package`",
+        "the package at package.root must hold exactly casework.yaml and its declared schema and context export files{}{}; rebuild it with `caseworkctl package`",
         if missing.is_empty() { String::new() } else { format!("; missing: {}", missing.join(", ")) },
         if extra.is_empty() { String::new() } else { format!("; extra: {}", extra.join(", ")) },
     )]
@@ -4082,12 +1724,8 @@ pub enum RuntimeConfigError {
         "the packaged file {path} changed after package verification; rebuild it with `caseworkctl package`"
     )]
     PackageFileChanged { path: String },
-    #[error(
-        "package.acknowledgeStrandedWork must be sha256: followed by 64 lowercase hexadecimal digits"
-    )]
-    InvalidStrandedWorkAcknowledgement,
-    #[error("an imported source description does not match the exact configured source policy")]
-    SourceDescription,
+    #[error("an imported review-context export does not match its pinned policy contract")]
+    ContextExport,
     #[error("the Casework runtime configuration is invalid")]
     Invalid,
     #[error("listener is not valid for its declared TLS termination and network exposure")]
@@ -4122,18 +1760,8 @@ pub enum RuntimeConfigError {
     InvalidDatabaseReference,
     #[error("{}", audit_message(.0))]
     InvalidAuditDestination(#[source] AuditDestinationError),
-    #[error("sources must bind exactly the source ids casework.yaml declares")]
-    InvalidSourceBindings,
-    #[error(
-        "each source namespace admitted for source-context review work must have an activated source adapter"
-    )]
-    InactiveReviewSourceNamespace,
-    #[error("{path} is not valid in a Casework source binding: {reason}")]
-    InvalidSourceBinding {
-        path: String,
-        pointer: String,
-        reason: &'static str,
-    },
+    #[error("contextProviders contains a deploymentRef casework.yaml does not declare")]
+    InvalidContextProviders,
     #[error(
         "{path} must name exactly one completion secret, in a header the runtime does not reserve"
     )]
@@ -4145,7 +1773,7 @@ pub enum RuntimeConfigError {
         reason: &'static str,
     },
     #[error(
-        "reviewCompletionDestinations must configure every destination casework.yaml reviewProducers[].completion.destinationId names"
+        "reviewCompletionDestinations must configure every destination casework.yaml trustedProducers[].completion.destinationId names"
     )]
     UnconfiguredReviewCompletionDestination,
     #[error("plaintext PostgreSQL is test-only")]
@@ -4180,25 +1808,22 @@ impl RuntimeConfigError {
             Self::InvalidDatabaseReference => "database",
             Self::PlaintextDatabase => "database.testOnlyPlaintext",
             Self::InvalidAuditDestination(error) => audit_field(error),
-            Self::InvalidSourceBindings => "sources",
+            Self::InvalidContextProviders => "contextProviders",
             Self::UnconfiguredReviewCompletionDestination => "reviewCompletionDestinations",
             Self::PackageDigest(_) => "package.expectedDigest",
-            Self::InvalidStrandedWorkAcknowledgement => "package.acknowledgeStrandedWork",
             // Located by `pointer` itself.
             Self::Load(_)
             | Self::BindingSecret { .. }
             | Self::InvalidReviewCompletionAuth { .. }
             | Self::InvalidReviewCompletionDestination { .. }
             | Self::InvalidTaskAuthority { .. }
-            | Self::InvalidSourceBinding { .. }
             | Self::MissingIdentity
-            | Self::InactiveReviewSourceNamespace
             | Self::Project(_)
             | Self::PolicyUnreadable
             | Self::Package(_)
             | Self::PackageContents { .. }
             | Self::PackageFileChanged { .. }
-            | Self::SourceDescription
+            | Self::ContextExport
             | Self::Invalid => "",
         }
     }
@@ -4213,16 +1838,14 @@ impl RuntimeConfigError {
             Self::BindingSecret { pointer, .. }
             | Self::InvalidReviewCompletionAuth { pointer, .. }
             | Self::InvalidReviewCompletionDestination { pointer, .. }
-            | Self::InvalidTaskAuthority { pointer, .. }
-            | Self::InvalidSourceBinding { pointer, .. } => pointer.clone(),
+            | Self::InvalidTaskAuthority { pointer, .. } => pointer.clone(),
             Self::MissingIdentity => "/identity".to_owned(),
-            Self::InactiveReviewSourceNamespace => "/sources".to_owned(),
             Self::Project(_)
             | Self::PolicyUnreadable
             | Self::Package(_)
             | Self::PackageContents { .. }
             | Self::PackageFileChanged { .. }
-            | Self::SourceDescription => "/package/root".to_owned(),
+            | Self::ContextExport => "/package/root".to_owned(),
             Self::Invalid => String::new(),
             _ => pointer_to(&self.member().split('.').collect::<Vec<_>>()),
         }
@@ -4245,10 +1868,7 @@ impl RuntimeConfigError {
             Self::PackageDigest(_) => "casework.package.digest-mismatch",
             Self::PackageContents { .. } => "casework.package.unexpected-contents",
             Self::PackageFileChanged { .. } => "casework.package.file-changed",
-            Self::InvalidStrandedWorkAcknowledgement => {
-                "casework.runtime.invalid-stranded-work-acknowledgement"
-            }
-            Self::SourceDescription => "casework.package.source-description-mismatch",
+            Self::ContextExport => "casework.package.context-export-mismatch",
             Self::Invalid => "casework.runtime.invalid",
             Self::InvalidListener => "casework.runtime.invalid-listener",
             Self::InvalidMetricsListener => "casework.runtime.invalid-metrics-listener",
@@ -4258,11 +1878,7 @@ impl RuntimeConfigError {
             Self::InvalidTaskAuthority { .. } => "casework.runtime.invalid-task-authority",
             Self::InvalidDatabaseReference => "casework.runtime.invalid-database-reference",
             Self::InvalidAuditDestination(_) => "casework.runtime.invalid-audit",
-            Self::InvalidSourceBindings => "casework.runtime.source-bindings-mismatch",
-            Self::InactiveReviewSourceNamespace => {
-                "casework.runtime.inactive-review-source-namespace"
-            }
-            Self::InvalidSourceBinding { .. } => "casework.runtime.invalid-source-binding",
+            Self::InvalidContextProviders => "casework.runtime.context-providers-mismatch",
             Self::InvalidReviewCompletionAuth { .. } => {
                 "casework.runtime.invalid-review-completion-auth"
             }
@@ -4307,11 +1923,8 @@ impl RuntimeConfigError {
             Self::PackageDigest(_) => {
                 "Set package.expectedDigest to the digest `caseworkctl package` reported for the package at package.root, or remove it."
             }
-            Self::InvalidStrandedWorkAcknowledgement => {
-                "Write package.acknowledgeStrandedWork as the sha256: package digest `caseworkctl doctor` names, or remove it."
-            }
-            Self::SourceDescription => {
-                "Import the source description again with `caseworkctl source add`, then rebuild the package with `caseworkctl package`."
+            Self::ContextExport => {
+                "Export and pair the producer's review-context contract again, then rebuild the package with `caseworkctl package`."
             }
             Self::Invalid => "Correct the runtime configuration as the message describes.",
             Self::InvalidListener => {
@@ -4334,14 +1947,8 @@ impl RuntimeConfigError {
                 "Write database.runtimeUrlRef and database.migrationUrlRef as secret references."
             }
             Self::InvalidAuditDestination(error) => audit_action(error),
-            Self::InvalidSourceBindings => {
-                "Bind under sources exactly the source ids casework.yaml declares under sources[].id."
-            }
-            Self::InactiveReviewSourceNamespace => {
-                "Bind under sources every namespace casework.yaml reviewProducers[].sourceNamespaces admits for a source-context review kind."
-            }
-            Self::InvalidSourceBinding { .. } => {
-                "Correct the member so it meets the binding rule the message names."
+            Self::InvalidContextProviders => {
+                "Remove the unrecognized contextProviders key, or declare its deploymentRef in casework.yaml. Omitted providers remain unavailable to their current-source reviews."
             }
             Self::InvalidReviewCompletionAuth { .. } => {
                 "Configure exactly one of bearerTokenRef and auth.secretRef, and name in auth.header only a header the runtime does not reserve."
@@ -4350,7 +1957,7 @@ impl RuntimeConfigError {
                 "Give the destination a non-empty id and an https URL with a host, or an http URL on 127.0.0.1 or [::1] for local development."
             }
             Self::UnconfiguredReviewCompletionDestination => {
-                "Add a reviewCompletionDestinations entry for each destination casework.yaml reviewProducers[].completion.destinationId names."
+                "Add a reviewCompletionDestinations entry for each destination casework.yaml trustedProducers[].completion.destinationId names."
             }
             Self::PlaintextDatabase => {
                 "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
@@ -4380,7 +1987,7 @@ impl RuntimeConfigError {
                 | Self::PackageDigest(_)
                 | Self::PackageContents { .. }
                 | Self::PackageFileChanged { .. }
-                | Self::SourceDescription
+                | Self::ContextExport
                 | Self::Invalid
                 | Self::Oidc
                 | Self::OidcJwksSecret(_)

@@ -1025,6 +1025,45 @@ pub struct BRegMetadata {
 }
 
 impl BRegMetadata {
+    /// Select only a caller-visible, action-specific review-context read.
+    pub fn select_proposal_review_context(
+        &self,
+        expected_profile: &str,
+        action: &str,
+    ) -> Result<crate::BRegProposalReviewBinding, BRegMetadataSelectionError> {
+        self.select_proposal_review(expected_profile, action, false)
+    }
+
+    /// Select only a caller-visible, action-specific review-status read.
+    pub fn select_proposal_review_status(
+        &self,
+        expected_profile: &str,
+        action: &str,
+    ) -> Result<crate::BRegProposalReviewBinding, BRegMetadataSelectionError> {
+        self.select_proposal_review(expected_profile, action, true)
+    }
+
+    fn select_proposal_review(
+        &self,
+        expected_profile: &str,
+        action: &str,
+        status: bool,
+    ) -> Result<crate::BRegProposalReviewBinding, BRegMetadataSelectionError> {
+        crate::BRegProposalReviewBinding::from_metadata(
+            self.proposals
+                .as_ref()
+                .and_then(|value| value.get("actions"))
+                .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::NotFound))?,
+            self.source_binding
+                .as_ref()
+                .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::UnboundSource))?,
+            expected_profile,
+            action,
+            status,
+        )
+        .map_err(|_| selection_error(BRegMetadataSelectionErrorKind::ContractMismatch))
+    }
+
     /// Promote an explicit UUID lookup grant independently of collection listing.
     pub fn select_proposal_get(
         &self,

@@ -9,15 +9,14 @@ use std::time::Duration;
 use napi::{Error as NapiError, Result};
 use napi_derive::napi;
 use registry_casework_client::{
-    AbsenceInput, AbsencesQuery, AssignmentRequest, BootstrapDirectoryRequest,
-    CaseloadApplyRequest, CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
+    AbsenceInput, AbsencesQuery, AssignmentRequest, BootstrapDirectoryRequest, CaseworkAuth,
     CaseworkClient as CoreClient, CaseworkClientConfig as CoreConfig, CaseworkClientError,
-    ClockRecomputeApplyRequest, ClockRecomputeRequest, DecideRequest, DelegateRequest,
-    DirectoryTargetsQuery, HoldingsQuery, HolidaySetRevisionInput, NextWorkItemQuery,
-    OwnReviewDecisionQuery, RecoverAttemptRequest, ReviewCancelRequest, ReviewCreateRequest,
+    DelegateRequest, DirectoryTargetsQuery, HolidaySetRevisionInput, OwnReviewDecisionQuery,
+    ReviewCancelRequest, ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest,
+    ReviewClockRecomputeApplyRequest, ReviewClockRecomputeRequest, ReviewCreateRequest,
     ReviewNoteRequest, ReviewPageQuery, ReviewRequestAccepted, ReviewResultResponse,
-    ReviewTaskDecisionRequest, ReviewTaskDraftInput, ReviewTaskQuery, SaveDraftRequest,
-    SubmissionDigest, SupervisoryReviewTaskQuery, WorkItemHistoryQuery,
+    ReviewStaffingQuery, ReviewTaskDecisionRequest, ReviewTaskDraftInput, SubmissionDigest,
+    SupervisoryReviewTaskQuery,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -189,26 +188,26 @@ impl CaseworkClient {
     }
 
     #[napi]
-    pub async fn review_kinds(&self, token: String, profile: String) -> Result<CaseworkOutcome> {
+    pub async fn review_policies(&self, token: String, profile: String) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
         outcome(
             self.inner
-                .review_kinds(CaseworkAuth::new(&token, &profile))
+                .review_policies(CaseworkAuth::new(&token, &profile))
                 .await,
         )
     }
 
     #[napi]
-    pub async fn review_kind(
+    pub async fn review_policy(
         &self,
         token: String,
         profile: String,
-        kind_id: String,
+        policy_id: String,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
         outcome(
             self.inner
-                .review_kind(CaseworkAuth::new(&token, &profile), &kind_id)
+                .review_policy(CaseworkAuth::new(&token, &profile), &policy_id)
                 .await,
         )
     }
@@ -222,10 +221,50 @@ impl CaseworkClient {
         source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
-        let query: ReviewTaskQuery = query.map(input).transpose()?.unwrap_or_default();
+        let query: ReviewStaffingQuery = query.map(input).transpose()?.unwrap_or_default();
         outcome(
             self.inner
                 .review_tasks(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    &query,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn next_review_task(
+        &self,
+        token: String,
+        profile: String,
+        query: Option<Value>,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: ReviewStaffingQuery = query.map(input).transpose()?.unwrap_or_default();
+        outcome(
+            self.inner
+                .next_review_task(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    &query,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_task_holdings(
+        &self,
+        token: String,
+        profile: String,
+        query: Option<Value>,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: ReviewStaffingQuery = query.map(input).transpose()?.unwrap_or_default();
+        outcome(
+            self.inner
+                .review_task_holdings(
                     optional_source_auth(&token, &profile, source_profile.as_deref()),
                     &query,
                 )
@@ -316,14 +355,17 @@ impl CaseworkClient {
         &self,
         token: String,
         profile: String,
-        source_profile: String,
         task_id: String,
+        source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         let task_id = uuid(&task_id)?;
         let token = bearer(token)?;
         outcome(
             self.inner
-                .preview_review_task_templates(auth(&token, &profile, &source_profile), task_id)
+                .preview_review_task_templates(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    task_id,
+                )
                 .await,
         )
     }
@@ -333,14 +375,17 @@ impl CaseworkClient {
         &self,
         token: String,
         profile: String,
-        source_profile: String,
         task_id: String,
+        source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         let task_id = uuid(&task_id)?;
         let token = bearer(token)?;
         outcome(
             self.inner
-                .list_review_task_grants(auth(&token, &profile, &source_profile), task_id)
+                .list_review_task_grants(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    task_id,
+                )
                 .await,
         )
     }
@@ -351,11 +396,11 @@ impl CaseworkClient {
         &self,
         token: String,
         profile: String,
-        source_profile: String,
         task_id: String,
         expected_revision: i64,
         idempotency_key: String,
         approval: Value,
+        source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let task_id = uuid(&task_id)?;
@@ -364,7 +409,7 @@ impl CaseworkClient {
         outcome(
             self.inner
                 .approve_review_task_grant(
-                    auth(&token, &profile, &source_profile),
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
                     task_id,
                     expected_revision,
                     &idempotency_key,
@@ -679,136 +724,6 @@ impl CaseworkClient {
     }
 
     #[napi]
-    pub async fn list_work_items(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        query: Value,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        let query = input(query)?;
-        outcome(
-            self.inner
-                .list_work_items(auth(&token, &profile, &source_profile), &query)
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn next_work_item(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        query: Option<Value>,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        let query: NextWorkItemQuery = query.map(input).transpose()?.unwrap_or_default();
-        outcome(
-            self.inner
-                .next_work_item(auth(&token, &profile, &source_profile), &query)
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn get_work_item(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        outcome(
-            self.inner
-                .get_work_item(auth(&token, &profile, &source_profile), uuid(&item_id)?)
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn preview_task_templates(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-    ) -> Result<CaseworkOutcome> {
-        let item_id = uuid(&item_id)?;
-        let token = bearer(token)?;
-        outcome(
-            self.inner
-                .preview_task_templates(auth(&token, &profile, &source_profile), item_id)
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn list_task_grants(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-    ) -> Result<CaseworkOutcome> {
-        let item_id = uuid(&item_id)?;
-        let token = bearer(token)?;
-        outcome(
-            self.inner
-                .list_task_grants(auth(&token, &profile, &source_profile), item_id)
-                .await,
-        )
-    }
-
-    #[napi]
-    #[allow(clippy::too_many_arguments)]
-    pub async fn approve_task_grant(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-        expected_revision: i64,
-        idempotency_key: String,
-        approval: Value,
-    ) -> Result<CaseworkOutcome> {
-        safe_revision(expected_revision)?;
-        let item_id = uuid(&item_id)?;
-        let approval: registry_casework_client::TaskApprovalRequest = input(approval)?;
-        let token = bearer(token)?;
-        outcome(
-            self.inner
-                .approve_task_grant(
-                    auth(&token, &profile, &source_profile),
-                    item_id,
-                    expected_revision,
-                    &idempotency_key,
-                    &approval,
-                )
-                .await,
-        )
-    }
-    #[napi]
-    pub async fn revoke_task_grant(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-        grant_id: String,
-    ) -> Result<CaseworkOutcome> {
-        let item_id = uuid(&item_id)?;
-        let grant_id = uuid(&grant_id)?;
-        let token = bearer(token)?;
-        outcome(
-            self.inner
-                .revoke_task_grant(auth(&token, &profile, &source_profile), item_id, grant_id)
-                .await,
-        )
-    }
-    #[napi]
     pub async fn task_assertion(&self, token: String, grant_id: String) -> Result<CaseworkOutcome> {
         let grant_id = uuid(&grant_id)?;
         let token = bearer(token)?;
@@ -830,230 +745,6 @@ impl CaseworkClient {
         let grant_id = uuid(&grant_id)?;
         let token = bearer(token)?;
         outcome(self.inner.task_grant_status(&token, grant_id).await)
-    }
-
-    #[napi]
-    pub async fn claim_work_item(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        action: Value,
-        idempotency_key: String,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        let action: CaseworkAction = input(action)?;
-        outcome(
-            self.inner
-                .claim_work_item(
-                    auth(&token, &profile, &source_profile),
-                    &action,
-                    &idempotency_key,
-                )
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn release_work_item(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        action: Value,
-        idempotency_key: String,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        let action: CaseworkAction = input(action)?;
-        outcome(
-            self.inner
-                .release_work_item(
-                    auth(&token, &profile, &source_profile),
-                    &action,
-                    &idempotency_key,
-                )
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn get_draft(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        outcome(
-            self.inner
-                .get_draft(auth(&token, &profile, &source_profile), uuid(&item_id)?)
-                .await,
-        )
-    }
-
-    #[napi]
-    #[allow(clippy::too_many_arguments)] // The public binding keeps per-call auth and mutation inputs explicit.
-    pub async fn save_draft(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-        expected_revision: i64,
-        idempotency_key: String,
-        draft: Value,
-    ) -> Result<CaseworkOutcome> {
-        safe_revision(expected_revision)?;
-        let token = bearer(token)?;
-        let draft: SaveDraftRequest = input(draft)?;
-        outcome(
-            self.inner
-                .save_draft(
-                    auth(&token, &profile, &source_profile),
-                    uuid(&item_id)?,
-                    expected_revision,
-                    &idempotency_key,
-                    &draft,
-                )
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn delete_draft(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-        expected_revision: i64,
-        idempotency_key: String,
-    ) -> Result<CaseworkOutcome> {
-        safe_revision(expected_revision)?;
-        let token = bearer(token)?;
-        outcome(
-            self.inner
-                .delete_draft(
-                    auth(&token, &profile, &source_profile),
-                    uuid(&item_id)?,
-                    expected_revision,
-                    &idempotency_key,
-                )
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn decide_work_item(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        action: Value,
-        idempotency_key: String,
-        decision: Value,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        let action: CaseworkAction = input(action)?;
-        let decision: DecideRequest = input(decision)?;
-        outcome(
-            self.inner
-                .decide_work_item(
-                    auth(&token, &profile, &source_profile),
-                    &action,
-                    &idempotency_key,
-                    &decision,
-                )
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn recover_decision(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-        attempt_id: String,
-        recovery: Value,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        let recovery: RecoverAttemptRequest = input(recovery)?;
-        outcome(
-            self.inner
-                .recover_decision(
-                    auth(&token, &profile, &source_profile),
-                    uuid(&item_id)?,
-                    uuid(&attempt_id)?,
-                    &recovery,
-                )
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn recover_decision_by_key(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-        idempotency_key: String,
-        recovery: Value,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        let recovery: RecoverAttemptRequest = input(recovery)?;
-        outcome(
-            self.inner
-                .recover_decision_by_key(
-                    auth(&token, &profile, &source_profile),
-                    uuid(&item_id)?,
-                    &idempotency_key,
-                    &recovery,
-                )
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn work_item_history(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-        query: Option<Value>,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        let query: WorkItemHistoryQuery = query.map(input).transpose()?.unwrap_or_default();
-        outcome(
-            self.inner
-                .work_item_history(
-                    auth(&token, &profile, &source_profile),
-                    uuid(&item_id)?,
-                    &query,
-                )
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn holdings(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        query: Option<Value>,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        let query: HoldingsQuery = query.map(input).transpose()?.unwrap_or_default();
-        outcome(
-            self.inner
-                .holdings(auth(&token, &profile, &source_profile), &query)
-                .await,
-        )
     }
 
     #[napi]
@@ -1199,79 +890,20 @@ impl CaseworkClient {
     }
 
     #[napi]
-    #[allow(clippy::too_many_arguments)] // Auth, revision and retry key remain explicit per call.
-    pub async fn assign_work_item(
-        &self,
-        token: String,
-        profile: String,
-        item_id: String,
-        expected_revision: i64,
-        idempotency_key: String,
-        request: Value,
-        source_profile: Option<String>,
-    ) -> Result<CaseworkOutcome> {
-        safe_revision(expected_revision)?;
-        let token = bearer(token)?;
-        let request: AssignmentRequest = input(request)?;
-        outcome(
-            self.inner
-                .assign_work_item(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
-                    uuid(&item_id)?,
-                    expected_revision,
-                    &idempotency_key,
-                    &request,
-                )
-                .await,
-        )
-    }
-
-    #[napi]
-    #[allow(clippy::too_many_arguments)] // Auth, revision and retry key remain explicit per call.
-    pub async fn delegate_work_item(
-        &self,
-        token: String,
-        profile: String,
-        item_id: String,
-        expected_revision: i64,
-        idempotency_key: String,
-        request: Value,
-        source_profile: Option<String>,
-    ) -> Result<CaseworkOutcome> {
-        safe_revision(expected_revision)?;
-        let token = bearer(token)?;
-        let request: DelegateRequest = input(request)?;
-        outcome(
-            self.inner
-                .delegate_work_item(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
-                    uuid(&item_id)?,
-                    expected_revision,
-                    &idempotency_key,
-                    &request,
-                )
-                .await,
-        )
-    }
-
-    #[napi]
     pub async fn preview_caseload_move(
         &self,
         token: String,
         profile: String,
         movement: Value,
-        query: Option<Value>,
         source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
-        let movement: CaseloadMoveRequest = input(movement)?;
-        let query: CaseloadPreviewQuery = query.map(input).transpose()?.unwrap_or_default();
+        let movement: ReviewCaseloadMoveRequest = input(movement)?;
         outcome(
             self.inner
                 .preview_caseload_move(
                     optional_source_auth(&token, &profile, source_profile.as_deref()),
                     &movement,
-                    &query,
                 )
                 .await,
         )
@@ -1287,10 +919,7 @@ impl CaseworkClient {
         source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
-        let request: CaseloadApplyRequest = input(request)?;
-        for item in &request.items {
-            safe_revision(item.expected_revision)?;
-        }
+        let request: ReviewCaseloadApplyRequest = input(request)?;
         outcome(
             self.inner
                 .apply_caseload_move(
@@ -1327,22 +956,6 @@ impl CaseworkClient {
                     &idempotency_key,
                     &request,
                 )
-                .await,
-        )
-    }
-
-    #[napi]
-    pub async fn work_item_clocks(
-        &self,
-        token: String,
-        profile: String,
-        source_profile: String,
-        item_id: String,
-    ) -> Result<CaseworkOutcome> {
-        let token = bearer(token)?;
-        outcome(
-            self.inner
-                .work_item_clocks(auth(&token, &profile, &source_profile), uuid(&item_id)?)
                 .await,
         )
     }
@@ -1397,7 +1010,7 @@ impl CaseworkClient {
         request: Value,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
-        let request: ClockRecomputeRequest = input(request)?;
+        let request: ReviewClockRecomputeRequest = input(request)?;
         outcome(
             self.inner
                 .preview_clock_recompute(CaseworkAuth::new(&token, &profile), &request)
@@ -1414,7 +1027,7 @@ impl CaseworkClient {
         request: Value,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
-        let request: ClockRecomputeApplyRequest = input(request)?;
+        let request: ReviewClockRecomputeApplyRequest = input(request)?;
         outcome(
             self.inner
                 .apply_clock_recompute(
@@ -1442,14 +1055,6 @@ fn optional_source_auth<'a>(
 fn bearer(value: String) -> Result<registry_casework_client::BearerToken> {
     registry_casework_client::BearerToken::new(value)
         .map_err(|_| binding_error("invalid-request", "the bearer token is invalid"))
-}
-
-fn auth<'a>(
-    token: &'a registry_casework_client::BearerToken,
-    profile: &'a str,
-    source_profile: &'a str,
-) -> CaseworkAuth<'a> {
-    CaseworkAuth::new(token, profile).with_source_profile(source_profile)
 }
 
 fn uuid(value: &str) -> Result<Uuid> {
@@ -1568,7 +1173,6 @@ fn client_error(error: CaseworkClientError) -> NapiError {
             code,
             detail,
             trace_id,
-            original_attempt_id,
             validation,
         } => {
             let message = detail
@@ -1579,7 +1183,6 @@ fn client_error(error: CaseworkClientError) -> NapiError {
                 "status": status,
                 "code": code.code(),
                 "traceId": trace_id,
-                "originalAttemptId": original_attempt_id,
                 "validation": validation.map(|validation| json!({
                     "path": validation.path,
                     "reason": validation.reason,

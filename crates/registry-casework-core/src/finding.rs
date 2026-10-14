@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use registry_platform_yaml::{Diagnostic, Document, Related, Report, Severity};
 
 /// The grammar of an access profile, queue, review producer, task template,
-/// clock, calendar, review kind, stage, outcome, and routing rule identifier.
+/// clock, calendar, review policy, stage, outcome, and routing rule identifier.
 pub(crate) const IDENTIFIER_MESSAGE: &str =
     "expected 1 to 64 characters: a lowercase letter, then lowercase letters, digits, '-', or '_'";
 pub(crate) const IDENTIFIER_ACTION: &str = "Write a lowercase identifier, such as first-review.";

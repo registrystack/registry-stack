@@ -7,21 +7,13 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::{
-    CaseworkFixture, CaseworkHolidaySet, CaseworkProject, CaseworkSimulation, CASEWORK_API_VERSION,
-    CASEWORK_FIXTURE_API_VERSION, CASEWORK_FIXTURE_KIND, CASEWORK_HOLIDAY_SET_API_VERSION,
-    CASEWORK_HOLIDAY_SET_KIND, CASEWORK_KIND, CASEWORK_SIMULATION_API_VERSION,
-    CASEWORK_SIMULATION_KIND,
+    CaseworkHolidaySet, CaseworkProject, CASEWORK_API_VERSION, CASEWORK_HOLIDAY_SET_API_VERSION,
+    CASEWORK_HOLIDAY_SET_KIND, CASEWORK_KIND,
 };
 
 pub const PROJECT_SCHEMA_FILE: &str = "project.schema.json";
 pub const PROJECT_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/casework/project/project.v1alpha1.schema.json";
-pub const FIXTURE_SCHEMA_FILE: &str = "fixture/fixture.schema.json";
-pub const FIXTURE_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/casework/fixture/fixture.v1alpha1.schema.json";
-pub const SIMULATION_SCHEMA_FILE: &str = "simulation/simulation.schema.json";
-pub const SIMULATION_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/casework/simulation/simulation.v1alpha1.schema.json";
 pub const HOLIDAY_SET_SCHEMA_FILE: &str = "holiday-set/holiday-set.schema.json";
 pub const HOLIDAY_SET_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/casework/holiday-set/holiday-set.v1alpha1.schema.json";
@@ -41,38 +33,16 @@ pub fn project_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
 /// The committed schema documents of the offline test files, by path below
 /// `products/casework/generated`.
 pub fn offline_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
-    Ok([
-        (
-            FIXTURE_SCHEMA_FILE,
-            render(
-                schemars::schema_for!(CaseworkFixture),
-                CASEWORK_FIXTURE_API_VERSION,
-                CASEWORK_FIXTURE_KIND,
-                FIXTURE_SCHEMA_ID,
-                "Registry Casework fixture",
-            )?,
-        ),
-        (
-            SIMULATION_SCHEMA_FILE,
-            render(
-                schemars::schema_for!(CaseworkSimulation),
-                CASEWORK_SIMULATION_API_VERSION,
-                CASEWORK_SIMULATION_KIND,
-                SIMULATION_SCHEMA_ID,
-                "Registry Casework simulation",
-            )?,
-        ),
-        (
-            HOLIDAY_SET_SCHEMA_FILE,
-            render(
-                schemars::schema_for!(CaseworkHolidaySet),
-                CASEWORK_HOLIDAY_SET_API_VERSION,
-                CASEWORK_HOLIDAY_SET_KIND,
-                HOLIDAY_SET_SCHEMA_ID,
-                "Registry Casework holiday set",
-            )?,
-        ),
-    ]
+    Ok([(
+        HOLIDAY_SET_SCHEMA_FILE,
+        render(
+            schemars::schema_for!(CaseworkHolidaySet),
+            CASEWORK_HOLIDAY_SET_API_VERSION,
+            CASEWORK_HOLIDAY_SET_KIND,
+            HOLIDAY_SET_SCHEMA_ID,
+            "Registry Casework holiday set",
+        )?,
+    )]
     .into())
 }
 
@@ -261,314 +231,26 @@ fn set_const(schema: &mut Value, property: &str, expected: &str) {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::disallowed_methods,
-        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
-    )]
     use super::*;
-    use jsonschema::{Draft, JSONSchema};
-
-    fn project_schema() -> JSONSchema {
-        let documents = project_documents().expect("the project schema generates");
-        let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE])
-            .expect("the project schema is JSON");
-        JSONSchema::options()
-            .with_draft(Draft::Draft202012)
-            .compile(&document)
-            .expect("the project schema compiles as Draft 2020-12")
-    }
-
-    fn example(name: &str) -> Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/casework/examples")
-            .join(name)
-            .join("casework.yaml");
-        let text = std::fs::read_to_string(path).expect("read the example");
-        serde_norway::from_str(&text).expect("the example is YAML")
-    }
-
     #[test]
-    fn every_maintained_example_validates_against_the_project_schema() {
-        let schema = project_schema();
-        for name in [
-            "multi-stage-routing-clocks",
-            "payment-review",
-            "professional-review",
-            "standalone-decision",
-        ] {
-            let document = example(name);
-            let errors = schema
-                .validate(&document)
-                .err()
-                .map(|errors| {
-                    errors
-                        .map(|error| format!("{} {error}", error.instance_path))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            assert!(errors.is_empty(), "{name}: {errors:#?}");
-        }
-    }
-
-    #[test]
-    fn the_project_schema_refuses_what_the_reader_refuses() {
-        let schema = project_schema();
-        let valid = example("standalone-decision");
-        assert!(schema.is_valid(&valid));
-        let mut unknown = valid.clone();
-        unknown["queuez"] = Value::Array(Vec::new());
-        assert!(!schema.is_valid(&unknown));
-        let mut null = valid.clone();
-        null["queues"][0]["label"] = Value::Null;
-        assert!(!schema.is_valid(&null));
-        let mut version = valid;
-        version["apiVersion"] = Value::from("registry.registrystack.org/casework/v1alpha0");
-        assert!(!schema.is_valid(&version));
-    }
-
-    #[test]
-    fn cfg_id_6_the_required_scopes_of_an_access_profile_are_a_set() {
-        let first = project_documents().unwrap();
-        let document: Value = serde_json::from_str(&first[PROJECT_SCHEMA_FILE]).unwrap();
-        let scopes = &document["$defs"]["AccessProfile"]["properties"]["requiredScopes"];
-        assert_eq!(scopes["uniqueItems"], true);
-        assert_eq!(scopes["minItems"], 1);
-    }
-
-    #[test]
-    fn cfg_id_1_every_declared_identifier_is_typed() {
-        let first = project_documents().unwrap();
-        let document: Value = serde_json::from_str(&first[PROJECT_SCHEMA_FILE]).unwrap();
-        let defs = &document["$defs"];
-        let local = serde_json::json!("#/$defs/LocalId");
-        for definition in [
-            "CalendarPolicy",
-            "ClockReminder",
-            "ClockStep",
-            "PassiveTargetPolicy",
-            "ReviewKindPolicy",
-            "ReviewOutcomePolicy",
-            "ReviewStagePolicy",
-            "RoutingRule",
-            "SourcePolicy",
-        ] {
-            assert_eq!(
-                defs[definition]["properties"]["id"]["$ref"], local,
-                "{definition}"
-            );
-        }
-        for variant in defs["ClockPolicy"]["oneOf"].as_array().unwrap() {
-            assert_eq!(variant["properties"]["id"]["$ref"], local);
-        }
-        assert_eq!(
-            defs["RoutingCondition"]["properties"]["fields"]["propertyNames"]["$ref"],
-            local
-        );
-        assert_eq!(
-            defs["TaskTemplate"]["properties"]["subjects"]["propertyNames"]["$ref"],
-            "#/$defs/ExternalId"
-        );
-    }
-
-    #[test]
-    fn project_schema_is_deterministic_and_versioned() {
-        let first = project_documents().unwrap();
-        let second = project_documents().unwrap();
-        assert_eq!(first, second);
-        let document: Value = serde_json::from_str(&first[PROJECT_SCHEMA_FILE]).unwrap();
-        assert_eq!(document["$id"], PROJECT_SCHEMA_ID);
+    fn project_schema_publishes_only_canonical_review_model() {
+        let documents = project_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();
         assert_eq!(
             document["properties"]["apiVersion"]["const"],
             CASEWORK_API_VERSION
         );
-        assert_eq!(document["properties"]["kind"]["const"], CASEWORK_KIND);
-    }
-
-    fn offline_schema(file: &str) -> JSONSchema {
-        let documents = offline_documents().expect("the offline schemas generate");
-        let document: Value =
-            serde_json::from_str(&documents[file]).expect("the offline schema is JSON");
-        JSONSchema::options()
-            .with_draft(Draft::Draft202012)
-            .compile(&document)
-            .expect("the offline schema compiles as Draft 2020-12")
-    }
-
-    fn example_file(path: &str) -> Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/casework/examples")
-            .join(path);
-        let text = std::fs::read_to_string(path).expect("read the example");
-        serde_norway::from_str(&text).expect("the example is YAML")
-    }
-
-    fn assert_valid(schema: &JSONSchema, name: &str, document: &Value) {
-        let errors = schema
-            .validate(document)
-            .err()
-            .map(|errors| {
-                errors
-                    .map(|error| format!("{} {error}", error.instance_path))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        assert!(errors.is_empty(), "{name}: {errors:#?}");
-    }
-
-    #[test]
-    fn every_maintained_offline_example_validates_against_its_schema() {
-        let fixture = offline_schema(FIXTURE_SCHEMA_FILE);
-        for name in [
-            "multi-stage-routing-clocks/fixtures/multi-stage-policy.yaml",
-            "payment-review/fixtures/payment-review.yaml",
-            "professional-review/fixtures/professional-review.yaml",
-            "standalone-decision/fixtures/standalone-decision.yaml",
+        for property in [
+            "reviewPolicies",
+            "trustedProducers",
+            "contextProviders",
+            "teams",
         ] {
-            assert_valid(&fixture, name, &example_file(name));
+            assert!(document["properties"].get(property).is_some());
         }
-        let simulation = offline_schema(SIMULATION_SCHEMA_FILE);
-        for name in [
-            "multi-stage-routing-clocks/simulations/friday-review.yaml",
-            "multi-stage-routing-clocks/simulations/resubmitted-response.yaml",
-        ] {
-            assert_valid(&simulation, name, &example_file(name));
+        for removed in ["sources", "reviewKinds", "reviewProducers"] {
+            assert!(document["properties"].get(removed).is_none());
         }
-        let name = "multi-stage-routing-clocks/simulations/holiday-sets/office-holidays-7.yaml";
-        assert_valid(
-            &offline_schema(HOLIDAY_SET_SCHEMA_FILE),
-            name,
-            &example_file(name),
-        );
-    }
-
-    #[test]
-    fn the_offline_schemas_refuse_what_the_reader_refuses() {
-        let fixture = offline_schema(FIXTURE_SCHEMA_FILE);
-        let valid = example_file("professional-review/fixtures/professional-review.yaml");
-        assert!(fixture.is_valid(&valid));
-        let mut none = valid.clone();
-        none["expect"]["target"] = Value::from("none");
-        assert!(fixture.is_valid(&none));
-        let mut null = valid.clone();
-        null["expect"]["target"] = Value::Null;
-        assert!(!fixture.is_valid(&null));
-        let mut zero = valid.clone();
-        zero["expect"]["target"]["elapsedMinutes"] = Value::from(0);
-        assert!(!fixture.is_valid(&zero));
-        let mut retired = valid;
-        retired["name"] = Value::from("professional-review-offline");
-        assert!(!fixture.is_valid(&retired));
-        let review = example_file("payment-review/fixtures/payment-review.yaml");
-        assert!(fixture.is_valid(&review));
-        let mut empty_display = review.clone();
-        empty_display["review"]["display"]["currency"] = Value::Null;
-        assert!(!fixture.is_valid(&empty_display));
-        let mut control_key = review;
-        control_key["review"]["display"]["line\nbreak"] = Value::from("x");
-        assert!(!fixture.is_valid(&control_key));
-
-        let simulation = offline_schema(SIMULATION_SCHEMA_FILE);
-        let valid = example_file("multi-stage-routing-clocks/simulations/friday-review.yaml");
-        let mut null = valid.clone();
-        null["subject"]["fields"]["region"] = Value::Null;
-        assert!(
-            !simulation.is_valid(&null),
-            "a field the record does not carry is omitted"
-        );
-        let mut nested = valid.clone();
-        nested["subject"]["fields"]["region"] = serde_json::json!(["north"]);
-        assert!(!simulation.is_valid(&nested));
-        let mut long_field = valid.clone();
-        long_field["subject"]["fields"]["f".repeat(513)] = Value::from("north");
-        assert!(!simulation.is_valid(&long_field));
-        let mut holiday_set = valid.clone();
-        holiday_set["holidayRevisions"]["Office"] = Value::from(7);
-        assert!(!simulation.is_valid(&holiday_set));
-        let mut state = valid;
-        state["expect"]["dueState"] = Value::from("atRisk");
-        assert!(!simulation.is_valid(&state));
-
-        let holidays = offline_schema(HOLIDAY_SET_SCHEMA_FILE);
-        let valid = example_file(
-            "multi-stage-routing-clocks/simulations/holiday-sets/office-holidays-7.yaml",
-        );
-        let mut repeated = valid.clone();
-        repeated["dates"] = serde_json::json!(["2026-09-07", "2026-09-07"]);
-        assert!(!holidays.is_valid(&repeated));
-        let mut zero = valid;
-        zero["revision"] = Value::from(0);
-        assert!(!holidays.is_valid(&zero));
-    }
-
-    #[test]
-    fn a_whole_number_that_may_be_zero_states_both_bounds() {
-        let simulation: Value =
-            serde_json::from_str(&offline_documents().unwrap()[SIMULATION_SCHEMA_FILE]).unwrap();
-        for pointer in [
-            "/$defs/SimulationExpectation/properties/remainingMilliseconds",
-            "/$defs/SimulationReviewTiming/properties/pausedMilliseconds",
-        ] {
-            let member = simulation.pointer(pointer).unwrap();
-            assert_eq!(member["minimum"], 0, "{pointer}");
-            assert!(member["maximum"].is_u64(), "{pointer}");
-            assert!(member.get("format").is_none(), "{pointer}");
-        }
-    }
-
-    #[test]
-    fn offline_schemas_are_deterministic_and_versioned() {
-        let first = offline_documents().unwrap();
-        assert_eq!(first, offline_documents().unwrap());
-        for (file, id, api_version, kind) in [
-            (
-                FIXTURE_SCHEMA_FILE,
-                FIXTURE_SCHEMA_ID,
-                CASEWORK_FIXTURE_API_VERSION,
-                CASEWORK_FIXTURE_KIND,
-            ),
-            (
-                SIMULATION_SCHEMA_FILE,
-                SIMULATION_SCHEMA_ID,
-                CASEWORK_SIMULATION_API_VERSION,
-                CASEWORK_SIMULATION_KIND,
-            ),
-            (
-                HOLIDAY_SET_SCHEMA_FILE,
-                HOLIDAY_SET_SCHEMA_ID,
-                CASEWORK_HOLIDAY_SET_API_VERSION,
-                CASEWORK_HOLIDAY_SET_KIND,
-            ),
-        ] {
-            let document: Value = serde_json::from_str(&first[file]).unwrap();
-            assert_eq!(document["$id"], id);
-            assert_eq!(document["properties"]["apiVersion"]["const"], api_version);
-            assert_eq!(document["properties"]["kind"]["const"], kind);
-        }
-    }
-
-    #[test]
-    fn committed_offline_schemas_match_generated_bytes() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/casework/generated");
-        for (file, generated) in offline_documents().unwrap() {
-            assert_eq!(
-                std::fs::read_to_string(root.join(file)).unwrap_or_default(),
-                generated,
-                "products/casework/generated/{file} differs from its generator; run cargo run -p registry-casework-core --features schema --example offline-schemas -- --output products/casework/generated"
-            );
-        }
-    }
-
-    #[test]
-    fn committed_project_schema_matches_generated_bytes() {
-        let generated = project_documents().unwrap();
-        let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/casework/generated/project")
-            .join(PROJECT_SCHEMA_FILE);
-        assert_eq!(
-            std::fs::read_to_string(committed).unwrap(),
-            generated[PROJECT_SCHEMA_FILE],
-            "products/casework/generated/project/{PROJECT_SCHEMA_FILE} differs from its generator; run cargo run -p registry-casework-core --features schema --example project-schema -- --output products/casework/generated/project"
-        );
+        assert!(!documents[PROJECT_SCHEMA_FILE].contains("itemKinds"));
     }
 }

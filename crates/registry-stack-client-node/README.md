@@ -41,8 +41,8 @@ const appointments = new scheduling.SchedulingClient({
   assertions.
 - `breg`: Base Registry Engine, records, contracts, writes, lifecycle, and typed
   applied-request result navigation.
-- `casework`: Registry Casework, staff inbox, claims, drafts, decisions,
-  recovery, history, holdings, and directory bootstrap.
+- `casework`: Registry Casework, pinned review policies, producer requests and
+  results, review task staffing, private decision drafts, receipts, and Directory.
 - `messaging`: Registry Messaging, submit, inspect, cancel, and preview
   institution-owned messages.
 - `scheduling`: Registry Scheduling, published offerings, availability,

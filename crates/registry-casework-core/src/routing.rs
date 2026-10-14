@@ -19,7 +19,6 @@ pub const MAXIMUM_ROUTING_SOURCE_STAGES: usize = 32;
 #[serde(rename_all = "kebab-case")]
 pub enum RoutingActivity {
     Review,
-    Apply,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -45,11 +44,11 @@ pub struct RoutingCondition {
     #[serde(
         default,
         skip_serializing_if = "BTreeMap::is_empty",
-        deserialize_with = "crate::typed::local_id_keys"
+        deserialize_with = "crate::typed::external_id_keys"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "BTreeMap<registry_platform_yaml::LocalId, RoutingPredicate>")
+        schemars(with = "BTreeMap<registry_platform_yaml::ExternalId, RoutingPredicate>")
     )]
     pub fields: BTreeMap<String, RoutingPredicate>,
 }
@@ -105,12 +104,14 @@ impl schemars::JsonSchema for RoutingPredicate {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EqualsPredicate {
     pub equals: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OneOfPredicate {
     pub one_of: Vec<Value>,
@@ -119,6 +120,7 @@ pub struct OneOfPredicate {
 /// Source-owned routing metadata imported by the source's own authoring tool.
 /// `schema` is the exact generated JSON Schema property for the API field.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoutingFieldDescriptor {
     pub field: String,
@@ -166,6 +168,7 @@ pub fn validate_source_field_value(
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoutingSourceMetadata {
     pub stages: Vec<String>,
@@ -192,6 +195,7 @@ impl fmt::Debug for RoutingContext {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoutingDecision {
     pub queue: String,
@@ -202,6 +206,7 @@ pub struct RoutingDecision {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum RoutingDiagnosticReason {
     TooManyRules,
@@ -411,7 +416,7 @@ pub fn routing_policy_findings(
                 .as_ref()
                 .is_some_and(|fields| fields.len() != metadata.fields.len())
             || metadata.fields.iter().any(|field| {
-                !valid_identifier(&field.field)
+                registry_platform_yaml::ExternalId::new(field.field.clone()).is_err()
                     || field.api_name.is_empty()
                     || field.api_name.len() > 128
             })
@@ -599,13 +604,6 @@ pub fn evaluate_routing(
                 ));
             }
         }
-        RoutingActivity::Apply if context.stage.is_some() => {
-            return Err(RoutingDiagnostic::new(
-                "/source/stage",
-                RoutingDiagnosticReason::UnexpectedSourceState,
-            ));
-        }
-        RoutingActivity::Apply => {}
     }
 
     let descriptors = source

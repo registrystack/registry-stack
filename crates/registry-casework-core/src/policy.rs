@@ -84,12 +84,6 @@ pub enum ClockPolicy {
         anchor: SubjectClockAnchor,
         complete_on: SubjectClockCompletion,
         after: ElapsedDuration,
-        #[serde(deserialize_with = "crate::typed::unique_list")]
-        #[cfg_attr(
-            feature = "schema",
-            schemars(with = "registry_platform_yaml::UniqueList<SubjectClockPause>")
-        )]
-        pause_while: Vec<SubjectClockPause>,
     },
     Activity {
         #[serde(deserialize_with = "crate::typed::local_id")]
@@ -111,6 +105,7 @@ registry_platform_yaml::tagged_union!(ClockPolicy);
 
 /// The serialized form of [`ClockPolicy`]: the shape the reader accepts.
 #[derive(Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "type",
     rename_all = "kebab-case",
@@ -122,7 +117,6 @@ enum ClockPolicyWire<'a> {
         anchor: SubjectClockAnchor,
         complete_on: SubjectClockCompletion,
         after: &'a ElapsedDuration,
-        pause_while: &'a [SubjectClockPause],
     },
     Activity {
         id: &'a str,
@@ -151,13 +145,11 @@ impl Serialize for ClockPolicy {
                 anchor,
                 complete_on,
                 after,
-                pause_while,
             } => ClockPolicyWire::Subject {
                 id,
                 anchor: *anchor,
                 complete_on: *complete_on,
                 after,
-                pause_while,
             },
             Self::Activity {
                 id,
@@ -196,21 +188,14 @@ impl ClockPolicy {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum SubjectClockAnchor {
-    FirstSubmittedAt,
+    RequestAcceptedAt,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum SubjectClockCompletion {
-    ReviewCompleted,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "kebab-case")]
-pub enum SubjectClockPause {
-    AwaitingApplicant,
+    ResultTerminal,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -294,6 +279,7 @@ pub struct ClockReassignment {
 
 /// One live, revisioned holiday set supplied separately from deployed policy.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HolidaySetDocument {
     pub holiday_set: String,
@@ -302,6 +288,7 @@ pub struct HolidaySetDocument {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ActivityClockEvaluation {
     pub due_at: DateTime<Utc>,
@@ -313,6 +300,7 @@ pub struct ActivityClockEvaluation {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReminderOccurrence {
     pub id: String,
@@ -320,6 +308,7 @@ pub struct ReminderOccurrence {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StepOccurrence {
     pub id: String,
@@ -448,23 +437,13 @@ pub fn clock_policy_findings(
             );
         }
         match clock {
-            ClockPolicy::Subject {
-                after, pause_while, ..
-            } => {
+            ClockPolicy::Subject { after, .. } => {
                 if parse_elapsed_seconds(&after.elapsed).is_none() {
                     findings.push(
                         "casework.clock.invalid-elapsed",
                         format!("{at}/after/elapsed"),
                         ELAPSED_MESSAGE,
                         ELAPSED_ACTION,
-                    );
-                }
-                if pause_while.as_slice() != [SubjectClockPause::AwaitingApplicant] {
-                    findings.push(
-                        "casework.clock.unsupported-pause",
-                        format!("{at}/pauseWhile"),
-                        "a subject clock pauses while awaiting-applicant and on nothing else",
-                        "Write pauseWhile: [awaiting-applicant].",
                     );
                 }
             }
@@ -870,17 +849,16 @@ mod tests {
     fn subject_policy_calls_the_shared_request_wide_elapsed_evaluator() {
         let clock = ClockPolicy::Subject {
             id: "response-budget".to_owned(),
-            anchor: SubjectClockAnchor::FirstSubmittedAt,
-            complete_on: SubjectClockCompletion::ReviewCompleted,
+            anchor: SubjectClockAnchor::RequestAcceptedAt,
+            complete_on: SubjectClockCompletion::ResultTerminal,
             after: ElapsedDuration {
                 elapsed: "PT48H".to_owned(),
             },
-            pause_while: vec![SubjectClockPause::AwaitingApplicant],
         };
         let result = evaluate_subject_clock(
             &clock,
             &ReviewTiming {
-                first_submitted_at: instant("2026-09-10T09:00:00+07:00"),
+                request_accepted_at: instant("2026-09-10T09:00:00+07:00"),
                 paused_milliseconds: 24 * 60 * 60 * 1_000,
                 pause_started_at: None,
                 completed_at: None,
@@ -940,10 +918,9 @@ mod tests {
         let subject = read_clock(
             r#"id: response-budget
 type: subject
-anchor: first-submitted-at
-completeOn: review-completed
+anchor: request-accepted-at
+completeOn: result-terminal
 after: {elapsed: PT48H}
-pauseWhile: [awaiting-applicant]
 "#,
         )
         .expect("documented subject clock");
@@ -964,10 +941,9 @@ dueTime: "17:00"
         let refused = read_clock(
             r#"id: response-budget
 type: subject
-anchor: first-submitted-at
-completeOn: review-completed
+anchor: request-accepted-at
+completeOn: result-terminal
 after: {elapsed: PT48H}
-pauseWhile: [awaiting-applicant]
 invented: true
 "#,
         )
@@ -980,29 +956,23 @@ invented: true
 
     const SUBJECT_CLOCK: &str = r#"id: response-budget
 type: subject
-anchor: first-submitted-at
-completeOn: review-completed
+anchor: request-accepted-at
+completeOn: result-terminal
 after: {elapsed: PT48H}
-pauseWhile: [awaiting-applicant]
 "#;
 
     #[test]
     fn cfg_name_2_each_previous_clock_value_is_refused_and_the_current_one_named() {
         for (current, previous, pointer) in [
             (
-                "anchor: first-submitted-at",
+                "anchor: request-accepted-at",
                 "anchor: firstSubmittedAt",
                 "/anchor",
             ),
             (
-                "completeOn: review-completed",
+                "completeOn: result-terminal",
                 "completeOn: reviewCompleted",
                 "/completeOn",
-            ),
-            (
-                "[awaiting-applicant]",
-                "[awaitingApplicant]",
-                "/pauseWhile/0",
             ),
         ] {
             let authored = SUBJECT_CLOCK.replacen(current, previous, 1);
@@ -1047,10 +1017,9 @@ dueTime: "17:00"
             serde_json::json!({
                 "id": "response-budget",
                 "type": "subject",
-                "anchor": "first-submitted-at",
-                "completeOn": "review-completed",
+                "anchor": "request-accepted-at",
+                "completeOn": "result-terminal",
                 "after": {"elapsed": "PT48H"},
-                "pauseWhile": ["awaiting-applicant"],
             })
         );
     }
