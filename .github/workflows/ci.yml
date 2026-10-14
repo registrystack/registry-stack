@@ -667,6 +667,9 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Test bounded FHIR example transport
+        run: python3 products/evidence/examples/fhir/test_source.py
+
       - name: Reproduce Evidence generated contracts
         run: products/evidence/scripts/check-contracts.sh
 

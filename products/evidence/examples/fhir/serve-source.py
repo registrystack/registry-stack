@@ -61,6 +61,9 @@ class FhirReadThrough(BaseHTTPRequestHandler):
             self.fail(404)
             return
         resource_type, resource_id = match.groups()
+        if resource_id in {".", ".."}:
+            self.fail(404)
+            return
         request = Request(
             f"{BASE_URL}/{resource_type}/{resource_id}",
             headers={"Accept": "application/fhir+json"},
@@ -86,7 +89,8 @@ class FhirReadThrough(BaseHTTPRequestHandler):
                 self.fail(502)
                 return
         except HTTPError as error:
-            self.fail(404 if error.code in {404, 410} else 502)
+            with error:
+                self.fail(404 if error.code in {404, 410} else 502)
             return
         except (URLError, TimeoutError, ValueError):
             self.fail(502)

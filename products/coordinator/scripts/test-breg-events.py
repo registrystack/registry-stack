@@ -38,6 +38,11 @@ native = module("coordinator_native_event_fixture", SCRIPTS / "test-real-service
 receiver = module("breg_existing_signature_fixture", REPO / "products/breg/examples/webhook-receiver/receiver.py")
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
 def request(method, url, body=None, token=None, headers=None, expected=(200,)):
     fields = dict(headers or {})
     if token:
@@ -47,7 +52,7 @@ def request(method, url, body=None, token=None, headers=None, expected=(200,)):
         raw = json.dumps(body, separators=(",", ":")).encode()
         fields.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=raw, headers=fields, method=method)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
     try:
         response = opener.open(req, timeout=10)
     except urllib.error.HTTPError as error:
@@ -61,8 +66,8 @@ def request(method, url, body=None, token=None, headers=None, expected=(200,)):
 
 class DeliveryProxy:
     """Forward exact wire bytes; deliberately lose one accepted response."""
-    def __init__(self, target):
-        self.target = target
+    def __init__(self, targets):
+        self.targets = dict(targets)
         self.deliveries = []
         self.lost = False
         self.lock = threading.Lock()
@@ -73,6 +78,11 @@ class DeliveryProxy:
                 pass
 
             def do_POST(self):
+                # Match before HTTPServer normalizes leading slashes.
+                target = proxy.targets.get(self.requestline.split()[1])
+                if target is None:
+                    self.send_error(404)
+                    return
                 length = int(self.headers.get("Content-Length", "0"))
                 if not 0 < length <= 65_536:
                     self.send_error(413)
@@ -81,7 +91,7 @@ class DeliveryProxy:
                 headers = {name.lower(): value for name, value in self.headers.items()
                            if name.lower() not in {"host", "content-length", "connection"}}
                 try:
-                    status, result, _ = request("POST", proxy.target + self.path, body=body,
+                    status, result, _ = request("POST", target, body=body,
                                                 headers=headers, expected=(204, 400, 401, 409, 503))
                 except (OSError, urllib.error.URLError):
                     status, result = 503, {}
@@ -269,13 +279,13 @@ def run(args):
     try:
         coordinator_port = native.free_ports(1)[0]
         coordinator_url = f"http://127.0.0.1:{coordinator_port}"
-        proxy = DeliveryProxy(coordinator_url)
+        paths = {trigger: f"/v1/events/event-follow-up/{trigger}" for trigger in ("created", "patched")}
+        proxy = DeliveryProxy({path: coordinator_url + path for path in paths.values()})
         journey.proxies.append(proxy)
         keys = root / "coordinator-secrets"
         keys.mkdir(mode=0o700)
         key = secrets.token_bytes(32)
         native.private(keys / "event-key", key)
-        paths = {trigger: f"/v1/events/event-follow-up/{trigger}" for trigger in ("created", "patched")}
         owner = write_source(journey, keys, proxy.url, paths)
         journey.ctl("bregctl", "check", owner)
         sample = {trigger: journey.ctl("bregctl", "webhook", "sample", owner, "--event", "application-" + trigger + "-v1")["request"]
