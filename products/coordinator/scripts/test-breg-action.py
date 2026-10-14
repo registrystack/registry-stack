@@ -23,13 +23,18 @@ from urllib.parse import urlsplit
 REPO = Path(__file__).resolve().parents[3]
 
 
-def proxy(origin, mutation_path, observe_only):
-    # Reuse the existing lost-response behavior without provisioning its
-    # unrelated Casework/Messaging/Scheduling composition.
+def native_fixture():
     spec = importlib.util.spec_from_file_location(
         "coordinator_native_services", Path(__file__).with_name("test-real-services.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def proxy(origin, mutation_path, observe_only):
+    # Reuse the existing lost-response behavior without provisioning its
+    # unrelated Casework/Messaging/Scheduling composition.
+    module = native_fixture()
     instance = module.LostResponseProxy(origin, mutation_path)
     instance.lost = observe_only
     requests = []
@@ -89,23 +94,15 @@ def run(env_file):
         ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], cwd=REPO, env=environment))["target_directory"]
     with tempfile.TemporaryDirectory(prefix="coordinator-breg-build-") as root:
         log_path = Path(root) / "build.jsonl"
-        with log_path.open("w") as log:
-            build = subprocess.run(["cargo", "build", "--locked", "-p", "registry-breg", "-p", "registry-bregctl",
-                "-p", "registry-messaging", "-p", "registry-messagingctl",
-                "--features", "registry-breg/runtime,registry-breg/postgres-test,registry-messaging/postgres-test",
-                "--bin", "breg", "--bin", "bregctl", "--bin", "messaging", "--bin", "messagingctl",
-                "--message-format", "json"], cwd=REPO, env=environment, stdout=log)
-        if build.returncode:
-            raise SystemExit("current-source BReg/Messaging build failed")
-        libraries = []
-        for line in log_path.read_text().splitlines():
-            item = json.loads(line)
-            if item.get("reason") == "build-script-executed" and "aws-lc-fips-sys" in item.get("package_id", ""):
-                libraries.append(str(Path(item["out_dir"]) / "build/artifacts"))
+        module = native_fixture()
+        command = ["cargo", "build", "--locked", "-p", "registry-breg", "-p", "registry-bregctl",
+            "-p", "registry-messaging", "-p", "registry-messagingctl",
+            "--features", "registry-breg/runtime,registry-breg/postgres-test,registry-messaging/postgres-test",
+            "--bin", "breg", "--bin", "bregctl", "--bin", "messaging", "--bin", "messagingctl",
+            "--message-format", "json-render-diagnostics"]
+        messages = module.cargo_build(command, log_path, environment)
         if sys.platform == "darwin":
-            if not libraries:
-                raise SystemExit("current Cargo build did not identify its FIPS shared libraries")
-            environment["DYLD_FALLBACK_LIBRARY_PATH"] = ":".join(libraries)
+            environment["DYLD_FALLBACK_LIBRARY_PATH"] = str(module.exact_fips_library(messages).parent)
         environment["COORDINATOR_BREG_BIN"] = str(Path(target) / "debug/breg")
         environment["COORDINATOR_BREGCTL_BIN"] = str(Path(target) / "debug/bregctl")
         environment["COORDINATOR_MESSAGING_BIN"] = str(Path(target) / "debug/messaging")

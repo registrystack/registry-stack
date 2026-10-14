@@ -6,6 +6,7 @@ import base64
 import datetime as dt
 import hashlib
 import http.server as http_server
+import importlib.util
 import threading
 import ipaddress
 import json
@@ -31,6 +32,27 @@ from real_service_fixtures import (write_breg, write_casework, write_messaging, 
                                    COORDINATOR_RESOURCE)
 
 REPO = Path(__file__).resolve().parents[3]
+SOURCE_FILES = ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml",
+                "scripts/cargo_runtime_library_path.py")
+SOURCE_PREFIXES = ("crates/", "products/", ".cargo/")
+NATIVE_BINARIES = ("breg", "bregctl", "casework", "caseworkctl", "messaging", "messagingctl",
+                   "scheduling", "schedulingctl", "coordinator", "coordinatorctl")
+NATIVE_PACKAGES = ("registry-breg", "registry-bregctl", "registry-casework", "registry-caseworkctl",
+                   "registry-messaging", "registry-messagingctl", "registry-scheduling",
+                   "registry-schedulingctl", "registry-coordinator")
+NATIVE_FEATURES = ",".join((
+    "registry-breg/runtime", "registry-breg/postgres-test", "registry-breg/tooling", "registry-breg/schema",
+    "registry-bregctl/schema", "registry-casework/schema", "registry-casework/postgres-test",
+    "registry-caseworkctl/schema", "registry-caseworkctl/postgres-test", "registry-messaging/schema",
+    "registry-messaging/postgres-test", "registry-messagingctl/postgres-test", "registry-scheduling/schema",
+    "registry-scheduling/postgres-test", "registry-schedulingctl/postgres-test",
+    "registry-coordinator/schema", "registry-coordinator/postgres-test",
+))
+_cargo_spec = importlib.util.spec_from_file_location("cargo_runtime_library_path", REPO / "scripts/cargo_runtime_library_path.py")
+cargo_runtime = importlib.util.module_from_spec(_cargo_spec)
+_cargo_spec.loader.exec_module(cargo_runtime)
+
+
 AUTHORITY = "https://casework.local.example"
 SOURCE = "coordinator-source"
 # The PostgreSQL image caseworkctl's dev sessions pin, for the one database
@@ -261,8 +283,8 @@ def source_manifest():
         # The docs reader deliberately copies source without Git metadata.
         # Its checkout already excludes ignored build output, so enumerate the
         # same bounded source roots directly.
-        candidates = [REPO / "Cargo.toml", REPO / "Cargo.lock"]
-        for root in (REPO / "crates", REPO / "products/coordinator"):
+        candidates = [REPO / name for name in SOURCE_FILES]
+        for root in (REPO / "crates", REPO / "products", REPO / ".cargo"):
             candidates.extend(root.rglob("*"))
         paths = [os.fsencode(path.relative_to(REPO)) for path in sorted(candidates)]
     manifest = {}
@@ -270,7 +292,7 @@ def source_manifest():
         if not encoded:
             continue
         name = os.fsdecode(encoded)
-        if name in ("Cargo.toml", "Cargo.lock") or name.startswith(("crates/", "products/coordinator/")):
+        if name in SOURCE_FILES or name.startswith(SOURCE_PREFIXES):
             path = REPO / name
             if path.is_file() and not path.is_symlink():
                 manifest[name] = file_digest(path)
@@ -279,6 +301,108 @@ def source_manifest():
 
 def source_digest():
     return hashlib.sha256(json.dumps(source_manifest(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def source_snapshot(inventory_path=None):
+    manifest = source_manifest()
+    encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    snapshot = {"sourceInventorySha256": hashlib.sha256(encoded.encode()).hexdigest(),
+        "capturedAt": stamp()}
+    if inventory_path is not None:
+        private(inventory_path, encoded)
+        snapshot["sourceInventoryFile"] = inventory_path.name
+    if (REPO / ".git").exists():
+        snapshot["gitHead"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO).decode().strip()
+        snapshot["workingDiffSha256"] = hashlib.sha256(subprocess.check_output(
+            ["git", "diff", "--binary", "HEAD"], cwd=REPO)).hexdigest()
+        untracked = subprocess.check_output(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=REPO).split(b"\0")
+        snapshot["untrackedSourceSha256"] = {os.fsdecode(name): manifest[os.fsdecode(name)]
+            for name in untracked if name and os.fsdecode(name) in manifest}
+    return snapshot
+
+
+def cargo_metadata(environment):
+    return json.loads(subprocess.check_output(
+        ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"],
+        cwd=REPO, env=environment))
+
+
+def cargo_build(command, log_path, environment):
+    with log_path.open("w") as log:
+        result = subprocess.run(command, cwd=REPO, env=environment, stdout=log)
+    lines = log_path.read_text().splitlines()
+    if result.returncode:
+        # Cargo's JSON stream contains rendered rustc diagnostics. Replay them
+        # before a temporary build directory can be removed by its owner.
+        sys.stderr.write(cargo_runtime.rendered_diagnostics(lines))
+        raise SystemExit("native Cargo build failed; see compiler diagnostics above")
+    return [json.loads(line) for line in lines if line.strip()]
+
+
+def exact_fips_library(messages):
+    directory = cargo_runtime.resolve_aws_lc_fips_artifacts(
+        [json.dumps(message) for message in messages])
+    build = next(message for message in messages if message.get("reason") == "build-script-executed"
+        and "aws-lc-fips-sys@" in message.get("package_id", ""))
+    library = next(name.removeprefix("dylib=") for name in build["linked_libs"]
+        if name.startswith("dylib=aws_lc_fips_") and name.endswith("_crypto"))
+    return directory / ("lib" + library + ".dylib")
+
+
+def prepare_native(destination, environment=None):
+    """Build explicitly, then retain exact executables and their runtime library."""
+    destination = destination.resolve()
+    destination.mkdir(mode=0o700)
+    environment = dict(os.environ if environment is None else environment)
+    for key in ("CARGO_INCREMENTAL", "CARGO_PROFILE_DEV_DEBUG", "CARGO_PROFILE_TEST_DEBUG"):
+        environment.setdefault(key, "0")
+    before = source_snapshot(destination / "source-before-build.inventory.json")
+    private(destination / "source-before-build.json", before)
+    metadata = cargo_metadata(environment)
+    command = ["cargo", "build", "--locked"]
+    for package in NATIVE_PACKAGES:
+        command += ["-p", package]
+    command += ["--features", NATIVE_FEATURES]
+    for binary in NATIVE_BINARIES:
+        command += ["--bin", binary]
+    command += ["--example", "reviewed-notice-input", "--message-format", "json-render-diagnostics"]
+    messages = cargo_build(command, destination / "build.jsonl", environment)
+    artifacts = {message["target"]["name"]: Path(message["executable"]) for message in messages
+        if message.get("reason") == "compiler-artifact" and message.get("executable")}
+    binaries = destination / "bin"
+    binaries.mkdir(mode=0o700)
+    for name in (*NATIVE_BINARIES, "reviewed-notice-input"):
+        if name not in artifacts:
+            raise SystemExit("Cargo did not report the required executable: " + name)
+        shutil.copy2(artifacts[name], binaries / name)
+        (binaries / name).chmod(0o500)
+    libraries = {}
+    if sys.platform == "darwin":
+        library = exact_fips_library(messages)
+        library_root = destination / "libraries"
+        library_root.mkdir(mode=0o700)
+        frozen = library_root / library.name
+        shutil.copy2(library, frozen)
+        frozen.chmod(0o500)
+        libraries[library.name] = {"path": str(frozen), "sha256": file_digest(frozen)}
+    after = source_snapshot(destination / "source-after-build.inventory.json")
+    private(destination / "source-after-build.json", after)
+    if before["sourceInventorySha256"] != after["sourceInventorySha256"]:
+        raise SystemExit("source changed during preparation; retry with stable source in a new output directory")
+    manifest = {"sourceBeforeBuild": before, "sourceAfterBuild": after, "command": command,
+        "cargoTargetDirectory": metadata["target_directory"],
+        "buildEnvironment": {key: environment[key] for key in (
+            "RUSTC_WRAPPER", "CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "CARGO_PROFILE_DEV_DEBUG",
+            "CARGO_PROFILE_TEST_DEBUG", "CARGO_BUILD_JOBS", "CARGO_NET_OFFLINE") if key in environment},
+        "binarySha256": {name: file_digest(binaries / name) for name in NATIVE_BINARIES},
+        "helperSha256": {"reviewed-notice-input": file_digest(binaries / "reviewed-notice-input")},
+        "runtimeLibraries": libraries,
+        "fipsBuildScripts": [message for message in messages
+            if message.get("reason") == "build-script-executed" and "aws-lc-fips-sys@" in message.get("package_id", "")]}
+    private(destination / "build-manifest.json", manifest)
+    print(f"Native preparation complete: {destination}", flush=True)
+    return binaries, destination / "build-manifest.json"
 
 
 class Journey:
@@ -309,21 +433,22 @@ class Journey:
         if sys.platform == "darwin" and self.build_provenance:
             library_dir = root / "native-libraries"
             library_dir.mkdir(mode=0o700)
-            for build in self.build_provenance.get("fipsBuildScripts", []):
-                artifacts = Path(build["out_dir"]) / "build/artifacts"
-                for library in artifacts.glob("*.dylib"):
-                    destination = library_dir / library.name
-                    digest = file_digest(library)
-                    assert not destination.exists() or file_digest(destination) == digest
-                    shutil.copy2(library, destination)
-                    destination.chmod(0o500)
-                    self.library_digests[library.name] = digest
+            retained = self.build_provenance.get("runtimeLibraries")
+            if retained is None:
+                libraries = [exact_fips_library(self.build_provenance.get("fipsBuildScripts", []))]
+            else:
+                libraries = [Path(item["path"]) for item in retained.values()]
+                assert all(file_digest(Path(item["path"])) == item["sha256"] for item in retained.values()), "prepared runtime library changed"
+            for library in libraries:
+                destination = library_dir / library.name
+                digest = file_digest(library)
+                assert not destination.exists() or file_digest(destination) == digest
+                shutil.copy2(library, destination)
+                destination.chmod(0o500)
+                self.library_digests[library.name] = digest
             assert self.library_digests, "exact Cargo FIPS library evidence is required on macOS"
             dylibs = [str(library_dir)]
-        required_binaries = required_binaries or [
-            "breg", "bregctl", "casework", "caseworkctl", "messaging", "messagingctl",
-            "scheduling", "schedulingctl", "coordinator", "coordinatorctl",
-        ]
+        required_binaries = required_binaries or NATIVE_BINARIES
         for name in required_binaries:
             binary = binaries / name
             assert binary.is_file(), f"build {name} before running this journey"
@@ -349,6 +474,8 @@ class Journey:
         self.reviewed_notice_starter_digest = file_digest(frozen)
         if self.build_provenance:
             assert self.build_provenance["binarySha256"] == self.binary_digests, "native binaries differ from build evidence"
+            if "helperSha256" in self.build_provenance:
+                assert self.build_provenance["helperSha256"]["reviewed-notice-input"] == self.reviewed_notice_starter_digest, "reviewed-notice-input differs from build evidence"
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env.get("PATH", "")
         self.env["REGISTRY_THUNDERID_TOOLING_DIAGNOSTICS"] = "1"
         listeners = [socket.socket() for _ in range(6)]
@@ -1505,13 +1632,25 @@ COMMIT;
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bin-dir", type=Path, default=REPO / "target/debug")
+    preparation = parser.add_mutually_exclusive_group()
+    preparation.add_argument("--prepare", type=Path, metavar="NEW_DIRECTORY",
+        help="Build and freeze all ten native binaries, reviewed-notice-input and a build manifest, then exit; honors CARGO_TARGET_DIR")
+    preparation.add_argument("--bin-dir", type=Path,
+        help="Use existing native binaries without rebuilding; defaults to Cargo's target_directory/debug")
     parser.add_argument("--authority-preflight", action="store_true", help="Diagnostic real assertion check before the workflow; omitted for first-call proof")
     parser.add_argument("--build-manifest", type=Path, help="Private source and binary digest evidence from the native build")
     parser.add_argument("--work-dir", type=Path, help="New owner-only directory for retained private diagnostics")
     parser.add_argument("--wait-seconds", type=int, default=961,
                         help="Actual durable wait; less than 901 is a smoke check only")
     args = parser.parse_args()
+    os.umask(0o077)
+    if args.prepare:
+        if args.build_manifest or args.work_dir:
+            parser.error("--prepare cannot be combined with --build-manifest or --work-dir")
+        prepare_native(args.prepare)
+        return
+    if args.bin_dir is None:
+        args.bin_dir = Path(cargo_metadata(os.environ)["target_directory"]) / "debug"
     assert 1 <= args.wait_seconds <= 1800
     for key in ["COORDINATOR_TEST_DATABASE_URL", "COORDINATOR_MESSAGING_TEST_DATABASE_URL"]:
         assert os.environ.get(key), f"set {key} to a disposable local database"

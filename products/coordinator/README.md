@@ -200,10 +200,12 @@ coordinatorctl types --project ./my-follow-up --language typescript --output ./f
 coordinatorctl types --project ./my-follow-up --language python --output ./follow_up.py
 ```
 
-Package refuses existing output and failing scenarios. The package digest covers `SHA256SUMS`;
+Package refuses existing output and failing scenarios. The package digest covers `SHA256SUMS`.
 The computed `workflowRevision` identifies execution semantics; package checksums cover the
-exact snapshot bytes. Titles and descriptions do not change that revision. A changed definition under an
-already admitted ID and human version is refused; retain old packages and keys for existing runs.
+exact snapshot bytes. Titles, descriptions, and the human version label do not change that revision.
+Existing runs retain their original snapshot and revision when a new package is activated.
+Retain the keys needed to read them. New starts must pin the active revision; recovery of an unknown
+admission uses the exact original key, input, and revision.
 
 Generated TypeScript and Python wrappers provide typed `start`, `get`, and `cancel` through the
 maintained public generic clients. They pin the workflow revision and validate returned workflow
@@ -265,9 +267,11 @@ cargo test --locked -p registry-coordinator --features schema \
   --test canonical_model --test breg_proposal_adapter --test sdk_generation \
   --test catalog_scenarios
 products/coordinator/scripts/check-schemas.sh
-cargo run --locked -p registry-coordinator --bin coordinatorctl -- openapi \
-  > products/coordinator/generated/openapi/coordinator.openapi.json
 ```
+
+The schema check generates temporary outputs and compares them with the committed schemas and
+OpenAPI document. It does not rewrite tracked artifacts; regenerate changed artifacts explicitly
+with their owning generators.
 
 With dedicated disposable PostgreSQL 17+ databases configured, use
 `scripts/test-postgres.sh` for the maintained durable-state, encrypted-custody,
@@ -279,12 +283,28 @@ The integration fixtures compose through Messaging's public HTTP contract and
 refuse missing executables; Coordinator does not link its runtime as a test
 dependency. The native-service
 fixture script runs the controlled BReg, Casework, Scheduling and Messaging
-journey. It requires Python 3, OpenSSL and PostgreSQL client tools, Docker,
-distinct disposable PostgreSQL databases, and all ten native service/operator
-binaries described by the script's `--help`. Build `messaging` and `scheduling`
-with their own `postgres-test` features: the journey gives them plaintext
-loopback databases, which only those builds accept. Those contributor checks do not replace the deployment runbook or imply
+journey. It requires Python 3, OpenSSL, PostgreSQL client tools matching the test server,
+Docker, and distinct disposable PostgreSQL databases. Use the explicit preparation command below
+to build all ten service/operator binaries and the `reviewed-notice-input` helper with the required
+features. Those contributor checks do not replace the deployment runbook or imply
 production credentials are needed to author a project.
+
+Run the generated TypeScript and Python client proofs with one owned disposable PostgreSQL 17+
+database. The identity must create and drop the fixtures' unique schemas and roles. The helper
+prepares the current Coordinator bindings and their FIPS/module paths; it needs the Cargo native
+build toolchain, Python 3, Node/npm matching the binding packages, and Pyright on `PATH`.
+Use `--pyright /absolute/path/pyright` to select another local installation. Missing Node development
+dependencies are installed locally with the binding's pinned `npm ci`.
+
+```sh
+COORDINATOR_TEST_DATABASE_URL=<owned-loopback-database-url> \
+  python3 products/coordinator/scripts/test-generated-clients.py
+```
+
+This check runs the strict TypeScript intersection regression and the four projects' generated
+TypeScript/Python admission, status, cancellation, and revision-refusal journeys. The external-job
+project additionally consumes a successful typed terminal outcome in both languages. It needs no
+Messaging database, product service binaries, Docker, or global package installation.
 
 The governed-action and external-directory examples have deterministic scenarios;
 adapter checks use mock HTTP services and durable-state checks use PostgreSQL.
@@ -314,12 +334,28 @@ digest before application can release a separately authorized notice. Rejection 
 cancellation closes without a notice. That Proposal observation test advances the disposable
 fixture clock by 900 seconds while preserving relative deadlines and read budgets.
 
-With the disposable databases and native binaries described earlier configured, run the native
-composition helper from the checkout:
+Prepare native executables once from the checkout, using a new private output directory outside
+its source roots. Preparation needs the Rust/native build toolchain but starts no service and
+requires no database URLs. It honors `CARGO_TARGET_DIR`, captures source identities before and
+after the build, and refuses a source change during compilation. It freezes all ten executables,
+`reviewed-notice-input`, and the exact macOS FIPS library with their hashes in `build-manifest.json`.
+Existing output is never overwritten.
 
 ```sh
-python3 products/coordinator/scripts/test-real-services.py --wait-seconds 961
+python3 products/coordinator/scripts/test-real-services.py --prepare /absolute/private/native-build
 ```
+
+Then configure the two disposable database URLs described earlier and run the composition:
+
+```sh
+python3 products/coordinator/scripts/test-real-services.py \
+  --bin-dir /absolute/private/native-build/bin \
+  --build-manifest /absolute/private/native-build/build-manifest.json --wait-seconds 961
+```
+
+A supplied `--bin-dir` uses existing executables without rebuilding. Without it, the helper uses
+Cargo metadata's `target_directory/debug`; that directory must already contain every required
+executable. Retain the preparation directory until the journey has finished.
 
 The real 961-second deferred-appointment wait crosses the immediate approval limit; a wait below
 901 seconds is a smoke check only. Exact original-receipt recovery, expiry and revocation checks,

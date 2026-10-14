@@ -147,9 +147,9 @@ delayed follow-up and governed action examples from one deployment. Runtime file
 state keys and audit custody are deployment configuration, outside the package.
 Existing output is never overwritten. Build a fresh directory for each update.
 Use `coordinatorctl test --project DIR` for projects with `scenarios.yaml`.
-Once a workflow version has admitted runs, change its version when changing its
-definition. Apply checks retained history, including terminal runs and erased
-payload tombstones, before activating a reused version.
+The human `project.version` is a display label. A semantic change produces a new
+`workflowRevision`; activating its package does not replace existing runs' snapshots.
+Retain the keys needed to read those snapshots and the custody metadata needed for recovery.
 
 ### Package digest and definition digest
 
@@ -170,11 +170,12 @@ longer matches with `coordinator.deployment.refused` and the advice to restore
 the exact pinned package. `workflowsDigest` identifies the whole set of pinned
 packages; the `active` activation record in `plan`, `apply` and
 `deployment-status` carries that set digest in its `packageDigest` field.
-When a workflow version that already admitted runs would name a different
-definition digest, `plan` and `apply` both refuse with
-`coordinator.command.workflow-version-conflict` and the advice to give that
-workflow's changed definition a new `project.version`; `apply` keeps the active
-package. A run admitted after `plan` can still make `apply` refuse.
+New starts must name the active `workflowRevision`. A caller recovering an unknown
+admission must send the exact original start key, input, and revision, even after a
+new package is activated. The original run keeps its admitted snapshot and revision.
+`plan` and `apply` also check current live-run connection bindings and refuse removal
+of a workflow whose runs could still act or need review; work admitted after `plan`
+can therefore make `apply` refuse.
 
 ## Create the keys and secrets
 
