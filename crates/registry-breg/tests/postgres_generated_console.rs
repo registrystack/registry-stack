@@ -215,6 +215,7 @@ async fn generated_typescript_and_python_consoles_use_live_http_and_rls() {
         command
             .arg(script)
             .current_dir(&root)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .env("BREG_CONSOLE_BUILD", &build)
             .env("BREG_PYTHON_MODULE_ROOT", &python_module)
             .env("BREG_READER_URL", &reader.base_url)

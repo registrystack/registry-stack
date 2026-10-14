@@ -1189,8 +1189,6 @@ fn submission_version(value: i64) -> Result<SubmissionVersion, MutationError> {
 #[cfg(test)]
 #[cfg(feature = "postgres-test")]
 mod tests {
-    use std::env;
-
     use registry_platform_canonical_json::canonicalize_json;
     use serde_json::{json, Map};
     use tokio_postgres::Client;
@@ -1221,43 +1219,7 @@ mod tests {
     const REQUEST_ENTITY: &str = "placement-correction-request";
     const TARGET_ENTITY: &str = "asset-placement";
 
-    fn load_postgres_env() {
-        if env::var_os("BREG_TEST_DATABASE_URL").is_some() {
-            return;
-        }
-        let Ok(contents) =
-            std::fs::read_to_string("/private/tmp/registry-cr-plain-gqgr39oa/test.env")
-        else {
-            return;
-        };
-        for line in contents.lines().map(str::trim) {
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let line = line.strip_prefix("export ").unwrap_or(line);
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            if key.trim() != "BREG_TEST_DATABASE_URL" {
-                continue;
-            }
-            let value = value.trim();
-            let value = value
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-                .or_else(|| {
-                    value
-                        .strip_prefix('"')
-                        .and_then(|value| value.strip_suffix('"'))
-                })
-                .unwrap_or(value);
-            env::set_var("BREG_TEST_DATABASE_URL", value);
-            return;
-        }
-    }
-
     async fn install_schema() -> (TestDatabase, Client, tokio::task::JoinHandle<()>) {
-        load_postgres_env();
         let database = TestDatabase::create(1).await;
         let (migration, migration_task) = database.connect_migration().await;
         for _ in 0..2 {
