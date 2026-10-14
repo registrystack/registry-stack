@@ -32,8 +32,10 @@ DATABASE_NAME = "casework_dev"
 # development lifecycle cannot change it, so the evidence records the constant.
 RUNTIME_POOL_MAX = 32
 BUILD_PROFILES = ("debug", "release")
-EXAMPLE_ISSUER_LINE = "    issuer: http://127.0.0.1:8091\n"
-EXAMPLE_SUBJECT_LINE = "    subject: requester\n"
+REQUESTER_BINDING = re.compile(
+    r"(?m)^(  - id: requester\n    profile: requester\n)"
+    r"    issuer: [^\n]+\n    subject: [^\n]+\n"
+)
 SUBJECT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 # Synthetic local callers. One client binds each access profile the example
 # declares, which is what caseworkctl dev requires, so the load harness drives
@@ -119,12 +121,6 @@ def reserve_ports() -> tuple[int, int, int]:
             listener.close()
 
 
-def _replace_once(source: str, expected: str, replacement: str) -> str:
-    if source.count(expected) != 1:
-        raise LoadtestError(f"example no longer has the expected line: {expected.strip()}")
-    return source.replace(expected, replacement, 1)
-
-
 def producer_subject(caseworkctl: Path) -> str:
     """The stable local subject caseworkctl dev issues to the producer client."""
     result = subprocess.run(
@@ -159,8 +155,18 @@ def local_project(example: Path, project: Path, issuer_port: int, subject: str) 
     shutil.copytree(example, project, symlinks=False)
     policy = project / "casework.yaml"
     source = policy.read_text(encoding="utf-8")
-    source = _replace_once(source, EXAMPLE_ISSUER_LINE, f"    issuer: http://127.0.0.1:{issuer_port}\n")
-    source = _replace_once(source, EXAMPLE_SUBJECT_LINE, f"    subject: {subject}\n")
+    source, count = REQUESTER_BINDING.subn(
+        lambda match: (
+            f"{match[1]}    issuer: http://127.0.0.1:{issuer_port}\n"
+            f"    subject: {subject}\n"
+        ),
+        source,
+    )
+    if count != 1:
+        raise LoadtestError(
+            "standalone-decision example must have exactly one requester producer binding; "
+            "update load-test preparation to match its profile, issuer, and subject fields"
+        )
     policy.write_text(source, encoding="utf-8")
     (project / "dev-clients.yaml").write_text(DEV_CLIENTS, encoding="utf-8")
 

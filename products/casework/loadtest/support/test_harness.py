@@ -286,7 +286,15 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
             policy = (project / "casework.yaml").read_text(encoding="utf-8")
             self.assertIn("    issuer: http://127.0.0.1:45678\n", policy)
             self.assertIn("    subject: agent-0123abcd\n", policy)
-            self.assertNotIn(loadenv.EXAMPLE_ISSUER_LINE, policy)
+            original_issuer = next(line for line in source_policy.splitlines(keepends=True) if line.startswith("    issuer: "))
+            original_subject = next(line for line in source_policy.splitlines(keepends=True) if line.startswith("    subject: "))
+            self.assertEqual(policy.count("    issuer: http://127.0.0.1:45678\n"), 1)
+            self.assertEqual(policy.count("    subject: agent-0123abcd\n"), 1)
+            self.assertEqual(
+                policy.replace("    issuer: http://127.0.0.1:45678\n", original_issuer)
+                .replace("    subject: agent-0123abcd\n", original_subject),
+                source_policy,
+            )
             clients = (project / "dev-clients.yaml").read_text(encoding="utf-8")
             self.assertIn("kind: CaseworkDevClients\n", clients)
             self.assertIn("id: loadtest-producer", clients)
@@ -300,6 +308,63 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.local_project(EXAMPLE, Path(directory) / "other", 45678, "subject with spaces")
         self.assertEqual((EXAMPLE / "casework.yaml").read_text(encoding="utf-8"), source_policy)
+
+    def test_local_project_changes_only_the_named_requester_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            example = root / "example"
+            shutil.copytree(EXAMPLE, example)
+            policy_path = example / "casework.yaml"
+            original = policy_path.read_text(encoding="utf-8")
+            other_producer = original.split("trustedProducers:\n", 1)[1].replace(
+                "  - id: requester\n", "  - id: other-requester\n", 1
+            )
+            policy_path.write_text(original + other_producer, encoding="utf-8")
+            for index, (port, subject) in enumerate(((45678, "agent-0123abcd"), (45679, "agent-9876abcd"))):
+                with self.subTest(port=port, subject=subject):
+                    project = root / f"project-{index}"
+                    loadenv.local_project(example, project, port, subject)
+                    policy = (project / "casework.yaml").read_text(encoding="utf-8")
+                    self.assertEqual(policy.count(f"    issuer: http://127.0.0.1:{port}\n"), 1)
+                    self.assertEqual(policy.count(f"    subject: {subject}\n"), 1)
+                    self.assertTrue(policy.endswith(other_producer))
+                    self.assertEqual(policy.split("trustedProducers:\n", 1)[0], original.split("trustedProducers:\n", 1)[0])
+            self.assertEqual(policy_path.read_text(encoding="utf-8"), original + other_producer)
+
+    def test_local_project_refuses_requester_binding_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = (EXAMPLE / "casework.yaml").read_text(encoding="utf-8")
+            producer = original.split("trustedProducers:\n", 1)[1]
+            for name, policy in (
+                ("missing", original.replace("  - id: requester\n", "  - id: other-requester\n")),
+                ("duplicate", original + producer),
+            ):
+                with self.subTest(name=name):
+                    example = root / name
+                    example.mkdir()
+                    (example / "casework.yaml").write_text(policy, encoding="utf-8")
+                    with self.assertRaisesRegex(loadenv.LoadtestError, "update load-test preparation"):
+                        loadenv.local_project(example, root / f"project-{name}", 45678, "agent-0123abcd")
+
+    def test_local_project_refuses_symbolic_links(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            linked_example = root / "linked-example"
+            linked_example.symlink_to(EXAMPLE, target_is_directory=True)
+            linked_output = root / "linked-output"
+            linked_output.symlink_to(root / "missing", target_is_directory=True)
+            for source, output in ((linked_example, root / "project"), (EXAMPLE, linked_output)):
+                with self.subTest(source=source.name, output=output.name):
+                    with self.assertRaises(loadenv.LoadtestError):
+                        loadenv.local_project(source, output, 45678, "agent-0123abcd")
+            copied_example = root / "example"
+            shutil.copytree(EXAMPLE, copied_example)
+            (copied_example / "linked-policy.yaml").symlink_to(EXAMPLE / "casework.yaml")
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.local_project(copied_example, root / "project", 45678, "agent-0123abcd")
+            self.assertFalse((root / "project").exists())
+            self.assertTrue(linked_output.is_symlink())
 
     def test_dev_header_must_be_the_owned_private_session_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
