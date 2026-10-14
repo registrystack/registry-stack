@@ -1549,8 +1549,6 @@ fn plain_bregctl(binary: &Path, json: bool, args: &[&str]) -> std::process::Outp
 fn dev_start_port_refusals_name_the_port_flag_and_role_in_both_formats() {
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     let temporary = tempfile::tempdir().expect("a temporary directory");
-    // `init` refuses a destination behind a symbolic link, and a platform's
-    // temporary root often is one.
     let parent = fs::canonicalize(temporary.path()).expect("a canonical directory");
     let project = parent.join("registry");
     let initialized = plain_bregctl(binary, false, &["init", project.to_str().unwrap()]);
@@ -1559,47 +1557,6 @@ fn dev_start_port_refusals_name_the_port_flag_and_role_in_both_formats() {
         "{}{}",
         String::from_utf8_lossy(&initialized.stdout),
         String::from_utf8_lossy(&initialized.stderr)
-    );
-    // Local development prepares a package from this synthetic source revision.
-    let registry = project.join("registry.yaml");
-    let mut source = fs::read_to_string(&registry).unwrap();
-    source.push_str("\npackage:\n  sourceRevision: synthetic-port-refusal\n");
-    fs::write(registry, source).unwrap();
-    fs::create_dir(project.join("tests")).unwrap();
-    write(
-        &project.join("tests/journeys.yaml"),
-        br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
-kind: BRegJourneys
-journeys:
-  - id: native-directory
-    steps:
-      - id: list-contacts
-        recordType: contact
-        accessProfile: directory-editor
-        claims:
-          principal: synthetic-editor
-          scopes: [registry:directory:write]
-          purpose: directory-administration
-          directClaims: {jurisdiction: synthetic-district}
-        request: {type: list}
-        expect: {outcome: success, status: 200, count: 0}
-"#,
-    );
-    // Local issuer clients are an explicit development input, separate from
-    // the small governed project emitted by init.
-    write(
-        &project.join("dev-clients.yaml"),
-        br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
-kind: BRegDevClients
-clients:
-  - id: directory-editor
-    accessProfiles: [directory-editor]
-    scopes: ["registry:directory:write"]
-    claims:
-      registry_principal: synthetic-editor
-      registry_purpose: directory-administration
-      jurisdiction: synthetic-district
-"#,
     );
     // The start probes BReg, then the database, then the owned issuer, so
     // each case names the port it occupies and leaves the earlier ports free.
@@ -1735,13 +1692,10 @@ clients:
 fn examples_list_prints_the_reader_and_catalogue_diagnostics_in_both_formats() {
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     let temporary = tempfile::tempdir().expect("a temporary directory");
-    // `init` refuses a destination behind a symbolic link, and a platform's
-    // temporary root often is one.
     let parent = fs::canonicalize(temporary.path()).expect("a canonical directory");
     let project = parent.join("registry");
     let initialized = plain_bregctl(binary, false, &["init", project.to_str().unwrap()]);
     assert!(initialized.status.success(), "{initialized:?}");
-    fs::create_dir(project.join("examples")).expect("an examples directory");
     let catalogue = project.join("examples/scenarios.json");
     let list = ["examples", "list", project.to_str().unwrap()];
     // A catalogue an earlier bregctl read, and one whose invoke step names

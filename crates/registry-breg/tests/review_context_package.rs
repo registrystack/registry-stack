@@ -32,14 +32,7 @@ fn digest(bytes: &[u8]) -> String {
 fn prepare() -> registry_breg::package::PreparedPackage {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/examples/refactor/facility");
-    let authored = fs::read_to_string(root.join("registry.yaml")).unwrap();
-    let project_bytes = authored
-        .replacen(
-            "\ndatasets:\n",
-            "\npackage:\n  sourceRevision: review-context-package-proof-1\n\ndatasets:\n",
-            1,
-        )
-        .into_bytes();
+    let project_bytes = fs::read(root.join("registry.yaml")).unwrap();
     let project = parse_project_yaml(&project_bytes).unwrap();
     let asset = PackageSourceFile {
         path: "plans/correct-address.rhai".into(),
@@ -59,7 +52,7 @@ fn prepare() -> registry_breg::package::PreparedPackage {
     prepare_package_with_project_assets(
         PackageBuildRequest {
             from_package_digest: None,
-            compiler_source_revision: "review-context-package-proof-1".into(),
+            compiler_source_revision: project.package.as_ref().unwrap().source_revision.clone(),
             schema_fingerprint: digest(compiled.ddl().script().as_bytes()),
             project: PackageSourceFile {
                 path: "source/registry.yaml".into(),

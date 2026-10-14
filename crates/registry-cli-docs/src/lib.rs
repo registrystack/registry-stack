@@ -831,8 +831,8 @@ mod tests {
                 && constraint.arguments == ["--last-operation"]
         }));
 
-        let evidencectl_new = find_command(&catalog.binaries, "evidencectl new");
-        assert!(evidencectl_new.constraints.iter().any(|constraint| {
+        let evidencectl_init = find_command(&catalog.binaries, "evidencectl init");
+        assert!(evidencectl_init.constraints.iter().any(|constraint| {
             constraint.kind == ConstraintKind::RequiredExactlyOne
                 && constraint.arguments
                     == [
@@ -841,7 +841,7 @@ mod tests {
                         "--starter <STARTER>",
                     ]
         }));
-        assert!(evidencectl_new
+        assert!(evidencectl_init
             .options
             .iter()
             .any(|argument| argument.display == "--profile <PROFILE>" && argument.always_required));
@@ -903,12 +903,12 @@ mod tests {
         let dev = find_command(&catalog.binaries, "evidencectl dev");
         assert_eq!(
             dev.usage,
-            "evidencectl dev [OPTIONS]\n       evidencectl dev [OPTIONS] <COMMAND>"
+            "evidencectl dev [OPTIONS] <COMMAND>"
         );
-        assert!(dev
-            .options
-            .iter()
-            .any(|argument| { argument.display == "--detach" && !argument.always_required }));
+        assert_eq!(
+            find_command(&catalog.binaries, "evidencectl dev start").usage,
+            "evidencectl dev start [OPTIONS] [PROJECT]"
+        );
 
         assert!(find_command(&catalog.binaries, "evidence-oid4vci check")
             .options

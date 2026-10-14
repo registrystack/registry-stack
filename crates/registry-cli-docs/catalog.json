@@ -8237,7 +8237,7 @@
               "options": [
                 {
                   "display": "--runtime-config <FILE>",
-                  "description": "Runtime configuration file that binds the package and authority store",
+                  "description": "Runtime configuration file",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -8276,7 +8276,7 @@
               "options": [
                 {
                   "display": "--runtime-config <FILE>",
-                  "description": "Runtime configuration file that binds the authority store",
+                  "description": "Runtime configuration file",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
