@@ -519,8 +519,7 @@ pub struct TargetRateLimits {
     pub requests_per_principal_per_minute: BoundedU32<1, 1_000_000>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub burst_per_principal: Option<BoundedU32<1, 100_000>>,
-    pub failed_selector_attempts_per_principal_authority_per_minute:
-        BoundedU32<1, 100_000>,
+    pub failed_selector_attempts_per_principal_authority_per_minute: BoundedU32<1, 100_000>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -589,12 +588,9 @@ impl TargetAuthentication {
         let oidc = value["oidc"]
             .as_object_mut()
             .expect("a typed target OIDC binding serializes as an object");
-        oidc
-            .entry("allowedClients")
+        oidc.entry("allowedClients")
             .or_insert(serde_json::json!("unrestricted"));
-        oidc
-            .entry("revokedKeyIds")
-            .or_insert(serde_json::json!([]));
+        oidc.entry("revokedKeyIds").or_insert(serde_json::json!([]));
         Ok(value)
     }
 }
@@ -715,10 +711,7 @@ mod tests {
 
         let governed = connection.governed_value().expect("connection projects");
         assert_eq!(governed["baseUrl"], "https://source.invalid");
-        assert_eq!(
-            governed["authentication"]["type"],
-            "static-authorization"
-        );
+        assert_eq!(governed["authentication"]["type"], "static-authorization");
         assert_eq!(governed["maximumConcurrency"], 256);
         assert!(governed.get("origin").is_none());
     }

@@ -780,9 +780,7 @@ pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
                 "derive must name an assertion-derive/v1 Function",
             );
         }
-        if definition.outputs.is_empty()
-            || definition.outputs.len() > MAX_OUTPUTS_PER_ASSERTION
-        {
+        if definition.outputs.is_empty() || definition.outputs.len() > MAX_OUTPUTS_PER_ASSERTION {
             push(
                 at.clone().key("outputs"),
                 "output-count",

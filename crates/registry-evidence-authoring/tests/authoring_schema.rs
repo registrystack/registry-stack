@@ -585,16 +585,14 @@ fn the_target_schema_and_reader_close_nested_deployment_blocks() {
 fn the_target_model_retains_complete_production_deployment_options() {
     let mut document = yaml_as_json(NORMALIZED_TARGET);
     document["assuranceProfile"] = serde_json::json!("production");
-    document["package"]["expectedDigest"] =
-        serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+    document["package"]["expectedDigest"] = serde_json::json!(format!("sha256:{}", "0".repeat(64)));
     document["listener"] = serde_json::json!({
         "bind":"0.0.0.0:8080", "networkExposure":"container-private",
         "tlsTermination":"operator-controlled-upstream", "trustProxyIdentityHeaders":false,
         "maximumRequestBytes":65536, "maximumConcurrentRequests":64,
         "requestTimeoutMilliseconds":10000, "shutdownGraceMilliseconds":30000
     });
-    document["authentication"]["oidc"]["allowedClients"] =
-        serde_json::json!(["service-client"]);
+    document["authentication"]["oidc"]["allowedClients"] = serde_json::json!(["service-client"]);
     document["authentication"]["oidc"]["assertionIssuers"] =
         serde_json::json!({"service-client":["urn:example:issuer:grants"]});
     document["authentication"]["oidc"]["claims"] = serde_json::json!({
@@ -604,8 +602,7 @@ fn the_target_model_retains_complete_production_deployment_options() {
         "grantBounds":"grant_bounds", "approver":"approver"
     });
     document["authentication"]["oidc"]["actorClaim"] = serde_json::json!("actor");
-    document["authentication"]["oidc"]["tlsTrustProfile"] =
-        serde_json::json!("private-ca");
+    document["authentication"]["oidc"]["tlsTrustProfile"] = serde_json::json!("private-ca");
     document["authentication"]["oidc"]["revokedKeyIds"] = serde_json::json!([]);
     document["connections"] = serde_json::json!({
         "none":{"origin":"http://127.0.0.1:8081","authentication":{"type":"none"}},
@@ -633,8 +630,12 @@ fn the_target_model_retains_complete_production_deployment_options() {
         "jurisdictions":["urn:example:jurisdiction"],
         "publisherId":"urn:example:publisher", "operatorId":"urn:example:operator"
     });
-    document["responseFormats"] =
-        serde_json::json!(["signed-jws", "unsigned-json", "sd-jwt-vc", "sd-jwt-vc-batch"]);
+    document["responseFormats"] = serde_json::json!([
+        "signed-jws",
+        "unsigned-json",
+        "sd-jwt-vc",
+        "sd-jwt-vc-batch"
+    ]);
     document["outboundTls"] = serde_json::json!({
         "systemRoots":true,
         "trustProfiles":{"private-ca":{"caBundleFile":"/etc/evidence/private-ca.pem"}}

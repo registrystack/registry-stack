@@ -311,10 +311,7 @@ fn authored_output_ceiling_compiles_into_the_runtime_and_refuses_one_more() {
         .iter()
         .find(|diagnostic| diagnostic.code == "evidence.project.output-count")
         .expect("the output ceiling is diagnosed");
-    assert_eq!(
-        diagnostic.path,
-        "/assertionDefinitions/all-forms/outputs"
-    );
+    assert_eq!(diagnostic.path, "/assertionDefinitions/all-forms/outputs");
 }
 
 #[test]
