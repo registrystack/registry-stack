@@ -542,7 +542,7 @@ mod typed_report_tests {
                 crate::project::check(&project, false, false).unwrap(),
             ),
             ("explain", crate::project::explain(&project).unwrap()),
-            ("test", crate::project::test(&project).unwrap()),
+            ("test", crate::project::test(&project, false).unwrap()),
             (
                 "types",
                 crate::project_types::generate(&project, &directory.path().join("types")).unwrap(),

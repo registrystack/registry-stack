@@ -11,7 +11,7 @@ pub struct ReviewContextContract {
     pub schema_digest: ContentDigest,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "mode",
@@ -25,6 +25,40 @@ pub enum ReviewContextPolicy {
         provider: String,
         contract: ReviewContextContract,
     },
+}
+
+// Serde ignores extra members on an internally tagged unit variant, even
+// with deny_unknown_fields. Decode the submitted form as an empty struct so
+// both variants enforce the same closed authoring contract. The public enum
+// and its serialized form remain unchanged.
+#[derive(Deserialize)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum ReviewContextPolicyWire {
+    Submitted {},
+    CurrentSource {
+        provider: String,
+        contract: ReviewContextContract,
+    },
+}
+registry_platform_yaml::tagged_union!(ReviewContextPolicyWire, tag = "mode");
+
+impl<'de> Deserialize<'de> for ReviewContextPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match <ReviewContextPolicyWire as Deserialize>::deserialize(deserializer)? {
+            ReviewContextPolicyWire::Submitted {} => Ok(Self::Submitted),
+            ReviewContextPolicyWire::CurrentSource { provider, contract } => {
+                Ok(Self::CurrentSource { provider, contract })
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

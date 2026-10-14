@@ -11,9 +11,9 @@ Five independent runtime products are relevant:
   permissions, revision history, and audit journal.
 - **Evidence** returns signed, minimum-disclosure assertions from fixed
   requests to authoritative sources.
-- **Registry Casework** gives authorized human teams a coordinated inbox over
-  source-owned work while leaving eligibility and registry mutations with the
-  source system.
+- **Registry Casework** gives authorized human teams policy-bound review tasks
+  from trusted producers and returns correlated results, while each source
+  keeps current disclosure and independently authorized mutation.
 - **Registry Scheduling** publishes bookable services over anchored supply
   and gives authorized callers short holds and confirmed appointments, with
   every capacity decision made inside one transaction under a task grant.
@@ -23,9 +23,9 @@ Five independent runtime products are relevant:
 
 The products compose without merging their boundaries. Evidence may use a Base
 Registry Engine route or another bounded HTTP endpoint as a fixed source and
-inherits none of that source's authorization. Casework may present source-owned work
-from a Base Registry Engine through its adapter, while current source
-visibility and action authority remain with that registry. Registry Scheduling
+inherits none of that source's authorization. Casework may review a Base Registry Engine Proposal through a read-only
+context provider, while current disclosure and later application remain
+independently authorized by that registry. Registry Scheduling
 may publish bookable supply for work another product governs, and another
 product may show an appointment Scheduling holds, without either side gaining
 the other's authority: eligibility stays with the source, and the authority to
@@ -84,8 +84,8 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-breg-mcp` | Citizen-facing MCP gateway beside the Base Registry Engine and the `breg-mcp` binary |
 | `crates/registry-breg-review` | Server-rendered citizen review page for BReg change requests and the `breg-review` binary |
 | `crates/registry-linkml` | LinkML reader and embedded PublicSchema snapshot behind `bregctl init --from publicschema` |
-| `crates/registry-casework-core` | Source-neutral Casework model, HTTP DTOs, transition rules, and source adapter contract |
-| `crates/registry-casework-breg` | BReg source adapter for Casework discovery, current visibility, promoted actions, and attempt recovery |
+| `crates/registry-casework-core` | Source-neutral Casework review model, HTTP DTOs, transitions, and read-only context contract |
+| `crates/registry-casework-breg` | Read-only BReg Proposal context provider for exact human disclosure and service status |
 | `crates/registry-casework` | PostgreSQL-backed Casework runtime and the `casework` binary |
 | `crates/registry-caseworkctl` | Casework authoring and local operator tooling and the `caseworkctl` binary |
 | `crates/registry-casework-client` | Rust Casework client and its bounded problem and recovery contract |
@@ -173,9 +173,9 @@ Registry Casework is implemented by `registry-casework`,
 its Rust, Node.js, and Python client crates. Its product contracts, generated
 OpenAPI, examples, checkpoint demo, and focused gates live under
 `products/casework`.
-Casework coordinates claims, private drafts, accountable attempts, and
-caller-visible inboxes. Source adapters retain source visibility and action
-authority. The source-neutral core and generic clients must not depend on BReg
+Casework coordinates pinned review rounds, claims, private drafts, human
+decisions, and results. Context providers preserve current source disclosure;
+Casework has no source write or apply authority. The source-neutral core and generic clients must not depend on BReg
 protocol types, and BReg must not depend on Casework.
 
 Registry Scheduling is implemented by `registry-scheduling`,

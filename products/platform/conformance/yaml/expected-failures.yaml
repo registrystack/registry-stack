@@ -55,10 +55,6 @@ unreachedFormats:
   reason: syntax json; the corpus mutates YAML text
 - format: breg/schema-test-receipt
   reason: syntax json; the corpus mutates YAML text
-- format: casework/breg-source-description
-  reason: syntax json; the corpus mutates YAML text
-- format: casework/dev-state
-  reason: syntax json; the corpus mutates YAML text
 - format: discovery/index
   reason: syntax json; the corpus mutates YAML text
 - format: evidence/client-contracts

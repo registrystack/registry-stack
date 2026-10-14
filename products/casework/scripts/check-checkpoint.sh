@@ -23,12 +23,29 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/casework-checkpoint.XXXXXX")
 cleanup() { rm -rf -- "$work"; }
 trap cleanup EXIT HUP INT TERM
 "$caseworkctl_bin" init "$work/standalone" --template standalone-decision >/dev/null
-for project in "$work/standalone" "$repo_root/products/casework/examples/standalone-decision" "$repo_root/products/casework/examples/canonical-review"; do
+for project in "$work/standalone" "$repo_root/products/casework/examples/standalone-decision" "$repo_root/products/casework/examples/canonical-review" "$repo_root/products/casework/examples/multi-stage-routing-clocks"; do
   "$caseworkctl_bin" --format json check "$project" >"$work/check.json"
   "$caseworkctl_bin" --format json explain "$project" >"$work/explain.json"
   "$caseworkctl_bin" --format json test "$project" >"$work/test.json"
   "$caseworkctl_bin" --format json types "$project" --output "$work/types" >"$work/types.json"
 done
+"$caseworkctl_bin" --format json explain "$repo_root/products/casework/examples/multi-stage-routing-clocks" >"$work/advanced-explain.json"
+python3 - "$work/advanced-explain.json" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+policies = report["data"]["reviewPolicies"]
+if report["ok"] is not True or len(policies) != 1:
+    sys.exit("the regional review policy did not compile")
+policy = policies[0]
+if [stage["id"] for stage in policy["stages"]] != ["technical", "signoff"]:
+    sys.exit("the two review stages changed")
+if policy["routingFields"] != ["region"] or policy["routing"][0]["queue"] != "northern-review":
+    sys.exit("the regional routing contract changed")
+if sorted(policy["clocks"]) != ["response-budget", "review-deadline"]:
+    sys.exit("the pinned response and deadline clocks changed")
+PY
 "$caseworkctl_bin" --format json package "$work/standalone" --output "$work/package" >"$work/package.json"
 "$caseworkctl_bin" --format json package "$work/standalone" --dry-run >"$work/dry-run.json"
 python3 - "$work/package.json" "$work/dry-run.json" <<'PY'

@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Generated JSON Schema for the Casework project, `casework.yaml`, and for
-//! the offline test files beside it: fixtures, simulations, and holiday sets.
+//! the offline test files beside it: review fixtures and holiday sets.
 
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
 use crate::{
-    CaseworkHolidaySet, CaseworkProject, CASEWORK_API_VERSION, CASEWORK_HOLIDAY_SET_API_VERSION,
+    CaseworkFixture, CaseworkHolidaySet, CaseworkProject, CASEWORK_API_VERSION,
+    CASEWORK_FIXTURE_API_VERSION, CASEWORK_FIXTURE_KIND, CASEWORK_HOLIDAY_SET_API_VERSION,
     CASEWORK_HOLIDAY_SET_KIND, CASEWORK_KIND,
 };
 
 pub const PROJECT_SCHEMA_FILE: &str = "project.schema.json";
 pub const PROJECT_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/casework/project/project.v1alpha1.schema.json";
+pub const FIXTURE_SCHEMA_FILE: &str = "fixture/fixture.schema.json";
+pub const FIXTURE_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/casework/fixture/fixture.v1alpha1.schema.json";
 pub const HOLIDAY_SET_SCHEMA_FILE: &str = "holiday-set/holiday-set.schema.json";
 pub const HOLIDAY_SET_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/casework/holiday-set/holiday-set.v1alpha1.schema.json";
@@ -33,16 +37,28 @@ pub fn project_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
 /// The committed schema documents of the offline test files, by path below
 /// `products/casework/generated`.
 pub fn offline_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
-    Ok([(
-        HOLIDAY_SET_SCHEMA_FILE,
-        render(
-            schemars::schema_for!(CaseworkHolidaySet),
-            CASEWORK_HOLIDAY_SET_API_VERSION,
-            CASEWORK_HOLIDAY_SET_KIND,
-            HOLIDAY_SET_SCHEMA_ID,
-            "Registry Casework holiday set",
-        )?,
-    )]
+    Ok([
+        (
+            FIXTURE_SCHEMA_FILE,
+            render(
+                schemars::schema_for!(CaseworkFixture),
+                CASEWORK_FIXTURE_API_VERSION,
+                CASEWORK_FIXTURE_KIND,
+                FIXTURE_SCHEMA_ID,
+                "Registry Casework synthetic review fixture",
+            )?,
+        ),
+        (
+            HOLIDAY_SET_SCHEMA_FILE,
+            render(
+                schemars::schema_for!(CaseworkHolidaySet),
+                CASEWORK_HOLIDAY_SET_API_VERSION,
+                CASEWORK_HOLIDAY_SET_KIND,
+                HOLIDAY_SET_SCHEMA_ID,
+                "Registry Casework holiday set",
+            )?,
+        ),
+    ]
     .into())
 }
 

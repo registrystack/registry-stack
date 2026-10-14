@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 mod dev;
+#[cfg(test)]
+mod fixture_tests;
 mod project;
 mod project_types;
 mod provider_pair;
@@ -18,6 +20,7 @@ use std::{
 #[derive(Debug, Parser)]
 #[command(name="caseworkctl",version=registry_platform_buildinfo::DISPLAY_VERSION,about="Compile and operate bounded review policies")]
 struct Cli {
+    /// Write human diagnostics and reports, or one typed JSON report.
     #[arg(long, value_enum, global = true, default_value_t)]
     format: OutputFormat,
     #[command(subcommand)]
@@ -33,7 +36,9 @@ enum OutputFormat {
 enum Command {
     /// Create a complete standalone ReviewPolicy project.
     Init {
+        /// New project directory; existing destinations are never overwritten.
         project: PathBuf,
+        /// Starter to create (standalone-decision).
         #[arg(long, default_value = "standalone-decision")]
         template: String,
     },
@@ -42,10 +47,12 @@ enum Command {
     /// Explain pinned policy, context custody, staffing, refusals and recovery.
     Explain(ProjectArgs),
     /// Exercise bounded review context fixtures offline.
-    Test(ProjectArgs),
+    Test(TestArgs),
     /// Generate policy bindings and context/request/task/result TypeScript and Python types.
     Types {
+        /// Existing authored Casework project directory.
         project: PathBuf,
+        /// Directory for generated TypeScript and Python contracts.
         #[arg(long)]
         output: PathBuf,
     },
@@ -58,22 +65,33 @@ enum Command {
     Lifecycle,
     /// Package the policy and its exact local schema and provider dependency closure.
     Package {
+        /// Existing authored Casework project directory.
         project: PathBuf,
+        /// New directory for the exact package closure; required unless --dry-run.
         #[arg(long)]
         output: Option<PathBuf>,
+        /// One printable source revision recorded in the package.
         #[arg(long)]
         revision: Option<String>,
+        /// Inspect the file closure and digest without writing a package.
         #[arg(long)]
         dry_run: bool,
     },
+    /// Inspect database, active package and audit readiness without applying changes.
     Doctor(OperatorArgs),
+    /// Read and explain the candidate activation plan without changing the database.
     Plan(OperatorArgs),
+    /// Read the active package identity and database activation ledger.
     Status(OperatorArgs),
+    /// Apply the reviewed package and fresh-schema activation with the migration credential.
     Apply {
+        /// Operator runtime configuration file with package and credential references.
         #[arg(long)]
         runtime_config: PathBuf,
+        /// Operator change or approval reference recorded with activation.
         #[arg(long)]
         operator_reference: Option<String>,
+        /// Backup reference recorded with activation; repeat for additional references.
         #[arg(long)]
         backup_reference: Vec<String>,
     },
@@ -86,44 +104,69 @@ enum Command {
 }
 #[derive(Debug, Subcommand)]
 enum ProviderCommand {
+    /// Verify native context and reader authority, then optionally retain its provider export.
     Pair {
+        /// Existing Casework project with the exact vendored schema and context pin.
         project: PathBuf,
+        /// Declared Casework context provider to pair.
         #[arg(long)]
         provider_id: String,
+        /// Sealed native BReg package directory containing the action's context export.
         #[arg(long)]
         breg_package: PathBuf,
+        /// BReg action that declares the required review context.
         #[arg(long)]
         action_id: String,
+        /// Matching bregctl executable used to verify the producer package.
         #[arg(long, default_value = "bregctl")]
         bregctl_bin: PathBuf,
+        /// Write the verified provider export and description reference after validation.
         #[arg(long)]
         apply: bool,
     },
 }
 #[derive(Debug, Args)]
 struct ProjectArgs {
+    /// Existing authored Casework project directory.
     project: PathBuf,
 }
 #[derive(Debug, Args)]
+struct TestArgs {
+    /// Existing authored Casework project and its offline fixtures.
+    project: PathBuf,
+    /// Refuse authored warnings as well as errors.
+    #[arg(long)]
+    deny_warnings: bool,
+}
+#[derive(Debug, Args)]
 struct OperatorArgs {
+    /// Operator runtime configuration file with package and credential references.
     #[arg(long)]
     runtime_config: PathBuf,
 }
 #[derive(Debug, Args)]
 struct CheckArgs {
+    /// Existing authored Casework project directory.
     project: PathBuf,
+    /// Check the exact package closure required for production.
     #[arg(long)]
     production: bool,
+    /// Refuse authored warnings as well as errors.
     #[arg(long)]
     deny_warnings: bool,
+    /// Compare imported provider contracts with this sealed native BReg package.
     #[arg(long)]
     against_breg_package: Option<PathBuf>,
+    /// Limit native package comparison to this declared provider.
     #[arg(long, requires = "against_breg_package")]
     provider_id: Option<String>,
+    /// Matching bregctl executable used for native package verification.
     #[arg(long, default_value = "bregctl")]
     bregctl_bin: PathBuf,
+    /// Also validate this operator runtime configuration offline.
     #[arg(long)]
     runtime_config: Option<PathBuf>,
+    /// Resolve configured environment substitutions while checking the runtime file.
     #[arg(long, requires = "runtime_config")]
     environment: bool,
 }
@@ -382,7 +425,7 @@ fn run(command: Command) -> Result<Value> {
             Ok(report)
         }
         Command::Explain(args) => project::explain(&args.project),
-        Command::Test(args) => project::test(&args.project),
+        Command::Test(args) => project::test(&args.project, args.deny_warnings),
         Command::Types { project, output } => project_types::generate(&project, &output),
         Command::Provider {
             command:
@@ -438,22 +481,22 @@ fn run(command: Command) -> Result<Value> {
     }
 }
 fn render_human(value: &Value, out: &mut (impl Write + ?Sized)) -> io::Result<()> {
-    if let Some(diagnostics) = value["diagnostics"].as_array() {
-        for diagnostic in diagnostics {
-            writeln!(
-                out,
-                "{}: {}",
-                diagnostic["code"].as_str().unwrap_or("casework.refused"),
-                diagnostic["message"]
-                    .as_str()
-                    .unwrap_or("operation refused")
-            )?;
+    let diagnostics: Vec<registry_platform_yaml::Diagnostic> =
+        serde_json::from_value(value["diagnostics"].clone()).map_err(io::Error::other)?;
+    if !diagnostics.is_empty() {
+        write!(
+            out,
+            "{}",
+            registry_platform_yaml::Report::new(diagnostics).render_human()
+        )?;
+        if value["ok"] == false {
+            return Ok(());
         }
     }
     writeln!(
         out,
         "{}",
-        serde_json::to_string_pretty(value).unwrap_or_default()
+        serde_json::to_string_pretty(value).map_err(io::Error::other)?
     )
 }
 pub(crate) fn configuration_report(
@@ -484,12 +527,68 @@ mod tests {
         }
     }
     #[test]
+    fn human_configuration_refusal_includes_positions_notes_and_summary() {
+        let temp = canonical_tempdir();
+        let project = temp.path().join("duplicate");
+        project::init(&project, "standalone-decision").unwrap();
+        std::fs::write(
+            project.join("casework.yaml"),
+            format!("{}\nduplicate: 1\nduplicate: 2\n", project::STANDALONE_YAML),
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let result = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("check"),
+                project.into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(result, ExitCode::from(1));
+        assert!(stdout.is_empty());
+        let human = String::from_utf8(stderr).unwrap();
+        assert!(human.contains("error[yaml.duplicate-key]"), "{human}");
+        assert!(human.contains(" /duplicate\n"), "{human}");
+        assert!(human.contains("  next:"), "{human}");
+        assert!(human.contains("  note:"), "{human}");
+        assert!(human.contains("1 error, 0 warnings in 1 file"), "{human}");
+        assert!(!human.contains("\"diagnostics\":"), "{human}");
+    }
+    #[test]
+    fn init_files_select_existing_local_editor_schemas() {
+        let temp = canonical_tempdir();
+        let project = temp.path().join("editor");
+        project::init(&project, "standalone-decision").unwrap();
+        for name in ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml"] {
+            let text = std::fs::read_to_string(project.join(name)).unwrap();
+            let schema = text
+                .lines()
+                .next()
+                .unwrap()
+                .strip_prefix("# yaml-language-server: $schema=")
+                .unwrap();
+            assert!(
+                project.join(schema).is_file(),
+                "{name} selects absent schema {schema}"
+            );
+            let document: Value =
+                serde_json::from_slice(&std::fs::read(project.join(schema)).unwrap()).unwrap();
+            assert!(
+                document["$id"].as_str().is_some(),
+                "{name} schema has no identity"
+            );
+        }
+    }
+    #[test]
     fn starter_compiles_and_generates_bindings() {
         let temp = canonical_tempdir();
         let project = temp.path().join("standalone");
         project::init(&project, "standalone-decision").unwrap();
         project::check(&project, false, false).unwrap();
-        project::test(&project).unwrap();
+        project::test(&project, false).unwrap();
         project_types::generate(&project, &temp.path().join("types")).unwrap();
     }
 }

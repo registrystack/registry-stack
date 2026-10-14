@@ -1,5 +1,13 @@
 # Registry Casework security review notes
 
+The current review-only security contract is the maintained
+`contracts/security-invariant-matrix.yaml` and its executable
+`contracts/security-test-traceability.yaml`. The sections that follow preserve
+historical review decisions, including the retired WorkItem/source-action
+implementation. Their old symbols, migration numbers and recovery commands are
+not instructions for the current runtime. Use the product README, runtime
+configuration reference and current contract matrix for deployment behavior.
+
 Review notes for security-sensitive Registry Casework changes, held in tracked
 material because commit messages do not survive a squash. Each section names
 the change, the threat it answers, the defaults it ships, where Rust enforces

@@ -127,6 +127,11 @@ fails the run too, as does an unlisted unreached format or inapplicable case.
 is the only writer, and it records no cell that leaks, crashes, times out, or
 that the harness could not run; it exits 1 when it leaves one out.
 
+`--only-format` checks format-specific harness and expected-failure references
+for the selected formats. It still validates the shared case corpus and
+inapplicable-case references. An unfiltered run validates every format
+reference in the registry and corpus metadata.
+
 Run through products/platform/scripts/run-config-conformance.sh, which
 provides PyYAML.
 """
@@ -2033,18 +2038,35 @@ def plan(root: Path, formats: list[Format], cases: list[Case], harness: dict[str
     return Plan(reached, skipped, listed, cells, inapplicable, init_only)
 
 
-def validate_ids(expected: ExpectedFailures, formats: list[Format], cases: list[Case], harness: dict[str, Any]) -> None:
+def validate_ids(
+    expected: ExpectedFailures,
+    formats: list[Format],
+    cases: list[Case],
+    harness: dict[str, Any],
+    only_formats: set[str] | None = None,
+) -> None:
+    """Validate the whole registry, or references applicable to selected formats.
+
+    Corpus-wide inapplicable case references remain shared in either mode.
+    Unknown selectors are refused separately before a scoped validation.
+    """
     format_ids = {fmt.id for fmt in formats}
     case_ids = {case.id for case in cases}
     for format_id in harness:
+        if only_formats is not None and format_id not in only_formats:
+            continue
         if format_id not in format_ids:
             raise HarnessError(f"formats.yaml names {format_id}, which the registry does not")
     for format_id, case_id in expected.failures:
+        if only_formats is not None and format_id not in only_formats:
+            continue
         if format_id not in format_ids:
             raise HarnessError(f"expected-failures.yaml names format {format_id}, which the registry does not")
         if not names_case(case_id, cases):
             raise HarnessError(f"expected-failures.yaml names case {case_id}, which the corpus does not")
     for format_id in expected.unreached:
+        if only_formats is not None and format_id not in only_formats:
+            continue
         if format_id not in format_ids:
             raise HarnessError(f"expected-failures.yaml names format {format_id}, which the registry does not")
     for case_id in expected.inapplicable:
@@ -2085,8 +2107,8 @@ def main(argv: list[str] | None = None) -> int:
         cases = load_cases(corpus / "cases")
         harness = load_harness(corpus / "formats.yaml")
         expected = load_expected_failures(expected_path)
-        validate_ids(expected, formats, cases, harness)
         validate_selectors(args, formats, cases)
+        validate_ids(expected, formats, cases, harness, set(args.only_format) if args.only_format else None)
         if not any(case.id == BASELINE for case in cases):
             raise HarnessError(f"the corpus has no `{BASELINE}` case")
         selected = [f for f in formats if not args.only_format or f.id in args.only_format]

@@ -1,10 +1,11 @@
 apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
 kind: CaseworkFixture
-id: multistage-routing-clocks-offline
-request:
-  source: regional-register
-  entity: regional-correction
+id: regional-review-offline
+review:
+  policy: regional-review
+  display:
+    summary: Review the submitted regional correction
+    region: south
 expect:
   queue: triage
-  applicationMode: manual
-  target: none
+  outcomes: [approved, rejected]

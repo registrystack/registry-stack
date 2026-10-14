@@ -1,0 +1,78 @@
+{
+  "$defs": {
+    "CaseworkFixtureExpect": {
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "outcomes": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "queue": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "type": "object"
+    },
+    "CaseworkFixtureReview": {
+      "additionalProperties": false,
+      "properties": {
+        "display": {
+          "additionalProperties": true,
+          "description": "Business values remain JSON; the selected policy owns their schema.",
+          "type": "object",
+          "x-registry-passthrough": "Synthetic business fields are validated against the selected compiled ReviewPolicy displaySchema."
+        },
+        "policy": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "policy",
+        "display"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/casework/fixture/fixture.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One synthetic context and meaningful expectations for a declared policy.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/casework/fixture/v1alpha1",
+      "type": "string"
+    },
+    "expect": {
+      "$ref": "#/$defs/CaseworkFixtureExpect"
+    },
+    "id": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "kind": {
+      "const": "CaseworkFixture",
+      "type": "string"
+    },
+    "review": {
+      "$ref": "#/$defs/CaseworkFixtureReview"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "id",
+    "review",
+    "expect"
+  ],
+  "title": "Registry Casework synthetic review fixture",
+  "type": "object"
+}

@@ -13,7 +13,8 @@ use std::{
     path::{Path, PathBuf},
 };
 pub(crate) const LOCAL_PACKAGE_DIRECTORY: &str = ".casework/package";
-pub(super) const STANDALONE_YAML: &str = r#"apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
+pub(super) const STANDALONE_YAML: &str = r#"# yaml-language-server: $schema=.casework/schemas/project.schema.json
+apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
 project:
   id: standalone-decision
@@ -77,7 +78,8 @@ trustedProducers:
     recoveryDays: 30
 "#;
 
-const STANDALONE_FIXTURE: &str = r#"apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
+const STANDALONE_FIXTURE: &str = r#"# yaml-language-server: $schema=../.casework/schemas/fixture.schema.json
+apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
 kind: CaseworkFixture
 id: standalone-decision-offline
 review:
@@ -90,7 +92,8 @@ expect:
   outcomes: [confirmed, rejected]
 "#;
 
-pub(super) const STANDALONE_DEV_CLIENTS: &str = r#"# Local callers for `caseworkctl dev`. The pinned local token issuer
+pub(super) const STANDALONE_DEV_CLIENTS: &str = r#"# yaml-language-server: $schema=.casework/schemas/dev-clients.schema.json
+# Local callers for `caseworkctl dev`. The pinned local token issuer
 # that `dev` starts beside Casework, registers each client below and issues it
 # short-lived tokens carrying these claims. One client binds each access
 # profile `casework.yaml` declares, so a first start serves every role in the
@@ -174,7 +177,10 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "audit":{"path":absolute.join("state/audit.ndjson"),"hashKeyRef":"secret:file/casework-audit-key"},"contextProviders":{}});
     fs::write(
         stage.path().join("runtime.example.yaml"),
-        serde_norway::to_string(&runtime)?,
+        format!(
+            "# yaml-language-server: $schema=.casework/schemas/runtime.schema.json\n{}",
+            serde_norway::to_string(&runtime)?
+        ),
     )?;
     for (name, content) in [
         (
@@ -191,13 +197,17 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
                 "../../../products/casework/generated/dev-clients/dev-clients.schema.json"
             ),
         ),
+        (
+            "fixture.schema.json",
+            include_str!("../../../products/casework/generated/fixture/fixture.schema.json"),
+        ),
     ] {
         fs::write(stage.path().join(".casework/schemas").join(name), content)?;
     }
     fs::write(
         stage.path().join(".vscode/settings.json"),
         serde_json::to_vec_pretty(
-            &json!({"yaml.schemas":{"./.casework/schemas/project.schema.json":"casework.yaml","./.casework/schemas/runtime.schema.json":"runtime.example.yaml","./.casework/schemas/dev-clients.schema.json":"dev-clients.yaml"}}),
+            &json!({"yaml.schemas":{"./.casework/schemas/project.schema.json":"casework.yaml","./.casework/schemas/runtime.schema.json":"runtime.example.yaml","./.casework/schemas/dev-clients.schema.json":"dev-clients.yaml","./.casework/schemas/fixture.schema.json":"fixtures/*.yaml"}}),
         )?,
     )?;
     load_and_check_policy(stage.path())?;
@@ -324,10 +334,14 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
         json!({"ok":true,"command":"explain","project":policy.project,"reviewPolicies":reviews,"contextProviders":policy.context_providers,"staffing":{"next":"due ordered eligible visible tasks","holdings":"claimed or assigned tasks under current visibility","caseload":"atomic preview and revision-fenced apply","routing":"once per task or stage from compiled minimized fields","clockRecompute":"pinned policy closure"},"authority":"producer, human reviewer and downstream executor authenticate independently"}),
     )
 }
-pub(super) fn test(project: &Path) -> Result<Value> {
-    check(project, false, false)?;
+pub(super) fn test(project: &Path, deny_warnings: bool) -> Result<Value> {
+    use std::io::Read as _;
+    let project_check = check(project, false, deny_warnings)?;
     let policy = load_and_check_policy(project)?;
     let mut checked = Vec::new();
+    let mut diagnostics = Report::new(serde_json::from_value(
+        project_check["diagnostics"].clone(),
+    )?);
     let fixtures = project.join("fixtures");
     if fixtures.is_dir() {
         let mut paths = fs::read_dir(fixtures)?
@@ -338,47 +352,33 @@ pub(super) fn test(project: &Path) -> Result<Value> {
             if !path.is_file() {
                 continue;
             }
-            let bytes = read_package_input(&path)?;
-            let fixture = registry_platform_yaml::Reader::new(path.display().to_string())
-                .scan(&bytes)?
-                .context("fixture is empty")?
-                .to_json_value();
-            if fixture["apiVersion"] != "id.registrystack.org/formats/casework/fixture/v1alpha1"
-                || fixture["kind"] != "CaseworkFixture"
-            {
-                bail!("fixture has the wrong envelope");
+            // The shared reader owns the one-MiB boundary and positioned
+            // format diagnostics, including empty and oversized fixtures.
+            if !fs::symlink_metadata(&path)?.file_type().is_file() {
+                bail!("fixture input must be a regular file");
             }
-            let review = &fixture["review"];
-            let id = review["policy"]
-                .as_str()
-                .context("fixture review.policy is required")?;
-            let p = policy
-                .review_policies
-                .iter()
-                .find(|p| p.id == id)
-                .context("fixture policy is not declared")?;
-            p.validate_display(&review["display"])?;
-            if let Some(queue) = fixture["expect"]["queue"].as_str() {
-                if p.stages.first().is_none_or(|stage| stage.queue != queue) {
-                    bail!("fixture expected queue differs from policy");
+            let mut bytes = Vec::new();
+            fs::File::open(&path)?
+                .take((registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)?;
+            match registry_casework_core::CaseworkFixture::read_against(
+                &path.display().to_string(),
+                &bytes,
+                &policy,
+            ) {
+                Ok(decoded) => {
+                    diagnostics.extend(decoded.document.warnings());
+                    checked.push(path);
                 }
+                Err(refused) => diagnostics.extend(refused),
             }
-            if let Some(outcomes) = fixture["expect"]["outcomes"].as_array() {
-                let actual = p.outcomes.iter().map(|o| o.id.as_str()).collect::<Vec<_>>();
-                if outcomes
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    != actual
-                {
-                    bail!("fixture expected outcomes differ from policy");
-                }
-            }
-            checked.push(path);
         }
     }
+    if diagnostics.has_errors() || (deny_warnings && diagnostics.warning_count() > 0) {
+        return Err(diagnostics.into());
+    }
     Ok(
-        json!({"ok":true,"command":"test","fixtures":checked,"proofBoundary":"offline-synthetic","productionClosure":false,"networkAccess":false,"databaseAccess":false}),
+        json!({"ok":true,"command":"test","fixtures":checked,"diagnostics":diagnostics.diagnostics(),"proofBoundary":"offline-synthetic","productionClosure":false,"networkAccess":false,"databaseAccess":false}),
     )
 }
 

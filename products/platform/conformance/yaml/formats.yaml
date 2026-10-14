@@ -40,21 +40,10 @@ formats:
   # The retired apiVersion and renamed keys each Casework reader refuses by
   # name.
   casework/fixture:
-    project: products/casework/examples/payment-review
+    project: products/casework/examples/standalone-decision
     retiredApiVersions:
       - registry.registrystack.org/casework-fixture/v1alpha1
-    removedKeys:
-      - /name
-      - /source
-      - /expect/targetElapsed
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: fixtures/standalone-decision.yaml}
-  casework/simulation:
-    project: products/casework/examples/multi-stage-routing-clocks
-    removedKeys:
-      - /subject/id
-      - /expect/ruleId
-  casework/holiday-set:
-    project: products/casework/examples/multi-stage-routing-clocks
   casework/dev-clients:
     removedKeys:
       - /version
@@ -67,8 +56,6 @@ formats:
       - /authentication/oidc/jwksSource/kind
       - /authentication/oidc/principalClaim
       - /audit/retainDays
-      - /reviewCompletionDestinations/payment-results/timeoutMilliseconds
-      - /reviewCompletionDestinations/payment-results/retrySeconds
       - /package/expectedPolicyDigest
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
 
